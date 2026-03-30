@@ -26,7 +26,6 @@ def start(
     """启动代理服务."""
     import uvicorn
 
-    from .config.schema import ProxyConfig
     from .server.app import create_app
 
     cfg_path = Path(config) if config else None

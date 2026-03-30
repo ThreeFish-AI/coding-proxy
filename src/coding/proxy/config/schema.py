@@ -68,10 +68,10 @@ class ProxyConfig(BaseModel):
     failover: FailoverConfig = FailoverConfig()
     model_mapping: list[ModelMappingRule] = Field(
         default=[
-            ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1", is_regex=True),
-            ModelMappingRule(pattern="claude-opus-*", target="glm-5.1", is_regex=True),
-            ModelMappingRule(pattern="claude-haiku-*", target="glm-4.5-air", is_regex=True),
-            ModelMappingRule(pattern="claude-*", target="glm-5.1", is_regex=True),
+            ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True),
+            ModelMappingRule(pattern="claude-opus-.*", target="glm-5.1", is_regex=True),
+            ModelMappingRule(pattern="claude-haiku-.*", target="glm-4.5-air", is_regex=True),
+            ModelMappingRule(pattern="claude-.*", target="glm-5.1", is_regex=True),
         ],
     )
     database: DatabaseConfig = DatabaseConfig()

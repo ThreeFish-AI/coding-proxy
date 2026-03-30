@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     config = app.state.config
     # Startup
     await token_logger.init()
-    logger.info("coding-proxy started: host=%s port=%d", config.server.port)
+    logger.info("coding-proxy started: host=%s port=%d", config.server.host, config.server.port)
     yield
     # Shutdown
     await router.close()

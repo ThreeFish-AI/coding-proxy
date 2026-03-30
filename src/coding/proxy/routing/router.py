@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from ..backends.base import BaseBackend, BackendResponse
+from ..backends.base import BaseBackend, BackendResponse, UsageInfo
 from ..logging.db import TokenLogger
 from .circuit_breaker import CircuitBreaker
 
@@ -82,7 +82,19 @@ class RequestRouter:
                     yield chunk, self._primary.get_name()
                 self._cb.record_success()
                 duration = int((time.monotonic() - start) * 1000)
-                await self._record(usage, body, self._primary.get_name(), duration, False)
+                model = body.get("model", "unknown")
+                await self._record_usage(
+                    self._primary.get_name(), model,
+                    usage.get("model_served", model),
+                    UsageInfo(
+                        input_tokens=usage.get("input_tokens", 0),
+                        output_tokens=usage.get("output_tokens", 0),
+                        cache_creation_tokens=usage.get("cache_creation_tokens", 0),
+                        cache_read_tokens=usage.get("cache_read_tokens", 0),
+                        request_id=usage.get("request_id", ""),
+                    ),
+                    duration, True, False,
+                )
                 return
             except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
                 logger.warning("Primary failed: %s", exc)
@@ -96,7 +108,19 @@ class RequestRouter:
             _parse_usage_from_chunk(chunk, usage)
             yield chunk, self._fallback.get_name()
         duration = int((time.monotonic() - start) * 1000)
-        await self._record(usage, body, self._fallback.get_name(), duration, failover)
+        model = body.get("model", "unknown")
+        await self._record_usage(
+            self._fallback.get_name(), model,
+            usage.get("model_served", model),
+            UsageInfo(
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                cache_creation_tokens=usage.get("cache_creation_tokens", 0),
+                cache_read_tokens=usage.get("cache_read_tokens", 0),
+                request_id=usage.get("request_id", ""),
+            ),
+            duration, True, failover,
+        )
 
     async def route_message(
         self,
@@ -114,7 +138,11 @@ class RequestRouter:
                 if resp.status_code < 400:
                     self._cb.record_success()
                     duration = int((time.monotonic() - start) * 1000)
-                    await self._record_response(resp, body, self._primary.get_name(), duration, False)
+                    model = body.get("model", "unknown")
+                    await self._record_usage(
+                        self._primary.get_name(), model, model,
+                        resp.usage, duration, True, False,
+                    )
                     return resp
                 if self._primary.should_trigger_failover(resp.status_code, {"error": {"type": resp.error_type, "message": resp.error_message}}):
                     logger.warning("Primary error %d, failing over", resp.status_code)
@@ -122,7 +150,11 @@ class RequestRouter:
                     failover = True
                 else:
                     duration = int((time.monotonic() - start) * 1000)
-                    await self._record_response(resp, body, self._primary.get_name(), duration, False)
+                    model = body.get("model", "unknown")
+                    await self._record_usage(
+                        self._primary.get_name(), model, model,
+                        resp.usage, duration, resp.status_code < 400, False,
+                    )
                     return resp
             except (httpx.TimeoutException, httpx.ConnectError) as exc:
                 logger.warning("Primary connection error: %s", exc)
@@ -132,55 +164,37 @@ class RequestRouter:
         # Fallback
         resp = await self._fallback.send_message(body, headers)
         duration = int((time.monotonic() - start) * 1000)
-        await self._record_response(resp, body, self._fallback.get_name(), duration, failover)
+        model = body.get("model", "unknown")
+        await self._record_usage(
+            self._fallback.get_name(), model, model,
+            resp.usage, duration, resp.status_code < 400, failover,
+        )
         return resp
 
-    async def _record(
+    async def _record_usage(
         self,
-        usage: dict,
-        body: dict,
         backend: str,
+        model_requested: str,
+        model_served: str,
+        usage: UsageInfo,
         duration_ms: int,
+        success: bool,
         failover: bool,
     ) -> None:
         if not self._token_logger:
             return
         await self._token_logger.log(
             backend=backend,
-            model_requested=body.get("model", "unknown"),
-            model_served=usage.get("model_served", body.get("model", "unknown")),
-            input_tokens=usage.get("input_tokens", 0),
-            output_tokens=usage.get("output_tokens", 0),
-            cache_creation_tokens=usage.get("cache_creation_tokens", 0),
-            cache_read_tokens=usage.get("cache_read_tokens", 0),
+            model_requested=model_requested,
+            model_served=model_served,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
             duration_ms=duration_ms,
-            success=True,
+            success=success,
             failover=failover,
-            request_id=usage.get("request_id", ""),
-        )
-
-    async def _record_response(
-        self,
-        resp: BackendResponse,
-        body: dict,
-        backend: str,
-        duration_ms: int,
-        failover: bool,
-    ) -> None:
-        if not self._token_logger:
-            return
-        await self._token_logger.log(
-            backend=backend,
-            model_requested=body.get("model", "unknown"),
-            model_served=body.get("model", "unknown"),
-            input_tokens=resp.usage.input_tokens,
-            output_tokens=resp.usage.output_tokens,
-            cache_creation_tokens=resp.usage.cache_creation_tokens,
-            cache_read_tokens=resp.usage.cache_read_tokens,
-            duration_ms=duration_ms,
-            success=resp.status_code < 400,
-            failover=failover,
-            request_id=resp.usage.request_id,
+            request_id=usage.request_id,
         )
 
     async def close(self) -> None:

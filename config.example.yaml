@@ -32,13 +32,13 @@ failover:
     - "usage cap"
 
 model_mapping:
-  - pattern: "claude-sonnet-*"
+  - pattern: "claude-sonnet-.*"
     target: "glm-5.1"
     is_regex: true
-  - pattern: "claude-opus-*"
+  - pattern: "claude-opus-.*"
     target: "glm-5.1"
     is_regex: true
-  - pattern: "claude-haiku-*"
+  - pattern: "claude-haiku-.*"
     target: "glm-4.5-air"
     is_regex: true
 
