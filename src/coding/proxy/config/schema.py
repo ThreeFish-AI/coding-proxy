@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ServerConfig(BaseModel):
@@ -16,6 +16,16 @@ class ServerConfig(BaseModel):
 class AnthropicConfig(BaseModel):
     enabled: bool = True
     base_url: str = "https://api.anthropic.com"
+    timeout_ms: int = 300000
+
+
+class CopilotConfig(BaseModel):
+    """GitHub Copilot 后端配置."""
+
+    enabled: bool = False
+    github_token: str = ""
+    token_url: str = "https://github.com/github-copilot/chat/token"
+    base_url: str = "https://api.individual.githubcopilot.com"
     timeout_ms: int = 300000
 
 
@@ -71,8 +81,10 @@ class LoggingConfig(BaseModel):
 class ProxyConfig(BaseModel):
     server: ServerConfig = ServerConfig()
     primary: AnthropicConfig = AnthropicConfig()
+    copilot: CopilotConfig = CopilotConfig()
     fallback: ZhipuConfig = ZhipuConfig()
     circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()
+    copilot_circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()
     failover: FailoverConfig = FailoverConfig()
     model_mapping: list[ModelMappingRule] = Field(
         default=[
@@ -83,8 +95,20 @@ class ProxyConfig(BaseModel):
         ],
     )
     quota_guard: QuotaGuardConfig = QuotaGuardConfig()
+    copilot_quota_guard: QuotaGuardConfig = QuotaGuardConfig()
     database: DatabaseConfig = DatabaseConfig()
     logging: LoggingConfig = LoggingConfig()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_fields(cls, data: Any) -> Any:
+        """向后兼容：支持 anthropic/zhipu 作为 primary/fallback 的别名."""
+        if isinstance(data, dict):
+            if "anthropic" in data and "primary" not in data:
+                data["primary"] = data.pop("anthropic")
+            if "zhipu" in data and "fallback" not in data:
+                data["fallback"] = data.pop("zhipu")
+        return data
 
     @property
     def db_path(self) -> Path:
