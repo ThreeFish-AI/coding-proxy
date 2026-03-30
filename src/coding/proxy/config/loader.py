@@ -35,9 +35,14 @@ def _expand_env_recursive(obj):
 def load_config(path: Path | None = None) -> ProxyConfig:
     """加载配置文件，合并默认值."""
     if path is None:
-        default_path = Path("~/.coding-proxy/config.yaml").expanduser()
-        if default_path.exists():
-            path = default_path
+        candidates = [
+            Path("config.yaml"),                              # 项目根目录
+            Path("~/.coding-proxy/config.yaml").expanduser(), # 用户目录
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                path = candidate
+                break
         else:
             return ProxyConfig()
 

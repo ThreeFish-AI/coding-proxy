@@ -1,5 +1,6 @@
 # coding-proxy 配置模板
-# 复制到 ~/.coding-proxy/config.yaml 并填入实际的 ZHIPU_API_KEY
+# 复制到 ./config.yaml（项目根目录）或 ~/.coding-proxy/config.yaml 并填入实际的 ZHIPU_API_KEY
+# 优先级：./config.yaml > ~/.coding-proxy/config.yaml
 
 server:
   host: "127.0.0.1"
