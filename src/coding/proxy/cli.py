@@ -56,6 +56,10 @@ def status(
         console.print(f"[green]备选后端:[/] {data.get('fallback', 'unknown')}")
         console.print(f"[blue]连续失败次数:[/] {cb.get('failure_count', 0)}")
         console.print(f"[blue]恢复超时(s):[/] {cb.get('current_recovery_seconds', 300)}")
+        qg = data.get("quota_guard")
+        if qg:
+            console.print(f"[cyan]配额守卫:[/] {qg.get('state', 'unknown')}")
+            console.print(f"[blue]窗口用量:[/] {qg.get('usage_percent', 0)}% ({qg.get('window_usage_tokens', 0)}/{qg.get('budget_tokens', 0)} tokens)")
     except httpx.ConnectError:
         console.print("[red]代理服务未运行[/red]")
 

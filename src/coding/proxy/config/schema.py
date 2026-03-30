@@ -51,6 +51,14 @@ class ModelMappingRule(BaseModel):
     is_regex: bool = False
 
 
+class QuotaGuardConfig(BaseModel):
+    enabled: bool = False
+    token_budget: int = 0
+    window_hours: float = 5.0
+    threshold_percent: float = 99.0
+    probe_interval_seconds: int = 300
+
+
 class DatabaseConfig(BaseModel):
     path: str = "~/.coding-proxy/usage.db"
 
@@ -74,6 +82,7 @@ class ProxyConfig(BaseModel):
             ModelMappingRule(pattern="claude-.*", target="glm-5.1", is_regex=True),
         ],
     )
+    quota_guard: QuotaGuardConfig = QuotaGuardConfig()
     database: DatabaseConfig = DatabaseConfig()
     logging: LoggingConfig = LoggingConfig()
 
