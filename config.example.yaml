@@ -1,0 +1,48 @@
+# coding-proxy 配置模板
+# 复制到 ~/.coding-proxy/config.yaml 并填入实际的 ZHIPU_API_KEY
+
+server:
+  host: "127.0.0.1"
+  port: 8046
+
+primary:
+  enabled: true
+  base_url: "https://api.anthropic.com"
+  timeout_ms: 300000
+
+fallback:
+  enabled: true
+  base_url: "https://open.bigmodel.cn/api/anthropic"
+  api_key: "${ZHIPU_API_KEY}"
+  timeout_ms: 3000000
+
+circuit_breaker:
+  failure_threshold: 3
+  recovery_timeout_seconds: 300
+  success_threshold: 2
+
+failover:
+  status_codes: [429, 403, 503, 500]
+  error_types:
+    - "rate_limit_error"
+    - "overloaded_error"
+  error_message_patterns:
+    - "quota"
+    - "usage cap"
+
+model_mapping:
+  - pattern: "claude-sonnet-*"
+    target: "glm-5.1"
+    is_regex: true
+  - pattern: "claude-opus-*"
+    target: "glm-5.1"
+    is_regex: true
+  - pattern: "claude-haiku-*"
+    target: "glm-4.5-air"
+    is_regex: true
+
+database:
+  path: "~/.coding-proxy/usage.db"
+
+logging:
+  level: "INFO"
