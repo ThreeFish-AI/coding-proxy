@@ -50,6 +50,11 @@ class QuotaGuard:
     def enabled(self) -> bool:
         return self._enabled
 
+    @property
+    def window_hours(self) -> float:
+        """滑动窗口小时数（供基线加载使用）."""
+        return self._window / 3600
+
     def can_use_primary(self) -> bool:
         """判断是否可以使用主后端."""
         if not self._enabled:

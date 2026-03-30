@@ -9,7 +9,12 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from ..config.schema import FailoverConfig
+
 logger = logging.getLogger(__name__)
+
+# 代理转发时应跳过的 hop-by-hop 请求头
+PROXY_SKIP_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
 
 
 @dataclass
@@ -38,9 +43,15 @@ class BackendResponse:
 class BaseBackend(ABC):
     """后端抽象基类，提供 HTTP 客户端管理和请求模板."""
 
-    def __init__(self, base_url: str, timeout_ms: int) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout_ms: int,
+        failover_config: FailoverConfig | None = None,
+    ) -> None:
         self._base_url = base_url
         self._timeout_ms = timeout_ms
+        self._failover_config = failover_config
         self._client: httpx.AsyncClient | None = None
 
     def _get_client(self) -> httpx.AsyncClient:
@@ -63,9 +74,26 @@ class BaseBackend(ABC):
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """准备请求体和请求头，由子类实现差异化逻辑."""
 
-    @abstractmethod
     def should_trigger_failover(self, status_code: int, body: dict[str, Any] | None) -> bool:
-        """判断响应是否应触发故障转移."""
+        """基于 FailoverConfig 的通用故障转移判断.
+
+        无 failover_config 时返回 False（终端后端默认行为）.
+        """
+        if self._failover_config is None:
+            return False
+        if status_code not in self._failover_config.status_codes:
+            return False
+        if body and "error" in body:
+            error = body["error"]
+            error_type = error.get("type", "")
+            error_message = error.get("message", "").lower()
+            if error_type in self._failover_config.error_types:
+                return True
+            for pattern in self._failover_config.error_message_patterns:
+                if pattern.lower() in error_message:
+                    return True
+        # 429/503 即使无法解析 body 也触发故障转移
+        return status_code in (429, 503)
 
     async def send_message_stream(
         self,

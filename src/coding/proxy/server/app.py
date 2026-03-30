@@ -10,33 +10,65 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 
 from ..backends.anthropic import AnthropicBackend
+from ..backends.copilot import CopilotBackend
 from ..backends.zhipu import ZhipuBackend
 from ..config.loader import load_config
-from ..config.schema import ProxyConfig
+from ..config.schema import (
+    CircuitBreakerConfig,
+    ProxyConfig,
+    QuotaGuardConfig,
+)
 from ..logging.db import TokenLogger
 from ..routing.circuit_breaker import CircuitBreaker
 from ..routing.model_mapper import ModelMapper
 from ..routing.quota_guard import QuotaGuard
 from ..routing.router import RequestRouter
+from ..routing.tier import BackendTier
 
 logger = logging.getLogger(__name__)
+
+
+def _build_circuit_breaker(cfg: CircuitBreakerConfig) -> CircuitBreaker:
+    """从配置构建熔断器实例."""
+    return CircuitBreaker(
+        failure_threshold=cfg.failure_threshold,
+        recovery_timeout_seconds=cfg.recovery_timeout_seconds,
+        success_threshold=cfg.success_threshold,
+        max_recovery_seconds=cfg.max_recovery_seconds,
+    )
+
+
+def _build_quota_guard(cfg: QuotaGuardConfig) -> QuotaGuard:
+    """从配置构建配额守卫实例."""
+    return QuotaGuard(
+        enabled=cfg.enabled,
+        token_budget=cfg.token_budget,
+        window_seconds=int(cfg.window_hours * 3600),
+        threshold_percent=cfg.threshold_percent,
+        probe_interval_seconds=cfg.probe_interval_seconds,
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理（启动 / 关闭）."""
-    router = app.state.router
-    token_logger = app.state.token_logger
-    quota_guard: QuotaGuard = app.state.quota_guard
-    config = app.state.config
-    # Startup
+    router: RequestRouter = app.state.router
+    token_logger: TokenLogger = app.state.token_logger
+    config: ProxyConfig = app.state.config
+
     await token_logger.init()
-    if quota_guard.enabled:
-        total = await token_logger.query_window_total(config.quota_guard.window_hours)
-        quota_guard.load_baseline(total)
+
+    # 为每个有 QuotaGuard 的 tier 加载基线
+    for tier in router.tiers:
+        if tier.quota_guard and tier.quota_guard.enabled:
+            total = await token_logger.query_window_total(
+                tier.quota_guard.window_hours,
+                backend=tier.name,
+            )
+            tier.quota_guard.load_baseline(total)
+
     logger.info("coding-proxy started: host=%s port=%d", config.server.host, config.server.port)
     yield
-    # Shutdown
     await router.close()
     await token_logger.close()
     logger.info("coding-proxy stopped")
@@ -47,40 +79,39 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     if config is None:
         config = load_config()
 
-    # 初始化 Token 日志
     token_logger = TokenLogger(config.db_path)
-
-    # 初始化模型映射器
     mapper = ModelMapper(config.model_mapping)
 
-    # 初始化后端
-    primary = AnthropicBackend(config.primary, config.failover)
-    fallback = ZhipuBackend(config.fallback, config.failover, mapper)
+    # 构建后端层级链
+    tiers: list[BackendTier] = []
 
-    # 初始化熔断器
-    cb = CircuitBreaker(
-        failure_threshold=config.circuit_breaker.failure_threshold,
-        recovery_timeout_seconds=config.circuit_breaker.recovery_timeout_seconds,
-        success_threshold=config.circuit_breaker.success_threshold,
-        max_recovery_seconds=config.circuit_breaker.max_recovery_seconds,
-    )
+    # Tier 0: Anthropic (主后端)
+    if config.primary.enabled:
+        tiers.append(BackendTier(
+            backend=AnthropicBackend(config.primary, config.failover),
+            circuit_breaker=_build_circuit_breaker(config.circuit_breaker),
+            quota_guard=_build_quota_guard(config.quota_guard),
+        ))
 
-    # 初始化配额守卫
-    quota_guard = QuotaGuard(
-        enabled=config.quota_guard.enabled,
-        token_budget=config.quota_guard.token_budget,
-        window_seconds=int(config.quota_guard.window_hours * 3600),
-        threshold_percent=config.quota_guard.threshold_percent,
-        probe_interval_seconds=config.quota_guard.probe_interval_seconds,
-    )
+    # Tier 1: GitHub Copilot (中间层)
+    if config.copilot.enabled:
+        tiers.append(BackendTier(
+            backend=CopilotBackend(config.copilot, config.failover),
+            circuit_breaker=_build_circuit_breaker(config.copilot_circuit_breaker),
+            quota_guard=_build_quota_guard(config.copilot_quota_guard),
+        ))
 
-    # 初始化路由器
-    router = RequestRouter(primary, fallback, cb, token_logger, quota_guard)
+    # Tier N: Zhipu (终端 fallback，无熔断器/配额守卫)
+    if config.fallback.enabled:
+        tiers.append(BackendTier(
+            backend=ZhipuBackend(config.fallback, mapper),
+        ))
+
+    router = RequestRouter(tiers, token_logger)
 
     app = FastAPI(title="coding-proxy", version="0.1.0", lifespan=lifespan)
     app.state.router = router
     app.state.token_logger = token_logger
-    app.state.quota_guard = quota_guard
     app.state.config = config
 
     @app.post("/v1/messages")
@@ -113,20 +144,24 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     @app.get("/api/status")
     async def status() -> dict:
-        result: dict[str, Any] = {
-            "circuit_breaker": router.circuit.get_info(),
-            "primary": primary.get_name(),
-            "fallback": fallback.get_name(),
-        }
-        if quota_guard.enabled:
-            result["quota_guard"] = quota_guard.get_info()
+        result: dict[str, Any] = {"tiers": []}
+        for tier in router.tiers:
+            info: dict[str, Any] = {"name": tier.name}
+            if tier.circuit_breaker:
+                info["circuit_breaker"] = tier.circuit_breaker.get_info()
+            if tier.quota_guard and tier.quota_guard.enabled:
+                info["quota_guard"] = tier.quota_guard.get_info()
+            result["tiers"].append(info)
         return result
 
     @app.post("/api/reset")
     async def reset_circuit() -> dict:
-        cb.reset()
-        quota_guard.reset()
-        return {"status": "ok", "circuit_breaker": cb.get_info()}
+        for tier in router.tiers:
+            if tier.circuit_breaker:
+                tier.circuit_breaker.reset()
+            if tier.quota_guard:
+                tier.quota_guard.reset()
+        return {"status": "ok"}
 
     return app
 

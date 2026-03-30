@@ -50,16 +50,15 @@ def status(
     try:
         resp = httpx.get(f"http://127.0.0.1:{port}/api/status", timeout=5)
         data = resp.json()
-        cb = data.get("circuit_breaker", {})
-        console.print(f"[cyan]熔断器状态:[/] {cb.get('state', 'unknown')}")
-        console.print(f"[green]主后端:[/] {data.get('primary', 'unknown')}")
-        console.print(f"[green]备选后端:[/] {data.get('fallback', 'unknown')}")
-        console.print(f"[blue]连续失败次数:[/] {cb.get('failure_count', 0)}")
-        console.print(f"[blue]恢复超时(s):[/] {cb.get('current_recovery_seconds', 300)}")
-        qg = data.get("quota_guard")
-        if qg:
-            console.print(f"[cyan]配额守卫:[/] {qg.get('state', 'unknown')}")
-            console.print(f"[blue]窗口用量:[/] {qg.get('usage_percent', 0)}% ({qg.get('window_usage_tokens', 0)}/{qg.get('budget_tokens', 0)} tokens)")
+        for tier_info in data.get("tiers", []):
+            name = tier_info.get("name", "unknown")
+            console.print(f"\n[bold green]{name}[/bold green]")
+            cb = tier_info.get("circuit_breaker")
+            if cb:
+                console.print(f"  [cyan]熔断器:[/] {cb.get('state', 'unknown')}  失败={cb.get('failure_count', 0)}")
+            qg = tier_info.get("quota_guard")
+            if qg:
+                console.print(f"  [cyan]配额:[/] {qg.get('state', 'unknown')}  {qg.get('usage_percent', 0)}% ({qg.get('window_usage_tokens', 0)}/{qg.get('budget_tokens', 0)})")
     except httpx.ConnectError:
         console.print("[red]代理服务未运行[/red]")
 
