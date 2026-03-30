@@ -78,6 +78,22 @@ class TokenLogger:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
+    async def query_window_total(
+        self, window_hours: float, backend: str = "anthropic",
+    ) -> int:
+        """查询滚动时间窗口内指定后端的 token 总用量."""
+        if not self._db:
+            return 0
+        cursor = await self._db.execute(
+            """SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS total
+               FROM usage_log
+               WHERE backend = ? AND success = 1
+                 AND ts >= datetime('now', ? || ' hours')""",
+            (backend, f"-{window_hours}"),
+        )
+        row = await cursor.fetchone()
+        return row["total"] if row else 0
+
     async def close(self) -> None:
         if self._db:
             await self._db.close()

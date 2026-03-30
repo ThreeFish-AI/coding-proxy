@@ -16,6 +16,7 @@ from ..config.schema import ProxyConfig
 from ..logging.db import TokenLogger
 from ..routing.circuit_breaker import CircuitBreaker
 from ..routing.model_mapper import ModelMapper
+from ..routing.quota_guard import QuotaGuard
 from ..routing.router import RequestRouter
 
 logger = logging.getLogger(__name__)
@@ -26,9 +27,13 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理（启动 / 关闭）."""
     router = app.state.router
     token_logger = app.state.token_logger
+    quota_guard: QuotaGuard = app.state.quota_guard
     config = app.state.config
     # Startup
     await token_logger.init()
+    if quota_guard.enabled:
+        total = await token_logger.query_window_total(config.quota_guard.window_hours)
+        quota_guard.load_baseline(total)
     logger.info("coding-proxy started: host=%s port=%d", config.server.host, config.server.port)
     yield
     # Shutdown
@@ -60,12 +65,22 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         max_recovery_seconds=config.circuit_breaker.max_recovery_seconds,
     )
 
+    # 初始化配额守卫
+    quota_guard = QuotaGuard(
+        enabled=config.quota_guard.enabled,
+        token_budget=config.quota_guard.token_budget,
+        window_seconds=int(config.quota_guard.window_hours * 3600),
+        threshold_percent=config.quota_guard.threshold_percent,
+        probe_interval_seconds=config.quota_guard.probe_interval_seconds,
+    )
+
     # 初始化路由器
-    router = RequestRouter(primary, fallback, cb, token_logger)
+    router = RequestRouter(primary, fallback, cb, token_logger, quota_guard)
 
     app = FastAPI(title="coding-proxy", version="0.1.0", lifespan=lifespan)
     app.state.router = router
     app.state.token_logger = token_logger
+    app.state.quota_guard = quota_guard
     app.state.config = config
 
     @app.post("/v1/messages")
@@ -98,16 +113,19 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     @app.get("/api/status")
     async def status() -> dict:
-        info = router.circuit.get_info()
-        return {
-            "circuit_breaker": info,
+        result: dict[str, Any] = {
+            "circuit_breaker": router.circuit.get_info(),
             "primary": primary.get_name(),
             "fallback": fallback.get_name(),
         }
+        if quota_guard.enabled:
+            result["quota_guard"] = quota_guard.get_info()
+        return result
 
     @app.post("/api/reset")
     async def reset_circuit() -> dict:
         cb.reset()
+        quota_guard.reset()
         return {"status": "ok", "circuit_breaker": cb.get_info()}
 
     return app
