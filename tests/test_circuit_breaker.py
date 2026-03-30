@@ -1,6 +1,6 @@
 """熔断器状态转换单元测试."""
 
-from coding_proxy.routing.circuit_breaker import CircuitBreaker, CircuitState
+from coding.proxy.routing.circuit_breaker import CircuitBreaker, CircuitState
 
 
 def test_initial_state_is_closed():
