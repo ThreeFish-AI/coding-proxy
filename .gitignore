@@ -9,3 +9,6 @@ dist/
 build/
 *.whl
 .uv/
+
+# Custom
+config.yaml
