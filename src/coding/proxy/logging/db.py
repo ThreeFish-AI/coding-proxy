@@ -59,10 +59,11 @@ class TokenLogger:
              duration_ms, success, failover, request_id))
         await self._db.commit()
 
-    async def query_daily(self, days: int = 7, backend: str | None = None) -> list[dict]:
+    async def query_daily(self, days: int = 7, backend: str | None = None,
+                          model: str | None = None) -> list[dict]:
         if not self._db:
             return []
-        sql = """SELECT date(ts) AS date, backend,
+        sql = """SELECT date(ts) AS date, backend, model_requested, model_served,
                    COUNT(*) AS total_requests,
                    SUM(input_tokens) AS total_input,
                    SUM(output_tokens) AS total_output,
@@ -73,7 +74,11 @@ class TokenLogger:
         if backend:
             sql += " AND backend = ?"
             params.append(backend)
-        sql += " GROUP BY date(ts), backend ORDER BY date(ts) DESC, backend"
+        if model:
+            sql += " AND model_requested = ?"
+            params.append(model)
+        sql += (" GROUP BY date(ts), backend, model_requested, model_served"
+                " ORDER BY date(ts) DESC, backend, model_requested, model_served")
         cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]

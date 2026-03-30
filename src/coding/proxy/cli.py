@@ -68,17 +68,19 @@ def status(
 def usage(
     days: int = typer.Option(7, "--days", "-d", help="统计天数"),
     backend: Optional[str] = typer.Option(None, "--backend", "-b", help="过滤后端"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="过滤请求模型"),
     db_path: Optional[str] = typer.Option(None, "--db", help="数据库路径"),
 ) -> None:
     """查看 Token 使用统计."""
     cfg = load_config(Path(db_path) if db_path else None)
     logger = TokenLogger(cfg.db_path)
-    asyncio.run(_run_usage(logger, days, backend))
+    asyncio.run(_run_usage(logger, days, backend, model))
 
 
-async def _run_usage(logger: TokenLogger, days: int, backend: str | None) -> None:
+async def _run_usage(logger: TokenLogger, days: int, backend: str | None,
+                     model: str | None) -> None:
     await logger.init()
-    await show_usage(logger, days, backend)
+    await show_usage(logger, days, backend, model)
     await logger.close()
 
 
