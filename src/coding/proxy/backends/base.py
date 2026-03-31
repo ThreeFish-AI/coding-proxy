@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 # 代理转发时应跳过的 hop-by-hop 请求头
 PROXY_SKIP_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
 
+# 构造合成 Response 时需移除的头部（避免 httpx 二次解压已解压内容）
+_SYNTHETIC_RESPONSE_SKIP_HEADERS = {"content-encoding", "content-length", "transfer-encoding"}
+
+
+def _sanitize_headers_for_synthetic_response(headers: httpx.Headers) -> dict[str, str]:
+    """移除 content-encoding 等头部，避免合成 httpx.Response 时触发二次解压."""
+    return {k: v for k, v in headers.items() if k.lower() not in _SYNTHETIC_RESPONSE_SKIP_HEADERS}
+
 
 @dataclass
 class UsageInfo:
@@ -149,7 +157,7 @@ class BaseBackend(ABC):
                     response=httpx.Response(
                         response.status_code,
                         content=error_body,
-                        headers=response.headers,
+                        headers=_sanitize_headers_for_synthetic_response(response.headers),
                         request=response.request,
                     ),
                 )
