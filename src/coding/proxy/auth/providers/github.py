@@ -7,6 +7,8 @@ import logging
 import time
 from typing import Any
 
+import webbrowser
+
 import httpx
 
 from ..store import ProviderTokens
@@ -53,10 +55,17 @@ class GitHubDeviceFlowProvider(OAuthProvider):
         device_code = device_data["device_code"]
         interval = device_data.get("interval", _POLL_INTERVAL)
 
+        # 优先使用预填充 user_code 的完整链接
+        verification_url = device_data.get(
+            "verification_uri_complete", verification_uri
+        )
+
         # Step 2: 引导用户在浏览器中授权
         logger.info("请在浏览器中访问 %s 并输入代码: %s", verification_uri, user_code)
         print(f"\n  🔗 请在浏览器中访问: {verification_uri}")
         print(f"  📋 并输入代码: {user_code}\n")
+
+        webbrowser.open(verification_url)
 
         # Step 3: 轮询等待用户完成授权
         for attempt in range(_MAX_POLL_ATTEMPTS):

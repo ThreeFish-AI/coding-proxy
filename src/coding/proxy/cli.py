@@ -125,7 +125,12 @@ def auth_logout(
 
 # ── 自动登录辅助 ─────────────────────────────────────────────
 async def _auto_login_if_needed(cfg_path: Path | None) -> None:
-    """检查已启用的 Tier 是否缺少凭证，自动触发浏览器登录."""
+    """检查已启用的 Tier 是否缺少凭证，自动触发浏览器登录.
+
+    两阶段检查:
+    1. needs_login() — 快速本地判断（无凭证或已过期且无 refresh_token）
+    2. validate()   — 网络验证已有凭证是否仍有效（仅在有凭证时触发）
+    """
     from .auth.providers.github import GitHubDeviceFlowProvider
     from .auth.providers.google import GoogleOAuthProvider
     from .auth.store import TokenStoreManager
@@ -134,33 +139,54 @@ async def _auto_login_if_needed(cfg_path: Path | None) -> None:
     store = TokenStoreManager()
     store.load()
 
-    # Copilot: 需要登录但缺少凭证
+    # --- GitHub / Copilot ---
     if cfg.copilot.enabled and not cfg.copilot.github_token:
         tokens = store.get("github")
-        if not tokens.access_token:
-            console.print("[bold cyan]Copilot 层缺少凭证，启动 GitHub OAuth 登录...[/bold cyan]")
+        prov = GitHubDeviceFlowProvider()
+        needs = prov.needs_login(tokens)
+        if not needs and tokens.has_credentials:
+            # 有凭证但可能过期/吊销 → 网络验证
             try:
-                prov = GitHubDeviceFlowProvider()
+                if not await prov.validate(tokens):
+                    needs = True
+            except Exception:
+                pass  # 网络失败不阻塞启动
+        if needs:
+            console.print("[bold cyan]Copilot 层缺少有效凭证，启动 GitHub OAuth 登录...[/bold cyan]")
+            try:
                 tokens = await prov.login()
                 store.set("github", tokens)
                 console.print("[green]GitHub 登录成功[/green]")
-                await prov.close()
             except Exception as exc:
                 console.print(f"[red]GitHub 登录失败: {exc}[/red]")
+            finally:
+                await prov.close()
+        else:
+            await prov.close()
 
-    # Antigravity: 需要登录但缺少凭证
+    # --- Google / Antigravity ---
     if cfg.antigravity.enabled and not cfg.antigravity.refresh_token:
         tokens = store.get("google")
-        if not tokens.refresh_token:
-            console.print("[bold cyan]Antigravity 层缺少凭证，启动 Google OAuth 登录...[/bold cyan]")
+        prov = GoogleOAuthProvider()
+        needs = prov.needs_login(tokens)
+        if not needs and tokens.has_credentials:
             try:
-                prov = GoogleOAuthProvider()
+                if not await prov.validate(tokens):
+                    needs = True
+            except Exception:
+                pass
+        if needs:
+            console.print("[bold cyan]Antigravity 层缺少有效凭证，启动 Google OAuth 登录...[/bold cyan]")
+            try:
                 tokens = await prov.login()
                 store.set("google", tokens)
                 console.print("[green]Google 登录成功[/green]")
-                await prov.close()
             except Exception as exc:
                 console.print(f"[red]Google 登录失败: {exc}[/red]")
+            finally:
+                await prov.close()
+        else:
+            await prov.close()
 
 
 # ── 主命令 ─────────────────────────────────────────────────────
