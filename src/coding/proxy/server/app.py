@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 
+from ..backends.antigravity import AntigravityBackend
 from ..backends.anthropic import AnthropicBackend
 from ..backends.copilot import CopilotBackend
 from ..backends.zhipu import ZhipuBackend
@@ -99,6 +100,14 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             backend=CopilotBackend(config.copilot, config.failover),
             circuit_breaker=_build_circuit_breaker(config.copilot_circuit_breaker),
             quota_guard=_build_quota_guard(config.copilot_quota_guard),
+        ))
+
+    # Tier 2: Google Antigravity Claude (中间层)
+    if config.antigravity.enabled:
+        tiers.append(BackendTier(
+            backend=AntigravityBackend(config.antigravity, config.failover),
+            circuit_breaker=_build_circuit_breaker(config.antigravity_circuit_breaker),
+            quota_guard=_build_quota_guard(config.antigravity_quota_guard),
         ))
 
     # Tier N: Zhipu (终端 fallback，无熔断器/配额守卫)
