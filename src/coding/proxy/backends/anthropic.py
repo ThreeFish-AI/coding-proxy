@@ -20,7 +20,7 @@ class AnthropicBackend(BaseBackend):
     def get_name(self) -> str:
         return "anthropic"
 
-    def _prepare_request(
+    async def _prepare_request(
         self,
         request_body: dict[str, Any],
         headers: dict[str, str],

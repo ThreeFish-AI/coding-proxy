@@ -28,7 +28,7 @@ class ZhipuBackend(BaseBackend):
     def get_name(self) -> str:
         return "zhipu"
 
-    def _prepare_request(
+    async def _prepare_request(
         self,
         request_body: dict[str, Any],
         headers: dict[str, str],

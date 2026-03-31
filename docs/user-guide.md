@@ -6,20 +6,25 @@
 
 coding-proxy 是一个面向 Claude Code 的多后端智能代理服务。它在 Claude Code 和 API 后端之间充当透明代理，具备以下核心能力：
 
-- **自动故障转移**：Anthropic API 不可用时自动切换到智谱 GLM 后端，恢复后自动切回
+- **N-tier 自动故障转移**：支持多层后端链式降级（Anthropic → Copilot → Antigravity → 智谱 GLM），恢复后自动切回
 - **模型名称映射**：自动将 Claude 模型名转换为对应的 GLM 模型名
+- **格式双向转换**：自动转换 Anthropic ↔ Gemini 格式，支持非 Anthropic 兼容后端
 - **Token 用量追踪**：记录每次请求的 Token 消耗、后端选择、响应时间等指标
-- **熔断器保护**：智能检测后端健康状态，避免反复请求失败的后端
+- **熔断器保护**：每层后端独立熔断器与配额守卫，智能检测健康状态
 
 ### 1.2 工作原理
 
 ```
-Claude Code ──→ coding-proxy ──→ Anthropic API（主后端）
+Claude Code ──→ coding-proxy ──→ Tier 0: Anthropic API（主后端）
                      │
-                     └──→ 智谱 GLM API（故障时自动切换）
+                     ├──→ Tier 1: GitHub Copilot（中间层）
+                     │
+                     ├──→ Tier 2: Antigravity Claude（中间层）
+                     │
+                     └──→ Tier 3: 智谱 GLM API（终端兜底）
 ```
 
-正常情况下，coding-proxy 将请求透传到 Anthropic API。当检测到限流、配额耗尽或服务过载等错误时，自动切换到智谱 GLM 备用后端。后端恢复后，代理会自动尝试切回主后端。整个过程对用户透明，无需手动干预。
+正常情况下，coding-proxy 将请求透传到 Anthropic API。当检测到限流、配额耗尽或服务过载等错误时，按优先级链自动降级到下一层后端。每层独立配备熔断器和配额守卫。后端恢复后，代理会自动尝试切回更高优先级的后端。整个过程对用户透明，无需手动干预。
 
 ---
 
@@ -139,27 +144,54 @@ server:
   host: "127.0.0.1"    # 监听地址
   port: 8046            # 监听端口
 
-# 主后端 — Anthropic 官方 API
+# === 后端层级（按优先级排列） ===
+
+# Tier 0: Anthropic Claude Team Plan（最高优先级）
 primary:
   enabled: true
   base_url: "https://api.anthropic.com"
   timeout_ms: 300000    # 5 分钟
 
-# 备选后端 — 智谱 GLM（Anthropic 兼容接口）
+# Tier 1: GitHub Copilot Team Plan（中间层）
+copilot:
+  enabled: false
+  github_token: "${GITHUB_TOKEN}"
+  timeout_ms: 300000
+
+# Tier 2: Google Antigravity Claude（中间层）
+antigravity:
+  enabled: false
+  client_id: "${GOOG_CLIENT_ID}"
+  client_secret: "${GOOG_CLIENT_SECRET}"
+  refresh_token: "${GOOG_REFRESH_TOKEN}"
+  model_endpoint: "models/claude-sonnet-4-20250514"
+  timeout_ms: 300000
+
+# Tier 3: 智谱 GLM（终端兜底）
 fallback:
   enabled: true
   base_url: "https://open.bigmodel.cn/api/anthropic"
-  api_key: "${ZHIPU_API_KEY}"   # 通过环境变量注入
+  api_key: "${ZHIPU_API_KEY}"
   timeout_ms: 3000000   # 50 分钟
 
-# 熔断器配置
-circuit_breaker:
-  failure_threshold: 3           # 连续 3 次失败后触发熔断
-  recovery_timeout_seconds: 300  # 熔断后等待 5 分钟尝试恢复
-  success_threshold: 2           # 连续 2 次成功后关闭熔断
-  max_recovery_seconds: 3600     # 指数退避上限 1 小时
+# === 弹性配置 ===
 
-# 故障转移触发条件
+# 各层熔断器（独立配置）
+circuit_breaker:
+  failure_threshold: 3
+  recovery_timeout_seconds: 300
+  success_threshold: 2
+  max_recovery_seconds: 3600
+
+copilot_circuit_breaker:
+  failure_threshold: 3
+  recovery_timeout_seconds: 300
+
+antigravity_circuit_breaker:
+  failure_threshold: 3
+  recovery_timeout_seconds: 300
+
+# 故障转移触发条件（所有层共用）
 failover:
   status_codes: [429, 403, 503, 500]
   error_types:
@@ -172,7 +204,7 @@ failover:
     - "usage cap"
     - "capacity"
 
-# 模型名称映射（Claude → GLM）
+# 模型名称映射（Claude → GLM，仅终端层使用）
 model_mapping:
   - pattern: "claude-sonnet-.*"
     target: "glm-5.1"
@@ -183,6 +215,18 @@ model_mapping:
   - pattern: "claude-haiku-.*"
     target: "glm-4.5-air"
     is_regex: true
+
+# 各层配额守卫
+quota_guard:
+  enabled: true
+  token_budget: 45000000
+  window_hours: 5.0
+
+copilot_quota_guard:
+  enabled: false
+
+antigravity_quota_guard:
+  enabled: false
 
 # 用量数据库
 database:
@@ -210,11 +254,35 @@ logging:
 | `base_url`   | string | `"https://api.anthropic.com"` | Anthropic API 地址              |
 | `timeout_ms` | int    | `300000`                      | 请求超时，默认 5 分钟（300 秒） |
 
-#### fallback — 备选后端（智谱）
+#### copilot — GitHub Copilot 后端
+
+| 字段           | 类型   | 默认值                                            | 说明                                          |
+| -------------- | ------ | ------------------------------------------------- | --------------------------------------------- |
+| `enabled`      | bool   | `false`                                           | 是否启用 Copilot 后端                         |
+| `github_token` | string | `""`                                              | GitHub PAT（需 Copilot 权限），支持 `${ENV_VAR}` |
+| `token_url`    | string | `"https://github.com/github-copilot/chat/token"`  | Token 交换端点                                |
+| `base_url`     | string | `"https://api.individual.githubcopilot.com"`       | Copilot API 地址                              |
+| `timeout_ms`   | int    | `300000`                                          | 请求超时，默认 5 分钟                         |
+
+#### antigravity — Google Antigravity Claude 后端
+
+| 字段             | 类型   | 默认值                                                     | 说明                                                    |
+| ---------------- | ------ | ---------------------------------------------------------- | ------------------------------------------------------- |
+| `enabled`        | bool   | `false`                                                    | 是否启用 Antigravity 后端                               |
+| `client_id`      | string | `""`                                                       | Google OAuth2 Client ID，支持 `${ENV_VAR}`              |
+| `client_secret`  | string | `""`                                                       | Google OAuth2 Client Secret，支持 `${ENV_VAR}`          |
+| `refresh_token`  | string | `""`                                                       | Google OAuth2 Refresh Token，支持 `${ENV_VAR}`          |
+| `base_url`       | string | `"https://generativelanguage.googleapis.com/v1beta"`       | Gemini API 基础地址                                     |
+| `model_endpoint` | string | `"models/claude-sonnet-4-20250514"`                        | 模型端点路径                                            |
+| `timeout_ms`     | int    | `300000`                                                   | 请求超时，默认 5 分钟                                   |
+
+> **Antigravity 说明**：Antigravity 后端通过 Google Generative Language API 调用 Claude 模型。代理自动处理 Anthropic ↔ Gemini 格式的双向转换，对 Claude Code 客户端透明。OAuth2 凭据可通过 Google Cloud Console 获取。
+
+#### fallback — 终端兜底后端（智谱）
 
 | 字段         | 类型   | 默认值                                     | 说明                                 |
 | ------------ | ------ | ------------------------------------------ | ------------------------------------ |
-| `enabled`    | bool   | `true`                                     | 是否启用备选后端                     |
+| `enabled`    | bool   | `true`                                     | 是否启用终端兜底后端                 |
 | `base_url`   | string | `"https://open.bigmodel.cn/api/anthropic"` | 智谱 Anthropic 兼容接口地址          |
 | `api_key`    | string | `""`                                       | 智谱 API Key，支持 `${ENV_VAR}` 引用 |
 | `timeout_ms` | int    | `3000000`                                  | 请求超时，默认 50 分钟               |

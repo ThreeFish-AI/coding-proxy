@@ -134,10 +134,14 @@ def test_copilot_get_name():
     assert backend.get_name() == "copilot"
 
 
-def test_copilot_prepare_request_filters_headers():
-    """同步 _prepare_request 过滤 hop-by-hop 头."""
+@pytest.mark.asyncio
+async def test_copilot_prepare_request_filters_and_injects_token():
+    """_prepare_request 过滤 hop-by-hop 头并注入 Copilot token."""
     config = CopilotConfig(github_token="ghp_test")
     backend = CopilotBackend(config, FailoverConfig())
+
+    # Mock token manager
+    backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
 
     body = {"model": "claude-sonnet-4-20250514", "messages": []}
     headers = {
@@ -146,28 +150,12 @@ def test_copilot_prepare_request_filters_headers():
         "content-length": "100",
         "anthropic-version": "2023-06-01",
     }
-    prepared_body, prepared_headers = backend._prepare_request(body, headers)
+    prepared_body, prepared_headers = await backend._prepare_request(body, headers)
     assert prepared_body is body  # 透传
     assert "host" not in prepared_headers
     assert "content-length" not in prepared_headers
-    assert prepared_headers["anthropic-version"] == "2023-06-01"
-
-
-@pytest.mark.asyncio
-async def test_copilot_prepare_request_async_injects_token():
-    """异步 _prepare_request_async 注入 Copilot token."""
-    config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
-
-    # Mock token manager
-    backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
-
-    body = {"model": "claude-sonnet-4-20250514", "messages": []}
-    headers = {"anthropic-version": "2023-06-01"}
-    prepared_body, prepared_headers = await backend._prepare_request_async(body, headers)
-
     assert prepared_headers["authorization"] == "Bearer cop_injected"
-    assert prepared_body is body
+    assert prepared_headers["anthropic-version"] == "2023-06-01"
 
 
 def test_copilot_inherits_failover():

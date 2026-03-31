@@ -39,7 +39,7 @@ class FakeBackend(BaseBackend):
     def get_name(self) -> str:
         return self._name
 
-    def _prepare_request(self, request_body, headers):
+    async def _prepare_request(self, request_body, headers):
         return request_body, headers
 
     async def send_message(self, request_body, headers) -> BackendResponse:
@@ -335,3 +335,117 @@ def test_router_tiers_property():
     tiers = [BackendTier(backend=FakeBackend("a")), BackendTier(backend=FakeBackend("b"))]
     router = RequestRouter(tiers)
     assert router.tiers is tiers
+
+
+# --- 4-tier 路由链测试 ---
+
+
+@pytest.mark.asyncio
+async def test_four_tier_failover_chain():
+    """4-tier 完整降级：anthropic→copilot→antigravity→zhipu."""
+    from coding.proxy.config.schema import FailoverConfig
+
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b0._failover_config = FailoverConfig()
+
+    b1 = FakeBackend("copilot", BackendResponse(status_code=503, error_type="overloaded_error", error_message="overloaded"))
+    b1._failover_config = FailoverConfig()
+
+    b2 = FakeBackend("antigravity", BackendResponse(status_code=403, error_type="api_error", error_message="forbidden"))
+    b2._failover_config = FailoverConfig()
+
+    b3 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=50)))
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b3),
+    ])
+    resp = await router.route_message(_body(), _headers())
+    assert resp.status_code == 200
+    assert b0.call_count == 1
+    assert b1.call_count == 1
+    assert b2.call_count == 1
+    assert b3.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_four_tier_antigravity_succeeds():
+    """4-tier：前两层失败，antigravity 成功."""
+    from coding.proxy.config.schema import FailoverConfig
+
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b0._failover_config = FailoverConfig()
+
+    b1 = FakeBackend("copilot", BackendResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b1._failover_config = FailoverConfig()
+
+    b2 = FakeBackend("antigravity", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=40, output_tokens=20)))
+    b3 = FakeBackend("zhipu")
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b3),
+    ])
+    resp = await router.route_message(_body(), _headers())
+    assert resp.status_code == 200
+    assert b0.call_count == 1
+    assert b1.call_count == 1
+    assert b2.call_count == 1
+    assert b3.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_four_tier_all_non_terminal_skipped():
+    """4-tier：所有非终端层 CB OPEN → 直达终端."""
+    b0 = FakeBackend("anthropic")
+    b1 = FakeBackend("copilot")
+    b2 = FakeBackend("antigravity")
+    b3 = FakeBackend("zhipu", BackendResponse(status_code=200))
+
+    cbs = [CircuitBreaker(failure_threshold=1) for _ in range(3)]
+    for cb in cbs:
+        cb.record_failure()
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=cbs[0]),
+        BackendTier(backend=b1, circuit_breaker=cbs[1]),
+        BackendTier(backend=b2, circuit_breaker=cbs[2]),
+        BackendTier(backend=b3),
+    ])
+    resp = await router.route_message(_body(), _headers())
+    assert resp.status_code == 200
+    assert b0.call_count == 0
+    assert b1.call_count == 0
+    assert b2.call_count == 0
+    assert b3.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_four_tier_stream_failover():
+    """4-tier 流式：前三层失败 → 终端接管."""
+    b0 = FakeBackend("anthropic", raise_on_call=httpx.ConnectError("refused"))
+    b1 = FakeBackend("copilot", raise_on_call=httpx.ConnectError("refused"))
+    b2 = FakeBackend("antigravity", raise_on_call=httpx.ConnectError("refused"))
+    b3 = FakeBackend("zhipu", stream_chunks=[b"data: ok\n\n"])
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b3),
+    ])
+
+    collected = []
+    async for chunk, name in router.route_stream(_body(), _headers()):
+        collected.append((chunk, name))
+
+    assert len(collected) == 1
+    assert collected[0][1] == "zhipu"
+    assert b0.call_count == 1
+    assert b1.call_count == 1
+    assert b2.call_count == 1
+    assert b3.call_count == 1

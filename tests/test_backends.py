@@ -1,5 +1,7 @@
 """后端基类与子类单元测试."""
 
+import pytest
+
 from coding.proxy.backends.anthropic import AnthropicBackend
 from coding.proxy.backends.base import BaseBackend, BackendResponse, UsageInfo
 from coding.proxy.backends.zhipu import ZhipuBackend
@@ -12,7 +14,8 @@ from coding.proxy.config.schema import (
 from coding.proxy.routing.model_mapper import ModelMapper
 
 
-def test_anthropic_prepare_request_filters_headers():
+@pytest.mark.asyncio
+async def test_anthropic_prepare_request_filters_headers():
     backend = AnthropicBackend(AnthropicConfig(), FailoverConfig())
     body = {"model": "claude-sonnet-4-20250514", "messages": []}
     headers = {
@@ -21,7 +24,7 @@ def test_anthropic_prepare_request_filters_headers():
         "content-length": "100",
         "anthropic-version": "2023-06-01",
     }
-    prepared_body, prepared_headers = backend._prepare_request(body, headers)
+    prepared_body, prepared_headers = await backend._prepare_request(body, headers)
     assert prepared_body is body  # 不修改原始 body
     assert "host" not in prepared_headers
     assert "content-length" not in prepared_headers
@@ -29,7 +32,8 @@ def test_anthropic_prepare_request_filters_headers():
     assert prepared_headers["anthropic-version"] == "2023-06-01"
 
 
-def test_zhipu_prepare_request_maps_model():
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_maps_model():
     mapper = ModelMapper([
         ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True),
     ])
@@ -38,7 +42,7 @@ def test_zhipu_prepare_request_maps_model():
 
     body = {"model": "claude-sonnet-4-20250514", "messages": []}
     headers = {"anthropic-version": "2023-06-01"}
-    prepared_body, prepared_headers = backend._prepare_request(body, headers)
+    prepared_body, prepared_headers = await backend._prepare_request(body, headers)
 
     assert prepared_body["model"] == "glm-5.1"
     assert prepared_headers["x-api-key"] == "test-key"

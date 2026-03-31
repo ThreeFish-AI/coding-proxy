@@ -29,6 +29,18 @@ class CopilotConfig(BaseModel):
     timeout_ms: int = 300000
 
 
+class AntigravityConfig(BaseModel):
+    """Google Antigravity Claude 后端配置."""
+
+    enabled: bool = False
+    client_id: str = ""
+    client_secret: str = ""
+    refresh_token: str = ""
+    base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    model_endpoint: str = "models/claude-sonnet-4-20250514"
+    timeout_ms: int = 300000
+
+
 class ZhipuConfig(BaseModel):
     enabled: bool = True
     base_url: str = "https://open.bigmodel.cn/api/anthropic"
@@ -82,9 +94,11 @@ class ProxyConfig(BaseModel):
     server: ServerConfig = ServerConfig()
     primary: AnthropicConfig = AnthropicConfig()
     copilot: CopilotConfig = CopilotConfig()
+    antigravity: AntigravityConfig = AntigravityConfig()
     fallback: ZhipuConfig = ZhipuConfig()
     circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()
     copilot_circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()
+    antigravity_circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()
     failover: FailoverConfig = FailoverConfig()
     model_mapping: list[ModelMappingRule] = Field(
         default=[
@@ -96,6 +110,7 @@ class ProxyConfig(BaseModel):
     )
     quota_guard: QuotaGuardConfig = QuotaGuardConfig()
     copilot_quota_guard: QuotaGuardConfig = QuotaGuardConfig()
+    antigravity_quota_guard: QuotaGuardConfig = QuotaGuardConfig()
     database: DatabaseConfig = DatabaseConfig()
     logging: LoggingConfig = LoggingConfig()
 

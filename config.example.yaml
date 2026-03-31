@@ -22,7 +22,17 @@ copilot:
   base_url: "https://api.individual.githubcopilot.com"
   timeout_ms: 300000
 
-# Tier 2: 智谱 GLM（终端兜底）
+# Tier 2: Google Antigravity Claude（中间层）
+antigravity:
+  enabled: false                        # 默认禁用，启用需配置 OAuth 凭据
+  client_id: "${GOOG_CLIENT_ID}"        # Google OAuth2 Client ID
+  client_secret: "${GOOG_CLIENT_SECRET}" # Google OAuth2 Client Secret
+  refresh_token: "${GOOG_REFRESH_TOKEN}" # Google OAuth2 Refresh Token
+  base_url: "https://generativelanguage.googleapis.com/v1beta"
+  model_endpoint: "models/claude-sonnet-4-20250514"
+  timeout_ms: 300000
+
+# Tier 3: 智谱 GLM（终端兜底）
 fallback:
   enabled: true
   base_url: "https://open.bigmodel.cn/api/anthropic"
@@ -39,6 +49,12 @@ circuit_breaker:
 
 # Copilot 熔断器
 copilot_circuit_breaker:
+  failure_threshold: 3
+  recovery_timeout_seconds: 300
+  success_threshold: 2
+
+# Antigravity 熔断器
+antigravity_circuit_breaker:
   failure_threshold: 3
   recovery_timeout_seconds: 300
   success_threshold: 2
@@ -73,6 +89,14 @@ quota_guard:
 
 # Copilot 配额守卫
 copilot_quota_guard:
+  enabled: false
+  token_budget: 0
+  window_hours: 24.0
+  threshold_percent: 95.0
+  probe_interval_seconds: 300
+
+# Antigravity 配额守卫
+antigravity_quota_guard:
   enabled: false                # 默认禁用；启用后按 Premium Requests 配额管理
   token_budget: 0
   window_hours: 24.0

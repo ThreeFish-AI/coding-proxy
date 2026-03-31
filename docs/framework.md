@@ -32,43 +32,42 @@ Claude Code 作为日常 AI 编程助手，其底层依赖 Anthropic Messages AP
 ### 2.1 架构分层图
 
 ```
-┌─────────────────────────────────────────────────┐
-│               Claude Code 客户端                 │
-└────────────────────┬────────────────────────────┘
-                     │ HTTP POST /v1/messages
-┌────────────────────▼────────────────────────────┐
-│            FastAPI Server (server/app.py)         │
-│                                                   │
-│  ┌─────────────────────────────────────────────┐ │
-│  │        RequestRouter (routing/router.py)      │ │
-│  │                                               │ │
-│  │  ┌──────────────────┐ ┌───────────────────┐  │ │
-│  │  │  CircuitBreaker   │ │   TokenLogger     │  │ │
-│  │  │  (circuit_breaker │ │   (logging/db.py) │  │ │
-│  │  │   .py)            │ │                   │  │ │
-│  │  └──────────────────┘ └───────────────────┘  │ │
-│  └────────┬──────────────────────┬──────────────┘ │
-│           │ Primary              │ Fallback        │
-│  ┌────────▼─────────┐  ┌────────▼──────────────┐ │
-│  │ AnthropicBackend  │  │ ZhipuBackend          │ │
-│  │ (backends/        │  │ (backends/zhipu.py)   │ │
-│  │  anthropic.py)    │  │ + ModelMapper         │ │
-│  └────────┬─────────┘  └────────┬──────────────┘ │
-└───────────┼──────────────────────┼────────────────┘
-            │                      │
-   ┌────────▼─────────┐  ┌────────▼──────────────┐
-   │  Anthropic API    │  │  智谱 GLM API          │
-   │  (官方)           │  │  (Anthropic 兼容接口)  │
-   └──────────────────┘  └───────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                     Claude Code 客户端                         │
+└────────────────────────────┬──────────────────────────────────┘
+                             │ HTTP POST /v1/messages
+┌────────────────────────────▼──────────────────────────────────┐
+│              FastAPI Server (server/app.py)                     │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │          RequestRouter (routing/router.py)                  │ │
+│  │          N-tier 链式路由 + TokenLogger                      │ │
+│  └───┬──────────┬──────────────┬──────────────┬──────────────┘ │
+│      │ Tier 0   │ Tier 1       │ Tier 2       │ Tier 3         │
+│  ┌───▼───────┐ ┌▼───────────┐ ┌▼────────────┐ ┌▼────────────┐ │
+│  │ Anthropic  │ │ Copilot    │ │Antigravity  │ │ Zhipu       │ │
+│  │ Backend    │ │ Backend    │ │Backend      │ │ Backend     │ │
+│  │ CB + QG    │ │ CB + QG    │ │CB + QG      │ │ (终端)      │ │
+│  └───┬───────┘ └┬───────────┘ └┬────────────┘ └┬────────────┘ │
+└──────┼──────────┼──────────────┼───────────────┼──────────────┘
+       │          │              │               │
+  ┌────▼─────┐ ┌─▼──────────┐ ┌▼────────────┐ ┌▼────────────┐
+  │Anthropic │ │ GitHub     │ │ Google      │ │ 智谱 GLM    │
+  │API       │ │ Copilot    │ │ Gemini API  │ │ API         │
+  │(官方)    │ │ API        │ │(Antigravity)│ │(兼容接口)   │
+  └──────────┘ └────────────┘ └─────────────┘ └─────────────┘
 ```
+
+> **CB** = CircuitBreaker（熔断器），**QG** = QuotaGuard（配额守卫）
 
 ### 2.2 模块职责一览
 
 | 模块 | 路径 | 职责 |
 |------|------|------|
 | **server** | `server/app.py` | 应用工厂、HTTP 端点定义、生命周期管理 |
-| **backends** | `backends/` | 后端抽象基类与具体实现（Anthropic、Zhipu） |
-| **routing** | `routing/` | 请求路由、熔断器状态机、模型名称映射 |
+| **backends** | `backends/` | 后端抽象基类与具体实现（Anthropic、Copilot、Antigravity、Zhipu） |
+| **convert** | `convert/` | Anthropic ↔ Gemini 双向格式转换（请求、响应、SSE 流） |
+| **routing** | `routing/` | N-tier 链式路由、熔断器状态机、配额守卫、模型名称映射 |
 | **config** | `config/` | Pydantic 配置模型定义与 YAML 加载 |
 | **logging** | `logging/` | Token 用量 SQLite 持久化与统计查询 |
 | **cli** | `cli.py` | Typer 命令行入口（start、status、usage、reset） |
@@ -106,17 +105,21 @@ BaseBackend（模板）
 ├── _get_client()           ← 公共逻辑：惰性初始化 httpx.AsyncClient
 ├── close()                 ← 公共逻辑：关闭 HTTP 客户端
 │
-├── _prepare_request()      ← 【抽象】子类实现请求转换
+├── _prepare_request()      ← 【抽象·异步】子类实现请求转换（支持 token 刷新等异步操作）
+├── _get_endpoint()         ← 【钩子】端点路径（默认 /v1/messages）
+├── _on_error_status()      ← 【钩子】错误状态码处理（如 token 失效标记）
 ├── get_name()              ← 【抽象】子类返回后端标识
-└── should_trigger_failover() ← 【抽象】子类定义故障转移条件
+└── should_trigger_failover() ← 基于 FailoverConfig 判断故障转移
 ```
 
-两个具体子类的差异化实现：
+四个具体子类的差异化实现：
 
-| 方法 | AnthropicBackend | ZhipuBackend |
-|------|-----------------|--------------|
-| `_prepare_request()` | 过滤 hop-by-hop 头，透传 OAuth token | 映射模型名称，替换为 API Key 认证 |
-| `should_trigger_failover()` | 检查 status_codes + error_types + message_patterns | 始终返回 `False`（最终后端） |
+| 方法 | AnthropicBackend | CopilotBackend | AntigravityBackend | ZhipuBackend |
+|------|-----------------|----------------|-------------------|--------------|
+| `_prepare_request()` | 过滤 hop-by-hop 头 | 过滤头 + 异步 token 注入 | Gemini 格式转换 + OAuth token | 模型映射 + API Key |
+| `_on_error_status()` | — | 401/403 token 失效 | 401/403 token 失效 | — |
+| `send_message()` | 继承基类 | 继承基类 | 覆写（自定义端点 + 响应转换） | 继承基类 |
+| `send_message_stream()` | 继承基类 | 继承基类 | 覆写（自定义端点 + SSE 适配） | 继承基类 |
 
 ### 3.2 Circuit Breaker（熔断器模式）
 
@@ -207,12 +210,14 @@ create_app(config)
     │
     ├─ 1. TokenLogger(config.db_path)
     ├─ 2. ModelMapper(config.model_mapping)
-    ├─ 3. AnthropicBackend(config.primary, config.failover)
-    ├─ 4. ZhipuBackend(config.fallback, config.failover, mapper)
-    ├─ 5. CircuitBreaker(config.circuit_breaker.*)
-    ├─ 6. RequestRouter(primary, fallback, cb, token_logger)
+    ├─ 3. 构建 BackendTier 链：
+    │     ├─ Tier 0: AnthropicBackend + CB + QG
+    │     ├─ Tier 1: CopilotBackend + CB + QG  （enabled 时）
+    │     ├─ Tier 2: AntigravityBackend + CB + QG（enabled 时）
+    │     └─ Tier N: ZhipuBackend（终端，无 CB/QG）
+    ├─ 4. RequestRouter(tiers, token_logger)
     │
-    └─ 7. FastAPI(lifespan=lifespan)
+    └─ 5. FastAPI(lifespan=lifespan)
          ├─ app.state.router = router
          ├─ app.state.token_logger = token_logger
          └─ app.state.config = config
@@ -349,12 +354,24 @@ class BackendResponse:
     error_message: str | None = None
 ```
 
-**AnthropicBackend**：
+**AnthropicBackend**（Tier 0）：
 - 过滤 hop-by-hop 头（`host`、`content-length`、`transfer-encoding`、`connection`）
 - 透传客户端的 OAuth token（`authorization` 头）
 - 不修改请求体
 
-**ZhipuBackend**：
+**CopilotBackend**（Tier 1）：
+- 过滤代理 hop-by-hop 头
+- 通过 `CopilotTokenManager` 异步获取并注入 GitHub Copilot 令牌
+- 401/403 时自动 invalidate token 触发重新交换
+
+**AntigravityBackend**（Tier 2）：
+- 调用 `convert/` 模块进行 Anthropic → Gemini 请求格式转换
+- 通过 `GoogleOAuthTokenManager` 异步获取并注入 OAuth2 access_token
+- 覆写 `send_message` / `send_message_stream` 使用 Gemini 端点
+- 响应经 `convert_response` / `adapt_sse_stream` 逆转换为 Anthropic 格式
+- 401/403 时自动 invalidate OAuth token
+
+**ZhipuBackend**（终端 Tier N）：
 - 浅拷贝请求体（`{**request_body}`），避免修改原始数据
 - 调用 `ModelMapper.map()` 映射模型名称
 - 替换认证头为 `x-api-key`
@@ -368,9 +385,9 @@ class BackendResponse:
 ### 5.2 routing/ — 路由模块
 
 **RequestRouter**：
-- 持有四个依赖：`primary`、`fallback`、`circuit_breaker`、`token_logger`
-- `route_message()` → 非流式路由，返回 `BackendResponse`
-- `route_stream()` → 流式路由，yield `(chunk, backend_name)`
+- 持有 `tiers: list[BackendTier]` + `token_logger`，支持 N-tier 链式降级
+- `route_message()` → 非流式路由，按优先级逐层尝试，返回 `BackendResponse`
+- `route_stream()` → 流式路由，按优先级逐层尝试，yield `(chunk, backend_name)`
 - `_record_usage()` → 统一记录用量到 TokenLogger
 
 **CircuitBreaker 参数**：
@@ -557,7 +574,16 @@ model_mapping:
 | `test_circuit_breaker.py` | 状态转换（CLOSED→OPEN→HALF_OPEN→CLOSED）、恢复超时、指数退避、手动重置 |
 | `test_model_mapper.py` | 精确匹配、正则匹配、Glob 匹配、默认回退、空规则集 |
 | `test_backends.py` | 请求头过滤、模型映射、故障转移判断、数据类默认值 |
-| `test_config_loader.py` | 配置文件搜索优先级、环境变量展开、缺失文件处理 |
+| `test_copilot.py` | CopilotTokenManager 交换/缓存/过期/失效、CopilotBackend 请求准备 |
+| `test_antigravity.py` | GoogleOAuthTokenManager 刷新/缓存/过期/失效、AntigravityBackend 格式转换+token 注入 |
+| `test_convert_request.py` | Anthropic→Gemini 请求转换（文本、多轮、system、图片、工具、参数映射） |
+| `test_convert_response.py` | Gemini→Anthropic 响应转换（文本、多部件、usage 提取、finishReason 映射） |
+| `test_convert_sse.py` | Gemini SSE→Anthropic SSE 流适配（单/多 chunk、各 finishReason、边界情况） |
+| `test_router_chain.py` | N-tier 链式路由（2/3/4-tier 降级、CB/QG 跳过、流式/非流式、连接异常） |
+| `test_tier.py` | BackendTier 可执行判断、成功/失败记录、终端判定 |
+| `test_config_loader.py` | 配置文件搜索优先级、环境变量展开、缺失文件处理、Copilot/Antigravity 配置 |
+| `test_quota_guard.py` | 配额守卫状态机、预算追踪、探测机制、基线加载 |
+| `test_token_logger.py` | 用量记录、窗口查询、按后端/模型过滤 |
 
 ### 8.2 测试工具
 
