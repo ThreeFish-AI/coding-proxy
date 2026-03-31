@@ -130,3 +130,19 @@ def test_status_exposes_backend_diagnostics():
         copilot = next(item for item in tiers if item["name"] == "copilot")
         assert "diagnostics" in copilot
         assert "非预期响应" in copilot["diagnostics"]["token_manager"]["last_error"]
+
+
+def test_incompatible_request_returns_400():
+    """当所有可用后端都无法保持工具语义时，返回明确错误而不是误降级."""
+    with _make_app(primary_enabled=False) as client:
+        resp = client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "tools": [{"name": "analyze_image"}],
+            },
+        )
+        assert resp.status_code == 400
+        data = resp.json()
+        assert data["error"]["type"] == "invalid_request_error"

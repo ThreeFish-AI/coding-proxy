@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, AsyncIterator
 
 import httpx
@@ -36,6 +37,37 @@ class UsageInfo:
     request_id: str = ""
 
 
+class CapabilityLossReason(Enum):
+    """请求语义与后端能力不匹配的原因."""
+
+    TOOLS = "tools"
+    THINKING = "thinking"
+    IMAGES = "images"
+    VENDOR_TOOLS = "vendor_tools"
+    METADATA = "metadata"
+
+
+@dataclass(frozen=True)
+class RequestCapabilities:
+    """一次请求实际使用到的能力画像."""
+
+    has_tools: bool = False
+    has_thinking: bool = False
+    has_images: bool = False
+    has_metadata: bool = False
+
+
+@dataclass(frozen=True)
+class BackendCapabilities:
+    """后端能力声明."""
+
+    supports_tools: bool = True
+    supports_thinking: bool = True
+    supports_images: bool = True
+    emits_vendor_tool_events: bool = False
+    supports_metadata: bool = True
+
+
 @dataclass
 class BackendResponse:
     """后端响应结果."""
@@ -48,6 +80,14 @@ class BackendResponse:
     error_message: str | None = None
     model_served: str | None = None
     response_headers: dict[str, str] = field(default_factory=dict)
+
+
+class NoCompatibleBackendError(RuntimeError):
+    """当前请求没有可安全承接的后端."""
+
+    def __init__(self, message: str, *, reasons: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.reasons = reasons or []
 
 
 class BaseBackend(ABC):
@@ -83,6 +123,33 @@ class BaseBackend(ABC):
         有模型映射需求的后端（如 Zhipu）应覆写此方法.
         """
         return model
+
+    def get_capabilities(self) -> BackendCapabilities:
+        """返回后端能力声明.
+
+        默认视为 Anthropic 兼容后端。
+        """
+        return BackendCapabilities()
+
+    def supports_request(
+        self, request_caps: RequestCapabilities,
+    ) -> tuple[bool, list[CapabilityLossReason]]:
+        """判断后端是否能无损承接该请求."""
+        backend_caps = self.get_capabilities()
+        reasons: list[CapabilityLossReason] = []
+
+        if request_caps.has_tools and not backend_caps.supports_tools:
+            reasons.append(CapabilityLossReason.TOOLS)
+        if request_caps.has_thinking and not backend_caps.supports_thinking:
+            reasons.append(CapabilityLossReason.THINKING)
+        if request_caps.has_images and not backend_caps.supports_images:
+            reasons.append(CapabilityLossReason.IMAGES)
+        if request_caps.has_metadata and not backend_caps.supports_metadata:
+            reasons.append(CapabilityLossReason.METADATA)
+        if request_caps.has_tools and backend_caps.emits_vendor_tool_events:
+            reasons.append(CapabilityLossReason.VENDOR_TOOLS)
+
+        return len(reasons) == 0, reasons
 
     @abstractmethod
     async def _prepare_request(

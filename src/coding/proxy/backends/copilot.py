@@ -9,7 +9,7 @@ import httpx
 
 from ..config.schema import CopilotConfig, FailoverConfig
 from .base import PROXY_SKIP_HEADERS, BaseBackend
-from .token_manager import BaseTokenManager, TokenAcquireError
+from .token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +40,23 @@ class CopilotTokenManager(BaseTokenManager):
     ) -> TokenAcquireError:
         detail = cls._format_body_excerpt(data)
         lowered = detail.lower()
+        capability_keys = {
+            "chat_enabled", "agent_mode_auto_approval", "chat_jetbrains_enabled",
+            "annotations_enabled", "code_quote_enabled",
+        }
+        if isinstance(data, dict) and capability_keys.intersection(data.keys()):
+            return TokenAcquireError.with_kind(
+                "Copilot 当前登录权限不足，需升级到可交换 chat token 的 GitHub 会话",
+                kind=TokenErrorKind.PERMISSION_UPGRADE_REQUIRED,
+                needs_reauth=True,
+            )
         needs_reauth = status_code == 401 or any(
             pattern in lowered for pattern in ("bad credentials", "invalid token", "unauthorized")
         )
-        return TokenAcquireError(
+        kind = TokenErrorKind.INVALID_CREDENTIALS if needs_reauth else TokenErrorKind.TEMPORARY
+        return TokenAcquireError.with_kind(
             f"Copilot token 交换返回非预期响应: status={status_code}, detail={detail}",
+            kind=kind,
             needs_reauth=needs_reauth,
         )
 
@@ -63,12 +75,20 @@ class CopilotTokenManager(BaseTokenManager):
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 401:
-                raise TokenAcquireError(
-                    "GitHub token 无效或已过期", needs_reauth=True,
+                raise TokenAcquireError.with_kind(
+                    "GitHub token 无效或已过期",
+                    kind=TokenErrorKind.INVALID_CREDENTIALS,
+                    needs_reauth=True,
                 ) from exc
-            raise TokenAcquireError(f"Copilot token 交换失败: {exc}") from exc
+            raise TokenAcquireError.with_kind(
+                f"Copilot token 交换失败: {exc}",
+                kind=TokenErrorKind.TEMPORARY,
+            ) from exc
         except (httpx.TimeoutException, httpx.ConnectError) as exc:
-            raise TokenAcquireError(f"Copilot token 交换网络异常: {exc}") from exc
+            raise TokenAcquireError.with_kind(
+                f"Copilot token 交换网络异常: {exc}",
+                kind=TokenErrorKind.TEMPORARY,
+            ) from exc
 
         try:
             data = response.json()
@@ -79,7 +99,11 @@ class CopilotTokenManager(BaseTokenManager):
 
         if response.status_code >= 400:
             if response.status_code == 401:
-                raise TokenAcquireError("GitHub token 无效或已过期", needs_reauth=True)
+                raise TokenAcquireError.with_kind(
+                    "GitHub token 无效或已过期",
+                    kind=TokenErrorKind.INVALID_CREDENTIALS,
+                    needs_reauth=True,
+                )
             raise self._build_missing_token_error(data, response.status_code)
 
         access_token = data.get("access_token")

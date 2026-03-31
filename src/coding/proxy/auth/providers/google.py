@@ -33,6 +33,7 @@ _SCOPES = [
     "https://www.googleapis.com/auth/cclog",
     "https://www.googleapis.com/auth/experimentsandconfigs",
 ]
+_REQUIRED_SCOPE_SET = frozenset(_SCOPES)
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
@@ -91,6 +92,11 @@ class GoogleOAuthProvider(OAuthProvider):
 
     def get_name(self) -> str:
         return "google"
+
+    @staticmethod
+    def has_required_scopes(scope: str) -> bool:
+        granted = {item for item in scope.split() if item}
+        return _REQUIRED_SCOPE_SET.issubset(granted)
 
     async def login(self) -> ProviderTokens:
         """执行 Google OAuth2 Code Flow，返回 Token."""
@@ -217,7 +223,10 @@ class GoogleOAuthProvider(OAuthProvider):
                 "https://www.googleapis.com/oauth2/v1/tokeninfo",
                 params={"access_token": tokens.access_token},
             )
-            return resp.status_code == 200
+            if resp.status_code != 200:
+                return False
+            data = resp.json()
+            return self.has_required_scopes(data.get("scope", tokens.scope))
         except httpx.HTTPError:
             return False
 

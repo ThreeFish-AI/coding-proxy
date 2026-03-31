@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,14 +15,17 @@ from fastapi.responses import StreamingResponse
 from ..auth.providers.github import GitHubDeviceFlowProvider
 from ..auth.providers.google import (
     GoogleOAuthProvider,
+    _REQUIRED_SCOPE_SET as _GOOGLE_REQUIRED_SCOPE_SET,
     _DEFAULT_CLIENT_ID as _GOOGLE_DEFAULT_CLIENT_ID,
     _DEFAULT_CLIENT_SECRET as _GOOGLE_DEFAULT_CLIENT_SECRET,
 )
 from ..auth.runtime import RuntimeReauthCoordinator
 from ..auth.store import TokenStoreManager
+from ..backends.base import NoCompatibleBackendError
 from ..backends.antigravity import AntigravityBackend
 from ..backends.anthropic import AnthropicBackend
 from ..backends.copilot import CopilotBackend
+from ..backends.token_manager import TokenAcquireError
 from ..backends.zhipu import ZhipuBackend
 from ..config.loader import load_config
 from ..config.schema import (
@@ -109,8 +113,36 @@ def _resolve_antigravity_credentials(
             updates["client_secret"] = _GOOGLE_DEFAULT_CLIENT_SECRET
         cfg = cfg.model_copy(update=updates)
         logger.info("Antigravity: 使用 Token Store 中的 Google 凭证")
+        if tokens.scope and not GoogleOAuthProvider.has_required_scopes(tokens.scope):
+            missing = sorted(_GOOGLE_REQUIRED_SCOPE_SET.difference(tokens.scope.split()))
+            logger.warning(
+                "Antigravity: Token Store 中的 Google scope 不完整，缺少: %s",
+                ", ".join(missing),
+            )
 
     return cfg
+
+
+def _json_error_response(
+    status_code: int,
+    *,
+    error_type: str,
+    message: str,
+    details: list[str] | None = None,
+) -> Response:
+    payload: dict[str, Any] = {
+        "error": {
+            "type": error_type,
+            "message": message,
+        }
+    }
+    if details:
+        payload["error"]["details"] = details
+    return Response(
+        content=json.dumps(payload, ensure_ascii=False).encode(),
+        status_code=status_code,
+        media_type="application/json",
+    )
 
 
 @asynccontextmanager
@@ -229,7 +261,27 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                 },
             )
 
-        resp = await router.route_message(body, headers)
+        try:
+            resp = await router.route_message(body, headers)
+        except NoCompatibleBackendError as exc:
+            return _json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message=str(exc),
+                details=exc.reasons,
+            )
+        except TokenAcquireError as exc:
+            return _json_error_response(
+                503,
+                error_type="authentication_error",
+                message=str(exc),
+            )
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            return _json_error_response(
+                502,
+                error_type="api_error",
+                message=f"上游不可达: {exc}",
+            )
         return Response(
             content=resp.raw_body or b"{}",
             status_code=resp.status_code,
@@ -341,5 +393,21 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
 async def _stream_proxy(router: RequestRouter, body: dict, headers: dict) -> Any:
     """流式代理生成器."""
-    async for chunk, backend_name in router.route_stream(body, headers):
-        yield chunk
+    try:
+        async for chunk, backend_name in router.route_stream(body, headers):
+            yield chunk
+    except NoCompatibleBackendError as exc:
+        yield (
+            "event: error\n"
+            f"data: {json.dumps({'type': 'error', 'error': {'type': 'invalid_request_error', 'message': str(exc), 'details': exc.reasons}}, ensure_ascii=False)}\n\n"
+        ).encode()
+    except TokenAcquireError as exc:
+        yield (
+            "event: error\n"
+            f"data: {json.dumps({'type': 'error', 'error': {'type': 'authentication_error', 'message': str(exc)}}, ensure_ascii=False)}\n\n"
+        ).encode()
+    except (httpx.TimeoutException, httpx.ConnectError) as exc:
+        yield (
+            "event: error\n"
+            f"data: {json.dumps({'type': 'error', 'error': {'type': 'api_error', 'message': f'上游不可达: {exc}'}}, ensure_ascii=False)}\n\n"
+        ).encode()

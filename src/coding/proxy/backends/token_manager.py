@@ -7,10 +7,20 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+class TokenErrorKind(Enum):
+    """Token 获取失败分类."""
+
+    TEMPORARY = "temporary"
+    INVALID_CREDENTIALS = "invalid_credentials"
+    PERMISSION_UPGRADE_REQUIRED = "permission_upgrade_required"
+    INSUFFICIENT_SCOPE = "insufficient_scope"
 
 
 class TokenAcquireError(Exception):
@@ -23,6 +33,19 @@ class TokenAcquireError(Exception):
     def __init__(self, message: str, *, needs_reauth: bool = False) -> None:
         super().__init__(message)
         self.needs_reauth = needs_reauth
+        self.kind = TokenErrorKind.TEMPORARY
+
+    @classmethod
+    def with_kind(
+        cls,
+        message: str,
+        *,
+        kind: TokenErrorKind,
+        needs_reauth: bool = False,
+    ) -> "TokenAcquireError":
+        err = cls(message, needs_reauth=needs_reauth)
+        err.kind = kind
+        return err
 
 
 @dataclass
@@ -31,6 +54,7 @@ class TokenManagerDiagnostics:
 
     last_error: str = ""
     needs_reauth: bool = False
+    error_kind: str = ""
     updated_at: float = 0.0
 
     def to_dict(self) -> dict[str, str | bool]:
@@ -39,6 +63,7 @@ class TokenManagerDiagnostics:
         return {
             "last_error": self.last_error,
             "needs_reauth": self.needs_reauth,
+            "error_kind": self.error_kind,
             "updated_at_unix": round(self.updated_at, 3),
         }
 
@@ -113,10 +138,25 @@ class BaseTokenManager(ABC):
     def get_diagnostics(self) -> dict[str, str | bool]:
         return self._diagnostics.to_dict()
 
+    def mark_error(
+        self,
+        message: str,
+        *,
+        kind: TokenErrorKind = TokenErrorKind.TEMPORARY,
+        needs_reauth: bool = False,
+    ) -> None:
+        self._record_error(TokenAcquireError.with_kind(
+            message, kind=kind, needs_reauth=needs_reauth,
+        ))
+
+    def clear_diagnostics(self) -> None:
+        self._clear_error()
+
     def _record_error(self, exc: TokenAcquireError) -> None:
         self._diagnostics = TokenManagerDiagnostics(
             last_error=str(exc),
             needs_reauth=exc.needs_reauth,
+            error_kind=exc.kind.value,
             updated_at=time.time(),
         )
         logger.warning("Token acquire failed: %s", exc)

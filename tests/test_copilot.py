@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from coding.proxy.backends.copilot import CopilotBackend, CopilotTokenManager
-from coding.proxy.backends.token_manager import TokenAcquireError
+from coding.proxy.backends.token_manager import TokenAcquireError, TokenErrorKind
 from coding.proxy.config.schema import CopilotConfig, FailoverConfig
 
 
@@ -172,6 +172,31 @@ async def test_token_manager_401_needs_reauth():
 
     assert exc_info.value.needs_reauth is True
     assert "GitHub token 无效或已过期" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_token_manager_permission_upgrade_required():
+    """200 但返回 capability 文档时，识别为权限升级需求而非普通过期."""
+    tm = CopilotTokenManager("ghp_test", "https://fake")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "agent_mode_auto_approval": True,
+        "chat_enabled": True,
+        "chat_jetbrains_enabled": True,
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    tm._client = mock_client
+
+    with pytest.raises(TokenAcquireError) as exc_info:
+        await tm.get_token()
+
+    assert exc_info.value.needs_reauth is True
+    assert exc_info.value.kind == TokenErrorKind.PERMISSION_UPGRADE_REQUIRED
 
 
 # --- CopilotBackend ---

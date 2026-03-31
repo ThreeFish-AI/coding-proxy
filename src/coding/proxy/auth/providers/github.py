@@ -23,6 +23,7 @@ _DEVICE_CODE_URL = "https://github.com/login/device/code"
 _ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 _POLL_INTERVAL = 5  # seconds
 _MAX_POLL_ATTEMPTS = 60  # 5 minutes total
+_COPILOT_PERMISSIVE_SCOPES = "read:user user:email repo workflow"
 
 
 class GitHubDeviceFlowProvider(OAuthProvider):
@@ -44,7 +45,7 @@ class GitHubDeviceFlowProvider(OAuthProvider):
         # Step 1: 请求 device code
         resp = await self._http.post(
             _DEVICE_CODE_URL,
-            data={"client_id": self._client_id, "scope": ""},
+            data={"client_id": self._client_id, "scope": _COPILOT_PERMISSIVE_SCOPES},
             headers={"accept": "application/json"},
         )
         resp.raise_for_status()

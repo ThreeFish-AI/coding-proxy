@@ -8,12 +8,19 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from ..auth.providers.google import GoogleOAuthProvider
 from ..config.schema import AntigravityConfig, FailoverConfig
 from ..convert.anthropic_to_gemini import convert_request
 from ..convert.gemini_to_anthropic import convert_response, extract_usage
 from ..convert.gemini_sse_adapter import adapt_sse_stream
-from .base import BackendResponse, BaseBackend, UsageInfo, _sanitize_headers_for_synthetic_response
-from .token_manager import BaseTokenManager, TokenAcquireError
+from .base import (
+    BackendCapabilities,
+    BackendResponse,
+    BaseBackend,
+    UsageInfo,
+    _sanitize_headers_for_synthetic_response,
+)
+from .token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
 
 logger = logging.getLogger(__name__)
 
@@ -53,15 +60,30 @@ class GoogleOAuthTokenManager(BaseTokenManager):
                 try:
                     err = exc.response.json()
                     if err.get("error") == "invalid_grant":
-                        raise TokenAcquireError(
-                            "Google refresh_token 已失效", needs_reauth=True,
+                        raise TokenAcquireError.with_kind(
+                            "Google refresh_token 已失效",
+                            kind=TokenErrorKind.INVALID_CREDENTIALS,
+                            needs_reauth=True,
                         ) from exc
                 except (ValueError, KeyError):
                     pass
-            raise TokenAcquireError(f"Google token 刷新失败: {exc}") from exc
+            raise TokenAcquireError.with_kind(
+                f"Google token 刷新失败: {exc}",
+                kind=TokenErrorKind.TEMPORARY,
+            ) from exc
         except (httpx.TimeoutException, httpx.ConnectError) as exc:
-            raise TokenAcquireError(f"Google token 刷新网络异常: {exc}") from exc
+            raise TokenAcquireError.with_kind(
+                f"Google token 刷新网络异常: {exc}",
+                kind=TokenErrorKind.TEMPORARY,
+            ) from exc
         data = response.json()
+        scope = data.get("scope", "")
+        if scope and not GoogleOAuthProvider.has_required_scopes(scope):
+            raise TokenAcquireError.with_kind(
+                "Google access_token 缺少 Antigravity 所需 scope",
+                kind=TokenErrorKind.INSUFFICIENT_SCOPE,
+                needs_reauth=True,
+            )
         expires_in = data.get("expires_in", 3600)
         logger.info("Google OAuth token refreshed, expires_in=%ds", expires_in)
         return data["access_token"], float(expires_in)
@@ -89,6 +111,14 @@ class AntigravityBackend(BaseBackend):
     def get_name(self) -> str:
         return "antigravity"
 
+    def get_capabilities(self) -> BackendCapabilities:
+        return BackendCapabilities(
+            supports_tools=False,
+            supports_thinking=False,
+            supports_images=True,
+            supports_metadata=False,
+        )
+
     async def _prepare_request(
         self,
         request_body: dict[str, Any],
@@ -108,6 +138,16 @@ class AntigravityBackend(BaseBackend):
         """401/403 时标记 token 失效以触发被动刷新."""
         if status_code in (401, 403):
             self._token_manager.invalidate()
+
+    def _mark_scope_error_if_needed(self, error_text: str) -> None:
+        lowered = error_text.lower()
+        if "access_token_scope_insufficient" not in lowered:
+            return
+        self._token_manager.mark_error(
+            "Google access_token scope 不足，当前凭证不能调用 Generative Language API",
+            kind=TokenErrorKind.INSUFFICIENT_SCOPE,
+            needs_reauth=True,
+        )
 
     async def check_health(self) -> bool:
         """检查 Google OAuth token 是否可刷新（免费操作）."""
@@ -138,6 +178,7 @@ class AntigravityBackend(BaseBackend):
 
         if response.status_code >= 400:
             self._on_error_status(response.status_code)
+            self._mark_scope_error_if_needed(response.text)
             return BackendResponse(
                 status_code=response.status_code,
                 raw_body=response.content,
@@ -178,6 +219,9 @@ class AntigravityBackend(BaseBackend):
             if response.status_code >= 400:
                 self._on_error_status(response.status_code)
                 error_body = await response.aread()
+                self._mark_scope_error_if_needed(
+                    error_body.decode("utf-8", errors="ignore"),
+                )
                 logger.warning(
                     "%s stream error: status=%d body=%s",
                     self.get_name(), response.status_code, error_body[:500],

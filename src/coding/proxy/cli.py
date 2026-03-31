@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 from typing import Optional
 
@@ -142,11 +143,17 @@ async def _auto_login_if_needed(cfg_path: Path | None) -> None:
     store = TokenStoreManager()
     store.load()
 
+    async def _resolve_needs_login(provider, tokens) -> bool:
+        result = provider.needs_login(tokens)
+        if inspect.isawaitable(result):
+            return bool(await result)
+        return bool(result)
+
     # --- GitHub / Copilot ---
     if not cfg.copilot.github_token:
         tokens = store.get("github")
         prov = GitHubDeviceFlowProvider()
-        needs = prov.needs_login(tokens)
+        needs = await _resolve_needs_login(prov, tokens)
         if not needs and tokens.has_credentials:
             # 有凭证但可能过期/吊销 → 网络验证
             try:
@@ -171,7 +178,7 @@ async def _auto_login_if_needed(cfg_path: Path | None) -> None:
     if not cfg.antigravity.refresh_token:
         tokens = store.get("google")
         prov = GoogleOAuthProvider()
-        needs = prov.needs_login(tokens)
+        needs = await _resolve_needs_login(prov, tokens)
         if not needs and tokens.has_credentials:
             try:
                 if not await prov.validate(tokens):
