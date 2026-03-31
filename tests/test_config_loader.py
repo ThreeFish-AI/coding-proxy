@@ -89,7 +89,7 @@ def test_copilot_config_defaults():
     assert cfg.copilot.enabled is False
     assert cfg.copilot.github_token == ""
     assert cfg.copilot.account_type == "individual"
-    assert cfg.copilot.base_url == "https://api.githubcopilot.com"
+    assert cfg.copilot.base_url == ""
 
 
 def test_copilot_config_from_yaml(tmp_path: Path, monkeypatch):
