@@ -67,12 +67,19 @@ class BaseBackend(ABC):
         """返回后端名称（用于日志）."""
 
     @abstractmethod
-    def _prepare_request(
+    async def _prepare_request(
         self,
         request_body: dict[str, Any],
         headers: dict[str, str],
     ) -> tuple[dict[str, Any], dict[str, str]]:
-        """准备请求体和请求头，由子类实现差异化逻辑."""
+        """准备请求体和请求头，由子类实现差异化逻辑（支持异步操作）."""
+
+    def _get_endpoint(self) -> str:
+        """返回 API 端点路径（默认 /v1/messages）."""
+        return "/v1/messages"
+
+    def _on_error_status(self, status_code: int) -> None:
+        """响应错误状态码时的钩子（如 token 失效标记）."""
 
     def should_trigger_failover(self, status_code: int, body: dict[str, Any] | None) -> bool:
         """基于 FailoverConfig 的通用故障转移判断.
@@ -101,16 +108,18 @@ class BaseBackend(ABC):
         headers: dict[str, str],
     ) -> AsyncIterator[bytes]:
         """发送消息并返回 SSE 字节流."""
-        body, prepared_headers = self._prepare_request(request_body, headers)
+        body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
+        endpoint = self._get_endpoint()
 
         async with client.stream(
             "POST",
-            "/v1/messages",
+            endpoint,
             json=body,
             headers=prepared_headers,
         ) as response:
             if response.status_code >= 400:
+                self._on_error_status(response.status_code)
                 error_body = await response.aread()
                 logger.warning(
                     "%s stream error: status=%d body=%s",
@@ -135,11 +144,12 @@ class BaseBackend(ABC):
         headers: dict[str, str],
     ) -> BackendResponse:
         """发送非流式消息请求."""
-        body, prepared_headers = self._prepare_request(request_body, headers)
+        body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
+        endpoint = self._get_endpoint()
 
         response = await client.post(
-            "/v1/messages",
+            endpoint,
             json=body,
             headers=prepared_headers,
         )
@@ -148,6 +158,7 @@ class BaseBackend(ABC):
         resp_body = response.json() if response.content else None
 
         if response.status_code >= 400:
+            self._on_error_status(response.status_code)
             return BackendResponse(
                 status_code=response.status_code,
                 raw_body=raw_content,
