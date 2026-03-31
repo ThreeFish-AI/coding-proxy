@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator
 import httpx
 
 from ..backends.base import BackendResponse, UsageInfo
+from ..backends.base import NoCompatibleBackendError, RequestCapabilities
 from ..backends.token_manager import TokenAcquireError
 from ..logging.db import TokenLogger
 from .rate_limit import (
@@ -20,6 +21,28 @@ from .rate_limit import (
 from .tier import BackendTier
 
 logger = logging.getLogger(__name__)
+
+
+def _build_request_capabilities(body: dict[str, Any]) -> RequestCapabilities:
+    """从请求体提取能力画像."""
+    has_images = False
+    for msg in body.get("messages", []):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(
+            isinstance(block, dict) and block.get("type") == "image"
+            for block in content
+        ):
+            has_images = True
+            break
+
+    return RequestCapabilities(
+        has_tools=bool(body.get("tools") or body.get("tool_choice")),
+        has_thinking=bool(body.get("thinking") or body.get("extended_thinking")),
+        has_images=has_images,
+        has_metadata=bool(body.get("metadata")),
+    )
 
 
 def _set_if_nonzero(usage: dict, key: str, value: int) -> None:
@@ -131,9 +154,20 @@ class RequestRouter:
         last_idx = len(self._tiers) - 1
         last_exc: Exception | None = None
         failed_tier_name: str | None = None
+        request_caps = _build_request_capabilities(body)
+        incompatible_reasons: list[str] = []
 
         for i, tier in enumerate(self._tiers):
             is_last = i == last_idx
+            supported, reasons = tier.backend.supports_request(request_caps)
+            if not supported:
+                reason_text = ",".join(sorted({r.value for r in reasons}))
+                incompatible_reasons.append(f"{tier.name}:{reason_text}")
+                logger.info(
+                    "Tier %s skipped due to incompatible capabilities: %s",
+                    tier.name, reason_text,
+                )
+                continue
 
             # 非终端层使用健康检查门控
             if not is_last:
@@ -206,6 +240,10 @@ class RequestRouter:
 
         if last_exc:
             raise last_exc
+        raise NoCompatibleBackendError(
+            "当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容后端",
+            reasons=incompatible_reasons,
+        )
 
     async def route_message(
         self,
@@ -216,9 +254,20 @@ class RequestRouter:
         last_idx = len(self._tiers) - 1
         start = time.monotonic()
         failed_tier_name: str | None = None
+        request_caps = _build_request_capabilities(body)
+        incompatible_reasons: list[str] = []
 
         for i, tier in enumerate(self._tiers):
             is_last = i == last_idx
+            supported, reasons = tier.backend.supports_request(request_caps)
+            if not supported:
+                reason_text = ",".join(sorted({r.value for r in reasons}))
+                incompatible_reasons.append(f"{tier.name}:{reason_text}")
+                logger.info(
+                    "Tier %s skipped due to incompatible capabilities: %s",
+                    tier.name, reason_text,
+                )
+                continue
 
             # 非终端层使用健康检查门控
             if not is_last:
@@ -294,6 +343,11 @@ class RequestRouter:
                     raise
                 continue
 
+        if incompatible_reasons:
+            raise NoCompatibleBackendError(
+                "当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容后端",
+                reasons=incompatible_reasons,
+            )
         raise RuntimeError("无可用后端层级")
 
     async def _record_usage(

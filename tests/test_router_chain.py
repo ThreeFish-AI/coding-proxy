@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from coding.proxy.backends.base import BackendResponse, BaseBackend, UsageInfo
+from coding.proxy.backends.base import BackendCapabilities, BackendResponse, BaseBackend, UsageInfo
 from coding.proxy.backends.token_manager import TokenAcquireError
 from coding.proxy.routing.circuit_breaker import CircuitBreaker
 from coding.proxy.routing.quota_guard import QuotaGuard
@@ -500,6 +500,37 @@ async def test_four_tier_stream_failover_when_copilot_token_acquire_fails():
 
     assert len(collected) == 1
     assert collected[0][1] == "antigravity"
+
+
+@pytest.mark.asyncio
+async def test_incompatible_tool_request_skips_non_compatible_tiers():
+    """带 tools 的请求不会静默降级到不兼容的 antigravity/zhipu."""
+    b0 = FakeBackend("copilot", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+    b1 = FakeBackend("antigravity", BackendResponse(status_code=200))
+    b2 = FakeBackend("zhipu", BackendResponse(status_code=200))
+
+    b1.get_capabilities = lambda: BackendCapabilities(
+        supports_tools=False, supports_thinking=False, supports_images=True,
+    )
+    b2.get_capabilities = lambda: BackendCapabilities(
+        supports_tools=False, supports_thinking=False, supports_images=True,
+        emits_vendor_tool_events=True,
+    )
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b2),
+    ])
+
+    resp = await router.route_message({
+        **_body(),
+        "tools": [{"name": "analyze_image"}],
+    }, _headers())
+    assert resp.status_code == 200
+    assert b0.call_count == 1
+    assert b1.call_count == 0
+    assert b2.call_count == 0
 
 
 # --- model_served 测试 ---

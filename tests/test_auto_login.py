@@ -302,11 +302,13 @@ async def test_github_login_opens_browser():
     }
 
     call_count = 0
+    device_call_data = {}
 
     async def _mock_post(url, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
+            device_call_data.update(kwargs.get("data", {}))
             return mock_resp_device
         return mock_resp_token
 
@@ -318,6 +320,7 @@ async def test_github_login_opens_browser():
     mock_wb.open.assert_called_once_with(
         "https://github.com/login/device?user_code=ABCD-1234"
     )
+    assert device_call_data["scope"] == "read:user user:email repo workflow"
     assert tokens.access_token == "ghp_test_tok"
     await prov.close()
 
