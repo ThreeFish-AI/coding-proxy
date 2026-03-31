@@ -185,3 +185,42 @@ def test_incompatible_request_returns_400():
         assert resp.status_code == 400
         data = resp.json()
         assert data["error"]["type"] == "invalid_request_error"
+
+
+def test_stream_http_status_error_returns_anthropic_sse_error():
+    """流式上游 HTTP 错误应转换为 Anthropic SSE error，而不是抛出 ASGI 异常."""
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+    ))
+
+    async def failing_route_stream(body, headers):
+        request = httpx.Request("POST", "https://api.example.com/v1/messages")
+        response = httpx.Response(
+            429,
+            content=b'{"error":{"type":"rate_limit_error","message":"Too many requests"}}',
+            headers={"content-type": "application/json"},
+            request=request,
+        )
+        raise httpx.HTTPStatusError("anthropic API error: 429", request=request, response=response)
+        yield  # pragma: no cover
+
+    app.state.router.route_stream = failing_route_stream
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": True,
+            },
+        ) as resp:
+            body = b"".join(resp.iter_bytes()).decode()
+
+    assert resp.status_code == 200
+    assert "event: error" in body
+    assert '"type": "rate_limit_error"' in body
+    assert "Too many requests" in body

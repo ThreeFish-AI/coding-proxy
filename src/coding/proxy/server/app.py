@@ -153,6 +153,46 @@ def _json_error_response(
     )
 
 
+def _stream_error_event(error_type: str, message: str, details: list[str] | None = None) -> bytes:
+    payload: dict[str, Any] = {
+        "type": "error",
+        "error": {
+            "type": error_type,
+            "message": message,
+        },
+    }
+    if details:
+        payload["error"]["details"] = details
+    return f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+
+
+def _extract_stream_http_error(exc: httpx.HTTPStatusError) -> tuple[str, str]:
+    response = exc.response
+    if response is None:
+        return "api_error", str(exc)
+
+    try:
+        payload = response.json() if response.content else None
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+        payload = None
+
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            error_type = error.get("type")
+            message = error.get("message")
+            if isinstance(error_type, str) and isinstance(message, str) and message:
+                return error_type, message
+        message = payload.get("message")
+        if isinstance(message, str) and message:
+            return "api_error", message
+
+    text = response.text.strip() if response.content else ""
+    if text:
+        return "api_error", text[:500]
+    return "api_error", str(exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理（启动 / 关闭）."""
@@ -461,7 +501,7 @@ async def _stream_proxy(router: RequestRouter, body: dict, headers: dict) -> Any
             f"data: {json.dumps({'type': 'error', 'error': {'type': 'authentication_error', 'message': str(exc)}}, ensure_ascii=False)}\n\n"
         ).encode()
     except (httpx.TimeoutException, httpx.ConnectError) as exc:
-        yield (
-            "event: error\n"
-            f"data: {json.dumps({'type': 'error', 'error': {'type': 'api_error', 'message': f'上游不可达: {exc}'}}, ensure_ascii=False)}\n\n"
-        ).encode()
+        yield _stream_error_event("api_error", f"上游不可达: {exc}")
+    except httpx.HTTPStatusError as exc:
+        error_type, message = _extract_stream_http_error(exc)
+        yield _stream_error_event(error_type, message)

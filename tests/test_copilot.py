@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from coding.proxy.backends.base import CapabilityLossReason, RequestCapabilities
 from coding.proxy.backends.copilot import CopilotBackend, CopilotTokenManager, resolve_copilot_base_url
 from coding.proxy.backends.token_manager import TokenAcquireError, TokenErrorKind
 from coding.proxy.config.schema import CopilotConfig, FailoverConfig
@@ -310,6 +311,40 @@ def test_copilot_capabilities_disable_thinking():
     assert caps.supports_tools is True
     assert caps.supports_images is True
     assert caps.supports_thinking is False
+
+
+def test_copilot_supports_request_with_thinking_via_adapter():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+
+    supported, reasons = backend.supports_request(RequestCapabilities(has_thinking=True))
+
+    assert supported is True
+    assert CapabilityLossReason.THINKING not in reasons
+
+
+@pytest.mark.asyncio
+async def test_copilot_prepare_request_records_thinking_adaptations():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+    backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
+
+    body = {
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{
+            "role": "assistant",
+            "content": [{"type": "thinking", "thinking": "先分析"}],
+        }],
+        "thinking": {"budget_tokens": 1024},
+    }
+
+    prepared_body, _ = await backend._prepare_request(body, {"anthropic-version": "2023-06-01"})
+
+    assert "thinking" not in prepared_body
+    assert "extended_thinking" not in prepared_body
+    diagnostics = backend.get_diagnostics()
+    assert "thinking_downgraded_to_text" in diagnostics["request_adaptations"]
+    assert "thinking_block_merged_into_text" in diagnostics["request_adaptations"]
 
 
 @pytest.mark.asyncio
