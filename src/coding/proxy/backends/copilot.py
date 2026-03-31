@@ -14,7 +14,17 @@ from ..config.schema import CopilotConfig, FailoverConfig
 from ..convert.anthropic_to_openai import convert_request as convert_openai_request
 from ..convert.openai_to_anthropic import convert_response as convert_openai_response
 from ..streaming.anthropic_compat import normalize_anthropic_compatible_stream
-from .base import PROXY_SKIP_HEADERS, BackendCapabilities, BackendResponse, BaseBackend, UsageInfo, _decode_json_body, _extract_error_message
+from .base import (
+    PROXY_SKIP_HEADERS,
+    BackendCapabilities,
+    BackendResponse,
+    BaseBackend,
+    CapabilityLossReason,
+    RequestCapabilities,
+    UsageInfo,
+    _decode_json_body,
+    _extract_error_message,
+)
 from .token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
 
 logger = logging.getLogger(__name__)
@@ -221,6 +231,7 @@ class CopilotBackend(BaseBackend):
         self._account_type = (config.account_type or "individual").strip().lower()
         self._configured_base_url = config.base_url
         self._resolved_base_url = resolve_copilot_base_url(self._account_type, config.base_url)
+        self._last_request_adaptations: list[str] = []
         super().__init__(self._resolved_base_url, config.timeout_ms, failover_config)
         self._token_manager = CopilotTokenManager(config.github_token, config.token_url)
 
@@ -235,6 +246,15 @@ class CopilotBackend(BaseBackend):
             emits_vendor_tool_events=False,
             supports_metadata=True,
         )
+
+    def supports_request(
+        self, request_caps: RequestCapabilities,
+    ) -> tuple[bool, list[CapabilityLossReason]]:
+        """Copilot 可通过适配层吸收 thinking 语义，不在路由阶段直接拒绝."""
+        supported, reasons = super().supports_request(request_caps)
+        if not supported:
+            reasons = [reason for reason in reasons if reason is not CapabilityLossReason.THINKING]
+        return len(reasons) == 0, reasons
 
     def _get_endpoint(self) -> str:
         return "/chat/completions"
@@ -259,6 +279,26 @@ class CopilotBackend(BaseBackend):
                 return "agent"
         return "user"
 
+    @staticmethod
+    def _collect_request_adaptations(request_body: dict[str, Any]) -> list[str]:
+        adaptations: list[str] = []
+
+        if request_body.get("thinking") or request_body.get("extended_thinking"):
+            adaptations.append("thinking_downgraded_to_text")
+
+        for message in request_body.get("messages", []):
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            if any(
+                isinstance(block, dict) and block.get("type") == "thinking"
+                for block in content
+            ):
+                adaptations.append("thinking_block_merged_into_text")
+                break
+
+        return adaptations
+
     async def _prepare_request(
         self,
         request_body: dict[str, Any],
@@ -273,6 +313,7 @@ class CopilotBackend(BaseBackend):
         token = await self._token_manager.get_token()
         prepared["authorization"] = f"Bearer {token}"
         prepared["x-initiator"] = self._resolve_initiator(request_body)
+        self._last_request_adaptations = self._collect_request_adaptations(request_body)
         return convert_openai_request(request_body), prepared
 
     def _on_error_status(self, status_code: int) -> None:
@@ -299,6 +340,8 @@ class CopilotBackend(BaseBackend):
         exchange = self._token_manager.get_exchange_diagnostics()
         if exchange:
             diagnostics["exchange"] = exchange
+        if self._last_request_adaptations:
+            diagnostics["request_adaptations"] = self._last_request_adaptations
         return diagnostics
 
     async def send_message(

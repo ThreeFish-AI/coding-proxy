@@ -10,7 +10,9 @@ import httpx
 import pytest
 
 from coding.proxy.backends.base import BackendCapabilities, BackendResponse, BaseBackend, UsageInfo
+from coding.proxy.backends.copilot import CopilotBackend
 from coding.proxy.backends.token_manager import TokenAcquireError
+from coding.proxy.config.schema import CopilotConfig, FailoverConfig
 from coding.proxy.routing.circuit_breaker import CircuitBreaker
 from coding.proxy.routing.quota_guard import QuotaGuard
 from coding.proxy.routing.router import RequestRouter
@@ -500,6 +502,48 @@ async def test_four_tier_stream_failover_when_copilot_token_acquire_fails():
 
     assert len(collected) == 1
     assert collected[0][1] == "antigravity"
+
+
+@pytest.mark.asyncio
+async def test_stream_failover_to_copilot_even_when_request_has_thinking():
+    """Anthropic 429 且请求含 thinking 时，Copilot 仍应通过适配层接管."""
+    from coding.proxy.config.schema import FailoverConfig as RouterFailoverConfig
+
+    b0 = FakeBackend("anthropic", raise_on_call=httpx.HTTPStatusError(
+        "anthropic API error: 429",
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        response=httpx.Response(
+            429,
+            content=b'{"error":{"type":"rate_limit_error","message":"limited"}}',
+            headers={"content-type": "application/json"},
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        ),
+    ))
+    b0._failover_config = RouterFailoverConfig()
+
+    copilot = CopilotBackend(CopilotConfig(github_token="ghp_test"), FailoverConfig())
+    copilot.check_health = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    async def _copilot_stream(_body, _headers):
+        yield b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-sonnet-4\",\"usage\":{\"input_tokens\":10}}}\n\n"
+        yield b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+    copilot.send_message_stream = _copilot_stream  # type: ignore[method-assign]
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=copilot, circuit_breaker=CircuitBreaker()),
+    ])
+
+    collected: list[tuple[bytes, str]] = []
+    async for chunk, name in router.route_stream({
+        **_body(),
+        "thinking": {"budget_tokens": 512},
+    }, _headers()):
+        collected.append((chunk, name))
+
+    assert collected
+    assert all(name == "copilot" for _, name in collected)
 
 
 @pytest.mark.asyncio
