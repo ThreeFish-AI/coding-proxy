@@ -53,6 +53,14 @@ def _find_anthropic_backend(router: RequestRouter) -> AnthropicBackend | None:
     return None
 
 
+def _find_copilot_backend(router: RequestRouter) -> CopilotBackend | None:
+    """从路由链中查找 Copilot 后端实例（用于诊断与模型探测）."""
+    for tier in router.tiers:
+        if isinstance(tier.backend, CopilotBackend):
+            return tier.backend
+    return None
+
+
 def _build_circuit_breaker(cfg: CircuitBreakerConfig) -> CircuitBreaker:
     """从配置构建熔断器实例."""
     return CircuitBreaker(
@@ -307,6 +315,52 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                 info["diagnostics"] = diagnostics
             result["tiers"].append(info)
         return result
+
+    @app.get("/api/copilot/diagnostics")
+    async def copilot_diagnostics() -> Response:
+        """返回 Copilot 认证与交换链路的脱敏诊断信息."""
+        backend = _find_copilot_backend(router)
+        if backend is None:
+            return _json_error_response(
+                404,
+                error_type="not_found",
+                message="copilot backend not enabled",
+            )
+        return Response(
+            content=json.dumps(backend.get_diagnostics(), ensure_ascii=False).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    @app.get("/api/copilot/models")
+    async def copilot_models() -> Response:
+        """按需探测当前 Copilot 会话可见模型列表."""
+        backend = _find_copilot_backend(router)
+        if backend is None:
+            return _json_error_response(
+                404,
+                error_type="not_found",
+                message="copilot backend not enabled",
+            )
+        try:
+            probe = await backend.probe_models()
+        except TokenAcquireError as exc:
+            return _json_error_response(
+                503,
+                error_type="authentication_error",
+                message=str(exc),
+            )
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            return _json_error_response(
+                502,
+                error_type="api_error",
+                message=f"copilot models probe failed: {exc}",
+            )
+        return Response(
+            content=json.dumps(probe, ensure_ascii=False).encode(),
+            status_code=200 if probe.get("probe_status") == "ok" else 502,
+            media_type="application/json",
+        )
 
     @app.post("/api/reset")
     async def reset_circuit() -> dict:

@@ -132,6 +132,45 @@ def test_status_exposes_backend_diagnostics():
         assert "非预期响应" in copilot["diagnostics"]["token_manager"]["last_error"]
 
 
+def test_copilot_diagnostics_endpoint_returns_backend_info():
+    config = ProxyConfig(
+        copilot={"enabled": True, "github_token": "ghu_test"},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+    )
+    app = create_app(config)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/copilot/diagnostics")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["account_type"] == "individual"
+        assert data["base_url"] == "https://api.githubcopilot.com"
+
+
+def test_copilot_models_endpoint_returns_probe_data():
+    config = ProxyConfig(
+        copilot={"enabled": True, "github_token": "ghu_test"},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+    )
+    app = create_app(config)
+
+    for tier in app.state.router.tiers:
+        if tier.name == "copilot":
+            tier.backend.probe_models = AsyncMock(return_value={  # type: ignore[method-assign]
+                "probe_status": "ok",
+                "available_models": ["claude-opus-4.6"],
+                "has_claude_opus_4_6": True,
+            })
+            break
+
+    with TestClient(app) as client:
+        resp = client.get("/api/copilot/models")
+        assert resp.status_code == 200
+        assert resp.json()["has_claude_opus_4_6"] is True
+
+
 def test_incompatible_request_returns_400():
     """当所有可用后端都无法保持工具语义时，返回明确错误而不是误降级."""
     with _make_app(primary_enabled=False) as client:

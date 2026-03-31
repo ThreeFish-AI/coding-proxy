@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from coding.proxy.backends.copilot import CopilotBackend, CopilotTokenManager
+from coding.proxy.backends.copilot import CopilotBackend, CopilotTokenManager, resolve_copilot_base_url
 from coding.proxy.backends.token_manager import TokenAcquireError, TokenErrorKind
 from coding.proxy.config.schema import CopilotConfig, FailoverConfig
 
@@ -40,6 +40,28 @@ async def test_token_manager_exchange():
     call_kwargs = mock_client.get.call_args
     headers = call_kwargs.kwargs.get("headers", call_kwargs[1].get("headers", {}))
     assert headers["authorization"] == "token ghp_test"
+
+
+@pytest.mark.asyncio
+async def test_token_manager_exchange_supports_token_refresh_in_shape():
+    """兼容 Copilot 当前返回的 token/refresh_in 形态."""
+    tm = CopilotTokenManager("ghp_test", "https://api.github.com/copilot_internal/v2/token")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"token": "cop_new", "refresh_in": 1740}
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    tm._client = mock_client
+
+    token = await tm.get_token()
+    assert token == "cop_new"
+    diagnostics = tm.get_exchange_diagnostics()
+    assert diagnostics["raw_shape"] == "token_refresh_in"
+    assert diagnostics["token_field"] == "token"
+    assert diagnostics["expires_in_seconds"] == 1740
 
 
 @pytest.mark.asyncio
@@ -199,6 +221,31 @@ async def test_token_manager_permission_upgrade_required():
     assert exc_info.value.kind == TokenErrorKind.PERMISSION_UPGRADE_REQUIRED
 
 
+@pytest.mark.asyncio
+async def test_token_manager_token_and_capabilities_still_succeeds():
+    """响应同时含 token 与 capability 字段时，不应误判为权限不足."""
+    tm = CopilotTokenManager("ghp_test", "https://fake")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "token": "cop_ok",
+        "refresh_in": 1200,
+        "chat_enabled": True,
+        "chat_jetbrains_enabled": True,
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    tm._client = mock_client
+
+    token = await tm.get_token()
+    assert token == "cop_ok"
+    diagnostics = tm.get_exchange_diagnostics()
+    assert diagnostics["capabilities"]["chat_enabled"] is True
+
+
 # --- CopilotBackend ---
 
 
@@ -206,6 +253,13 @@ def test_copilot_get_name():
     config = CopilotConfig(github_token="ghp_test")
     backend = CopilotBackend(config, FailoverConfig())
     assert backend.get_name() == "copilot"
+
+
+def test_resolve_copilot_base_url():
+    assert resolve_copilot_base_url("individual", "") == "https://api.githubcopilot.com"
+    assert resolve_copilot_base_url("business", "") == "https://api.business.githubcopilot.com"
+    assert resolve_copilot_base_url("enterprise", "") == "https://api.enterprise.githubcopilot.com"
+    assert resolve_copilot_base_url("individual", "https://custom.example.com") == "https://custom.example.com"
 
 
 @pytest.mark.asyncio
@@ -230,6 +284,8 @@ async def test_copilot_prepare_request_filters_and_injects_token():
     assert "content-length" not in prepared_headers
     assert prepared_headers["authorization"] == "Bearer cop_injected"
     assert prepared_headers["anthropic-version"] == "2023-06-01"
+    assert prepared_headers["copilot-integration-id"] == "vscode-chat"
+    assert prepared_headers["openai-intent"] == "conversation-panel"
 
 
 def test_copilot_inherits_failover():
@@ -243,3 +299,27 @@ def test_copilot_inherits_failover():
     assert backend.should_trigger_failover(429, {
         "error": {"type": "rate_limit_error", "message": "limited"}
     })
+
+
+@pytest.mark.asyncio
+async def test_probe_models_reports_opus_46():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+    backend._token_manager.get_token = AsyncMock(return_value="cop_token")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b'{"data":[{"id":"claude-opus-4.6"},{"id":"claude-sonnet-4"}]}'
+    mock_response.json.return_value = {
+        "data": [{"id": "claude-opus-4.6"}, {"id": "claude-sonnet-4"}]
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    backend._client = mock_client
+
+    probe = await backend.probe_models()
+    assert probe["probe_status"] == "ok"
+    assert probe["has_claude_opus_4_6"] is True
+    assert "claude-opus-4.6" in probe["available_models"]

@@ -274,10 +274,13 @@ logging:
 | 字段           | 类型   | 默认值                                            | 说明                                          |
 | -------------- | ------ | ------------------------------------------------- | --------------------------------------------- |
 | `enabled`      | bool   | `false`                                           | 是否启用 Copilot 后端                         |
-| `github_token` | string | `""`                                              | GitHub PAT（需 Copilot 权限），支持 `${ENV_VAR}` |
-| `token_url`    | string | `"https://github.com/github-copilot/chat/token"`  | Token 交换端点                                |
-| `base_url`     | string | `"https://api.individual.githubcopilot.com"`       | Copilot API 地址                              |
+| `github_token` | string | `""`                                              | GitHub OAuth token / PAT，支持 `${ENV_VAR}`   |
+| `account_type` | string | `"individual"`                                    | 账号类型：`individual` / `business` / `enterprise` |
+| `token_url`    | string | `"https://api.github.com/copilot_internal/v2/token"` | Token 交换端点                             |
+| `base_url`     | string | `"https://api.githubcopilot.com"`                 | Copilot API 地址；企业账号可显式覆盖          |
 | `timeout_ms`   | int    | `300000`                                          | 请求超时，默认 5 分钟                         |
+
+> **说明**：浏览器显示 `Congratulations, you're all set!` 仅表示 GitHub Device Flow 完成，不代表当前会话已经成功交换 Copilot chat token，也不代表 Claude Opus 4.6 已对该账号开放。可通过 `/api/copilot/diagnostics` 与 `/api/copilot/models` 做按需排查。
 
 #### antigravity — Google Antigravity Claude 后端
 
