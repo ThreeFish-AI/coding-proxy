@@ -6,6 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 
@@ -27,6 +28,14 @@ from ..routing.router import RequestRouter
 from ..routing.tier import BackendTier
 
 logger = logging.getLogger(__name__)
+
+
+def _find_anthropic_backend(router: RequestRouter) -> AnthropicBackend | None:
+    """从路由链中查找 Anthropic 后端实例（用于旁路透传）."""
+    for tier in router.tiers:
+        if isinstance(tier.backend, AnthropicBackend):
+            return tier.backend
+    return None
 
 
 def _build_circuit_breaker(cfg: CircuitBreakerConfig) -> CircuitBreaker:
@@ -171,6 +180,52 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             if tier.quota_guard:
                 tier.quota_guard.reset()
         return {"status": "ok"}
+
+    # ── 连通性探测 ──────────────────────────────────────────────
+    @app.head("/")
+    @app.get("/")
+    async def root() -> Response:
+        """根路径连通性探测 — Claude Code 在建连前发送 HEAD / 作为 health probe."""
+        return Response(status_code=200)
+
+    # ── Token 计数透传 ─────────────────────────────────────────
+    @app.post("/v1/messages/count_tokens")
+    async def count_tokens(request: Request) -> Response:
+        """Token 计数 API 透传 — 旁路直通 Anthropic，不经过路由链.
+
+        仅当 Anthropic 主后端启用时可用；其他后端不支持此协议。
+        """
+        anthropic_backend = _find_anthropic_backend(router)
+        if anthropic_backend is None:
+            return Response(
+                content=b'{"error":{"type":"not_found","message":"count_tokens requires anthropic backend"}}',
+                status_code=404,
+                media_type="application/json",
+            )
+
+        body = await request.json()
+        headers = dict(request.headers)
+        prepared_body, prepared_headers = await anthropic_backend._prepare_request(body, headers)
+
+        client = anthropic_backend._get_client()
+        url = "/v1/messages/count_tokens"
+        if request.query_params:
+            url = f"{url}?{request.query_params}"
+
+        try:
+            response = await client.post(url, json=prepared_body, headers=prepared_headers)
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                media_type="application/json",
+            )
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            logger.warning("count_tokens proxy failed: %s", exc)
+            return Response(
+                content=b'{"error":{"type":"api_error","message":"count_tokens upstream unreachable"}}',
+                status_code=502,
+                media_type="application/json",
+            )
 
     return app
 
