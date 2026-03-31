@@ -39,6 +39,7 @@ class BackendResponse:
     error_type: str | None = None
     error_message: str | None = None
     model_served: str | None = None
+    response_headers: dict[str, str] = field(default_factory=dict)
 
 
 class BaseBackend(ABC):
@@ -111,6 +112,14 @@ class BaseBackend(ABC):
         # 429/503 即使无法解析 body 也触发故障转移
         return status_code in (429, 503)
 
+    async def check_health(self) -> bool:
+        """检查后端健康状态（轻量级探测）.
+
+        默认实现返回 True（假定健康）。
+        子类可覆写以实现低成本的认证层检查。
+        """
+        return True
+
     async def send_message_stream(
         self,
         request_body: dict[str, Any],
@@ -173,6 +182,7 @@ class BaseBackend(ABC):
                 raw_body=raw_content,
                 error_type=resp_body.get("error", {}).get("type") if resp_body else None,
                 error_message=resp_body.get("error", {}).get("message") if resp_body else None,
+                response_headers=dict(response.headers),
             )
 
         usage = resp_body.get("usage", {}) if resp_body else {}

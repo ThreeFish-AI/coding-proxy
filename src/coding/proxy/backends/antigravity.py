@@ -137,6 +137,7 @@ class AntigravityBackend(BaseBackend):
                 raw_body=response.content,
                 error_type="api_error",
                 error_message=response.text[:500],
+                response_headers=dict(response.headers),
             )
 
         gemini_resp = response.json()
