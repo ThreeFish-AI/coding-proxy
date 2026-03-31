@@ -29,6 +29,7 @@ class _OpenAICompatState:
         self.block_index = 0
         self.content_block_open = False
         self.tool_calls: dict[int, dict[str, Any]] = {}
+        self.usage_updated = False  # 标记是否已收到 usage 信息
 
     def ensure_started(self) -> list[bytes]:
         if self.started:
@@ -62,10 +63,15 @@ class _OpenAICompatState:
                 "index": self.block_index,
             }))
             self.content_block_open = False
+        # 确保在最终的 message_delta 中包含完整的 token 信息
+        usage_data = {"output_tokens": self.output_tokens}
+        if self.usage_updated and self.input_tokens > 0:
+            usage_data["input_tokens"] = self.input_tokens
+
         chunks.append(_make_event("message_delta", {
             "type": "message_delta",
             "delta": {"stop_reason": reason, "stop_sequence": None},
-            "usage": {"output_tokens": self.output_tokens},
+            "usage": usage_data,
         }))
         chunks.append(_make_event("message_stop", {"type": "message_stop"}))
         return chunks
@@ -118,8 +124,28 @@ def _normalize_stream_event(data: dict[str, Any], event_name: str | None) -> lis
 def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> list[bytes]:
     chunks: list[bytes] = []
     usage = data.get("usage", {})
-    state.input_tokens = usage.get("prompt_tokens", state.input_tokens)
-    state.output_tokens = usage.get("completion_tokens", state.output_tokens)
+
+    # 处理 token 统计更新
+    old_input_tokens = state.input_tokens
+    old_output_tokens = state.output_tokens
+
+    if "prompt_tokens" in usage:
+        state.input_tokens = usage.get("prompt_tokens", state.input_tokens)
+        state.usage_updated = True
+
+    if "completion_tokens" in usage:
+        state.output_tokens = usage.get("completion_tokens", state.output_tokens)
+        state.usage_updated = True
+
+    # 如果 usage 信息已更新且 message 已开始，发送 token 补偿事件
+    if state.started and state.usage_updated and (old_input_tokens != state.input_tokens):
+        chunks.append(_make_event("message_delta", {
+            "type": "message_delta",
+            "usage": {
+                "input_tokens": state.input_tokens,
+                "output_tokens": state.output_tokens,
+            },
+        }))
 
     choices = data.get("choices", [])
     if not choices:

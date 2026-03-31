@@ -46,8 +46,11 @@ def _build_request_capabilities(body: dict[str, Any]) -> RequestCapabilities:
 
 
 def _set_if_nonzero(usage: dict, key: str, value: int) -> None:
-    """仅在 value 非零时设置，避免后续 chunk 的 0 值覆盖已提取的非零值."""
-    if value:
+    """仅在 value 非零时设置，避免后续 chunk 的 0 值覆盖已提取的非零值.
+
+    同时处理 None 值，确保数据类型正确性。
+    """
+    if value is not None and value > 0:
         usage[key] = value
 
 
@@ -74,10 +77,10 @@ def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
         msg = data.get("message", {})
         if isinstance(msg, dict) and "usage" in msg:
             u = msg["usage"]
-            _set_if_nonzero(
-                usage, "input_tokens",
-                u.get("input_tokens", 0) or u.get("prompt_tokens", 0),
-            )
+            input_tokens = u.get("input_tokens", 0) or u.get("prompt_tokens", 0)
+            if input_tokens > 0:
+                logger.debug("Extracted input tokens from message.usage: %d", input_tokens)
+            _set_if_nonzero(usage, "input_tokens", input_tokens)
             _set_if_nonzero(usage, "cache_creation_tokens", u.get("cache_creation_input_tokens", 0))
             _set_if_nonzero(usage, "cache_read_tokens", u.get("cache_read_input_tokens", 0))
             if "id" in msg:
@@ -88,14 +91,16 @@ def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
         # Anthropic message_delta / OpenAI 最后一个 chunk (data.usage)
         if "usage" in data:
             u = data["usage"]
-            _set_if_nonzero(
-                usage, "output_tokens",
-                u.get("output_tokens", 0) or u.get("completion_tokens", 0),
-            )
-            _set_if_nonzero(
-                usage, "input_tokens",
-                u.get("input_tokens", 0) or u.get("prompt_tokens", 0),
-            )
+            output_tokens = u.get("output_tokens", 0) or u.get("completion_tokens", 0)
+            input_tokens = u.get("input_tokens", 0) or u.get("prompt_tokens", 0)
+
+            if output_tokens > 0:
+                logger.debug("Extracted output tokens from data.usage: %d", output_tokens)
+            if input_tokens > 0:
+                logger.debug("Extracted input tokens from data.usage: %d (Copilot/OpenAI format)", input_tokens)
+
+            _set_if_nonzero(usage, "output_tokens", output_tokens)
+            _set_if_nonzero(usage, "input_tokens", input_tokens)
 
         # request_id fallback (OpenAI 格式下 id 在顶层)
         if "id" in data and not usage.get("request_id"):
@@ -187,8 +192,8 @@ class RequestRouter:
                 info = self._build_usage_info(usage)
                 if info.input_tokens == 0 and info.output_tokens > 0:
                     logger.warning(
-                        "Stream completed with input_tokens=0, output_tokens=%d, tier=%s",
-                        info.output_tokens, tier.name,
+                        "Stream completed with input_tokens=0, output_tokens=%d, tier=%s, usage_data=%r",
+                        info.output_tokens, tier.name, usage,
                     )
                 tier.record_success(info.input_tokens + info.output_tokens)
                 duration = int((time.monotonic() - start) * 1000)
