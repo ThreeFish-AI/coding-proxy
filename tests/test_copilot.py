@@ -14,7 +14,9 @@ from coding.proxy.backends.copilot import (
     CopilotBackend,
     CopilotTokenManager,
     build_copilot_candidate_base_urls,
+    normalize_copilot_requested_model,
     resolve_copilot_base_url,
+    _select_copilot_model,
 )
 from coding.proxy.backends.token_manager import TokenAcquireError, TokenErrorKind
 from coding.proxy.config.schema import CopilotConfig, FailoverConfig
@@ -300,6 +302,31 @@ def test_build_copilot_candidate_base_urls():
     ]
 
 
+def test_normalize_copilot_requested_model():
+    assert normalize_copilot_requested_model("claude-sonnet-4-20250514") == "claude-sonnet-4"
+    assert normalize_copilot_requested_model("claude-opus-4-20250514") == "claude-opus-4"
+    assert normalize_copilot_requested_model("claude-haiku-4-20250514") == "claude-haiku-4"
+    assert normalize_copilot_requested_model("gpt-5.2") == "gpt-5.2"
+
+
+def test_select_copilot_model_prefers_same_family_highest_version():
+    selected, reason = _select_copilot_model(
+        "claude-sonnet-4-20250514",
+        ["claude-sonnet-4.5", "claude-sonnet-4.6", "claude-opus-4.6"],
+    )
+    assert selected == "claude-sonnet-4.6"
+    assert reason == "same_family_highest_version"
+
+
+def test_select_copilot_model_does_not_cross_family():
+    selected, reason = _select_copilot_model(
+        "claude-sonnet-4-20250514",
+        ["claude-opus-4.6"],
+    )
+    assert selected is None
+    assert reason == "no_same_family_model_available"
+
+
 @pytest.mark.asyncio
 async def test_copilot_prepare_request_filters_and_injects_token():
     """_prepare_request 过滤 hop-by-hop 头并注入 Copilot token."""
@@ -308,6 +335,7 @@ async def test_copilot_prepare_request_filters_and_injects_token():
 
     # Mock token manager
     backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
+    backend._fetch_available_models = AsyncMock(return_value=["claude-sonnet-4.6"])  # type: ignore[method-assign]
 
     body = {"model": "claude-sonnet-4-20250514", "messages": []}
     headers = {
@@ -317,7 +345,7 @@ async def test_copilot_prepare_request_filters_and_injects_token():
         "anthropic-version": "2023-06-01",
     }
     prepared_body, prepared_headers = await backend._prepare_request(body, headers)
-    assert prepared_body["model"] == "claude-sonnet-4"
+    assert prepared_body["model"] == "claude-sonnet-4.6"
     assert prepared_body["messages"] == []
     assert "host" not in prepared_headers
     assert "content-length" not in prepared_headers
@@ -365,6 +393,7 @@ async def test_copilot_prepare_request_records_thinking_adaptations():
     config = CopilotConfig(github_token="ghp_test")
     backend = CopilotBackend(config, FailoverConfig())
     backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
+    backend._fetch_available_models = AsyncMock(return_value=["claude-sonnet-4.6"])  # type: ignore[method-assign]
 
     body = {
         "model": "claude-sonnet-4-20250514",
@@ -382,6 +411,24 @@ async def test_copilot_prepare_request_records_thinking_adaptations():
     diagnostics = backend.get_diagnostics()
     assert "thinking_downgraded_to_text" in diagnostics["request_adaptations"]
     assert "thinking_block_merged_into_text" in diagnostics["request_adaptations"]
+    assert diagnostics["resolved_model"] == "claude-sonnet-4.6"
+
+
+@pytest.mark.asyncio
+async def test_copilot_prepare_request_uses_cached_models_without_refetch():
+    config = CopilotConfig(github_token="ghp_test", models_cache_ttl_seconds=300)
+    backend = CopilotBackend(config, FailoverConfig())
+    backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
+    backend._model_catalog.available_models = ["claude-sonnet-4.6"]
+    backend._model_catalog.fetched_at_unix = int(time.time())
+    backend._fetch_available_models = AsyncMock(side_effect=AssertionError("should not refetch"))  # type: ignore[method-assign]
+
+    prepared_body, _ = await backend._prepare_request(
+        {"model": "claude-sonnet-4-20250514", "messages": []},
+        {"anthropic-version": "2023-06-01"},
+    )
+
+    assert prepared_body["model"] == "claude-sonnet-4.6"
 
 
 @pytest.mark.asyncio
@@ -511,6 +558,54 @@ async def test_copilot_stream_421_retries_alternate_base_url():
 
 
 @pytest.mark.asyncio
+async def test_copilot_stream_retries_after_model_not_supported():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+    backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
+
+    refreshed = False
+
+    async def _fake_fetch_available_models(*, refresh_reason: str) -> list[str]:
+        nonlocal refreshed
+        refreshed = refreshed or refresh_reason == "model_not_supported_retry"
+        return ["claude-sonnet-4.5"] if not refreshed else ["claude-sonnet-4.6"]
+
+    backend._fetch_available_models = _fake_fetch_available_models  # type: ignore[method-assign]
+
+    stream_models: list[str] = []
+
+    async def _fake_stream_from_client(client, *, base_url, body, prepared_headers, request_model):
+        stream_models.append(body["model"])
+        request = httpx.Request("POST", f"{base_url}/chat/completions")
+        if len(stream_models) == 1:
+            raise httpx.HTTPStatusError(
+                "copilot API error: 400",
+                request=request,
+                response=httpx.Response(
+                    400,
+                    content=b'{"error":{"message":"The requested model is not supported.","code":"model_not_supported","param":"model","type":"invalid_request_error"}}',
+                    headers={"content-type": "application/json"},
+                    request=request,
+                ),
+            )
+        yield b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-sonnet-4.6\",\"usage\":{\"input_tokens\":10}}}\n\n"
+        yield b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+    backend._stream_from_client = _fake_stream_from_client  # type: ignore[method-assign]
+
+    chunks = []
+    async for chunk in backend.send_message_stream(
+        {"model": "claude-sonnet-4-20250514", "messages": []},
+        {"anthropic-version": "2023-06-01"},
+    ):
+        chunks.append(chunk)
+
+    assert chunks
+    assert stream_models == ["claude-sonnet-4.5", "claude-sonnet-4.6"]
+    assert backend.get_diagnostics()["resolved_model"] == "claude-sonnet-4.6"
+
+
+@pytest.mark.asyncio
 async def test_probe_models_reports_opus_46():
     config = CopilotConfig(github_token="ghp_test")
     backend = CopilotBackend(config, FailoverConfig())
@@ -532,6 +627,7 @@ async def test_probe_models_reports_opus_46():
     assert probe["probe_status"] == "ok"
     assert probe["has_claude_opus_4_6"] is True
     assert "claude-opus-4.6" in probe["available_models"]
+    assert backend.get_diagnostics()["available_models_cache"] == ["claude-opus-4.6", "claude-sonnet-4"]
 
 
 @pytest.mark.asyncio
@@ -539,6 +635,7 @@ async def test_copilot_send_message_translates_openai_response_to_anthropic():
     config = CopilotConfig(github_token="ghp_test")
     backend = CopilotBackend(config, FailoverConfig())
     backend._token_manager.get_token = AsyncMock(return_value="cop_token")
+    backend._fetch_available_models = AsyncMock(return_value=["claude-opus-4.6"])  # type: ignore[method-assign]
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -571,6 +668,94 @@ async def test_copilot_send_message_translates_openai_response_to_anthropic():
     assert body["content"][0]["text"] == "hello"
     assert body["usage"]["input_tokens"] == 7
     assert resp.model_served == "claude-opus-4"
+
+
+@pytest.mark.asyncio
+async def test_copilot_send_message_retries_after_model_not_supported():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+    backend._token_manager.get_token = AsyncMock(return_value="cop_token")
+
+    refreshed = False
+
+    async def _fake_fetch_available_models(*, refresh_reason: str) -> list[str]:
+        nonlocal refreshed
+        refreshed = refreshed or refresh_reason == "model_not_supported_retry"
+        return ["claude-sonnet-4.5"] if not refreshed else ["claude-sonnet-4.6"]
+
+    backend._fetch_available_models = _fake_fetch_available_models  # type: ignore[method-assign]
+
+    first_request = httpx.Request("POST", "https://api.individual.githubcopilot.com/chat/completions")
+    success_payload = {
+        "id": "chatcmpl_2",
+        "model": "claude-sonnet-4.6",
+        "choices": [{
+            "message": {"role": "assistant", "content": "fixed"},
+            "finish_reason": "stop",
+            "index": 0,
+            "logprobs": None,
+        }],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+    }
+    responses = [
+        httpx.Response(
+            400,
+            content=b'{"error":{"message":"The requested model is not supported.","code":"model_not_supported","param":"model","type":"invalid_request_error"}}',
+            headers={"content-type": "application/json"},
+            request=first_request,
+        ),
+        httpx.Response(
+            200,
+            json=success_payload,
+            headers={"content-type": "application/json"},
+            request=first_request,
+        ),
+    ]
+
+    mock_client = AsyncMock()
+    mock_client.request.side_effect = responses
+    mock_client.is_closed = False
+    backend._client = mock_client
+
+    resp = await backend.send_message(
+        {"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "hi"}]},
+        {"anthropic-version": "2023-06-01"},
+    )
+
+    assert resp.status_code == 200
+    assert backend.get_diagnostics()["resolved_model"] == "claude-sonnet-4.6"
+    assert backend.get_diagnostics()["last_model_refresh_reason"] == "model_not_supported_retry"
+
+
+@pytest.mark.asyncio
+async def test_copilot_send_message_returns_enriched_model_error_when_family_missing():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+    backend._token_manager.get_token = AsyncMock(return_value="cop_token")
+    backend._fetch_available_models = AsyncMock(return_value=["claude-opus-4.6"])  # type: ignore[method-assign]
+
+    request = httpx.Request("POST", "https://api.individual.githubcopilot.com/chat/completions")
+    model_error = httpx.Response(
+        400,
+        content=b'{"error":{"message":"The requested model is not supported.","code":"model_not_supported","param":"model","type":"invalid_request_error"}}',
+        headers={"content-type": "application/json"},
+        request=request,
+    )
+    mock_client = AsyncMock()
+    mock_client.request.side_effect = [model_error, model_error]
+    mock_client.is_closed = False
+    backend._client = mock_client
+
+    resp = await backend.send_message(
+        {"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "hi"}]},
+        {"anthropic-version": "2023-06-01"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.error_type == "invalid_request_error"
+    payload = json.loads(resp.raw_body)
+    assert payload["error"]["code"] == "model_not_supported"
+    assert payload["error"]["details"]["available_models"] == ["claude-opus-4.6"]
 
 
 @pytest.mark.asyncio

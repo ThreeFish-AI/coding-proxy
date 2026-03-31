@@ -90,6 +90,7 @@ def test_copilot_config_defaults():
     assert cfg.copilot.github_token == ""
     assert cfg.copilot.account_type == "individual"
     assert cfg.copilot.base_url == ""
+    assert cfg.copilot.models_cache_ttl_seconds == 300
 
 
 def test_copilot_config_from_yaml(tmp_path: Path, monkeypatch):
