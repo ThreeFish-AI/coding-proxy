@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator
 import httpx
 
 from ..backends.base import BackendResponse, UsageInfo
+from ..backends.token_manager import TokenAcquireError
 from ..logging.db import TokenLogger
 from .rate_limit import compute_effective_retry_seconds, parse_rate_limit_headers
 from .tier import BackendTier
@@ -77,15 +78,23 @@ def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
 class RequestRouter:
     """路由请求到合适的后端层级，按优先级链式故障转移."""
 
+    # Tier 名称 → OAuth provider 名称的映射
+    _TIER_PROVIDER_MAP: dict[str, str] = {
+        "copilot": "github",
+        "antigravity": "google",
+    }
+
     def __init__(
         self,
         tiers: list[BackendTier],
         token_logger: TokenLogger | None = None,
+        reauth_coordinator: Any | None = None,
     ) -> None:
         if not tiers:
             raise ValueError("至少需要一个后端层级")
         self._tiers = tiers
         self._token_logger = token_logger
+        self._reauth_coordinator = reauth_coordinator
 
     @property
     def tiers(self) -> list[BackendTier]:
@@ -153,6 +162,17 @@ class RequestRouter:
                     failed_tier_name is not None, failed_tier_name,
                 )
                 return
+            except TokenAcquireError as exc:
+                logger.warning("Tier %s credential expired: %s", tier.name, exc)
+                tier.record_failure()
+                if exc.needs_reauth and self._reauth_coordinator:
+                    provider = self._TIER_PROVIDER_MAP.get(tier.name)
+                    if provider:
+                        await self._reauth_coordinator.request_reauth(provider)
+                failed_tier_name = tier.name
+                last_exc = exc
+                if is_last:
+                    raise
             except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
                 logger.warning("Tier %s stream failed: %s", tier.name, exc)
 
@@ -243,6 +263,17 @@ class RequestRouter:
                 )
                 return resp
 
+            except TokenAcquireError as exc:
+                logger.warning("Tier %s credential expired: %s", tier.name, exc)
+                tier.record_failure()
+                if exc.needs_reauth and self._reauth_coordinator:
+                    provider = self._TIER_PROVIDER_MAP.get(tier.name)
+                    if provider:
+                        await self._reauth_coordinator.request_reauth(provider)
+                failed_tier_name = tier.name
+                if is_last:
+                    raise
+                continue
             except (httpx.TimeoutException, httpx.ConnectError) as exc:
                 logger.warning("Tier %s connection error: %s", tier.name, exc)
                 tier.record_failure()  # 连接错误无 rate limit 信息

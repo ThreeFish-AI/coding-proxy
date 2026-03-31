@@ -11,6 +11,9 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 
+from ..auth.providers.github import GitHubDeviceFlowProvider
+from ..auth.providers.google import GoogleOAuthProvider
+from ..auth.runtime import RuntimeReauthCoordinator
 from ..auth.store import TokenStoreManager
 from ..backends.antigravity import AntigravityBackend
 from ..backends.anthropic import AnthropicBackend
@@ -180,12 +183,30 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             backend=ZhipuBackend(config.fallback, mapper),
         ))
 
-    router = RequestRouter(tiers, token_logger)
+    # 构建运行时重认证协调器
+    reauth_providers: dict[str, Any] = {}
+    token_updaters: dict[str, Any] = {}
+    for tier in tiers:
+        if isinstance(tier.backend, CopilotBackend):
+            reauth_providers["github"] = GitHubDeviceFlowProvider()
+            token_updaters["github"] = tier.backend._token_manager.update_github_token
+        elif isinstance(tier.backend, AntigravityBackend):
+            reauth_providers["google"] = GoogleOAuthProvider()
+            token_updaters["google"] = tier.backend._token_manager.update_refresh_token
+
+    reauth_coordinator: RuntimeReauthCoordinator | None = None
+    if reauth_providers:
+        reauth_coordinator = RuntimeReauthCoordinator(
+            token_store, reauth_providers, token_updaters,
+        )
+
+    router = RequestRouter(tiers, token_logger, reauth_coordinator)
 
     app = FastAPI(title="coding-proxy", version="0.1.0", lifespan=lifespan)
     app.state.router = router
     app.state.token_logger = token_logger
     app.state.config = config
+    app.state.reauth_coordinator = reauth_coordinator
 
     @app.post("/v1/messages")
     async def messages(request: Request) -> Response:
@@ -281,6 +302,30 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                 status_code=502,
                 media_type="application/json",
             )
+
+    # ── 重认证 API ─────────────────────────────────────────────
+    @app.get("/api/reauth/status")
+    async def reauth_status() -> dict:
+        """查询运行时重认证状态."""
+        if not reauth_coordinator:
+            return {"providers": {}}
+        return {"providers": reauth_coordinator.get_status()}
+
+    @app.post("/api/reauth/{provider}")
+    async def trigger_reauth(provider: str) -> Response:
+        """手动触发指定 provider 的运行时重认证."""
+        if not reauth_coordinator:
+            return Response(
+                content=b'{"error":"reauth not available"}',
+                status_code=404,
+                media_type="application/json",
+            )
+        await reauth_coordinator.request_reauth(provider)
+        return Response(
+            content=b'{"status":"reauth requested"}',
+            status_code=202,
+            media_type="application/json",
+        )
 
     return app
 
