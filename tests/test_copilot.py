@@ -26,16 +26,16 @@ async def test_token_manager_exchange():
     mock_response.raise_for_status = MagicMock()
 
     mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
+    mock_client.get.return_value = mock_response
     mock_client.is_closed = False
     tm._client = mock_client
 
     token = await tm.get_token()
     assert token == "cop_abc"
-    mock_client.post.assert_awaited_once()
+    mock_client.get.assert_awaited_once()
 
     # 验证请求头包含 GitHub PAT
-    call_kwargs = mock_client.post.call_args
+    call_kwargs = mock_client.get.call_args
     headers = call_kwargs.kwargs.get("headers", call_kwargs[1].get("headers", {}))
     assert headers["authorization"] == "token ghp_test"
 
@@ -50,7 +50,7 @@ async def test_token_manager_caching():
     mock_response.raise_for_status = MagicMock()
 
     mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
+    mock_client.get.return_value = mock_response
     mock_client.is_closed = False
     tm._client = mock_client
 
@@ -58,7 +58,7 @@ async def test_token_manager_caching():
     token2 = await tm.get_token()
     assert token1 == token2 == "cached_token"
     # 仅调用一次交换
-    assert mock_client.post.await_count == 1
+    assert mock_client.get.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,7 @@ async def test_token_manager_refresh_on_expiry():
     mock_response.raise_for_status = MagicMock()
 
     mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
+    mock_client.get.return_value = mock_response
     mock_client.is_closed = False
     tm._client = mock_client
 
@@ -84,11 +84,11 @@ async def test_token_manager_refresh_on_expiry():
     mock_response2 = MagicMock()
     mock_response2.json.return_value = {"access_token": "token_v2", "expires_in": 1800}
     mock_response2.raise_for_status = MagicMock()
-    mock_client.post.return_value = mock_response2
+    mock_client.get.return_value = mock_response2
 
     token2 = await tm.get_token()
     assert token2 == "token_v2"
-    assert mock_client.post.await_count == 2
+    assert mock_client.get.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -101,7 +101,7 @@ async def test_token_manager_invalidate():
     mock_response.raise_for_status = MagicMock()
 
     mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
+    mock_client.get.return_value = mock_response
     mock_client.is_closed = False
     tm._client = mock_client
 
@@ -110,7 +110,7 @@ async def test_token_manager_invalidate():
     assert tm._expires_at == 0.0
 
     await tm.get_token()
-    assert mock_client.post.await_count == 2
+    assert mock_client.get.await_count == 2
 
 
 @pytest.mark.asyncio

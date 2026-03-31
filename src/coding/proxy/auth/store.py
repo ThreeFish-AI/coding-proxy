@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,6 @@ class ProviderTokens(BaseModel):
     @property
     def is_expired(self) -> bool:
         """检查 access_token 是否已过期（含 60 秒余量）."""
-        import time
         return self.expires_at > 0 and time.time() > self.expires_at - 60
 
     @property

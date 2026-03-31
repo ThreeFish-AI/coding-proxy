@@ -32,11 +32,14 @@ _SCOPES = [
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
-    """OAuth 回调 HTTP 处理器."""
+    """OAuth 回调 HTTP 处理器.
 
-    auth_code: str | None = None
-    state: str | None = None
-    error: str | None = None
+    使用实例级 result dict 避免类属性在并发场景下的交叉污染.
+    """
+
+    def __init__(self, *args: Any, result: dict[str, str | None], **kwargs: Any) -> None:
+        self._result = result
+        super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -44,11 +47,11 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/callback":
             if "error" in params:
-                _CallbackHandler.error = params["error"][0]
+                self._result["error"] = params["error"][0]
                 self._respond("授权失败，请关闭此页面返回终端。")
             elif "code" in params and "state" in params:
-                _CallbackHandler.auth_code = params["code"][0]
-                _CallbackHandler.state = params["state"][0]
+                self._result["auth_code"] = params["code"][0]
+                self._result["state"] = params["state"][0]
                 self._respond("授权成功！请关闭此页面返回终端。")
             else:
                 self._respond("无效的回调参数。")
@@ -88,11 +91,19 @@ class GoogleOAuthProvider(OAuthProvider):
     async def login(self) -> ProviderTokens:
         """执行 Google OAuth2 Code Flow，返回 Token."""
         state = secrets.token_urlsafe(32)
-        redirect_port = self._find_available_port()
+        result: dict[str, str | None] = {"auth_code": None, "state": None, "error": None}
+
+        def _make_handler(*args: Any, **kwargs: Any) -> _CallbackHandler:
+            return _CallbackHandler(*args, result=result, **kwargs)
+
+        # 绑定到 port 0，由 OS 分配可用端口，避免 TOCTOU 竞态
+        server = HTTPServer(("127.0.0.1", 0), _make_handler)
+        redirect_port = server.server_address[1]
+        redirect_uri = f"http://127.0.0.1:{redirect_port}/callback"
 
         params = urlencode({
             "client_id": self._client_id,
-            "redirect_uri": f"http://127.0.0.1:{redirect_port}/callback",
+            "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": " ".join(_SCOPES),
             "state": state,
@@ -100,12 +111,6 @@ class GoogleOAuthProvider(OAuthProvider):
             "prompt": "consent",
         })
         auth_url = f"{_AUTH_URL}?{params}"
-
-        # 启动本地回调服务器
-        server = HTTPServer(("127.0.0.1", redirect_port), _CallbackHandler)
-        _CallbackHandler.auth_code = None
-        _CallbackHandler.state = None
-        _CallbackHandler.error = None
 
         logger.info("请在浏览器中完成 Google 授权")
         print(f"\n  🔗 请在浏览器中访问以下链接完成授权:\n")
@@ -116,27 +121,25 @@ class GoogleOAuthProvider(OAuthProvider):
         webbrowser.open(auth_url)
 
         # 等待回调
-        loop = asyncio.get_event_loop()
         for _ in range(120):  # 最多等 2 分钟
             server.handle_request()
-            if _CallbackHandler.auth_code or _CallbackHandler.error:
+            if result["auth_code"] or result["error"]:
                 break
             await asyncio.sleep(1)
 
         server.server_close()
 
-        if _CallbackHandler.error:
-            raise RuntimeError(f"Google OAuth 错误: {_CallbackHandler.error}")
+        if result["error"]:
+            raise RuntimeError(f"Google OAuth 错误: {result['error']}")
 
-        if not _CallbackHandler.auth_code:
+        if not result["auth_code"]:
             raise RuntimeError("Google OAuth 超时，请重试")
 
-        if _CallbackHandler.state != state:
+        if result["state"] != state:
             raise RuntimeError("OAuth state 不匹配，可能遭受 CSRF 攻击")
 
         # 交换 code → token
-        redirect_uri = f"http://127.0.0.1:{redirect_port}/callback"
-        return await self._exchange_code(_CallbackHandler.auth_code, redirect_uri)
+        return await self._exchange_code(result["auth_code"], redirect_uri)
 
     async def _exchange_code(
         self, code: str, redirect_uri: str

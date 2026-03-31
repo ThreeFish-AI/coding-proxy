@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -59,7 +60,6 @@ class GitHubDeviceFlowProvider(OAuthProvider):
 
         # Step 3: 轮询等待用户完成授权
         for attempt in range(_MAX_POLL_ATTEMPTS):
-            import asyncio
             await asyncio.sleep(interval)
 
             token_resp = await self._http.post(
