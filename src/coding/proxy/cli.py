@@ -50,12 +50,15 @@ def status(
     try:
         resp = httpx.get(f"http://127.0.0.1:{port}/api/status", timeout=5)
         data = resp.json()
-        cb = data.get("circuit_breaker", {})
-        console.print(f"[cyan]熔断器状态:[/] {cb.get('state', 'unknown')}")
-        console.print(f"[green]主后端:[/] {data.get('primary', 'unknown')}")
-        console.print(f"[green]备选后端:[/] {data.get('fallback', 'unknown')}")
-        console.print(f"[blue]连续失败次数:[/] {cb.get('failure_count', 0)}")
-        console.print(f"[blue]恢复超时(s):[/] {cb.get('current_recovery_seconds', 300)}")
+        for tier_info in data.get("tiers", []):
+            name = tier_info.get("name", "unknown")
+            console.print(f"\n[bold green]{name}[/bold green]")
+            cb = tier_info.get("circuit_breaker")
+            if cb:
+                console.print(f"  [cyan]熔断器:[/] {cb.get('state', 'unknown')}  失败={cb.get('failure_count', 0)}")
+            qg = tier_info.get("quota_guard")
+            if qg:
+                console.print(f"  [cyan]配额:[/] {qg.get('state', 'unknown')}  {qg.get('usage_percent', 0)}% ({qg.get('window_usage_tokens', 0)}/{qg.get('budget_tokens', 0)})")
     except httpx.ConnectError:
         console.print("[red]代理服务未运行[/red]")
 
@@ -64,17 +67,19 @@ def status(
 def usage(
     days: int = typer.Option(7, "--days", "-d", help="统计天数"),
     backend: Optional[str] = typer.Option(None, "--backend", "-b", help="过滤后端"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="过滤请求模型"),
     db_path: Optional[str] = typer.Option(None, "--db", help="数据库路径"),
 ) -> None:
     """查看 Token 使用统计."""
     cfg = load_config(Path(db_path) if db_path else None)
     logger = TokenLogger(cfg.db_path)
-    asyncio.run(_run_usage(logger, days, backend))
+    asyncio.run(_run_usage(logger, days, backend, model))
 
 
-async def _run_usage(logger: TokenLogger, days: int, backend: str | None) -> None:
+async def _run_usage(logger: TokenLogger, days: int, backend: str | None,
+                     model: str | None) -> None:
     await logger.init()
-    await show_usage(logger, days, backend)
+    await show_usage(logger, days, backend, model)
     await logger.close()
 
 

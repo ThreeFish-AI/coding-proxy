@@ -1,23 +1,60 @@
 # coding-proxy 配置模板
-# 复制到 ./config.yaml（项目根目录）或 ~/.coding-proxy/config.yaml 并填入实际的 ZHIPU_API_KEY
+# 复制到 ./config.yaml（项目根目录）或 ~/.coding-proxy/config.yaml 并填入实际密钥
 # 优先级：./config.yaml > ~/.coding-proxy/config.yaml
 
 server:
   host: "127.0.0.1"
   port: 8046
 
+# === 后端层级（按优先级排列） ===
+
+# Tier 0: Anthropic Claude Team Plan（最高优先级）
 primary:
   enabled: true
   base_url: "https://api.anthropic.com"
   timeout_ms: 300000
 
+# Tier 1: GitHub Copilot Team Plan（中间优先级）
+copilot:
+  enabled: false                     # 默认禁用，启用需配置 github_token
+  github_token: "${GITHUB_TOKEN}"    # GitHub PAT（需 Copilot 权限）
+  token_url: "https://github.com/github-copilot/chat/token"
+  base_url: "https://api.individual.githubcopilot.com"
+  timeout_ms: 300000
+
+# Tier 2: Google Antigravity Claude（中间层）
+antigravity:
+  enabled: false                        # 默认禁用，启用需配置 OAuth 凭据
+  client_id: "${GOOG_CLIENT_ID}"        # Google OAuth2 Client ID
+  client_secret: "${GOOG_CLIENT_SECRET}" # Google OAuth2 Client Secret
+  refresh_token: "${GOOG_REFRESH_TOKEN}" # Google OAuth2 Refresh Token
+  base_url: "https://generativelanguage.googleapis.com/v1beta"
+  model_endpoint: "models/claude-sonnet-4-20250514"
+  timeout_ms: 300000
+
+# Tier 3: 智谱 GLM（终端兜底）
 fallback:
   enabled: true
   base_url: "https://open.bigmodel.cn/api/anthropic"
   api_key: "${ZHIPU_API_KEY}"
   timeout_ms: 3000000
 
+# === 弹性配置 ===
+
+# Anthropic 熔断器
 circuit_breaker:
+  failure_threshold: 3
+  recovery_timeout_seconds: 300
+  success_threshold: 2
+
+# Copilot 熔断器
+copilot_circuit_breaker:
+  failure_threshold: 3
+  recovery_timeout_seconds: 300
+  success_threshold: 2
+
+# Antigravity 熔断器
+antigravity_circuit_breaker:
   failure_threshold: 3
   recovery_timeout_seconds: 300
   success_threshold: 2
@@ -41,6 +78,30 @@ model_mapping:
   - pattern: "claude-haiku-.*"
     target: "glm-4.5-air"
     is_regex: true
+
+# Anthropic 配额守卫
+quota_guard:
+  enabled: true
+  token_budget: 45000000        # 5 小时 token 预算（根据订阅计划调整）
+  window_hours: 5.0
+  threshold_percent: 99.0
+  probe_interval_seconds: 300
+
+# Copilot 配额守卫
+copilot_quota_guard:
+  enabled: false
+  token_budget: 0
+  window_hours: 24.0
+  threshold_percent: 95.0
+  probe_interval_seconds: 300
+
+# Antigravity 配额守卫
+antigravity_quota_guard:
+  enabled: false                # 默认禁用；启用后按 Premium Requests 配额管理
+  token_budget: 0
+  window_hours: 24.0
+  threshold_percent: 95.0
+  probe_interval_seconds: 300
 
 database:
   path: "~/.coding-proxy/usage.db"

@@ -1,4 +1,4 @@
-"""请求路由器 — 带故障转移的路由逻辑."""
+"""请求路由器 — N-tier 链式路由与自动故障转移."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from ..backends.base import BaseBackend, BackendResponse, UsageInfo
+from ..backends.base import BackendResponse, UsageInfo
 from ..logging.db import TokenLogger
-from .circuit_breaker import CircuitBreaker
+from .tier import BackendTier
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,6 @@ def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
             data = json.loads(payload)
         except json.JSONDecodeError:
             continue
-        # message_start: {"type":"message_start","message":{"usage":{...}}}
         msg = data.get("message", {})
         if isinstance(msg, dict) and "usage" in msg:
             u = msg["usage"]
@@ -40,136 +39,140 @@ def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
                 usage["request_id"] = msg["id"]
             if "model" in msg:
                 usage["model_served"] = msg["model"]
-        # message_delta: {"type":"message_delta","usage":{"output_tokens":N}}
         if "usage" in data and "message" not in data:
             usage["output_tokens"] = data["usage"].get("output_tokens", 0)
 
 
 class RequestRouter:
-    """路由请求到合适的后端，支持自动故障转移."""
+    """路由请求到合适的后端层级，按优先级链式故障转移."""
 
     def __init__(
         self,
-        primary: BaseBackend,
-        fallback: BaseBackend,
-        circuit_breaker: CircuitBreaker,
+        tiers: list[BackendTier],
         token_logger: TokenLogger | None = None,
     ) -> None:
-        self._primary = primary
-        self._fallback = fallback
-        self._cb = circuit_breaker
+        if not tiers:
+            raise ValueError("至少需要一个后端层级")
+        self._tiers = tiers
         self._token_logger = token_logger
 
     @property
-    def circuit(self) -> CircuitBreaker:
-        return self._cb
+    def tiers(self) -> list[BackendTier]:
+        return self._tiers
+
+    @staticmethod
+    def _build_usage_info(usage: dict[str, Any]) -> UsageInfo:
+        return UsageInfo(
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            cache_creation_tokens=usage.get("cache_creation_tokens", 0),
+            cache_read_tokens=usage.get("cache_read_tokens", 0),
+            request_id=usage.get("request_id", ""),
+        )
+
+    @staticmethod
+    def _is_cap_error(resp: BackendResponse) -> bool:
+        """判断是否为订阅用量上限错误."""
+        if resp.status_code not in (429, 403):
+            return False
+        msg = (resp.error_message or "").lower()
+        return any(p in msg for p in ("usage cap", "quota", "limit exceeded"))
 
     async def route_stream(
         self,
         body: dict[str, Any],
         headers: dict[str, str],
     ) -> AsyncIterator[tuple[bytes, str]]:
-        """路由流式请求，yield (chunk, backend_name)."""
-        use_primary = self._cb.can_execute()
-        failover = False
-        start = time.monotonic()
-        usage: dict[str, Any] = {}
+        """路由流式请求，按优先级尝试各层级."""
+        last_idx = len(self._tiers) - 1
+        last_exc: Exception | None = None
 
-        if use_primary:
+        for i, tier in enumerate(self._tiers):
+            is_last = i == last_idx
+
+            if not tier.can_execute() and not is_last:
+                continue
+
+            start = time.monotonic()
+            usage: dict[str, Any] = {}
+            failover = i > 0
+
             try:
-                async for chunk in self._primary.send_message_stream(body, headers):
+                async for chunk in tier.backend.send_message_stream(body, headers):
                     _parse_usage_from_chunk(chunk, usage)
-                    yield chunk, self._primary.get_name()
-                self._cb.record_success()
+                    yield chunk, tier.name
+
+                info = self._build_usage_info(usage)
+                tier.record_success(info.input_tokens + info.output_tokens)
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 await self._record_usage(
-                    self._primary.get_name(), model,
-                    usage.get("model_served", model),
-                    UsageInfo(
-                        input_tokens=usage.get("input_tokens", 0),
-                        output_tokens=usage.get("output_tokens", 0),
-                        cache_creation_tokens=usage.get("cache_creation_tokens", 0),
-                        cache_read_tokens=usage.get("cache_read_tokens", 0),
-                        request_id=usage.get("request_id", ""),
-                    ),
-                    duration, True, False,
+                    tier.name, model, usage.get("model_served", model),
+                    info, duration, True, failover,
                 )
                 return
             except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
-                logger.warning("Primary failed: %s", exc)
-                self._cb.record_failure()
-                failover = True
-                usage.clear()
+                logger.warning("Tier %s stream failed: %s", tier.name, exc)
+                tier.record_failure()
+                last_exc = exc
+                if is_last:
+                    raise
 
-        # Fallback
-        start = time.monotonic()
-        async for chunk in self._fallback.send_message_stream(body, headers):
-            _parse_usage_from_chunk(chunk, usage)
-            yield chunk, self._fallback.get_name()
-        duration = int((time.monotonic() - start) * 1000)
-        model = body.get("model", "unknown")
-        await self._record_usage(
-            self._fallback.get_name(), model,
-            usage.get("model_served", model),
-            UsageInfo(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                cache_creation_tokens=usage.get("cache_creation_tokens", 0),
-                cache_read_tokens=usage.get("cache_read_tokens", 0),
-                request_id=usage.get("request_id", ""),
-            ),
-            duration, True, failover,
-        )
+        if last_exc:
+            raise last_exc
 
     async def route_message(
         self,
         body: dict[str, Any],
         headers: dict[str, str],
     ) -> BackendResponse:
-        """路由非流式请求."""
-        use_primary = self._cb.can_execute()
-        failover = False
+        """路由非流式请求，按优先级尝试各层级."""
+        last_idx = len(self._tiers) - 1
         start = time.monotonic()
 
-        if use_primary:
-            try:
-                resp = await self._primary.send_message(body, headers)
-                if resp.status_code < 400:
-                    self._cb.record_success()
-                    duration = int((time.monotonic() - start) * 1000)
-                    model = body.get("model", "unknown")
-                    await self._record_usage(
-                        self._primary.get_name(), model, model,
-                        resp.usage, duration, True, False,
-                    )
-                    return resp
-                if self._primary.should_trigger_failover(resp.status_code, {"error": {"type": resp.error_type, "message": resp.error_message}}):
-                    logger.warning("Primary error %d, failing over", resp.status_code)
-                    self._cb.record_failure()
-                    failover = True
-                else:
-                    duration = int((time.monotonic() - start) * 1000)
-                    model = body.get("model", "unknown")
-                    await self._record_usage(
-                        self._primary.get_name(), model, model,
-                        resp.usage, duration, resp.status_code < 400, False,
-                    )
-                    return resp
-            except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                logger.warning("Primary connection error: %s", exc)
-                self._cb.record_failure()
-                failover = True
+        for i, tier in enumerate(self._tiers):
+            is_last = i == last_idx
 
-        # Fallback
-        resp = await self._fallback.send_message(body, headers)
-        duration = int((time.monotonic() - start) * 1000)
-        model = body.get("model", "unknown")
-        await self._record_usage(
-            self._fallback.get_name(), model, model,
-            resp.usage, duration, resp.status_code < 400, failover,
-        )
-        return resp
+            if not tier.can_execute() and not is_last:
+                continue
+
+            try:
+                resp = await tier.backend.send_message(body, headers)
+
+                if resp.status_code < 400:
+                    tier.record_success(resp.usage.input_tokens + resp.usage.output_tokens)
+                    duration = int((time.monotonic() - start) * 1000)
+                    model = body.get("model", "unknown")
+                    await self._record_usage(
+                        tier.name, model, model,
+                        resp.usage, duration, True, i > 0,
+                    )
+                    return resp
+
+                if not is_last and tier.backend.should_trigger_failover(
+                    resp.status_code,
+                    {"error": {"type": resp.error_type, "message": resp.error_message}},
+                ):
+                    logger.warning("Tier %s error %d, failing over", tier.name, resp.status_code)
+                    tier.record_failure(is_cap_error=self._is_cap_error(resp))
+                    continue
+
+                duration = int((time.monotonic() - start) * 1000)
+                model = body.get("model", "unknown")
+                await self._record_usage(
+                    tier.name, model, model,
+                    resp.usage, duration, resp.status_code < 400, i > 0,
+                )
+                return resp
+
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                logger.warning("Tier %s connection error: %s", tier.name, exc)
+                tier.record_failure()
+                if is_last:
+                    raise
+                continue
+
+        raise RuntimeError("无可用后端层级")
 
     async def _record_usage(
         self,
@@ -198,5 +201,5 @@ class RequestRouter:
         )
 
     async def close(self) -> None:
-        await self._primary.close()
-        await self._fallback.close()
+        for tier in self._tiers:
+            await tier.backend.close()

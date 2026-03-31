@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..config.schema import FailoverConfig, ZhipuConfig
+from ..config.schema import ZhipuConfig
 from ..routing.model_mapper import ModelMapper
 from .base import BaseBackend
 
 
 class ZhipuBackend(BaseBackend):
-    """智谱 GLM API 后端.
+    """智谱 GLM API 后端（终端 fallback）.
 
     使用 Anthropic 兼容接口，将请求转发到智谱 API.
     替换认证头和模型名称.
@@ -19,7 +19,6 @@ class ZhipuBackend(BaseBackend):
     def __init__(
         self,
         config: ZhipuConfig,
-        failover_config: FailoverConfig,
         model_mapper: ModelMapper,
     ) -> None:
         super().__init__(config.base_url, config.timeout_ms)
@@ -29,7 +28,7 @@ class ZhipuBackend(BaseBackend):
     def get_name(self) -> str:
         return "zhipu"
 
-    def _prepare_request(
+    async def _prepare_request(
         self,
         request_body: dict[str, Any],
         headers: dict[str, str],
@@ -45,7 +44,3 @@ class ZhipuBackend(BaseBackend):
             "anthropic-version": headers.get("anthropic-version", "2023-06-01"),
         }
         return body, new_headers
-
-    def should_trigger_failover(self, status_code: int, body: dict[str, Any] | None) -> bool:
-        """智谱后端不再触发故障转移（它是最终的 fallback）."""
-        return False
