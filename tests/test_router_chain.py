@@ -555,3 +555,151 @@ async def test_route_stream_model_served_identity_backend():
     call_kwargs = logger_mock.log.call_args
     assert call_kwargs[1]["model_requested"] == "claude-sonnet-4-20250514"
     assert call_kwargs[1]["model_served"] == "claude-sonnet-4-20250514"
+
+
+# --- 故障转移语义测试 ---
+
+
+@pytest.mark.asyncio
+async def test_failover_records_source():
+    """真正故障转移时 failover_from 记录来源后端."""
+    from coding.proxy.config.schema import FailoverConfig
+
+    logger_mock = AsyncMock()
+    b0 = FakeBackend(
+        "anthropic",
+        BackendResponse(status_code=429, error_type="rate_limit_error", error_message="limit"),
+    )
+    b0._failover_config = FailoverConfig()
+    b1 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1),
+    ], token_logger=logger_mock)
+
+    resp = await router.route_message(_body(), _headers())
+    assert resp.status_code == 200
+
+    # zhipu 的记录应为 failover=True, failover_from="anthropic"
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["backend"] == "zhipu"
+    assert call_kwargs["failover"] is True
+    assert call_kwargs["failover_from"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_circuit_open_not_counted_as_failover():
+    """CB OPEN 跳过后的请求不算故障转移."""
+    logger_mock = AsyncMock()
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=200))
+    b1 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+
+    cb0 = CircuitBreaker(failure_threshold=1)
+    cb0.record_failure()  # anthropic CB OPEN
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=cb0),
+        BackendTier(backend=b1),
+    ], token_logger=logger_mock)
+
+    resp = await router.route_message(_body(), _headers())
+    assert resp.status_code == 200
+    assert b0.call_count == 0  # 被跳过
+
+    # 稳定降级：failover=False, failover_from=None
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["failover"] is False
+    assert call_kwargs["failover_from"] is None
+
+
+@pytest.mark.asyncio
+async def test_multi_tier_failover_tracks_source():
+    """多级故障转移记录最近失败来源."""
+    from coding.proxy.config.schema import FailoverConfig
+
+    logger_mock = AsyncMock()
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b0._failover_config = FailoverConfig()
+    b1 = FakeBackend("copilot", BackendResponse(status_code=503, error_type="overloaded_error", error_message="overloaded"))
+    b1._failover_config = FailoverConfig()
+    b2 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=30)))
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b2),
+    ], token_logger=logger_mock)
+
+    resp = await router.route_message(_body(), _headers())
+    assert resp.status_code == 200
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["failover"] is True
+    assert call_kwargs["failover_from"] == "copilot"  # 最近失败的 tier
+
+
+@pytest.mark.asyncio
+async def test_stream_failover_records_source():
+    """流式故障转移记录来源."""
+    logger_mock = AsyncMock()
+    b0 = FakeBackend("anthropic", raise_on_call=httpx.ConnectError("refused"))
+    b1 = FakeBackend("zhipu", stream_chunks=[b"data: ok\n\n"])
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1),
+    ], token_logger=logger_mock)
+
+    async for _ in router.route_stream(_body(), _headers()):
+        pass
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["failover"] is True
+    assert call_kwargs["failover_from"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_stream_circuit_open_not_failover():
+    """流式：CB OPEN 跳过后不算故障转移."""
+    logger_mock = AsyncMock()
+    b0 = FakeBackend("anthropic", stream_chunks=[b"data: ok\n\n"])
+    b1 = FakeBackend("zhipu", stream_chunks=[b"data: ok\n\n"])
+
+    cb0 = CircuitBreaker(failure_threshold=1)
+    cb0.record_failure()
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=cb0),
+        BackendTier(backend=b1),
+    ], token_logger=logger_mock)
+
+    async for _ in router.route_stream(_body(), _headers()):
+        pass
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["failover"] is False
+    assert call_kwargs["failover_from"] is None
+
+
+@pytest.mark.asyncio
+async def test_primary_success_no_failover():
+    """首层成功：无故障转移."""
+    logger_mock = AsyncMock()
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+    ], token_logger=logger_mock)
+
+    await router.route_message(_body(), _headers())
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["failover"] is False
+    assert call_kwargs["failover_from"] is None
