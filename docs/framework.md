@@ -17,7 +17,7 @@ Claude Code 作为日常 AI 编程助手，其底层依赖 Anthropic Messages AP
 
 与此同时，多个 Anthropic 兼容或可转换的 API 通道为构建多后端容灾体系提供了可能：
 
-- **GitHub Copilot**：提供 Anthropic 兼容的 Claude API 端点，通过 GitHub PAT 认证
+- **GitHub Copilot**：提供 Anthropic 兼容的 Claude API 端点，通过 GitHub OAuth token / PAT 完成 token 交换
 - **Google Antigravity Claude**：通过 Google Gemini/Vertex AI 端点提供 Claude 模型访问，需 Anthropic ↔ Gemini 双向格式转换
 - **智谱 (Zhipu)**：提供与 Anthropic 兼容的 GLM API 接口（`/api/anthropic`），作为终端兜底
 
@@ -357,7 +357,7 @@ async with self._lock:
 
 | Token Manager | 认证流程 | 有效期 | 提前刷新余量 |
 |---------------|---------|--------|-------------|
-| `CopilotTokenManager` | GitHub PAT → POST token_url → access_token | ~30 分钟 | 60 秒 |
+| `CopilotTokenManager` | GitHub token → GET `copilot_internal/v2/token` → `token`/`access_token` | ~30 分钟 | 60 秒 |
 | `GoogleOAuthTokenManager` | refresh_token → POST oauth2.googleapis.com/token → access_token | ~1 小时 | 120 秒 |
 
 两者均支持**被动刷新**：当后端返回 401/403 时，通过 `_on_error_status()` 调用 `invalidate()` 标记 token 失效，下次请求自动触发重新获取。
@@ -503,7 +503,7 @@ class BackendResponse:
 
 **CopilotBackend**（Tier 1，[`backends/copilot.py`](../src/coding/proxy/backends/copilot.py)）：
 - 构造：`CopilotBackend(config: CopilotConfig, failover_config: FailoverConfig)`
-- 内置 `CopilotTokenManager`：GitHub PAT → Copilot access_token 交换（有效期 ~30 分钟，提前 60 秒刷新）
+- 内置 `CopilotTokenManager`：GitHub token → Copilot chat token 交换（兼容 `token/refresh_in` 与 `access_token/expires_in` 两种响应）
 - 过滤 hop-by-hop 头并注入 `Authorization: Bearer {copilot_token}`
 - 透传请求体（Claude 模型名原生支持，无需映射）
 - 401/403 时自动 invalidate token 触发被动刷新
@@ -684,9 +684,10 @@ Pydantic 默认值
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enabled` | bool | `false` | 是否启用 |
-| `github_token` | str | `""` | GitHub PAT（支持 `${ENV_VAR}`） |
-| `token_url` | str | `"https://github.com/github-copilot/chat/token"` | Token 交换端点 |
-| `base_url` | str | `"https://api.individual.githubcopilot.com"` | Copilot API 基础地址 |
+| `github_token` | str | `""` | GitHub OAuth token / PAT（支持 `${ENV_VAR}`） |
+| `account_type` | str | `"individual"` | 账号类型：`individual` / `business` / `enterprise` |
+| `token_url` | str | `"https://api.github.com/copilot_internal/v2/token"` | Token 交换端点 |
+| `base_url` | str | `"https://api.githubcopilot.com"` | Copilot API 基础地址 |
 | `timeout_ms` | int | `300000` | 请求超时（毫秒），默认 5 分钟 |
 
 **antigravity — Google Antigravity Claude 后端配置**

@@ -88,7 +88,8 @@ def test_copilot_config_defaults():
     cfg = load_config(Path("/nonexistent/path"))
     assert cfg.copilot.enabled is False
     assert cfg.copilot.github_token == ""
-    assert cfg.copilot.base_url == "https://api.individual.githubcopilot.com"
+    assert cfg.copilot.account_type == "individual"
+    assert cfg.copilot.base_url == "https://api.githubcopilot.com"
 
 
 def test_copilot_config_from_yaml(tmp_path: Path, monkeypatch):
@@ -105,6 +106,7 @@ def test_copilot_config_from_yaml(tmp_path: Path, monkeypatch):
     cfg = load_config(cfg_file)
     assert cfg.copilot.enabled is True
     assert cfg.copilot.github_token == "ghp_yaml_test"
+    assert cfg.copilot.account_type == "individual"
     assert cfg.copilot_circuit_breaker.failure_threshold == 5
 
 

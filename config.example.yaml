@@ -18,8 +18,9 @@ primary:
 copilot:
   enabled: false                     # 默认禁用，启用需 OAuth 登录或手动配置 github_token
   github_token: "${GITHUB_TOKEN}"    # GitHub token（可选，运行 coding-proxy auth login 自动获取）
+  account_type: "individual"         # individual / business / enterprise
   token_url: "https://api.github.com/copilot_internal/v2/token"
-  base_url: "https://api.individual.githubcopilot.com"
+  base_url: "https://api.githubcopilot.com"
   timeout_ms: 300000
 
 # Tier 2: Google Antigravity Claude（中间层）
