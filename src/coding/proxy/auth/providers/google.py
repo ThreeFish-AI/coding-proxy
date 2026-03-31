@@ -217,14 +217,6 @@ class GoogleOAuthProvider(OAuthProvider):
         except httpx.HTTPError:
             return False
 
-    @staticmethod
-    def _find_available_port() -> int:
-        """查找可用端口."""
-        import socket
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            return s.getsockname()[1]
-
     async def close(self) -> None:
         if not self._http.is_closed:
             await self._http.aclose()

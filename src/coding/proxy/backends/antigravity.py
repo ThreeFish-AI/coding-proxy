@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import time
 from typing import Any, AsyncIterator
 
 import httpx
@@ -14,13 +12,14 @@ from ..config.schema import AntigravityConfig, FailoverConfig
 from ..convert.anthropic_to_gemini import convert_request
 from ..convert.gemini_to_anthropic import convert_response, extract_usage
 from ..convert.gemini_sse_adapter import adapt_sse_stream
-from .base import BackendResponse, BaseBackend, UsageInfo
+from .base import BackendResponse, BaseBackend, UsageInfo, _sanitize_headers_for_synthetic_response
+from .token_manager import BaseTokenManager, TokenAcquireError
 
 logger = logging.getLogger(__name__)
 
 
-class GoogleOAuthTokenManager:
-    """管理 Google OAuth2 token 的自动刷新.
+class GoogleOAuthTokenManager(BaseTokenManager):
+    """Google OAuth2 token 自动刷新管理.
 
     流程: refresh_token → POST oauth2.googleapis.com/token → access_token (~1 小时有效期)
     """
@@ -29,57 +28,48 @@ class GoogleOAuthTokenManager:
     _TOKEN_URL = "https://oauth2.googleapis.com/token"
 
     def __init__(self, client_id: str, client_secret: str, refresh_token: str) -> None:
+        super().__init__()
         self._client_id = client_id
         self._client_secret = client_secret
         self._refresh_token = refresh_token
-        self._access_token: str | None = None
-        self._expires_at: float = 0.0
-        self._lock = asyncio.Lock()
-        self._client: httpx.AsyncClient | None = None
 
-    def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
-        return self._client
-
-    async def get_token(self) -> str:
-        """获取有效的 Google access_token（带缓存和自动刷新）."""
-        if self._access_token and time.monotonic() < self._expires_at:
-            return self._access_token
-
-        async with self._lock:
-            if self._access_token and time.monotonic() < self._expires_at:
-                return self._access_token
-            await self._refresh()
-            assert self._access_token is not None
-            return self._access_token
-
-    async def _refresh(self) -> None:
+    async def _acquire(self) -> tuple[str, float]:
         """通过 refresh_token 获取新的 access_token."""
         client = self._get_client()
-        response = await client.post(
-            self._TOKEN_URL,
-            data={
-                "client_id": self._client_id,
-                "client_secret": self._client_secret,
-                "refresh_token": self._refresh_token,
-                "grant_type": "refresh_token",
-            },
-        )
-        response.raise_for_status()
+        try:
+            response = await client.post(
+                self._TOKEN_URL,
+                data={
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                    "refresh_token": self._refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # 400 + invalid_grant 表示 refresh_token 已失效
+            if exc.response.status_code == 400:
+                try:
+                    err = exc.response.json()
+                    if err.get("error") == "invalid_grant":
+                        raise TokenAcquireError(
+                            "Google refresh_token 已失效", needs_reauth=True,
+                        ) from exc
+                except (ValueError, KeyError):
+                    pass
+            raise TokenAcquireError(f"Google token 刷新失败: {exc}") from exc
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            raise TokenAcquireError(f"Google token 刷新网络异常: {exc}") from exc
         data = response.json()
-        self._access_token = data["access_token"]
         expires_in = data.get("expires_in", 3600)
-        self._expires_at = time.monotonic() + expires_in - self._REFRESH_MARGIN
         logger.info("Google OAuth token refreshed, expires_in=%ds", expires_in)
+        return data["access_token"], float(expires_in)
 
-    def invalidate(self) -> None:
-        """标记当前 token 失效（触发下次请求时被动刷新）."""
-        self._expires_at = 0.0
-
-    async def close(self) -> None:
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
+    def update_refresh_token(self, new_refresh_token: str) -> None:
+        """运行时热更新 refresh_token（重认证后调用）."""
+        self._refresh_token = new_refresh_token
+        self.invalidate()
 
 
 class AntigravityBackend(BaseBackend):
@@ -182,7 +172,7 @@ class AntigravityBackend(BaseBackend):
                     response=httpx.Response(
                         response.status_code,
                         content=error_body,
-                        headers=response.headers,
+                        headers=_sanitize_headers_for_synthetic_response(response.headers),
                         request=response.request,
                     ),
                 )

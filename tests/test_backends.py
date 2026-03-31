@@ -1,9 +1,15 @@
 """后端基类与子类单元测试."""
 
+import httpx
 import pytest
 
 from coding.proxy.backends.anthropic import AnthropicBackend
-from coding.proxy.backends.base import BaseBackend, BackendResponse, UsageInfo
+from coding.proxy.backends.base import (
+    BaseBackend,
+    BackendResponse,
+    UsageInfo,
+    _sanitize_headers_for_synthetic_response,
+)
 from coding.proxy.backends.zhipu import ZhipuBackend
 from coding.proxy.config.schema import (
     AnthropicConfig,
@@ -135,3 +141,53 @@ def test_base_failover_without_config_returns_false():
         "error": {"type": "rate_limit_error", "message": "limited"}
     })
     assert not backend.should_trigger_failover(503, None)
+
+
+# --- _sanitize_headers_for_synthetic_response ---
+
+
+def test_sanitize_headers_removes_encoding():
+    """移除 content-encoding/content-length/transfer-encoding."""
+    raw = httpx.Headers({
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+        "content-length": "123",
+        "transfer-encoding": "chunked",
+        "x-request-id": "abc",
+    })
+    result = _sanitize_headers_for_synthetic_response(raw)
+    assert "content-type" in result
+    assert "x-request-id" in result
+    assert "content-encoding" not in result
+    assert "content-length" not in result
+    assert "transfer-encoding" not in result
+
+
+def test_sanitize_headers_preserves_other():
+    """非跳过头部全部保留."""
+    raw = httpx.Headers({
+        "retry-after": "60",
+        "x-ratelimit-remaining": "0",
+    })
+    result = _sanitize_headers_for_synthetic_response(raw)
+    assert result["retry-after"] == "60"
+    assert result["x-ratelimit-remaining"] == "0"
+
+
+def test_synthetic_response_no_decompression_error():
+    """验证清洗后的头部构造 httpx.Response 不触发 zlib 解压错误."""
+    # 这是原始 bug 的精确复现: 已解压的 content + gzip header → zlib error
+    raw_headers = httpx.Headers({
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+    })
+    clean_headers = _sanitize_headers_for_synthetic_response(raw_headers)
+    # 使用已解压的 JSON 文本构造 Response — 不应抛异常
+    resp = httpx.Response(
+        429,
+        content=b'{"error": "rate limit"}',
+        headers=clean_headers,
+        request=httpx.Request("POST", "https://api.example.com/v1/messages"),
+    )
+    assert resp.status_code == 429
+    assert b"rate limit" in resp.content

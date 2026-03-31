@@ -84,6 +84,26 @@ def auth_status() -> None:
         console.print(f"  {name}: {status_text}  {has_refresh}")
 
 
+@auth_app.command("reauth")
+def auth_reauth(
+    provider: str = typer.Argument(..., help="provider 名称 (github/google)"),
+    port: int = typer.Option(8046, "--port", "-p", help="代理服务端口"),
+) -> None:
+    """触发运行中代理的 OAuth 重认证."""
+    import httpx as _httpx
+
+    try:
+        resp = _httpx.post(f"http://127.0.0.1:{port}/api/reauth/{provider}", timeout=5)
+        if resp.status_code == 202:
+            console.print(f"[green]{provider} 重认证已触发，请在浏览器中完成登录[/green]")
+        elif resp.status_code == 404:
+            console.print(f"[red]重认证不可用（代理未启用对应后端）[/red]")
+        else:
+            console.print(f"[red]触发失败: {resp.status_code} {resp.text}[/red]")
+    except _httpx.ConnectError:
+        console.print("[red]代理服务未运行[/red]")
+
+
 @auth_app.command("logout")
 def auth_logout(
     provider: Optional[str] = typer.Option(None, "--provider", "-p", help="指定 provider（不指定则全部登出）"),
