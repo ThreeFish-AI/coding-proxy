@@ -59,8 +59,8 @@ def test_partial_env_expansion(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_trigger_login_even_when_disabled(tmp_path: Path):
-    """Copilot 禁用但无凭证时仍触发登录（凭证获取与 enabled 解耦）."""
+async def test_skip_login_when_tier_disabled(tmp_path: Path):
+    """Copilot 禁用时不触发预登录."""
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
@@ -81,17 +81,18 @@ async def test_trigger_login_even_when_disabled(tmp_path: Path):
     ):
         await _auto_login_if_needed(cfg_file)
 
-    mock_prov.login.assert_awaited_once()
+    mock_prov.login.assert_not_awaited()
+    mock_prov.close.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_skip_login_when_store_has_credentials(tmp_path: Path):
-    """Store 已有有效凭证时不触发登录（无论 enabled 状态）."""
+    """Store 已有有效凭证时不触发登录."""
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "copilot:\n  enabled: false\n"
+        "copilot:\n  enabled: true\n"
         "antigravity:\n  refresh_token: skip\n"
     )
 
@@ -273,6 +274,92 @@ async def test_antigravity_trigger_login_when_no_refresh_token(tmp_path: Path):
 
     mock_prov.login.assert_awaited_once()
     mock_prov.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_antigravity_refresh_expired_access_token_before_login(tmp_path: Path):
+    """Antigravity access_token 过期但有 refresh_token 时优先静默刷新."""
+    from coding.proxy.cli import _auto_login_if_needed
+
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("copilot:\n  github_token: skip\nantigravity:\n  enabled: true\n")
+
+    expired_store = _make_store({
+        "google": {
+            "access_token": "goog_old",
+            "refresh_token": "goog_refresh",
+            "expires_at": 1,
+        },
+    })
+
+    mock_prov = AsyncMock()
+    mock_prov.needs_login = MagicMock(return_value=False)
+    mock_prov.refresh.return_value = ProviderTokens(
+        access_token="goog_new",
+        refresh_token="goog_refresh",
+        expires_at=9999999999,
+    )
+
+    with (
+        patch("coding.proxy.auth.providers.google.GoogleOAuthProvider", return_value=mock_prov),
+        patch("coding.proxy.auth.store.TokenStoreManager", return_value=expired_store),
+    ):
+        await _auto_login_if_needed(cfg_file)
+
+    mock_prov.refresh.assert_awaited_once()
+    mock_prov.login.assert_not_awaited()
+    assert expired_store._data["google"]["access_token"] == "goog_new"
+
+
+@pytest.mark.asyncio
+async def test_antigravity_refresh_failure_falls_back_to_login(tmp_path: Path):
+    """Antigravity 静默刷新失败时回退到交互登录."""
+    from coding.proxy.cli import _auto_login_if_needed
+
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("copilot:\n  github_token: skip\nantigravity:\n  enabled: true\n")
+
+    expired_store = _make_store({
+        "google": {
+            "access_token": "goog_old",
+            "refresh_token": "goog_refresh",
+            "expires_at": 1,
+        },
+    })
+
+    mock_prov = AsyncMock()
+    mock_prov.needs_login = MagicMock(return_value=False)
+    mock_prov.refresh.side_effect = RuntimeError("invalid_grant")
+    mock_prov.login.return_value = ProviderTokens(
+        access_token="goog_login",
+        refresh_token="goog_new_refresh",
+    )
+
+    with (
+        patch("coding.proxy.auth.providers.google.GoogleOAuthProvider", return_value=mock_prov),
+        patch("coding.proxy.auth.store.TokenStoreManager", return_value=expired_store),
+    ):
+        await _auto_login_if_needed(cfg_file)
+
+    mock_prov.refresh.assert_awaited_once()
+    mock_prov.login.assert_awaited_once()
+    assert expired_store._data["google"]["access_token"] == "goog_login"
+
+
+def test_build_token_store_uses_configured_path(tmp_path: Path):
+    """CLI token store 路径与配置保持一致."""
+    from coding.proxy.cli import _build_token_store
+
+    cfg_file = tmp_path / "config.yaml"
+    store_path = tmp_path / "nested" / "tokens.json"
+    cfg_file.write_text(
+        "auth:\n"
+        f'  token_store_path: "{store_path}"\n'
+    )
+
+    _, store = _build_token_store(cfg_file)
+
+    assert store._path == store_path
 
 
 # ── GitHub 浏览器自动打开测试 ─────────────────────────────────
