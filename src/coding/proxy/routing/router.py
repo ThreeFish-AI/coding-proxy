@@ -86,6 +86,7 @@ class RequestRouter:
         """路由流式请求，按优先级尝试各层级."""
         last_idx = len(self._tiers) - 1
         last_exc: Exception | None = None
+        failed_tier_name: str | None = None
 
         for i, tier in enumerate(self._tiers):
             is_last = i == last_idx
@@ -95,7 +96,6 @@ class RequestRouter:
 
             start = time.monotonic()
             usage: dict[str, Any] = {}
-            failover = i > 0
 
             try:
                 async for chunk in tier.backend.send_message_stream(body, headers):
@@ -109,12 +109,14 @@ class RequestRouter:
                 model_served = usage.get("model_served") or tier.backend.map_model(model)
                 await self._record_usage(
                     tier.name, model, model_served,
-                    info, duration, True, failover,
+                    info, duration, True,
+                    failed_tier_name is not None, failed_tier_name,
                 )
                 return
             except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
                 logger.warning("Tier %s stream failed: %s", tier.name, exc)
                 tier.record_failure()
+                failed_tier_name = tier.name
                 last_exc = exc
                 if is_last:
                     raise
@@ -130,6 +132,7 @@ class RequestRouter:
         """路由非流式请求，按优先级尝试各层级."""
         last_idx = len(self._tiers) - 1
         start = time.monotonic()
+        failed_tier_name: str | None = None
 
         for i, tier in enumerate(self._tiers):
             is_last = i == last_idx
@@ -147,7 +150,8 @@ class RequestRouter:
                     model_served = resp.model_served or model
                     await self._record_usage(
                         tier.name, model, model_served,
-                        resp.usage, duration, True, i > 0,
+                        resp.usage, duration, True,
+                        failed_tier_name is not None, failed_tier_name,
                     )
                     return resp
 
@@ -157,6 +161,7 @@ class RequestRouter:
                 ):
                     logger.warning("Tier %s error %d, failing over", tier.name, resp.status_code)
                     tier.record_failure(is_cap_error=self._is_cap_error(resp))
+                    failed_tier_name = tier.name
                     continue
 
                 duration = int((time.monotonic() - start) * 1000)
@@ -164,13 +169,15 @@ class RequestRouter:
                 model_served = resp.model_served or model
                 await self._record_usage(
                     tier.name, model, model_served,
-                    resp.usage, duration, resp.status_code < 400, i > 0,
+                    resp.usage, duration, resp.status_code < 400,
+                    failed_tier_name is not None, failed_tier_name,
                 )
                 return resp
 
             except (httpx.TimeoutException, httpx.ConnectError) as exc:
                 logger.warning("Tier %s connection error: %s", tier.name, exc)
                 tier.record_failure()
+                failed_tier_name = tier.name
                 if is_last:
                     raise
                 continue
@@ -186,6 +193,7 @@ class RequestRouter:
         duration_ms: int,
         success: bool,
         failover: bool,
+        failover_from: str | None = None,
     ) -> None:
         if not self._token_logger:
             return
@@ -200,6 +208,7 @@ class RequestRouter:
             duration_ms=duration_ms,
             success=success,
             failover=failover,
+            failover_from=failover_from,
             request_id=usage.request_id,
         )
 
