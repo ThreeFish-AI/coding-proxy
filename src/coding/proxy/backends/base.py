@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -24,6 +25,44 @@ _SYNTHETIC_RESPONSE_SKIP_HEADERS = {"content-encoding", "content-length", "trans
 def _sanitize_headers_for_synthetic_response(headers: httpx.Headers) -> dict[str, str]:
     """移除 content-encoding 等头部，避免合成 httpx.Response 时触发二次解压."""
     return {k: v for k, v in headers.items() if k.lower() not in _SYNTHETIC_RESPONSE_SKIP_HEADERS}
+
+
+def _decode_json_body(response: httpx.Response) -> dict[str, Any] | list[Any] | None:
+    """安全解析 JSON 响应.
+
+    若 content-type 未声明 JSON 或内容非法，返回 None，而不是抛 JSONDecodeError。
+    """
+    if not response.content:
+        return None
+
+    content_type = response.headers.get("content-type", "").lower()
+    if "json" not in content_type:
+        try:
+            return json.loads(response.content)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+            return None
+
+    try:
+        return response.json()
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return None
+
+
+def _extract_error_message(response: httpx.Response, resp_body: dict[str, Any] | list[Any] | None) -> str | None:
+    if isinstance(resp_body, dict):
+        error = resp_body.get("error")
+        if isinstance(error, dict):
+            return error.get("message")
+        if isinstance(error, str):
+            return error
+        message = resp_body.get("message")
+        if isinstance(message, str):
+            return message
+
+    if not response.content:
+        return None
+    text = response.text.strip()
+    return text[:500] if text else None
 
 
 @dataclass
@@ -252,19 +291,19 @@ class BaseBackend(ABC):
         )
 
         raw_content = response.content
-        resp_body = response.json() if response.content else None
+        resp_body = _decode_json_body(response)
 
         if response.status_code >= 400:
             self._on_error_status(response.status_code)
             return BackendResponse(
                 status_code=response.status_code,
                 raw_body=raw_content,
-                error_type=resp_body.get("error", {}).get("type") if resp_body else None,
-                error_message=resp_body.get("error", {}).get("message") if resp_body else None,
+                error_type=resp_body.get("error", {}).get("type") if isinstance(resp_body, dict) and isinstance(resp_body.get("error"), dict) else None,
+                error_message=_extract_error_message(response, resp_body),
                 response_headers=dict(response.headers),
             )
 
-        usage = resp_body.get("usage", {}) if resp_body else {}
+        usage = resp_body.get("usage", {}) if isinstance(resp_body, dict) else {}
         return BackendResponse(
             status_code=response.status_code,
             raw_body=raw_content,
@@ -273,9 +312,9 @@ class BaseBackend(ABC):
                 output_tokens=usage.get("output_tokens", 0) or usage.get("completion_tokens", 0),
                 cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
                 cache_read_tokens=usage.get("cache_read_input_tokens", 0),
-                request_id=resp_body.get("id", "") if resp_body else "",
+                request_id=resp_body.get("id", "") if isinstance(resp_body, dict) else "",
             ),
-            model_served=resp_body.get("model") if resp_body else None,
+            model_served=resp_body.get("model") if isinstance(resp_body, dict) else None,
         )
 
     async def close(self) -> None:

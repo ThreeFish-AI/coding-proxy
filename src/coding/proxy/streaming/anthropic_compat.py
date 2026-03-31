@@ -27,6 +27,8 @@ class _OpenAICompatState:
         self.input_tokens = 0
         self.output_tokens = 0
         self.block_index = 0
+        self.content_block_open = False
+        self.tool_calls: dict[int, dict[str, Any]] = {}
 
     def ensure_started(self) -> list[bytes]:
         if self.started:
@@ -47,11 +49,6 @@ class _OpenAICompatState:
                     },
                 },
             }),
-            _make_event("content_block_start", {
-                "type": "content_block_start",
-                "index": self.block_index,
-                "content_block": {"type": "text", "text": ""},
-            }),
         ]
 
     def close(self, reason: str = "end_turn") -> list[bytes]:
@@ -59,11 +56,12 @@ class _OpenAICompatState:
             return []
         self.stopped = True
         chunks: list[bytes] = []
-        if self.started:
+        if self.started and self.content_block_open:
             chunks.append(_make_event("content_block_stop", {
                 "type": "content_block_stop",
                 "index": self.block_index,
             }))
+            self.content_block_open = False
         chunks.append(_make_event("message_delta", {
             "type": "message_delta",
             "delta": {"stop_reason": reason, "stop_sequence": None},
@@ -130,12 +128,29 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
     choice = choices[0]
     delta = choice.get("delta", {})
     finish_reason = choice.get("finish_reason")
-    if delta.get("tool_calls"):
-        return chunks
 
     text_fragments = _extract_text_fragments(delta.get("content"))
     if text_fragments:
         chunks.extend(state.ensure_started())
+        if state.content_block_open and any(
+            tool.get("anthropic_block_index") == state.block_index
+            for tool in state.tool_calls.values()
+        ):
+            chunks.append(_make_event("content_block_stop", {
+                "type": "content_block_stop",
+                "index": state.block_index,
+            }))
+            state.block_index += 1
+            state.content_block_open = False
+
+        if not state.content_block_open:
+            chunks.append(_make_event("content_block_start", {
+                "type": "content_block_start",
+                "index": state.block_index,
+                "content_block": {"type": "text", "text": ""},
+            }))
+            state.content_block_open = True
+
         for text in text_fragments:
             chunks.append(_make_event("content_block_delta", {
                 "type": "content_block_delta",
@@ -143,8 +158,55 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
                 "delta": {"type": "text_delta", "text": text},
             }))
 
+    tool_calls = delta.get("tool_calls") or []
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        tool_index = int(tool_call.get("index", 0))
+        if tool_call.get("id") and isinstance(tool_call.get("function"), dict) and tool_call["function"].get("name"):
+            if state.content_block_open:
+                chunks.append(_make_event("content_block_stop", {
+                    "type": "content_block_stop",
+                    "index": state.block_index,
+                }))
+                state.block_index += 1
+                state.content_block_open = False
+
+            state.tool_calls[tool_index] = {
+                "id": tool_call["id"],
+                "name": tool_call["function"]["name"],
+                "anthropic_block_index": state.block_index,
+            }
+            chunks.extend(state.ensure_started())
+            chunks.append(_make_event("content_block_start", {
+                "type": "content_block_start",
+                "index": state.block_index,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": tool_call["id"],
+                    "name": tool_call["function"]["name"],
+                    "input": {},
+                },
+            }))
+            state.content_block_open = True
+
+        function = tool_call.get("function")
+        if isinstance(function, dict) and function.get("arguments"):
+            tool_info = state.tool_calls.get(tool_index)
+            if tool_info:
+                chunks.append(_make_event("content_block_delta", {
+                    "type": "content_block_delta",
+                    "index": tool_info["anthropic_block_index"],
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": function["arguments"],
+                    },
+                }))
+
     if finish_reason:
         stop_reason = "max_tokens" if finish_reason == "length" else "end_turn"
+        if finish_reason == "tool_calls":
+            stop_reason = "tool_use"
         chunks.extend(state.close(stop_reason))
 
     return chunks

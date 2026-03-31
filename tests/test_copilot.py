@@ -279,13 +279,15 @@ async def test_copilot_prepare_request_filters_and_injects_token():
         "anthropic-version": "2023-06-01",
     }
     prepared_body, prepared_headers = await backend._prepare_request(body, headers)
-    assert prepared_body is body  # 透传
+    assert prepared_body["model"] == "claude-sonnet-4"
+    assert prepared_body["messages"] == []
     assert "host" not in prepared_headers
     assert "content-length" not in prepared_headers
     assert prepared_headers["authorization"] == "Bearer cop_injected"
     assert prepared_headers["anthropic-version"] == "2023-06-01"
     assert prepared_headers["copilot-integration-id"] == "vscode-chat"
     assert prepared_headers["openai-intent"] == "conversation-panel"
+    assert prepared_headers["x-initiator"] == "user"
 
 
 def test_copilot_inherits_failover():
@@ -299,6 +301,15 @@ def test_copilot_inherits_failover():
     assert backend.should_trigger_failover(429, {
         "error": {"type": "rate_limit_error", "message": "limited"}
     })
+
+
+def test_copilot_capabilities_disable_thinking():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+    caps = backend.get_capabilities()
+    assert caps.supports_tools is True
+    assert caps.supports_images is True
+    assert caps.supports_thinking is False
 
 
 @pytest.mark.asyncio
@@ -323,3 +334,68 @@ async def test_probe_models_reports_opus_46():
     assert probe["probe_status"] == "ok"
     assert probe["has_claude_opus_4_6"] is True
     assert "claude-opus-4.6" in probe["available_models"]
+
+
+@pytest.mark.asyncio
+async def test_copilot_send_message_translates_openai_response_to_anthropic():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+    backend._token_manager.get_token = AsyncMock(return_value="cop_token")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b'{"id":"chatcmpl_1","model":"claude-opus-4","choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop","index":0,"logprobs":null}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}'
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {
+        "id": "chatcmpl_1",
+        "model": "claude-opus-4",
+        "choices": [{
+            "message": {"role": "assistant", "content": "hello"},
+            "finish_reason": "stop",
+            "index": 0,
+            "logprobs": None,
+        }],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+    }
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+    mock_client.is_closed = False
+    backend._client = mock_client
+
+    resp = await backend.send_message(
+        {"model": "claude-opus-4-20250514", "messages": [{"role": "user", "content": "hi"}]},
+        {"anthropic-version": "2023-06-01"},
+    )
+    body = json.loads(resp.raw_body)
+    assert resp.status_code == 200
+    assert body["type"] == "message"
+    assert body["content"][0]["text"] == "hello"
+    assert body["usage"]["input_tokens"] == 7
+    assert resp.model_served == "claude-opus-4"
+
+
+@pytest.mark.asyncio
+async def test_copilot_send_message_handles_non_json_success_without_crash():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+    backend._token_manager.get_token = AsyncMock(return_value="cop_token")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b"<!doctype html>"
+    mock_response.headers = {"content-type": "text/html"}
+    mock_response.text = "<!doctype html>"
+    mock_response.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+    mock_client.is_closed = False
+    backend._client = mock_client
+
+    resp = await backend.send_message(
+        {"model": "claude-opus-4-20250514", "messages": [{"role": "user", "content": "hi"}]},
+        {"anthropic-version": "2023-06-01"},
+    )
+    assert resp.status_code == 502
+    assert resp.error_type == "api_error"
