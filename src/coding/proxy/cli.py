@@ -125,7 +125,10 @@ def auth_logout(
 
 # ── 自动登录辅助 ─────────────────────────────────────────────
 async def _auto_login_if_needed(cfg_path: Path | None) -> None:
-    """检查已启用的 Tier 是否缺少凭证，自动触发浏览器登录.
+    """检查各 Provider 是否缺少凭证，自动触发浏览器登录.
+
+    凭证获取与 Tier enabled 状态解耦：无论后端是否启用，
+    只要本地无有效凭证即触发登录，以便用户后续启用时无需再走登录流程。
 
     两阶段检查:
     1. needs_login() — 快速本地判断（无凭证或已过期且无 refresh_token）
@@ -140,7 +143,7 @@ async def _auto_login_if_needed(cfg_path: Path | None) -> None:
     store.load()
 
     # --- GitHub / Copilot ---
-    if cfg.copilot.enabled and not cfg.copilot.github_token:
+    if not cfg.copilot.github_token:
         tokens = store.get("github")
         prov = GitHubDeviceFlowProvider()
         needs = prov.needs_login(tokens)
@@ -165,7 +168,7 @@ async def _auto_login_if_needed(cfg_path: Path | None) -> None:
             await prov.close()
 
     # --- Google / Antigravity ---
-    if cfg.antigravity.enabled and not cfg.antigravity.refresh_token:
+    if not cfg.antigravity.refresh_token:
         tokens = store.get("google")
         prov = GoogleOAuthProvider()
         needs = prov.needs_login(tokens)
