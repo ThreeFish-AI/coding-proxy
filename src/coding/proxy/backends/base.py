@@ -38,6 +38,7 @@ class BackendResponse:
     raw_body: bytes = b"{}"
     error_type: str | None = None
     error_message: str | None = None
+    model_served: str | None = None
 
 
 class BaseBackend(ABC):
@@ -65,6 +66,14 @@ class BaseBackend(ABC):
     @abstractmethod
     def get_name(self) -> str:
         """返回后端名称（用于日志）."""
+
+    def map_model(self, model: str) -> str:
+        """将请求模型名映射为后端实际使用的模型名.
+
+        默认实现为恒等映射（无转换）.
+        有模型映射需求的后端（如 Zhipu）应覆写此方法.
+        """
+        return model
 
     @abstractmethod
     async def _prepare_request(
@@ -177,6 +186,7 @@ class BaseBackend(ABC):
                 cache_read_tokens=usage.get("cache_read_input_tokens", 0),
                 request_id=resp_body.get("id", "") if resp_body else "",
             ),
+            model_served=resp_body.get("model") if resp_body else None,
         )
 
     async def close(self) -> None:

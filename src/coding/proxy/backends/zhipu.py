@@ -28,6 +28,10 @@ class ZhipuBackend(BaseBackend):
     def get_name(self) -> str:
         return "zhipu"
 
+    def map_model(self, model: str) -> str:
+        """将 Claude 模型名映射为智谱模型名."""
+        return self._model_mapper.map(model)
+
     async def _prepare_request(
         self,
         request_body: dict[str, Any],

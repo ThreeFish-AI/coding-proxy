@@ -449,3 +449,109 @@ async def test_four_tier_stream_failover():
     assert b1.call_count == 1
     assert b2.call_count == 1
     assert b3.call_count == 1
+
+
+# --- model_served 测试 ---
+
+
+class MappingFakeBackend(FakeBackend):
+    """带模型映射的假后端."""
+
+    def __init__(self, name: str = "mapping-fake", mapped_model: str = "glm-5.1",
+                 response: BackendResponse | None = None,
+                 stream_chunks: list[bytes] | None = None) -> None:
+        super().__init__(name=name, response=response, stream_chunks=stream_chunks)
+        self._mapped_model = mapped_model
+
+    def map_model(self, model: str) -> str:
+        return self._mapped_model
+
+
+@pytest.mark.asyncio
+async def test_route_message_model_served_from_response():
+    """非流式：model_served 从响应体提取."""
+    logger_mock = AsyncMock()
+    resp = BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10), model_served="glm-5.1")
+    backend = FakeBackend("zhipu", response=resp)
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    await router.route_message(_body(), _headers())
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args
+    assert call_kwargs[1]["model_requested"] == "claude-sonnet-4-20250514"
+    assert call_kwargs[1]["model_served"] == "glm-5.1"
+
+
+@pytest.mark.asyncio
+async def test_route_message_model_served_fallback_when_none():
+    """非流式：model_served 为 None 时 fallback 到请求模型名."""
+    logger_mock = AsyncMock()
+    resp = BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10))
+    backend = FakeBackend("anthropic", response=resp)
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    await router.route_message(_body(), _headers())
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args
+    assert call_kwargs[1]["model_requested"] == "claude-sonnet-4-20250514"
+    assert call_kwargs[1]["model_served"] == "claude-sonnet-4-20250514"
+
+
+@pytest.mark.asyncio
+async def test_route_stream_model_served_from_sse():
+    """流式：model_served 从 SSE message_start 事件提取."""
+    logger_mock = AsyncMock()
+    sse_chunk = (
+        b'event: message_start\n'
+        b'data: {"type":"message_start","message":{"id":"msg_1","model":"glm-5.1","usage":{"input_tokens":10,"output_tokens":0}}}\n\n'
+        b'data: [DONE]\n\n'
+    )
+    backend = MappingFakeBackend(mapped_model="glm-5.1", stream_chunks=[sse_chunk])
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    collected = []
+    async for chunk, name in router.route_stream(_body(), _headers()):
+        collected.append(chunk)
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args
+    assert call_kwargs[1]["model_requested"] == "claude-sonnet-4-20250514"
+    assert call_kwargs[1]["model_served"] == "glm-5.1"
+
+
+@pytest.mark.asyncio
+async def test_route_stream_model_served_fallback_to_map_model():
+    """流式：SSE 未提供 model 时，fallback 到 backend.map_model()."""
+    logger_mock = AsyncMock()
+    chunks = [b"data: {}\n\n", b"data: [DONE]\n\n"]
+    backend = MappingFakeBackend(mapped_model="glm-4.5-air", stream_chunks=chunks)
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    async for _ in router.route_stream(
+        {"model": "claude-haiku-4-5-20251001", "messages": []}, _headers(),
+    ):
+        pass
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args
+    assert call_kwargs[1]["model_requested"] == "claude-haiku-4-5-20251001"
+    assert call_kwargs[1]["model_served"] == "glm-4.5-air"
+
+
+@pytest.mark.asyncio
+async def test_route_stream_model_served_identity_backend():
+    """流式：无映射后端，model_served 等于请求模型名."""
+    logger_mock = AsyncMock()
+    chunks = [b"data: {}\n\n", b"data: [DONE]\n\n"]
+    backend = FakeBackend("anthropic", stream_chunks=chunks)
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    async for _ in router.route_stream(_body(), _headers()):
+        pass
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args
+    assert call_kwargs[1]["model_requested"] == "claude-sonnet-4-20250514"
+    assert call_kwargs[1]["model_served"] == "claude-sonnet-4-20250514"
