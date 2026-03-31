@@ -24,7 +24,7 @@ class CopilotConfig(BaseModel):
 
     enabled: bool = False
     github_token: str = ""
-    token_url: str = "https://github.com/github-copilot/chat/token"
+    token_url: str = "https://api.github.com/copilot_internal/v2/token"
     base_url: str = "https://api.individual.githubcopilot.com"
     timeout_ms: int = 300000
 
@@ -90,6 +90,18 @@ class LoggingConfig(BaseModel):
     file: Optional[str] = None
 
 
+class AuthConfig(BaseModel):
+    """OAuth 登录配置."""
+
+    github_client_id: str = "Iv1.b507a08c87ecfe98"
+    google_client_id: str = (
+        "764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur"
+        ".apps.googleusercontent.com"
+    )
+    google_client_secret: str = "d-FL95Q19W7jAaasCmO6F9XZ"
+    token_store_path: str = "~/.coding-proxy/tokens.json"
+
+
 class ProxyConfig(BaseModel):
     server: ServerConfig = ServerConfig()
     primary: AnthropicConfig = AnthropicConfig()
@@ -111,6 +123,7 @@ class ProxyConfig(BaseModel):
     quota_guard: QuotaGuardConfig = QuotaGuardConfig()
     copilot_quota_guard: QuotaGuardConfig = QuotaGuardConfig()
     antigravity_quota_guard: QuotaGuardConfig = QuotaGuardConfig()
+    auth: AuthConfig = AuthConfig()
     database: DatabaseConfig = DatabaseConfig()
     logging: LoggingConfig = LoggingConfig()
 

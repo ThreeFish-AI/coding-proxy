@@ -17,6 +17,133 @@ app = typer.Typer(name="coding-proxy", help="Claude Code 多后端智能代理�
 console = Console()
 
 
+# ── Auth 子命令 ─────────────────────────────────────────────
+auth_app = typer.Typer(name="auth", help="管理 OAuth 登录凭证")
+app.add_typer(auth_app, name="auth")
+
+
+@auth_app.command("login")
+def auth_login(
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="指定 provider (github/google)"),
+) -> None:
+    """执行 OAuth 浏览器登录."""
+    asyncio.run(_run_auth_login(provider))
+
+
+async def _run_auth_login(provider: str | None) -> None:
+    from .auth.providers.github import GitHubDeviceFlowProvider
+    from .auth.providers.google import GoogleOAuthProvider
+    from .auth.store import TokenStoreManager
+
+    store = TokenStoreManager()
+    store.load()
+
+    providers = []
+    if provider == "github":
+        providers = [("github", GitHubDeviceFlowProvider())]
+    elif provider == "google":
+        providers = [("google", GoogleOAuthProvider())]
+    elif provider is None:
+        providers = [
+            ("github", GitHubDeviceFlowProvider()),
+            ("google", GoogleOAuthProvider()),
+        ]
+    else:
+        console.print(f"[red]未知 provider: {provider}[/red]")
+        raise typer.Exit(1)
+
+    for name, prov in providers:
+        try:
+            console.print(f"\n[bold cyan]登录 {name}...[/bold cyan]")
+            tokens = await prov.login()
+            store.set(name, tokens)
+            console.print(f"[green]{name} 登录成功[/green]")
+            await prov.close()
+        except Exception as exc:
+            console.print(f"[red]{name} 登录失败: {exc}[/red]")
+
+
+@auth_app.command("status")
+def auth_status() -> None:
+    """查看已登录的 OAuth 凭证状态."""
+    from .auth.store import TokenStoreManager
+
+    store = TokenStoreManager()
+    store.load()
+
+    providers = store.list_providers()
+    if not providers:
+        console.print("[yellow]尚未登录任何 provider[/yellow]")
+        return
+
+    for name in providers:
+        tokens = store.get(name)
+        expired = tokens.is_expired
+        status_text = "[red]已过期[/red]" if expired else "[green]有效[/green]"
+        has_refresh = "有 refresh_token" if tokens.refresh_token else "无 refresh_token"
+        console.print(f"  {name}: {status_text}  {has_refresh}")
+
+
+@auth_app.command("logout")
+def auth_logout(
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="指定 provider（不指定则全部登出）"),
+) -> None:
+    """清除已存储的 OAuth 凭证."""
+    from .auth.store import TokenStoreManager
+
+    store = TokenStoreManager()
+    store.load()
+
+    if provider:
+        store.remove(provider)
+        console.print(f"[green]已登出 {provider}[/green]")
+    else:
+        for name in store.list_providers():
+            store.remove(name)
+        console.print("[green]已登出所有 provider[/green]")
+
+
+# ── 自动登录辅助 ─────────────────────────────────────────────
+async def _auto_login_if_needed(cfg_path: Path | None) -> None:
+    """检查已启用的 Tier 是否缺少凭证，自动触发浏览器登录."""
+    from .auth.providers.github import GitHubDeviceFlowProvider
+    from .auth.providers.google import GoogleOAuthProvider
+    from .auth.store import TokenStoreManager
+
+    cfg = load_config(cfg_path)
+    store = TokenStoreManager()
+    store.load()
+
+    # Copilot: 需要登录但缺少凭证
+    if cfg.copilot.enabled and not cfg.copilot.github_token:
+        tokens = store.get("github")
+        if not tokens.access_token:
+            console.print("[bold cyan]Copilot 层缺少凭证，启动 GitHub OAuth 登录...[/bold cyan]")
+            try:
+                prov = GitHubDeviceFlowProvider()
+                tokens = await prov.login()
+                store.set("github", tokens)
+                console.print("[green]GitHub 登录成功[/green]")
+                await prov.close()
+            except Exception as exc:
+                console.print(f"[red]GitHub 登录失败: {exc}[/red]")
+
+    # Antigravity: 需要登录但缺少凭证
+    if cfg.antigravity.enabled and not cfg.antigravity.refresh_token:
+        tokens = store.get("google")
+        if not tokens.refresh_token:
+            console.print("[bold cyan]Antigravity 层缺少凭证，启动 Google OAuth 登录...[/bold cyan]")
+            try:
+                prov = GoogleOAuthProvider()
+                tokens = await prov.login()
+                store.set("google", tokens)
+                console.print("[green]Google 登录成功[/green]")
+                await prov.close()
+            except Exception as exc:
+                console.print(f"[red]Google 登录失败: {exc}[/red]")
+
+
+# ── 主命令 ─────────────────────────────────────────────────────
 @app.command()
 def start(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="配置文件路径"),
@@ -35,6 +162,9 @@ def start(
         cfg.server.port = port
     if host:
         cfg.server.host = host
+
+    # 自动登录检查
+    asyncio.run(_auto_login_if_needed(cfg_path))
 
     fastapi_app = create_app(cfg)
     uvicorn.run(fastapi_app, host=cfg.server.host, port=cfg.server.port, log_level="info")

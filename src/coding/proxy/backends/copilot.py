@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class CopilotTokenManager:
     """管理 GitHub Copilot token 的交换与自动刷新.
 
-    流程: GitHub PAT → POST token_url → Copilot access_token (~30 分钟有效期)
+    流程: GitHub token → GET copilot_internal/v2/token → Copilot access_token (~30 分钟有效期)
     """
 
     # 提前刷新的余量（秒）
@@ -51,14 +51,15 @@ class CopilotTokenManager:
             return self._access_token
 
     async def _exchange(self) -> None:
-        """通过 GitHub PAT 交换 Copilot token."""
+        """通过 GitHub token 交换 Copilot token (GET copilot_internal/v2/token)."""
         client = self._get_client()
-        response = await client.post(
+        response = await client.get(
             self._token_url,
             headers={
                 "authorization": f"token {self._github_token}",
                 "accept": "application/json",
-                "content-type": "application/json",
+                "editor-version": "vscode/1.95.0",
+                "editor-plugin-version": "copilot/1.0.0",
             },
         )
         response.raise_for_status()
