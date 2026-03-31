@@ -110,9 +110,9 @@ database:
 auth:
   # GitHub Device Flow client_id（默认使用 Copilot VS Code 扩展公开 ID）
   # github_client_id: "Iv1.b507a08c87ecfe98"
-  # Google OAuth 凭据（默认使用公开值）
-  # google_client_id: "764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com"
-  # google_client_secret: "d-FL95Q19W7jAaasCmO6F9XZ"
+  # Google OAuth 凭据（默认使用 Antigravity Enterprise 公开凭据，无需手动配置）
+  # google_client_id: ""
+  # google_client_secret: ""
   token_store_path: "~/.coding-proxy/tokens.json"
 
 logging:
