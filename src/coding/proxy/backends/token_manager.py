@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import httpx
 
@@ -22,6 +23,24 @@ class TokenAcquireError(Exception):
     def __init__(self, message: str, *, needs_reauth: bool = False) -> None:
         super().__init__(message)
         self.needs_reauth = needs_reauth
+
+
+@dataclass
+class TokenManagerDiagnostics:
+    """TokenManager 最近一次失败诊断信息."""
+
+    last_error: str = ""
+    needs_reauth: bool = False
+    updated_at: float = 0.0
+
+    def to_dict(self) -> dict[str, str | bool]:
+        if not self.last_error:
+            return {}
+        return {
+            "last_error": self.last_error,
+            "needs_reauth": self.needs_reauth,
+            "updated_at_unix": round(self.updated_at, 3),
+        }
 
 
 class BaseTokenManager(ABC):
@@ -42,6 +61,7 @@ class BaseTokenManager(ABC):
         self._expires_at: float = 0.0
         self._lock = asyncio.Lock()
         self._client: httpx.AsyncClient | None = None
+        self._diagnostics: TokenManagerDiagnostics = TokenManagerDiagnostics()
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -61,9 +81,18 @@ class BaseTokenManager(ABC):
             # Double-check after acquiring lock
             if self._access_token and time.monotonic() < self._expires_at:
                 return self._access_token
-            token, expires_in = await self._acquire()
+            try:
+                token, expires_in = await self._acquire()
+            except TokenAcquireError as exc:
+                self._record_error(exc)
+                raise
+            except Exception as exc:
+                wrapped = TokenAcquireError(f"Token 获取异常: {exc}")
+                self._record_error(wrapped)
+                raise wrapped from exc
             self._access_token = token
             self._expires_at = time.monotonic() + expires_in - self._REFRESH_MARGIN
+            self._clear_error()
             return self._access_token
 
     @abstractmethod
@@ -80,6 +109,20 @@ class BaseTokenManager(ABC):
     def invalidate(self) -> None:
         """标记当前 token 失效（触发下次请求时被动刷新）."""
         self._expires_at = 0.0
+
+    def get_diagnostics(self) -> dict[str, str | bool]:
+        return self._diagnostics.to_dict()
+
+    def _record_error(self, exc: TokenAcquireError) -> None:
+        self._diagnostics = TokenManagerDiagnostics(
+            last_error=str(exc),
+            needs_reauth=exc.needs_reauth,
+            updated_at=time.time(),
+        )
+        logger.warning("Token acquire failed: %s", exc)
+
+    def _clear_error(self) -> None:
+        self._diagnostics = TokenManagerDiagnostics()
 
     async def close(self) -> None:
         if self._client and not self._client.is_closed:

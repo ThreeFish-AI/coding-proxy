@@ -37,6 +37,13 @@ class _FailingTokenManager(BaseTokenManager):
         raise TokenAcquireError("模拟失败", needs_reauth=self._needs_reauth)
 
 
+class _UnexpectedFailingTokenManager(BaseTokenManager):
+    """测试用: _acquire 抛出非 TokenAcquireError."""
+
+    async def _acquire(self) -> tuple[str, float]:
+        raise KeyError("access_token")
+
+
 # --- TokenAcquireError ---
 
 
@@ -105,6 +112,17 @@ async def test_acquire_error_propagation():
     with pytest.raises(TokenAcquireError) as exc_info:
         await tm.get_token()
     assert exc_info.value.needs_reauth is True
+
+
+@pytest.mark.asyncio
+async def test_acquire_unexpected_error_wrapped():
+    """_acquire 抛出意外异常时统一包装为 TokenAcquireError."""
+    tm = _UnexpectedFailingTokenManager()
+    with pytest.raises(TokenAcquireError) as exc_info:
+        await tm.get_token()
+    assert "Token 获取异常" in str(exc_info.value)
+    assert exc_info.value.needs_reauth is False
+    assert tm.get_diagnostics()["last_error"].startswith("Token 获取异常")
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from coding.proxy.backends.token_manager import TokenAcquireError
 from coding.proxy.config.schema import ProxyConfig
 from coding.proxy.server.app import create_app
 
@@ -104,3 +105,28 @@ def test_count_tokens_upstream_error_passthrough():
             )
             assert resp.status_code == 429
             assert resp.json()["error"]["type"] == "rate_limit_error"
+
+
+def test_status_exposes_backend_diagnostics():
+    """状态接口暴露后端诊断信息，便于排查凭证交换异常."""
+    config = ProxyConfig(
+        copilot={"enabled": True, "github_token": "ghu_test"},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+    )
+    app = create_app(config)
+
+    for tier in app.state.router.tiers:
+        if tier.name == "copilot":
+            tier.backend._token_manager._record_error(  # type: ignore[attr-defined]
+                TokenAcquireError("Copilot token 交换返回非预期响应")
+            )
+            break
+
+    with TestClient(app) as client:
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        tiers = resp.json()["tiers"]
+        copilot = next(item for item in tiers if item["name"] == "copilot")
+        assert "diagnostics" in copilot
+        assert "非预期响应" in copilot["diagnostics"]["token_manager"]["last_error"]
