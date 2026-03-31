@@ -3,6 +3,7 @@
 import httpx
 import pytest
 
+from coding.proxy.backends.antigravity import AntigravityBackend
 from coding.proxy.backends.anthropic import AnthropicBackend
 from coding.proxy.backends.base import (
     BaseBackend,
@@ -13,6 +14,7 @@ from coding.proxy.backends.base import (
 from coding.proxy.backends.zhipu import ZhipuBackend
 from coding.proxy.config.schema import (
     AnthropicConfig,
+    AntigravityConfig,
     FailoverConfig,
     ModelMappingRule,
     ZhipuConfig,
@@ -191,3 +193,47 @@ def test_synthetic_response_no_decompression_error():
     )
     assert resp.status_code == 429
     assert b"rate limit" in resp.content
+
+
+# --- check_health 测试 ---
+
+
+@pytest.mark.asyncio
+async def test_anthropic_check_health_returns_true():
+    """Anthropic 透明代理策略：check_health 始终返回 True."""
+    backend = AnthropicBackend(AnthropicConfig(), FailoverConfig())
+    result = await backend.check_health()
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_antigravity_check_health_token_success():
+    """Antigravity 健康检查：token 刷新成功 → True."""
+    from unittest.mock import AsyncMock
+
+    config = AntigravityConfig(
+        client_id="cid", client_secret="csecret", refresh_token="rtoken",
+    )
+    backend = AntigravityBackend(config, FailoverConfig())
+    # Mock token manager 返回有效 token
+    backend._token_manager.get_token = AsyncMock(return_value="valid-token")
+
+    result = await backend.check_health()
+    assert result is True
+    backend._token_manager.get_token.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_antigravity_check_health_token_failure():
+    """Antigravity 健康检查：token 刷新失败 → False."""
+    from unittest.mock import AsyncMock
+
+    config = AntigravityConfig(
+        client_id="cid", client_secret="csecret", refresh_token="rtoken",
+    )
+    backend = AntigravityBackend(config, FailoverConfig())
+    # Mock token manager 抛出异常
+    backend._token_manager.get_token = AsyncMock(side_effect=Exception("refresh failed"))
+
+    result = await backend.check_health()
+    assert result is False

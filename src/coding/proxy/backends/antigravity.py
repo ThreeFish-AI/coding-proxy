@@ -108,6 +108,15 @@ class AntigravityBackend(BaseBackend):
         if status_code in (401, 403):
             self._token_manager.invalidate()
 
+    async def check_health(self) -> bool:
+        """检查 Google OAuth token 是否可刷新（免费操作）."""
+        try:
+            token = await self._token_manager.get_token()
+            return bool(token)
+        except Exception:
+            logger.warning("Antigravity health check failed: token refresh error")
+            return False
+
     async def send_message(
         self,
         request_body: dict[str, Any],

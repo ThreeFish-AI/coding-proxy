@@ -245,6 +245,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                 info["circuit_breaker"] = tier.circuit_breaker.get_info()
             if tier.quota_guard and tier.quota_guard.enabled:
                 info["quota_guard"] = tier.quota_guard.get_info()
+            info["rate_limit"] = tier.get_rate_limit_info()
             result["tiers"].append(info)
         return result
 
@@ -255,6 +256,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                 tier.circuit_breaker.reset()
             if tier.quota_guard:
                 tier.quota_guard.reset()
+            tier.reset_rate_limit()
         return {"status": "ok"}
 
     # ── 连通性探测 ──────────────────────────────────────────────

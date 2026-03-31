@@ -91,6 +91,32 @@ def compute_effective_retry_seconds(info: RateLimitInfo) -> float | None:
     return max(candidates) if candidates else None
 
 
+def compute_rate_limit_deadline(info: RateLimitInfo) -> float | None:
+    """从 RateLimitInfo 中计算最保守的恢复截止 monotonic 时间戳.
+
+    与 compute_effective_retry_seconds() 互补:
+    - 后者返回相对秒数（给 CircuitBreaker 用于退避计算）
+    - 本函数返回绝对 monotonic 时间戳（给 BackendTier 用于精确门控）
+
+    取所有可用时间信号中的最大值，并加 10% 安全余量。
+    """
+    candidates: list[float] = []
+    now = time.monotonic()
+
+    if info.retry_after_seconds is not None:
+        candidates.append(now + info.retry_after_seconds * 1.1)
+
+    if info.requests_reset_at is not None and info.requests_reset_at > now:
+        remaining = info.requests_reset_at - now
+        candidates.append(now + remaining * 1.1)
+
+    if info.tokens_reset_at is not None and info.tokens_reset_at > now:
+        remaining = info.tokens_reset_at - now
+        candidates.append(now + remaining * 1.1)
+
+    return max(candidates) if candidates else None
+
+
 def _get_header(headers: Any, name: str) -> str | None:
     """统一获取 header 值（兼容 httpx.Headers 和 dict）."""
     if headers is None:

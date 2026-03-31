@@ -703,3 +703,52 @@ async def test_primary_success_no_failover():
     call_kwargs = logger_mock.log.call_args[1]
     assert call_kwargs["failover"] is False
     assert call_kwargs["failover_from"] is None
+
+
+# --- Rate Limit Deadline 集成测试 ---
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_deadline_prevents_premature_probe():
+    """CB HALF_OPEN 但 rate limit deadline 未到期 → 不探测，直达终端."""
+    import time
+
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=200))
+    b1 = FakeBackend("zhipu", BackendResponse(status_code=200))
+
+    cb0 = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=0)
+    cb0.record_failure()  # → OPEN → 立即 HALF_OPEN (recovery=0)
+
+    tier0 = BackendTier(backend=b0, circuit_breaker=cb0)
+    # 设置一个远未到期的 deadline
+    tier0._rate_limit_deadline = time.monotonic() + 300
+
+    router = RequestRouter([tier0, BackendTier(backend=b1)])
+    resp = await router.route_message(_body(), _headers())
+
+    assert resp.status_code == 200
+    assert b0.call_count == 0  # deadline 阻止了探测
+    assert b1.call_count == 1  # 降级到终端
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_deadline_allows_probe_after_expiry():
+    """rate limit deadline 已过期 → 允许探测，恢复正常路由."""
+    import time
+
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+    b1 = FakeBackend("zhipu", BackendResponse(status_code=200))
+
+    cb0 = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=0)
+    cb0.record_failure()  # → OPEN → 立即 HALF_OPEN (recovery=0)
+
+    tier0 = BackendTier(backend=b0, circuit_breaker=cb0)
+    # 设置已过期的 deadline
+    tier0._rate_limit_deadline = time.monotonic() - 1
+
+    router = RequestRouter([tier0, BackendTier(backend=b1)])
+    resp = await router.route_message(_body(), _headers())
+
+    assert resp.status_code == 200
+    assert b0.call_count == 1  # deadline 过期，允许探测
+    assert b1.call_count == 0  # 探测成功，无需降级

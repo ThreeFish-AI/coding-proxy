@@ -12,7 +12,11 @@ import httpx
 from ..backends.base import BackendResponse, UsageInfo
 from ..backends.token_manager import TokenAcquireError
 from ..logging.db import TokenLogger
-from .rate_limit import compute_effective_retry_seconds, parse_rate_limit_headers
+from .rate_limit import (
+    compute_effective_retry_seconds,
+    compute_rate_limit_deadline,
+    parse_rate_limit_headers,
+)
 from .tier import BackendTier
 
 logger = logging.getLogger(__name__)
@@ -179,6 +183,7 @@ class RequestRouter:
                 # 从 HTTPStatusError 提取 rate limit 信息
                 retry_seconds = None
                 is_cap = False
+                deadline = None
                 if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
                     rl_info = parse_rate_limit_headers(
                         exc.response.headers,
@@ -187,8 +192,13 @@ class RequestRouter:
                     )
                     retry_seconds = compute_effective_retry_seconds(rl_info)
                     is_cap = rl_info.is_cap_error
+                    deadline = compute_rate_limit_deadline(rl_info)
 
-                tier.record_failure(is_cap_error=is_cap, retry_after_seconds=retry_seconds)
+                tier.record_failure(
+                    is_cap_error=is_cap,
+                    retry_after_seconds=retry_seconds,
+                    rate_limit_deadline=deadline,
+                )
                 failed_tier_name = tier.name
                 last_exc = exc
                 if is_last:
@@ -245,10 +255,12 @@ class RequestRouter:
                         resp.error_message,
                     )
                     retry_seconds = compute_effective_retry_seconds(rl_info)
+                    deadline = compute_rate_limit_deadline(rl_info)
 
                     tier.record_failure(
                         is_cap_error=self._is_cap_error(resp) or rl_info.is_cap_error,
                         retry_after_seconds=retry_seconds,
+                        rate_limit_deadline=deadline,
                     )
                     failed_tier_name = tier.name
                     continue
