@@ -145,7 +145,11 @@ def test_copilot_diagnostics_endpoint_returns_backend_info():
         assert resp.status_code == 200
         data = resp.json()
         assert data["account_type"] == "individual"
-        assert data["base_url"] == "https://api.githubcopilot.com"
+        assert data["base_url"] == "https://api.individual.githubcopilot.com"
+        assert data["candidate_base_urls"] == [
+            "https://api.individual.githubcopilot.com",
+            "https://api.githubcopilot.com",
+        ]
 
 
 def test_copilot_models_endpoint_returns_probe_data():

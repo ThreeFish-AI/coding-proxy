@@ -36,17 +36,42 @@ _USER_AGENT = f"GitHubCopilotChat/{_COPILOT_VERSION}"
 _GITHUB_API_VERSION = "2025-04-01"
 
 
+def _normalize_base_url(url: str) -> str:
+    return url.rstrip("/")
+
+
+def build_copilot_candidate_base_urls(account_type: str, configured_base_url: str) -> list[str]:
+    """构建 Copilot 候选基础地址列表."""
+    if configured_base_url.strip():
+        return [_normalize_base_url(configured_base_url.strip())]
+
+    normalized = (account_type or "individual").strip().lower() or "individual"
+    candidates = [f"https://api.{normalized}.githubcopilot.com"]
+    candidates.append("https://api.githubcopilot.com")
+
+    unique_candidates: list[str] = []
+    for candidate in candidates:
+        normalized_candidate = _normalize_base_url(candidate)
+        if normalized_candidate not in unique_candidates:
+            unique_candidates.append(normalized_candidate)
+    return unique_candidates
+
+
 def resolve_copilot_base_url(account_type: str, configured_base_url: str) -> str:
     """解析 Copilot API 基础地址.
 
     保留用户显式覆盖；仅当值为空时按账号类型回退到官方推荐域名。
     """
-    if configured_base_url:
-        return configured_base_url
-    normalized = (account_type or "individual").strip().lower()
-    if normalized == "individual":
-        return "https://api.githubcopilot.com"
-    return f"https://api.{normalized}.githubcopilot.com"
+    return build_copilot_candidate_base_urls(account_type, configured_base_url)[0]
+
+
+@dataclass
+class CopilotMisdirectedRequest:
+    base_url: str
+    status_code: int
+    request: httpx.Request
+    headers: httpx.Headers
+    body: bytes
 
 
 @dataclass
@@ -230,8 +255,12 @@ class CopilotBackend(BaseBackend):
     def __init__(self, config: CopilotConfig, failover_config: FailoverConfig) -> None:
         self._account_type = (config.account_type or "individual").strip().lower()
         self._configured_base_url = config.base_url
+        self._candidate_base_urls = build_copilot_candidate_base_urls(self._account_type, config.base_url)
         self._resolved_base_url = resolve_copilot_base_url(self._account_type, config.base_url)
         self._last_request_adaptations: list[str] = []
+        self._last_request_base_url = ""
+        self._last_421_base_url = ""
+        self._last_retry_base_url = ""
         super().__init__(self._resolved_base_url, config.timeout_ms, failover_config)
         self._token_manager = CopilotTokenManager(config.github_token, config.token_url)
 
@@ -299,6 +328,148 @@ class CopilotBackend(BaseBackend):
 
         return adaptations
 
+    def _create_fresh_client(self, base_url: str) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=base_url,
+            timeout=httpx.Timeout(self._timeout_ms / 1000.0),
+        )
+
+    async def _activate_base_url(self, base_url: str) -> None:
+        normalized = _normalize_base_url(base_url)
+        self._resolved_base_url = normalized
+        self._base_url = normalized
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
+
+    def _begin_request(self, base_url: str) -> None:
+        self._last_request_base_url = _normalize_base_url(base_url)
+        self._last_421_base_url = ""
+        self._last_retry_base_url = ""
+
+    def _retry_base_urls(self, base_url: str) -> list[str]:
+        """构建 421 后的重试候选：同 authority fresh connection + 备选域名."""
+        normalized = _normalize_base_url(base_url)
+        retry_urls = [normalized]
+        if not self._configured_base_url.strip():
+            retry_urls.extend(
+                candidate for candidate in self._candidate_base_urls
+                if candidate != normalized
+            )
+        return retry_urls
+
+    @staticmethod
+    def _build_misdirected_request(response: httpx.Response, body: bytes, base_url: str) -> CopilotMisdirectedRequest:
+        return CopilotMisdirectedRequest(
+            base_url=_normalize_base_url(base_url),
+            status_code=response.status_code,
+            request=response.request,
+            headers=response.headers,
+            body=body,
+        )
+
+    @staticmethod
+    def _build_http_status_error_from_misdirected(error: CopilotMisdirectedRequest) -> httpx.HTTPStatusError:
+        return httpx.HTTPStatusError(
+            f"copilot API error: {error.status_code}",
+            request=error.request,
+            response=httpx.Response(
+                error.status_code,
+                content=error.body,
+                headers=error.headers,
+                request=error.request,
+            ),
+        )
+
+    async def _request_with_421_retry(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        headers: dict[str, str],
+        json_body: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        current_base_url = self._resolved_base_url
+        self._begin_request(current_base_url)
+
+        response = await self._get_client().request(
+            method,
+            endpoint,
+            json=json_body,
+            headers=headers,
+        )
+        if response.status_code != 421:
+            return response
+
+        self._last_421_base_url = current_base_url
+        last_response = response
+
+        for retry_base_url in self._retry_base_urls(current_base_url):
+            self._last_retry_base_url = retry_base_url
+            async with self._create_fresh_client(retry_base_url) as retry_client:
+                retry_response = await retry_client.request(
+                    method,
+                    endpoint,
+                    json=json_body,
+                    headers=headers,
+                )
+            last_response = retry_response
+            if retry_response.status_code != 421:
+                await self._activate_base_url(retry_base_url)
+                return retry_response
+            self._last_421_base_url = retry_base_url
+
+        return last_response
+
+    async def _stream_from_client(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        base_url: str,
+        body: dict[str, Any],
+        prepared_headers: dict[str, str],
+        request_model: str,
+    ) -> AsyncIterator[bytes]:
+        async with client.stream(
+            "POST",
+            self._get_endpoint(),
+            json=body,
+            headers=prepared_headers,
+        ) as response:
+            if response.status_code == 421:
+                error_body = await response.aread()
+                self._last_421_base_url = _normalize_base_url(base_url)
+                raise self._build_http_status_error_from_misdirected(
+                    self._build_misdirected_request(response, error_body, base_url),
+                )
+            if response.status_code >= 400:
+                self._on_error_status(response.status_code)
+                error_body = await response.aread()
+                logger.warning(
+                    "%s stream error: status=%d body=%s",
+                    self.get_name(), response.status_code, error_body[:500],
+                )
+                raise httpx.HTTPStatusError(
+                    f"{self.get_name()} API error: {response.status_code}",
+                    request=response.request,
+                    response=httpx.Response(
+                        response.status_code,
+                        content=error_body,
+                        headers=response.headers,
+                        request=response.request,
+                    ),
+                )
+
+            async def _upstream() -> AsyncIterator[bytes]:
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+
+            async for chunk in normalize_anthropic_compatible_stream(
+                _upstream(),
+                model=body.get("model", request_model),
+            ):
+                yield chunk
+
     async def _prepare_request(
         self,
         request_body: dict[str, Any],
@@ -333,6 +504,9 @@ class CopilotBackend(BaseBackend):
         diagnostics: dict[str, Any] = {
             "account_type": self._account_type,
             "base_url": self._resolved_base_url,
+            "configured_base_url": self._configured_base_url,
+            "resolved_base_url": self._resolved_base_url,
+            "candidate_base_urls": self._candidate_base_urls,
         }
         token_manager = self._token_manager.get_diagnostics()
         if token_manager:
@@ -342,6 +516,12 @@ class CopilotBackend(BaseBackend):
             diagnostics["exchange"] = exchange
         if self._last_request_adaptations:
             diagnostics["request_adaptations"] = self._last_request_adaptations
+        if self._last_request_base_url:
+            diagnostics["last_request_base_url"] = self._last_request_base_url
+        if self._last_421_base_url:
+            diagnostics["last_421_base_url"] = self._last_421_base_url
+        if self._last_retry_base_url:
+            diagnostics["last_retry_base_url"] = self._last_retry_base_url
         return diagnostics
 
     async def send_message(
@@ -350,9 +530,10 @@ class CopilotBackend(BaseBackend):
         headers: dict[str, str],
     ) -> BackendResponse:
         body, prepared_headers = await self._prepare_request(request_body, headers)
-        response = await self._get_client().post(
+        response = await self._request_with_421_retry(
+            "POST",
             self._get_endpoint(),
-            json=body,
+            json_body=body,
             headers=prepared_headers,
         )
 
@@ -403,45 +584,53 @@ class CopilotBackend(BaseBackend):
         headers: dict[str, str],
     ) -> AsyncIterator[bytes]:
         body, prepared_headers = await self._prepare_request(request_body, headers)
-        client = self._get_client()
-        async with client.stream(
-            "POST",
-            self._get_endpoint(),
-            json=body,
-            headers=prepared_headers,
-        ) as response:
-            if response.status_code >= 400:
-                self._on_error_status(response.status_code)
-                error_body = await response.aread()
-                logger.warning(
-                    "%s stream error: status=%d body=%s",
-                    self.get_name(), response.status_code, error_body[:500],
-                )
-                raise httpx.HTTPStatusError(
-                    f"{self.get_name()} API error: {response.status_code}",
-                    request=response.request,
-                    response=httpx.Response(
-                        response.status_code,
-                        content=error_body,
-                        headers=response.headers,
-                        request=response.request,
-                    ),
-                )
+        current_base_url = self._resolved_base_url
+        self._begin_request(current_base_url)
+        request_model = request_body.get("model", "unknown")
+        last_exc: httpx.HTTPStatusError | None = None
 
-            async def _upstream() -> AsyncIterator[bytes]:
-                async for chunk in response.aiter_bytes():
-                    yield chunk
-
-            async for chunk in normalize_anthropic_compatible_stream(
-                _upstream(),
-                model=body.get("model", request_body.get("model", "unknown")),
+        try:
+            async for chunk in self._stream_from_client(
+                self._get_client(),
+                base_url=current_base_url,
+                body=body,
+                prepared_headers=prepared_headers,
+                request_model=request_model,
             ):
                 yield chunk
+            return
+        except httpx.HTTPStatusError as exc:
+            if exc.response is None or exc.response.status_code != 421:
+                raise
+            last_exc = exc
+
+        for retry_base_url in self._retry_base_urls(current_base_url):
+            self._last_retry_base_url = retry_base_url
+            async with self._create_fresh_client(retry_base_url) as retry_client:
+                try:
+                    async for chunk in self._stream_from_client(
+                        retry_client,
+                        base_url=retry_base_url,
+                        body=body,
+                        prepared_headers=prepared_headers,
+                        request_model=request_model,
+                    ):
+                        yield chunk
+                    await self._activate_base_url(retry_base_url)
+                    return
+                except httpx.HTTPStatusError as retry_exc:
+                    last_exc = retry_exc
+                    if retry_exc.response is None or retry_exc.response.status_code != 421:
+                        raise
+
+        if last_exc:
+            raise last_exc
 
     async def probe_models(self) -> dict[str, Any]:
         """探测当前 Copilot 会话可见模型列表."""
         token = await self._token_manager.get_token()
-        response = await self._get_client().get(
+        response = await self._request_with_421_retry(
+            "GET",
             "/models",
             headers={
                 **self._build_copilot_headers(),
@@ -453,8 +642,10 @@ class CopilotBackend(BaseBackend):
             "status_code": response.status_code,
             "account_type": self._account_type,
             "base_url": self._resolved_base_url,
+            "resolved_base_url": self._resolved_base_url,
+            "candidate_base_urls": self._candidate_base_urls,
         }
-        data = response.json() if response.content else {}
+        data = _decode_json_body(response) or {}
         if response.status_code >= 400:
             error = data.get("error", {}) if isinstance(data, dict) else {}
             probe["failure_reason"] = (

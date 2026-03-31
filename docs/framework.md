@@ -687,7 +687,7 @@ Pydantic 默认值
 | `github_token` | str | `""` | GitHub OAuth token / PAT（支持 `${ENV_VAR}`） |
 | `account_type` | str | `"individual"` | 账号类型：`individual` / `business` / `enterprise` |
 | `token_url` | str | `"https://api.github.com/copilot_internal/v2/token"` | Token 交换端点 |
-| `base_url` | str | `"https://api.githubcopilot.com"` | Copilot API 基础地址 |
+| `base_url` | str | `""` | 留空时按 `account_type` 自动解析；显式填写时强制使用该地址 |
 | `timeout_ms` | int | `300000` | 请求超时（毫秒），默认 5 分钟 |
 
 **antigravity — Google Antigravity Claude 后端配置**

@@ -10,9 +10,32 @@ import httpx
 import pytest
 
 from coding.proxy.backends.base import CapabilityLossReason, RequestCapabilities
-from coding.proxy.backends.copilot import CopilotBackend, CopilotTokenManager, resolve_copilot_base_url
+from coding.proxy.backends.copilot import (
+    CopilotBackend,
+    CopilotTokenManager,
+    build_copilot_candidate_base_urls,
+    resolve_copilot_base_url,
+)
 from coding.proxy.backends.token_manager import TokenAcquireError, TokenErrorKind
 from coding.proxy.config.schema import CopilotConfig, FailoverConfig
+
+
+class _AsyncRequestClientStub:
+    def __init__(self, response: httpx.Response) -> None:
+        self._response = response
+        self.is_closed = False
+
+    async def request(self, *args, **kwargs) -> httpx.Response:
+        return self._response
+
+    async def aclose(self) -> None:
+        self.is_closed = True
+
+    async def __aenter__(self) -> "_AsyncRequestClientStub":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self.is_closed = True
 
 
 # --- CopilotTokenManager ---
@@ -257,10 +280,24 @@ def test_copilot_get_name():
 
 
 def test_resolve_copilot_base_url():
-    assert resolve_copilot_base_url("individual", "") == "https://api.githubcopilot.com"
+    assert resolve_copilot_base_url("individual", "") == "https://api.individual.githubcopilot.com"
     assert resolve_copilot_base_url("business", "") == "https://api.business.githubcopilot.com"
     assert resolve_copilot_base_url("enterprise", "") == "https://api.enterprise.githubcopilot.com"
     assert resolve_copilot_base_url("individual", "https://custom.example.com") == "https://custom.example.com"
+
+
+def test_build_copilot_candidate_base_urls():
+    assert build_copilot_candidate_base_urls("individual", "") == [
+        "https://api.individual.githubcopilot.com",
+        "https://api.githubcopilot.com",
+    ]
+    assert build_copilot_candidate_base_urls("business", "") == [
+        "https://api.business.githubcopilot.com",
+        "https://api.githubcopilot.com",
+    ]
+    assert build_copilot_candidate_base_urls("individual", "https://custom.example.com/") == [
+        "https://custom.example.com",
+    ]
 
 
 @pytest.mark.asyncio
@@ -348,6 +385,132 @@ async def test_copilot_prepare_request_records_thinking_adaptations():
 
 
 @pytest.mark.asyncio
+async def test_copilot_request_with_421_retries_fresh_connection():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+
+    initial_request = httpx.Request("POST", "https://api.individual.githubcopilot.com/chat/completions")
+    backend._client = _AsyncRequestClientStub(httpx.Response(  # type: ignore[assignment]
+        421,
+        content=b"Misdirected Request\n",
+        request=initial_request,
+    ))
+
+    retry_client = _AsyncRequestClientStub(httpx.Response(
+        200,
+        content=b'{"ok":true}',
+        headers={"content-type": "application/json"},
+        request=initial_request,
+    ))
+    backend._create_fresh_client = lambda base_url: retry_client  # type: ignore[method-assign]
+
+    response = await backend._request_with_421_retry(
+        "POST",
+        "/chat/completions",
+        headers={"authorization": "Bearer cop"},
+        json_body={"model": "claude-sonnet-4"},
+    )
+
+    assert response.status_code == 200
+    diagnostics = backend.get_diagnostics()
+    assert diagnostics["last_request_base_url"] == "https://api.individual.githubcopilot.com"
+    assert diagnostics["last_421_base_url"] == "https://api.individual.githubcopilot.com"
+    assert diagnostics["last_retry_base_url"] == "https://api.individual.githubcopilot.com"
+
+
+@pytest.mark.asyncio
+async def test_copilot_request_with_421_falls_back_to_public_domain():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+
+    initial_request = httpx.Request("POST", "https://api.individual.githubcopilot.com/chat/completions")
+    backend._client = _AsyncRequestClientStub(httpx.Response(  # type: ignore[assignment]
+        421,
+        content=b"Misdirected Request\n",
+        request=initial_request,
+    ))
+
+    retry_clients = [
+        _AsyncRequestClientStub(httpx.Response(
+            421,
+            content=b"Misdirected Request\n",
+            request=initial_request,
+        )),
+        _AsyncRequestClientStub(httpx.Response(
+            200,
+            content=b'{"ok":true}',
+            headers={"content-type": "application/json"},
+            request=httpx.Request("POST", "https://api.githubcopilot.com/chat/completions"),
+        )),
+    ]
+    retry_urls: list[str] = []
+
+    def _fake_create_fresh_client(base_url: str):
+        retry_urls.append(base_url)
+        return retry_clients.pop(0)
+
+    backend._create_fresh_client = _fake_create_fresh_client  # type: ignore[method-assign]
+
+    response = await backend._request_with_421_retry(
+        "POST",
+        "/chat/completions",
+        headers={"authorization": "Bearer cop"},
+        json_body={"model": "claude-sonnet-4"},
+    )
+
+    assert response.status_code == 200
+    assert retry_urls == [
+        "https://api.individual.githubcopilot.com",
+        "https://api.githubcopilot.com",
+    ]
+    diagnostics = backend.get_diagnostics()
+    assert diagnostics["resolved_base_url"] == "https://api.githubcopilot.com"
+    assert diagnostics["last_retry_base_url"] == "https://api.githubcopilot.com"
+
+
+@pytest.mark.asyncio
+async def test_copilot_stream_421_retries_alternate_base_url():
+    config = CopilotConfig(github_token="ghp_test")
+    backend = CopilotBackend(config, FailoverConfig())
+    backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
+
+    current_base_url = "https://api.individual.githubcopilot.com"
+    fallback_base_url = "https://api.githubcopilot.com"
+    stream_calls: list[str] = []
+
+    async def _fake_stream_from_client(client, *, base_url, body, prepared_headers, request_model):
+        stream_calls.append(base_url)
+        request = httpx.Request("POST", f"{base_url}/chat/completions")
+        if base_url != fallback_base_url:
+            raise httpx.HTTPStatusError(
+                "copilot API error: 421",
+                request=request,
+                response=httpx.Response(421, content=b"Misdirected Request\n", request=request),
+            )
+        yield b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+    backend._stream_from_client = _fake_stream_from_client  # type: ignore[method-assign]
+    backend._create_fresh_client = lambda base_url: _AsyncRequestClientStub(  # type: ignore[method-assign]
+        httpx.Response(200, request=httpx.Request("POST", f"{base_url}/chat/completions"))
+    )
+
+    chunks = []
+    async for chunk in backend.send_message_stream(
+        {"model": "claude-sonnet-4-20250514", "messages": []},
+        {"anthropic-version": "2023-06-01"},
+    ):
+        chunks.append(chunk)
+
+    assert chunks
+    assert stream_calls == [
+        current_base_url,
+        current_base_url,
+        fallback_base_url,
+    ]
+    assert backend.get_diagnostics()["resolved_base_url"] == fallback_base_url
+
+
+@pytest.mark.asyncio
 async def test_probe_models_reports_opus_46():
     config = CopilotConfig(github_token="ghp_test")
     backend = CopilotBackend(config, FailoverConfig())
@@ -361,7 +524,7 @@ async def test_probe_models_reports_opus_46():
     }
 
     mock_client = AsyncMock()
-    mock_client.get.return_value = mock_response
+    mock_client.request.return_value = mock_response
     mock_client.is_closed = False
     backend._client = mock_client
 
@@ -394,7 +557,7 @@ async def test_copilot_send_message_translates_openai_response_to_anthropic():
     }
 
     mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
+    mock_client.request.return_value = mock_response
     mock_client.is_closed = False
     backend._client = mock_client
 
@@ -424,7 +587,7 @@ async def test_copilot_send_message_handles_non_json_success_without_crash():
     mock_response.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
 
     mock_client = AsyncMock()
-    mock_client.post.return_value = mock_response
+    mock_client.request.return_value = mock_response
     mock_client.is_closed = False
     backend._client = mock_client
 

@@ -26,7 +26,7 @@ class CopilotConfig(BaseModel):
     github_token: str = ""
     account_type: str = "individual"
     token_url: str = "https://api.github.com/copilot_internal/v2/token"
-    base_url: str = "https://api.githubcopilot.com"
+    base_url: str = ""
     timeout_ms: int = 300000
 
 

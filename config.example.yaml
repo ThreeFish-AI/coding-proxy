@@ -20,7 +20,7 @@ copilot:
   github_token: "${GITHUB_TOKEN}"    # GitHub token（可选，运行 coding-proxy auth login 自动获取）
   account_type: "individual"         # individual / business / enterprise
   token_url: "https://api.github.com/copilot_internal/v2/token"
-  base_url: "https://api.githubcopilot.com"
+  base_url: ""                       # 留空时按 account_type 自动解析；仅在特殊网络环境下显式覆盖
   timeout_ms: 300000
 
 # Tier 2: Google Antigravity Claude（中间层）
