@@ -90,9 +90,11 @@ coding-proxy start --host 0.0.0.0 --port 8046
 
 启动成功后会看到类似输出：
 
-```
-INFO:     coding-proxy started: host=127.0.0.1 port=8046
-INFO:     Uvicorn running on http://127.0.0.1:8046
+```bash
+INFO:     Started server process [75773]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8046 (Press CTRL+C to quit)
 ```
 
 ### 2.5 验证服务
@@ -195,71 +197,71 @@ logging:
 
 #### server — 服务器
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
+| 字段   | 类型   | 默认值        | 说明                                      |
+| ------ | ------ | ------------- | ----------------------------------------- |
 | `host` | string | `"127.0.0.1"` | 监听地址。设为 `"0.0.0.0"` 可接受外部连接 |
-| `port` | int | `8046` | 监听端口 |
+| `port` | int    | `8046`        | 监听端口                                  |
 
 #### primary — 主后端（Anthropic）
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enabled` | bool | `true` | 是否启用主后端 |
-| `base_url` | string | `"https://api.anthropic.com"` | Anthropic API 地址 |
-| `timeout_ms` | int | `300000` | 请求超时，默认 5 分钟（300 秒） |
+| 字段         | 类型   | 默认值                        | 说明                            |
+| ------------ | ------ | ----------------------------- | ------------------------------- |
+| `enabled`    | bool   | `true`                        | 是否启用主后端                  |
+| `base_url`   | string | `"https://api.anthropic.com"` | Anthropic API 地址              |
+| `timeout_ms` | int    | `300000`                      | 请求超时，默认 5 分钟（300 秒） |
 
 #### fallback — 备选后端（智谱）
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enabled` | bool | `true` | 是否启用备选后端 |
-| `base_url` | string | `"https://open.bigmodel.cn/api/anthropic"` | 智谱 Anthropic 兼容接口地址 |
-| `api_key` | string | `""` | 智谱 API Key，支持 `${ENV_VAR}` 引用 |
-| `timeout_ms` | int | `3000000` | 请求超时，默认 50 分钟 |
+| 字段         | 类型   | 默认值                                     | 说明                                 |
+| ------------ | ------ | ------------------------------------------ | ------------------------------------ |
+| `enabled`    | bool   | `true`                                     | 是否启用备选后端                     |
+| `base_url`   | string | `"https://open.bigmodel.cn/api/anthropic"` | 智谱 Anthropic 兼容接口地址          |
+| `api_key`    | string | `""`                                       | 智谱 API Key，支持 `${ENV_VAR}` 引用 |
+| `timeout_ms` | int    | `3000000`                                  | 请求超时，默认 50 分钟               |
 
 #### circuit_breaker — 熔断器
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `failure_threshold` | int | `3` | 连续失败多少次后触发熔断（切换到备选后端） |
-| `recovery_timeout_seconds` | int | `300` | 熔断后等待多久尝试恢复（秒） |
-| `success_threshold` | int | `2` | 恢复测试阶段需要连续成功多少次才关闭熔断 |
-| `max_recovery_seconds` | int | `3600` | 指数退避的最大等待时间（秒） |
+| 字段                       | 类型 | 默认值 | 说明                                       |
+| -------------------------- | ---- | ------ | ------------------------------------------ |
+| `failure_threshold`        | int  | `3`    | 连续失败多少次后触发熔断（切换到备选后端） |
+| `recovery_timeout_seconds` | int  | `300`  | 熔断后等待多久尝试恢复（秒）               |
+| `success_threshold`        | int  | `2`    | 恢复测试阶段需要连续成功多少次才关闭熔断   |
+| `max_recovery_seconds`     | int  | `3600` | 指数退避的最大等待时间（秒）               |
 
 **指数退避机制**：如果恢复测试失败，等待时间会翻倍（300s → 600s → 1200s → ...），直到达到 `max_recovery_seconds` 上限。
 
 #### failover — 故障转移条件
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `status_codes` | list[int] | `[429, 403, 503, 500]` | 触发故障转移的 HTTP 状态码 |
-| `error_types` | list[str] | `["rate_limit_error", "overloaded_error", "api_error"]` | 触发故障转移的 Anthropic 错误类型 |
-| `error_message_patterns` | list[str] | `["quota", "limit exceeded", "usage cap", "capacity"]` | 触发故障转移的错误消息关键词（不区分大小写） |
+| 字段                     | 类型      | 默认值                                                  | 说明                                         |
+| ------------------------ | --------- | ------------------------------------------------------- | -------------------------------------------- |
+| `status_codes`           | list[int] | `[429, 403, 503, 500]`                                  | 触发故障转移的 HTTP 状态码                   |
+| `error_types`            | list[str] | `["rate_limit_error", "overloaded_error", "api_error"]` | 触发故障转移的 Anthropic 错误类型            |
+| `error_message_patterns` | list[str] | `["quota", "limit exceeded", "usage cap", "capacity"]`  | 触发故障转移的错误消息关键词（不区分大小写） |
 
 #### model_mapping — 模型映射规则
 
 每条规则包含：
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `pattern` | string | 匹配模式 |
-| `target` | string | 目标模型名称 |
-| `is_regex` | bool | 是否为正则表达式（默认 `false`） |
+| 字段       | 类型   | 说明                             |
+| ---------- | ------ | -------------------------------- |
+| `pattern`  | string | 匹配模式                         |
+| `target`   | string | 目标模型名称                     |
+| `is_regex` | bool   | 是否为正则表达式（默认 `false`） |
 
 **匹配优先级**：精确匹配 > 正则/通配符匹配 > 默认值 (`glm-5.1`)
 
 #### database — 数据库
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
+| 字段   | 类型   | 默认值                       | 说明                                 |
+| ------ | ------ | ---------------------------- | ------------------------------------ |
 | `path` | string | `"~/.coding-proxy/usage.db"` | SQLite 数据库文件路径，支持 `~` 展开 |
 
 #### logging — 日志
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `level` | string | `"INFO"` | 日志级别（DEBUG / INFO / WARNING / ERROR） |
-| `file` | string \| null | `null` | 日志文件路径，`null` 表示输出到控制台 |
+| 字段    | 类型           | 默认值   | 说明                                       |
+| ------- | -------------- | -------- | ------------------------------------------ |
+| `level` | string         | `"INFO"` | 日志级别（DEBUG / INFO / WARNING / ERROR） |
+| `file`  | string \| null | `null`   | 日志文件路径，`null` 表示输出到控制台      |
 
 ### 3.4 环境变量引用
 
@@ -284,11 +286,11 @@ fallback:
 coding-proxy start [OPTIONS]
 ```
 
-| 参数 | 缩写 | 说明 |
-|------|------|------|
-| `--config` | `-c` | 配置文件路径 |
-| `--port` | `-p` | 监听端口（覆盖配置文件） |
-| `--host` | `-h` | 监听地址（覆盖配置文件） |
+| 参数       | 缩写 | 说明                     |
+| ---------- | ---- | ------------------------ |
+| `--config` | `-c` | 配置文件路径             |
+| `--port`   | `-p` | 监听端口（覆盖配置文件） |
+| `--host`   | `-h` | 监听地址（覆盖配置文件） |
 
 **示例**：
 
@@ -308,8 +310,8 @@ coding-proxy start -p 9000 -c ~/my-config.yaml
 coding-proxy status [OPTIONS]
 ```
 
-| 参数 | 缩写 | 说明 |
-|------|------|------|
+| 参数     | 缩写 | 说明                      |
+| -------- | ---- | ------------------------- |
 | `--port` | `-p` | 代理服务端口（默认 8046） |
 
 **输出示例**：
@@ -324,11 +326,11 @@ coding-proxy status [OPTIONS]
 
 **熔断器状态说明**：
 
-| 状态 | 含义 |
-|------|------|
-| `closed` | 正常运行，使用主后端（Anthropic） |
-| `open` | 熔断中，使用备选后端（智谱） |
-| `half_open` | 恢复测试中，尝试使用主后端 |
+| 状态        | 含义                              |
+| ----------- | --------------------------------- |
+| `closed`    | 正常运行，使用主后端（Anthropic） |
+| `open`      | 熔断中，使用备选后端（智谱）      |
+| `half_open` | 恢复测试中，尝试使用主后端        |
 
 ### 4.3 coding-proxy usage
 
@@ -338,11 +340,11 @@ coding-proxy status [OPTIONS]
 coding-proxy usage [OPTIONS]
 ```
 
-| 参数 | 缩写 | 说明 |
-|------|------|------|
-| `--days` | `-d` | 统计天数（默认 7） |
+| 参数        | 缩写 | 说明                                      |
+| ----------- | ---- | ----------------------------------------- |
+| `--days`    | `-d` | 统计天数（默认 7）                        |
 | `--backend` | `-b` | 过滤指定后端（如 `anthropic` 或 `zhipu`） |
-| `--db` | — | 数据库文件路径 |
+| `--db`      | —    | 数据库文件路径                            |
 
 **示例**：
 
@@ -362,8 +364,8 @@ coding-proxy usage -d 30 -b anthropic
 coding-proxy reset [OPTIONS]
 ```
 
-| 参数 | 缩写 | 说明 |
-|------|------|------|
+| 参数     | 缩写 | 说明                      |
+| -------- | ---- | ------------------------- |
 | `--port` | `-p` | 代理服务端口（默认 8046） |
 
 **使用场景**：确认 Anthropic API 已恢复正常后，手动强制切回主后端，无需等待自动恢复超时。
@@ -503,12 +505,12 @@ failover:
 
 代理服务日志默认输出到控制台，包含以下关键事件：
 
-| 事件 | 日志级别 | 示例 |
-|------|---------|------|
+| 事件           | 日志级别     | 示例                                                      |
+| -------------- | ------------ | --------------------------------------------------------- |
 | 熔断器状态转换 | INFO/WARNING | `Circuit breaker: CLOSED → OPEN (3 consecutive failures)` |
-| 故障转移触发 | WARNING | `Primary error 429, failing over` |
-| 恢复成功 | INFO | `Circuit breaker: HALF_OPEN → CLOSED (recovered)` |
-| 连接错误 | WARNING | `Primary connection error: ConnectTimeout` |
+| 故障转移触发   | WARNING      | `Primary error 429, failing over`                         |
+| 恢复成功       | INFO         | `Circuit breaker: HALF_OPEN → CLOSED (recovered)`         |
+| 连接错误       | WARNING      | `Primary connection error: ConnectTimeout`                |
 
 可通过配置调整日志级别：
 
@@ -533,15 +535,15 @@ coding-proxy usage -d 30 -b zhipu
 
 统计字段说明：
 
-| 字段 | 说明 |
-|------|------|
-| 日期 | 统计日期 |
-| 后端 | `anthropic` 或 `zhipu` |
-| 请求数 | 当日总请求数 |
-| 输入 Token | 当日总输入 Token 数 |
-| 输出 Token | 当日总输出 Token 数 |
-| 故障转移次数 | 当日经过故障转移的请求数 |
-| 平均耗时 | 当日请求平均响应时间（毫秒） |
+| 字段         | 说明                         |
+| ------------ | ---------------------------- |
+| 日期         | 统计日期                     |
+| 后端         | `anthropic` 或 `zhipu`       |
+| 请求数       | 当日总请求数                 |
+| 输入 Token   | 当日总输入 Token 数          |
+| 输出 Token   | 当日总输出 Token 数          |
+| 故障转移次数 | 当日经过故障转移的请求数     |
+| 平均耗时     | 当日请求平均响应时间（毫秒） |
 
 ### 7.3 健康检查
 
