@@ -87,13 +87,13 @@ async def _run_usage(logger: TokenLogger, days: int, backend: str | None,
 def reset(
     port: int = typer.Option(8046, "--port", "-p", help="代理服务端口"),
 ) -> None:
-    """重置熔断器状态（恢复使用主后端）."""
+    """重置所有层级的熔断器和配额守卫（恢复使用最高优先级后端）."""
     import httpx
 
     try:
         resp = httpx.post(f"http://127.0.0.1:{port}/api/reset", timeout=5)
         if resp.status_code == 200:
-            console.print("[green]熔断器已重置为 CLOSED 状态[/green]")
+            console.print("[green]所有层级的熔断器和配额守卫已重置[/green]")
         else:
             console.print(f"[red]重置失败: {resp.status_code}[/red]")
     except httpx.ConnectError:
