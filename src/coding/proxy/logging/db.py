@@ -102,16 +102,34 @@ class TokenLogger:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
-    async def query_failover_stats(self, days: int = 7) -> list[dict]:
-        """按 failover_from → backend 聚合故障转移次数."""
+    async def query_failover_stats(self, days: int = 7, include_model_info: bool = False) -> list[dict]:
+        """
+        按 failover_from → backend 聚合故障转移次数.
+
+        Args:
+            days: 查询天数
+            include_model_info: 是否在聚合中包含模型信息
+                              - False: 按 (failover_from, backend) 聚合 (默认,向后兼容)
+                              - True: 按 (failover_from, backend, model_requested, model_served) 聚合
+        """
         if not self._db:
             return []
-        sql = """SELECT failover_from, backend,
-                   COUNT(*) AS count
-               FROM usage_log
-               WHERE failover = 1 AND ts >= datetime('now', ? || ' days')
-               GROUP BY failover_from, backend
-               ORDER BY count DESC"""
+
+        if include_model_info:
+            sql = """SELECT failover_from, backend, model_requested, model_served,
+                       COUNT(*) AS count
+                   FROM usage_log
+                   WHERE failover = 1 AND ts >= datetime('now', ? || ' days')
+                   GROUP BY failover_from, backend, model_requested, model_served
+                   ORDER BY count DESC"""
+        else:
+            # 保持原有的聚合逻辑确保向后兼容
+            sql = """SELECT failover_from, backend,
+                       COUNT(*) AS count
+                   FROM usa                WHERE failover = 1atetime('now', ? || ' days')
+                   GROUP BY failover_from, backend
+                   ORDER BY count DESC"""
+
         cursor = await self._db.execute(sql, [f"-{days}"])
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
