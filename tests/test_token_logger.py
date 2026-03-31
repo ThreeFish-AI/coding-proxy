@@ -142,7 +142,6 @@ async def test_query_daily_shows_model_mapping(logger):
     assert zhipu_row["model_requested"] == "claude-sonnet-4"
     assert zhipu_row["model_served"] == "glm-5.1"
     assert zhipu_row["total_failovers"] == 1
-    assert zhipu_row["failover_from"] == "anthropic"
 
 
 @pytest.mark.asyncio
@@ -156,7 +155,11 @@ async def test_log_with_failover_from(logger):
     )
     rows = await logger.query_daily(days=7)
     assert len(rows) == 1
-    assert rows[0]["failover_from"] == "anthropic"
+    assert rows[0]["total_failovers"] == 1
+    # failover_from 通过 query_failover_stats 验证
+    stats = await logger.query_failover_stats(days=7)
+    assert len(stats) == 1
+    assert stats[0]["failover_from"] == "anthropic"
 
 
 @pytest.mark.asyncio
@@ -169,12 +172,13 @@ async def test_log_without_failover_from(logger):
     )
     rows = await logger.query_daily(days=7)
     assert len(rows) == 1
-    assert rows[0]["failover_from"] is None
+    stats = await logger.query_failover_stats(days=7)
+    assert len(stats) == 0
 
 
 @pytest.mark.asyncio
-async def test_query_daily_groups_by_failover_from(logger):
-    """query_daily 按 failover_from 分组."""
+async def test_query_daily_merges_failover_rows(logger):
+    """query_daily no longer groups by failover_from, rows merge."""
     await logger.log(
         backend="zhipu", model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
@@ -183,14 +187,13 @@ async def test_query_daily_groups_by_failover_from(logger):
     await logger.log(
         backend="zhipu", model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=200,  # 无 failover_from → 稳定降级
+        input_tokens=200,
     )
     rows = await logger.query_daily(days=7)
-    assert len(rows) == 2
-    failover_row = next(r for r in rows if r["failover_from"] == "anthropic")
-    assert failover_row["total_requests"] == 1
-    stable_row = next(r for r in rows if r["failover_from"] is None)
-    assert stable_row["total_requests"] == 1
+    assert len(rows) == 1
+    assert rows[0]["total_requests"] == 2
+    assert rows[0]["total_input"] == 300
+    assert rows[0]["total_failovers"] == 1
 
 
 @pytest.mark.asyncio
@@ -229,7 +232,6 @@ async def test_migration_adds_failover_from_column(tmp_path):
     await tl.init()
     rows = await tl.query_daily(days=7)
     assert len(rows) == 1
-    assert rows[0]["failover_from"] is None
     await tl.close()
 
 
