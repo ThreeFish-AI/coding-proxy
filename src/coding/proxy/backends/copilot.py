@@ -5,13 +5,16 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, AsyncIterator
 from uuid import uuid4
 
 import httpx
 
 from ..config.schema import CopilotConfig, FailoverConfig
-from .base import PROXY_SKIP_HEADERS, BaseBackend
+from ..convert.anthropic_to_openai import convert_request as convert_openai_request
+from ..convert.openai_to_anthropic import convert_response as convert_openai_response
+from ..streaming.anthropic_compat import normalize_anthropic_compatible_stream
+from .base import PROXY_SKIP_HEADERS, BackendCapabilities, BackendResponse, BaseBackend, UsageInfo, _decode_json_body, _extract_error_message
 from .token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
 
 logger = logging.getLogger(__name__)
@@ -224,6 +227,18 @@ class CopilotBackend(BaseBackend):
     def get_name(self) -> str:
         return "copilot"
 
+    def get_capabilities(self) -> BackendCapabilities:
+        return BackendCapabilities(
+            supports_tools=True,
+            supports_thinking=False,
+            supports_images=True,
+            emits_vendor_tool_events=False,
+            supports_metadata=True,
+        )
+
+    def _get_endpoint(self) -> str:
+        return "/chat/completions"
+
     def _build_copilot_headers(self) -> dict[str, str]:
         return {
             "copilot-integration-id": "vscode-chat",
@@ -236,6 +251,13 @@ class CopilotBackend(BaseBackend):
             "x-vscode-user-agent-library-version": "electron-fetch",
             "content-type": "application/json",
         }
+
+    @staticmethod
+    def _resolve_initiator(request_body: dict[str, Any]) -> str:
+        for message in request_body.get("messages", []):
+            if message.get("role") in {"assistant", "tool"}:
+                return "agent"
+        return "user"
 
     async def _prepare_request(
         self,
@@ -250,7 +272,8 @@ class CopilotBackend(BaseBackend):
                 prepared[key] = value
         token = await self._token_manager.get_token()
         prepared["authorization"] = f"Bearer {token}"
-        return request_body, prepared
+        prepared["x-initiator"] = self._resolve_initiator(request_body)
+        return convert_openai_request(request_body), prepared
 
     def _on_error_status(self, status_code: int) -> None:
         """401/403 时标记 token 失效以触发被动刷新."""
@@ -277,6 +300,100 @@ class CopilotBackend(BaseBackend):
         if exchange:
             diagnostics["exchange"] = exchange
         return diagnostics
+
+    async def send_message(
+        self,
+        request_body: dict[str, Any],
+        headers: dict[str, str],
+    ) -> BackendResponse:
+        body, prepared_headers = await self._prepare_request(request_body, headers)
+        response = await self._get_client().post(
+            self._get_endpoint(),
+            json=body,
+            headers=prepared_headers,
+        )
+
+        raw_content = response.content
+        resp_body = _decode_json_body(response)
+
+        if response.status_code >= 400:
+            self._on_error_status(response.status_code)
+            return BackendResponse(
+                status_code=response.status_code,
+                raw_body=raw_content,
+                error_type=resp_body.get("error", {}).get("type") if isinstance(resp_body, dict) and isinstance(resp_body.get("error"), dict) else None,
+                error_message=_extract_error_message(response, resp_body),
+                response_headers=dict(response.headers),
+            )
+
+        if not isinstance(resp_body, dict):
+            return BackendResponse(
+                status_code=502,
+                raw_body=raw_content,
+                error_type="api_error",
+                error_message="Copilot non-stream response is not valid JSON",
+                response_headers=dict(response.headers),
+            )
+
+        anthropic_resp = convert_openai_response(resp_body)
+        usage = anthropic_resp.get("usage", {})
+        return BackendResponse(
+            status_code=response.status_code,
+            raw_body=httpx.Response(
+                response.status_code,
+                json=anthropic_resp,
+            ).content,
+            usage=UsageInfo(
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                cache_read_tokens=usage.get("cache_read_input_tokens", 0),
+                cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
+                request_id=anthropic_resp.get("id", ""),
+            ),
+            model_served=anthropic_resp.get("model"),
+            response_headers=dict(response.headers),
+        )
+
+    async def send_message_stream(
+        self,
+        request_body: dict[str, Any],
+        headers: dict[str, str],
+    ) -> AsyncIterator[bytes]:
+        body, prepared_headers = await self._prepare_request(request_body, headers)
+        client = self._get_client()
+        async with client.stream(
+            "POST",
+            self._get_endpoint(),
+            json=body,
+            headers=prepared_headers,
+        ) as response:
+            if response.status_code >= 400:
+                self._on_error_status(response.status_code)
+                error_body = await response.aread()
+                logger.warning(
+                    "%s stream error: status=%d body=%s",
+                    self.get_name(), response.status_code, error_body[:500],
+                )
+                raise httpx.HTTPStatusError(
+                    f"{self.get_name()} API error: {response.status_code}",
+                    request=response.request,
+                    response=httpx.Response(
+                        response.status_code,
+                        content=error_body,
+                        headers=response.headers,
+                        request=response.request,
+                    ),
+                )
+
+            async def _upstream() -> AsyncIterator[bytes]:
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+
+            async for chunk in normalize_anthropic_compatible_stream(
+                _upstream(),
+                model=body.get("model", request_body.get("model", "unknown")),
+            ):
+                yield chunk
 
     async def probe_models(self) -> dict[str, Any]:
         """探测当前 Copilot 会话可见模型列表."""

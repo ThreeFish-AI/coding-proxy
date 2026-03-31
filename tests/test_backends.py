@@ -9,6 +9,7 @@ from coding.proxy.backends.base import (
     BaseBackend,
     BackendResponse,
     UsageInfo,
+    _decode_json_body,
     _sanitize_headers_for_synthetic_response,
 )
 from coding.proxy.backends.zhipu import ZhipuBackend
@@ -193,6 +194,15 @@ def test_synthetic_response_no_decompression_error():
     )
     assert resp.status_code == 429
     assert b"rate limit" in resp.content
+
+
+def test_decode_json_body_returns_none_for_html():
+    resp = httpx.Response(
+        200,
+        content=b"<html>not json</html>",
+        headers={"content-type": "text/html"},
+    )
+    assert _decode_json_body(resp) is None
 
 
 # --- check_health 测试 ---

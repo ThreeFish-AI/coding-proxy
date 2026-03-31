@@ -72,3 +72,28 @@ async def test_openai_style_stream_is_converted():
     assert "message_start" in event_types
     assert event_types.count("content_block_delta") == 2
     assert "message_stop" in event_types
+
+
+@pytest.mark.asyncio
+async def test_openai_tool_call_stream_is_converted():
+    """OpenAI tool_calls 增量流被转为 Anthropic tool_use 事件."""
+    chunks = [
+        'data: {"id":"chatcmpl-1","model":"claude-opus-4","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather"}}]},"finish_reason":null}]}\n\n',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"city\\":\\"Tokyo\\"}"}}],"content":null},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":9,"completion_tokens":4}}\n\n',
+        "data: [DONE]\n\n",
+    ]
+
+    collected = []
+    async for chunk in normalize_anthropic_compatible_stream(
+        _raw_chunks(chunks), model="claude-opus-4",
+    ):
+        collected.append(chunk)
+
+    events = _parse_events(collected)
+    tool_start = next(event for event in events if event["event"] == "content_block_start")
+    tool_delta = next(event for event in events if event["event"] == "content_block_delta")
+    message_delta = next(event for event in events if event["event"] == "message_delta")
+    assert tool_start["data"]["content_block"]["type"] == "tool_use"
+    assert tool_start["data"]["content_block"]["name"] == "get_weather"
+    assert tool_delta["data"]["delta"]["type"] == "input_json_delta"
+    assert message_delta["data"]["delta"]["stop_reason"] == "tool_use"
