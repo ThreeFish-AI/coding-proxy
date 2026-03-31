@@ -99,6 +99,10 @@ class BaseBackend(ABC):
     def _on_error_status(self, status_code: int) -> None:
         """响应错误状态码时的钩子（如 token 失效标记）."""
 
+    def get_diagnostics(self) -> dict[str, Any]:
+        """返回后端运行时诊断信息."""
+        return {}
+
     def should_trigger_failover(self, status_code: int, body: dict[str, Any] | None) -> bool:
         """基于 FailoverConfig 的通用故障转移判断.
 

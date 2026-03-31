@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from coding.proxy.backends.base import BackendResponse, BaseBackend, UsageInfo
+from coding.proxy.backends.token_manager import TokenAcquireError
 from coding.proxy.routing.circuit_breaker import CircuitBreaker
 from coding.proxy.routing.quota_guard import QuotaGuard
 from coding.proxy.routing.router import RequestRouter
@@ -449,6 +450,56 @@ async def test_four_tier_stream_failover():
     assert b1.call_count == 1
     assert b2.call_count == 1
     assert b3.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_four_tier_failover_when_copilot_token_acquire_fails():
+    """Anthropic 429 后，Copilot token 获取失败仍应降级到 Antigravity."""
+    from coding.proxy.config.schema import FailoverConfig
+
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b0._failover_config = FailoverConfig()
+
+    b1 = FakeBackend("copilot", raise_on_call=TokenAcquireError("Copilot token 交换返回非预期响应"))
+    b2 = FakeBackend("antigravity", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=40)))
+    b3 = FakeBackend("zhipu")
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b3),
+    ])
+
+    resp = await router.route_message(_body(), _headers())
+    assert resp.status_code == 200
+    assert b0.call_count == 1
+    assert b1.call_count == 1
+    assert b2.call_count == 1
+    assert b3.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_four_tier_stream_failover_when_copilot_token_acquire_fails():
+    """流式请求下，Copilot token 获取失败也应继续降级."""
+    b0 = FakeBackend("anthropic", raise_on_call=httpx.ConnectError("refused"))
+    b1 = FakeBackend("copilot", raise_on_call=TokenAcquireError("Copilot token 交换返回非预期响应"))
+    b2 = FakeBackend("antigravity", stream_chunks=[b"data: ok\n\n"])
+    b3 = FakeBackend("zhipu")
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b3),
+    ])
+
+    collected = []
+    async for chunk, name in router.route_stream(_body(), _headers()):
+        collected.append((chunk, name))
+
+    assert len(collected) == 1
+    assert collected[0][1] == "antigravity"
 
 
 # --- model_served 测试 ---

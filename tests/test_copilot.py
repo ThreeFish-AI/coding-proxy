@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from coding.proxy.backends.copilot import CopilotBackend, CopilotTokenManager
+from coding.proxy.backends.token_manager import TokenAcquireError
 from coding.proxy.config.schema import CopilotConfig, FailoverConfig
 
 
@@ -22,6 +23,7 @@ async def test_token_manager_exchange():
     tm = CopilotTokenManager("ghp_test", "https://github.com/github-copilot/chat/token")
 
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {"access_token": "cop_abc", "expires_in": 1800}
     mock_response.raise_for_status = MagicMock()
 
@@ -46,6 +48,7 @@ async def test_token_manager_caching():
     tm = CopilotTokenManager("ghp_test", "https://fake")
 
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {"access_token": "cached_token", "expires_in": 1800}
     mock_response.raise_for_status = MagicMock()
 
@@ -67,6 +70,7 @@ async def test_token_manager_refresh_on_expiry():
     tm = CopilotTokenManager("ghp_test", "https://fake")
 
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {"access_token": "token_v1", "expires_in": 1800}
     mock_response.raise_for_status = MagicMock()
 
@@ -82,6 +86,7 @@ async def test_token_manager_refresh_on_expiry():
     tm._expires_at = 0.0
 
     mock_response2 = MagicMock()
+    mock_response2.status_code = 200
     mock_response2.json.return_value = {"access_token": "token_v2", "expires_in": 1800}
     mock_response2.raise_for_status = MagicMock()
     mock_client.get.return_value = mock_response2
@@ -97,6 +102,7 @@ async def test_token_manager_invalidate():
     tm = CopilotTokenManager("ghp_test", "https://fake")
 
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {"access_token": "tok", "expires_in": 1800}
     mock_response.raise_for_status = MagicMock()
 
@@ -123,6 +129,49 @@ async def test_token_manager_close():
 
     await tm.close()
     mock_client.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_token_manager_missing_access_token_raises_token_acquire_error():
+    """响应缺少 access_token 时抛 TokenAcquireError，而非 KeyError."""
+    tm = CopilotTokenManager("ghp_test", "https://fake")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"message": "license check required"}
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    tm._client = mock_client
+
+    with pytest.raises(TokenAcquireError) as exc_info:
+        await tm.get_token()
+
+    assert "非预期响应" in str(exc_info.value)
+    assert "license check required" in str(exc_info.value)
+    assert tm.get_diagnostics()["last_error"] == str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_token_manager_401_needs_reauth():
+    """401 交换失败应触发 needs_reauth."""
+    tm = CopilotTokenManager("ghp_test", "https://fake")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.json.return_value = {"message": "Bad credentials"}
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    tm._client = mock_client
+
+    with pytest.raises(TokenAcquireError) as exc_info:
+        await tm.get_token()
+
+    assert exc_info.value.needs_reauth is True
+    assert "GitHub token 无效或已过期" in str(exc_info.value)
 
 
 # --- CopilotBackend ---

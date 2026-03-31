@@ -118,6 +118,12 @@ class AntigravityBackend(BaseBackend):
             logger.warning("Antigravity health check failed: token refresh error")
             return False
 
+    def get_diagnostics(self) -> dict[str, Any]:
+        diagnostics = self._token_manager.get_diagnostics()
+        if not diagnostics:
+            return {}
+        return {"token_manager": diagnostics}
+
     async def send_message(
         self,
         request_body: dict[str, Any],

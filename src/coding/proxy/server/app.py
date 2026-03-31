@@ -250,6 +250,9 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             if tier.quota_guard and tier.quota_guard.enabled:
                 info["quota_guard"] = tier.quota_guard.get_info()
             info["rate_limit"] = tier.get_rate_limit_info()
+            diagnostics = tier.backend.get_diagnostics()
+            if diagnostics:
+                info["diagnostics"] = diagnostics
             result["tiers"].append(info)
         return result
 
