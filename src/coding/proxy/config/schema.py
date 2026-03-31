@@ -27,6 +27,7 @@ class CopilotConfig(BaseModel):
     account_type: str = "individual"
     token_url: str = "https://api.github.com/copilot_internal/v2/token"
     base_url: str = ""
+    models_cache_ttl_seconds: int = 300
     timeout_ms: int = 300000
 
 

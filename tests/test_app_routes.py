@@ -150,6 +150,7 @@ def test_copilot_diagnostics_endpoint_returns_backend_info():
             "https://api.individual.githubcopilot.com",
             "https://api.githubcopilot.com",
         ]
+        assert data["available_models_cache"] == []
 
 
 def test_copilot_models_endpoint_returns_probe_data():
