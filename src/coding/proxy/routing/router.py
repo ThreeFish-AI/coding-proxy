@@ -11,6 +11,7 @@ import httpx
 
 from ..backends.base import BackendResponse, UsageInfo
 from ..logging.db import TokenLogger
+from .rate_limit import compute_effective_retry_seconds, parse_rate_limit_headers
 from .tier import BackendTier
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,11 @@ class RequestRouter:
         for i, tier in enumerate(self._tiers):
             is_last = i == last_idx
 
-            if not tier.can_execute() and not is_last:
+            # 非终端层使用健康检查门控
+            if not is_last:
+                if not await tier.can_execute_with_health_check():
+                    continue
+            elif not tier.can_execute() and not is_last:
                 continue
 
             start = time.monotonic()
@@ -150,7 +155,20 @@ class RequestRouter:
                 return
             except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
                 logger.warning("Tier %s stream failed: %s", tier.name, exc)
-                tier.record_failure()
+
+                # 从 HTTPStatusError 提取 rate limit 信息
+                retry_seconds = None
+                is_cap = False
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+                    rl_info = parse_rate_limit_headers(
+                        exc.response.headers,
+                        exc.response.status_code,
+                        exc.response.text[:500] if exc.response.text else None,
+                    )
+                    retry_seconds = compute_effective_retry_seconds(rl_info)
+                    is_cap = rl_info.is_cap_error
+
+                tier.record_failure(is_cap_error=is_cap, retry_after_seconds=retry_seconds)
                 failed_tier_name = tier.name
                 last_exc = exc
                 if is_last:
@@ -172,7 +190,11 @@ class RequestRouter:
         for i, tier in enumerate(self._tiers):
             is_last = i == last_idx
 
-            if not tier.can_execute() and not is_last:
+            # 非终端层使用健康检查门控
+            if not is_last:
+                if not await tier.can_execute_with_health_check():
+                    continue
+            elif not tier.can_execute() and not is_last:
                 continue
 
             try:
@@ -195,7 +217,19 @@ class RequestRouter:
                     {"error": {"type": resp.error_type, "message": resp.error_message}},
                 ):
                     logger.warning("Tier %s error %d, failing over", tier.name, resp.status_code)
-                    tier.record_failure(is_cap_error=self._is_cap_error(resp))
+
+                    # 解析 rate limit 信息
+                    rl_info = parse_rate_limit_headers(
+                        resp.response_headers,
+                        resp.status_code,
+                        resp.error_message,
+                    )
+                    retry_seconds = compute_effective_retry_seconds(rl_info)
+
+                    tier.record_failure(
+                        is_cap_error=self._is_cap_error(resp) or rl_info.is_cap_error,
+                        retry_after_seconds=retry_seconds,
+                    )
                     failed_tier_name = tier.name
                     continue
 
@@ -211,7 +245,7 @@ class RequestRouter:
 
             except (httpx.TimeoutException, httpx.ConnectError) as exc:
                 logger.warning("Tier %s connection error: %s", tier.name, exc)
-                tier.record_failure()
+                tier.record_failure()  # 连接错误无 rate limit 信息
                 failed_tier_name = tier.name
                 if is_last:
                     raise
