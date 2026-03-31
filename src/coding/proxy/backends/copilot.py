@@ -2,80 +2,60 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from typing import Any
 
 import httpx
 
 from ..config.schema import CopilotConfig, FailoverConfig
 from .base import PROXY_SKIP_HEADERS, BaseBackend
+from .token_manager import BaseTokenManager, TokenAcquireError
 
 logger = logging.getLogger(__name__)
 
 
-class CopilotTokenManager:
-    """管理 GitHub Copilot token 的交换与自动刷新.
+class CopilotTokenManager(BaseTokenManager):
+    """GitHub Copilot token 交换管理.
 
     流程: GitHub token → GET copilot_internal/v2/token → Copilot access_token (~30 分钟有效期)
     """
 
-    # 提前刷新的余量（秒）
-    _REFRESH_MARGIN = 60
-
     def __init__(self, github_token: str, token_url: str) -> None:
+        super().__init__()
         self._github_token = github_token
         self._token_url = token_url
-        self._access_token: str | None = None
-        self._expires_at: float = 0.0
-        self._lock = asyncio.Lock()
-        self._client: httpx.AsyncClient | None = None
 
-    def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
-        return self._client
-
-    async def get_token(self) -> str:
-        """获取有效的 Copilot access_token（带缓存和自动刷新）."""
-        if self._access_token and time.monotonic() < self._expires_at:
-            return self._access_token
-
-        async with self._lock:
-            # Double-check after acquiring lock
-            if self._access_token and time.monotonic() < self._expires_at:
-                return self._access_token
-            await self._exchange()
-            assert self._access_token is not None
-            return self._access_token
-
-    async def _exchange(self) -> None:
-        """通过 GitHub token 交换 Copilot token (GET copilot_internal/v2/token)."""
+    async def _acquire(self) -> tuple[str, float]:
+        """通过 GitHub token 交换 Copilot token."""
         client = self._get_client()
-        response = await client.get(
-            self._token_url,
-            headers={
-                "authorization": f"token {self._github_token}",
-                "accept": "application/json",
-                "editor-version": "vscode/1.95.0",
-                "editor-plugin-version": "copilot/1.0.0",
-            },
-        )
-        response.raise_for_status()
+        try:
+            response = await client.get(
+                self._token_url,
+                headers={
+                    "authorization": f"token {self._github_token}",
+                    "accept": "application/json",
+                    "editor-version": "vscode/1.95.0",
+                    "editor-plugin-version": "copilot/1.0.0",
+                },
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 401:
+                raise TokenAcquireError(
+                    "GitHub token 无效或已过期", needs_reauth=True,
+                ) from exc
+            raise TokenAcquireError(f"Copilot token 交换失败: {exc}") from exc
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            raise TokenAcquireError(f"Copilot token 交换网络异常: {exc}") from exc
         data = response.json()
-        self._access_token = data["access_token"]
         expires_in = data.get("expires_in", 1800)
-        self._expires_at = time.monotonic() + expires_in - self._REFRESH_MARGIN
         logger.info("Copilot token exchanged, expires_in=%ds", expires_in)
+        return data["access_token"], float(expires_in)
 
-    def invalidate(self) -> None:
-        """标记当前 token 失效（触发下次请求时被动刷新）."""
-        self._expires_at = 0.0
-
-    async def close(self) -> None:
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
+    def update_github_token(self, new_token: str) -> None:
+        """运行时热更新 GitHub token（重认证后调用）."""
+        self._github_token = new_token
+        self.invalidate()
 
 
 class CopilotBackend(BaseBackend):
