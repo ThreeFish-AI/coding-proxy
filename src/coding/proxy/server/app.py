@@ -4,19 +4,23 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 
+from ..auth.store import TokenStoreManager
 from ..backends.antigravity import AntigravityBackend
 from ..backends.anthropic import AnthropicBackend
 from ..backends.copilot import CopilotBackend
 from ..backends.zhipu import ZhipuBackend
 from ..config.loader import load_config
 from ..config.schema import (
+    AntigravityConfig,
     CircuitBreakerConfig,
+    CopilotConfig,
     ProxyConfig,
     QuotaGuardConfig,
 )
@@ -59,6 +63,49 @@ def _build_quota_guard(cfg: QuotaGuardConfig) -> QuotaGuard:
     )
 
 
+def _resolve_copilot_credentials(
+    cfg: CopilotConfig, token_store: TokenStoreManager
+) -> CopilotConfig:
+    """合并 Copilot 凭证: Token Store > Config YAML.
+
+    返回更新后的 CopilotConfig（github_token 已填充）。
+    """
+    if cfg.github_token:
+        return cfg  # config.yaml 已有凭证，直接使用
+
+    tokens = token_store.get("github")
+    if tokens.access_token:
+        cfg = cfg.model_copy(update={"github_token": tokens.access_token})
+        logger.info("Copilot: 使用 Token Store 中的 GitHub 凭证")
+
+    return cfg
+
+
+def _resolve_antigravity_credentials(
+    cfg: AntigravityConfig, token_store: TokenStoreManager
+) -> AntigravityConfig:
+    """合并 Antigravity 凭证: Token Store > Config YAML.
+
+    优先使用 Token Store 中的 refresh_token；
+    若 config.yaml 已有完整凭证（client_id + client_secret + refresh_token），则直接使用。
+    """
+    if cfg.refresh_token:
+        return cfg  # config.yaml 已有凭证，直接使用
+
+    tokens = token_store.get("google")
+    if tokens.refresh_token:
+        updates: dict[str, str] = {"refresh_token": tokens.refresh_token}
+        # 若 config.yaml 缺少 OAuth 凭据，使用默认公开凭据
+        if not cfg.client_id:
+            updates["client_id"] = "764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com"
+        if not cfg.client_secret:
+            updates["client_secret"] = "d-FL95Q19W7jAaasCmO6F9XZ"
+        cfg = cfg.model_copy(update=updates)
+        logger.info("Antigravity: 使用 Token Store 中的 Google 凭证")
+
+    return cfg
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理（启动 / 关闭）."""
@@ -92,6 +139,12 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     token_logger = TokenLogger(config.db_path)
     mapper = ModelMapper(config.model_mapping)
 
+    # 加载 Token Store 用于凭证合并
+    token_store = TokenStoreManager(
+        store_path=Path(config.auth.token_store_path) if config.auth.token_store_path else None
+    )
+    token_store.load()
+
     # 构建后端层级链
     tiers: list[BackendTier] = []
 
@@ -105,16 +158,18 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     # Tier 1: GitHub Copilot (中间层)
     if config.copilot.enabled:
+        copilot_cfg = _resolve_copilot_credentials(config.copilot, token_store)
         tiers.append(BackendTier(
-            backend=CopilotBackend(config.copilot, config.failover),
+            backend=CopilotBackend(copilot_cfg, config.failover),
             circuit_breaker=_build_circuit_breaker(config.copilot_circuit_breaker),
             quota_guard=_build_quota_guard(config.copilot_quota_guard),
         ))
 
     # Tier 2: Google Antigravity Claude (中间层)
     if config.antigravity.enabled:
+        antigravity_cfg = _resolve_antigravity_credentials(config.antigravity, token_store)
         tiers.append(BackendTier(
-            backend=AntigravityBackend(config.antigravity, config.failover),
+            backend=AntigravityBackend(antigravity_cfg, config.failover),
             circuit_breaker=_build_circuit_breaker(config.antigravity_circuit_breaker),
             quota_guard=_build_quota_guard(config.antigravity_quota_guard),
         ))
