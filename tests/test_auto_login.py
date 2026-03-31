@@ -59,16 +59,55 @@ def test_partial_env_expansion(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_skip_when_copilot_disabled(tmp_path: Path):
-    """Copilot 禁用时不触发登录."""
+async def test_trigger_login_even_when_disabled(tmp_path: Path):
+    """Copilot 禁用但无凭证时仍触发登录（凭证获取与 enabled 解耦）."""
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  enabled: false\n")
+    cfg_file.write_text(
+        "copilot:\n  enabled: false\n"
+        "antigravity:\n  refresh_token: skip\n"
+    )
 
-    with patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider") as mock_cls:
+    mock_prov = AsyncMock()
+    mock_prov.needs_login.return_value = True
+    mock_prov.login.return_value = ProviderTokens(access_token="ghp_new")
+
+    empty_store = _make_store()
+
+    with (
+        patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider", return_value=mock_prov),
+        patch("coding.proxy.auth.store.TokenStoreManager", return_value=empty_store),
+    ):
         await _auto_login_if_needed(cfg_file)
-        mock_cls.assert_not_called()
+
+    mock_prov.login.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_skip_login_when_store_has_credentials(tmp_path: Path):
+    """Store 已有有效凭证时不触发登录（无论 enabled 状态）."""
+    from coding.proxy.cli import _auto_login_if_needed
+
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "copilot:\n  enabled: false\n"
+        "antigravity:\n  refresh_token: skip\n"
+    )
+
+    mock_prov = AsyncMock()
+    mock_prov.needs_login = MagicMock(return_value=False)
+    mock_prov.validate.return_value = True
+
+    valid_store = _make_store({"github": {"access_token": "ghp_valid"}})
+
+    with (
+        patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider", return_value=mock_prov),
+        patch("coding.proxy.auth.store.TokenStoreManager", return_value=valid_store),
+    ):
+        await _auto_login_if_needed(cfg_file)
+
+    mock_prov.login.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -82,6 +121,8 @@ async def test_skip_when_config_has_token(tmp_path: Path, monkeypatch):
         "copilot:\n"
         "  enabled: true\n"
         '  github_token: "${GH_TOKEN_TEST_AUTO}"\n'
+        "antigravity:\n"
+        "  refresh_token: skip\n"
     )
 
     with patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider") as mock_cls:
@@ -95,7 +136,7 @@ async def test_trigger_login_when_no_token(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  enabled: true\n")
+    cfg_file.write_text("copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n")
 
     mock_prov = AsyncMock()
     mock_prov.needs_login.return_value = True
@@ -119,7 +160,7 @@ async def test_validate_stale_token_triggers_login(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  enabled: true\n")
+    cfg_file.write_text("copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n")
 
     mock_prov = AsyncMock()
     mock_prov.needs_login = MagicMock(return_value=False)  # 同步方法需用 MagicMock
@@ -144,7 +185,7 @@ async def test_skip_login_when_token_valid(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  enabled: true\n")
+    cfg_file.write_text("copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n")
 
     mock_prov = AsyncMock()
     mock_prov.needs_login = MagicMock(return_value=False)  # 同步方法需用 MagicMock
@@ -168,7 +209,7 @@ async def test_network_failure_does_not_block_startup(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  enabled: true\n")
+    cfg_file.write_text("copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n")
 
     mock_prov = AsyncMock()
     mock_prov.needs_login = MagicMock(return_value=False)  # 同步方法需用 MagicMock
@@ -191,7 +232,7 @@ async def test_login_failure_closes_provider(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  enabled: true\n")
+    cfg_file.write_text("copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n")
 
     mock_prov = AsyncMock()
     mock_prov.needs_login.return_value = True
@@ -210,11 +251,11 @@ async def test_login_failure_closes_provider(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_antigravity_trigger_login_when_no_refresh_token(tmp_path: Path):
-    """Antigravity 启用且无 refresh_token 时触发登录."""
+    """Antigravity 无 refresh_token 时触发登录."""
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("antigravity:\n  enabled: true\n")
+    cfg_file.write_text("copilot:\n  github_token: skip\nantigravity:\n  enabled: true\n")
 
     mock_prov = AsyncMock()
     mock_prov.needs_login.return_value = True

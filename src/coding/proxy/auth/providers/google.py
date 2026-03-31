@@ -27,7 +27,7 @@ _DEFAULT_CLIENT_SECRET = "d-FL95Q19W7jAaasCmO6F9XZ"
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _SCOPES = [
-    "https://www.googleapis.com/auth/generative-language",
+    "https://www.googleapis.com/auth/cloud-platform",
 ]
 
 
