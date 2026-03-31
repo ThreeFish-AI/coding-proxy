@@ -152,6 +152,7 @@ class AntigravityBackend(BaseBackend):
                 input_tokens=usage_data.get("input_tokens", 0),
                 output_tokens=usage_data.get("output_tokens", 0),
             ),
+            model_served=model,
         )
 
     async def send_message_stream(
