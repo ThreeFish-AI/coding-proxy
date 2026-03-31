@@ -17,17 +17,21 @@ from .base import OAuthProvider
 
 logger = logging.getLogger(__name__)
 
-# Google AI Studio / Antigravity 公开 OAuth 凭据
+# Antigravity Enterprise 公开 OAuth 凭据
 _DEFAULT_CLIENT_ID = (
-    "764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur"
+    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep"
     ".apps.googleusercontent.com"
 )
-_DEFAULT_CLIENT_SECRET = "d-FL95Q19W7jAaasCmO6F9XZ"
+_DEFAULT_CLIENT_SECRET = "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"
 
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _SCOPES = [
     "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/cclog",
+    "https://www.googleapis.com/auth/experimentsandconfigs",
 ]
 
 

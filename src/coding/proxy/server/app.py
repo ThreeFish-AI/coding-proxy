@@ -12,7 +12,11 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 
 from ..auth.providers.github import GitHubDeviceFlowProvider
-from ..auth.providers.google import GoogleOAuthProvider
+from ..auth.providers.google import (
+    GoogleOAuthProvider,
+    _DEFAULT_CLIENT_ID as _GOOGLE_DEFAULT_CLIENT_ID,
+    _DEFAULT_CLIENT_SECRET as _GOOGLE_DEFAULT_CLIENT_SECRET,
+)
 from ..auth.runtime import RuntimeReauthCoordinator
 from ..auth.store import TokenStoreManager
 from ..backends.antigravity import AntigravityBackend
@@ -100,9 +104,9 @@ def _resolve_antigravity_credentials(
         updates: dict[str, str] = {"refresh_token": tokens.refresh_token}
         # 若 config.yaml 缺少 OAuth 凭据，使用默认公开凭据
         if not cfg.client_id:
-            updates["client_id"] = "764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com"
+            updates["client_id"] = _GOOGLE_DEFAULT_CLIENT_ID
         if not cfg.client_secret:
-            updates["client_secret"] = "d-FL95Q19W7jAaasCmO6F9XZ"
+            updates["client_secret"] = _GOOGLE_DEFAULT_CLIENT_SECRET
         cfg = cfg.model_copy(update=updates)
         logger.info("Antigravity: 使用 Token Store 中的 Google 凭证")
 

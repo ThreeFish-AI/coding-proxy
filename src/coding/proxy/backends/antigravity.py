@@ -100,6 +100,7 @@ class AntigravityBackend(BaseBackend):
         new_headers = {
             "content-type": "application/json",
             "authorization": f"Bearer {token}",
+            "anthropic-beta": "claude-code-20250219",
         }
         return gemini_body, new_headers
 
