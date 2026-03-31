@@ -107,6 +107,14 @@ class CopilotBackend(BaseBackend):
         if status_code in (401, 403):
             self._token_manager.invalidate()
 
+    async def check_health(self) -> bool:
+        """检查 Copilot token 交换是否有效（免费操作）."""
+        try:
+            token = await self._token_manager.get_token()
+            return bool(token)
+        except Exception:
+            return False
+
     async def close(self) -> None:
         await self._token_manager.close()
         await super().close()

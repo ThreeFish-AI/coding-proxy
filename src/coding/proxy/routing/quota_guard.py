@@ -44,6 +44,7 @@ class QuotaGuard:
         self._total: int = 0
         self._last_probe: float = 0.0
         self._cap_error_active: bool = False
+        self._effective_probe_interval: float = probe_interval_seconds
         self._lock = threading.Lock()
 
     @property
@@ -76,7 +77,7 @@ class QuotaGuard:
                 logger.info("Quota guard: EXCEEDED → WITHIN_QUOTA (usage dropped)")
                 return True
             now = time.monotonic()
-            if now - self._last_probe >= self._probe_interval:
+            if now - self._last_probe >= self._effective_probe_interval:
                 self._last_probe = now
                 logger.info("Quota guard: allowing probe request")
                 return True
@@ -99,15 +100,28 @@ class QuotaGuard:
                 self._transition_to(QuotaState.WITHIN_QUOTA)
                 logger.info("Quota guard: EXCEEDED → WITHIN_QUOTA (probe success)")
 
-    def notify_cap_error(self) -> None:
-        """外部通知检测到用量上限错误."""
+    def notify_cap_error(self, retry_after_seconds: float | None = None) -> None:
+        """外部通知检测到用量上限错误.
+
+        Args:
+            retry_after_seconds: 从响应头解析的建议恢复时间。
+                若提供，更新探测间隔以避免过早探测。
+        """
         if not self._enabled:
             return
         with self._lock:
             if self._state != QuotaState.QUOTA_EXCEEDED:
                 self._transition_to(QuotaState.QUOTA_EXCEEDED)
-                self._cap_error_active = True
-                logger.warning("Quota guard: cap error detected → EXCEEDED")
+            if retry_after_seconds is not None:
+                self._effective_probe_interval = max(
+                    retry_after_seconds * 1.1,
+                    self._probe_interval,
+                )
+            self._cap_error_active = True
+            logger.warning(
+                "Quota guard: cap error detected → EXCEEDED (effective_probe=%ds)",
+                int(self._effective_probe_interval),
+            )
 
     def load_baseline(self, total_tokens: int) -> None:
         """从数据库加载窗口历史用量基线."""
@@ -150,5 +164,6 @@ class QuotaGuard:
         self._state = new_state
         if new_state == QuotaState.WITHIN_QUOTA:
             self._cap_error_active = False
+            self._effective_probe_interval = self._probe_interval
         elif new_state == QuotaState.QUOTA_EXCEEDED:
             self._last_probe = time.monotonic()
