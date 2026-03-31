@@ -87,8 +87,7 @@ class TokenLogger:
                    SUM(input_tokens) AS total_input,
                    SUM(output_tokens) AS total_output,
                    SUM(CASE WHEN failover THEN 1 ELSE 0 END) AS total_failovers,
-                   AVG(duration_ms) AS avg_duration_ms,
-                   failover_from
+                   AVG(duration_ms) AS avg_duration_ms
                FROM usage_log WHERE ts >= datetime('now', ? || ' days')"""
         params: list = [f"-{days}"]
         if backend:
@@ -97,8 +96,8 @@ class TokenLogger:
         if model:
             sql += " AND model_requested = ?"
             params.append(model)
-        sql += (" GROUP BY date(ts), backend, model_requested, model_served, failover_from"
-                " ORDER BY date(ts) DESC, backend, model_requested, model_served, failover_from")
+        sql += (" GROUP BY date(ts), backend, model_requested, model_served"
+                " ORDER BY date(ts) DESC, backend, model_requested, model_served")
         cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
