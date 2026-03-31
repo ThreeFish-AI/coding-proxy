@@ -180,8 +180,8 @@ class BaseBackend(ABC):
             status_code=response.status_code,
             raw_body=raw_content,
             usage=UsageInfo(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
+                input_tokens=usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0) or usage.get("completion_tokens", 0),
                 cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
                 cache_read_tokens=usage.get("cache_read_input_tokens", 0),
                 request_id=resp_body.get("id", "") if resp_body else "",

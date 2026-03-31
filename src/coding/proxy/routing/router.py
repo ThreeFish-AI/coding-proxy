@@ -16,8 +16,19 @@ from .tier import BackendTier
 logger = logging.getLogger(__name__)
 
 
+def _set_if_nonzero(usage: dict, key: str, value: int) -> None:
+    """仅在 value 非零时设置，避免后续 chunk 的 0 值覆盖已提取的非零值."""
+    if value:
+        usage[key] = value
+
+
 def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
-    """从 SSE chunk 提取 token 用量."""
+    """从 SSE chunk 提取 token 用量.
+
+    同时支持 Anthropic 原生格式和 OpenAI/Zhipu 兼容格式：
+    - Anthropic: data.message.usage.input_tokens / data.usage.output_tokens
+    - OpenAI/Zhipu: 顶层 data.usage.prompt_tokens / data.usage.completion_tokens
+    """
     text = chunk.decode("utf-8", errors="ignore")
     for line in text.split("\n"):
         if not line.startswith("data: "):
@@ -29,18 +40,37 @@ def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
             data = json.loads(payload)
         except json.JSONDecodeError:
             continue
+
+        # Anthropic 格式: message_start 事件 (data.message.usage)
         msg = data.get("message", {})
         if isinstance(msg, dict) and "usage" in msg:
             u = msg["usage"]
-            usage["input_tokens"] = u.get("input_tokens", 0)
-            usage["cache_creation_tokens"] = u.get("cache_creation_input_tokens", 0)
-            usage["cache_read_tokens"] = u.get("cache_read_input_tokens", 0)
+            _set_if_nonzero(
+                usage, "input_tokens",
+                u.get("input_tokens", 0) or u.get("prompt_tokens", 0),
+            )
+            _set_if_nonzero(usage, "cache_creation_tokens", u.get("cache_creation_input_tokens", 0))
+            _set_if_nonzero(usage, "cache_read_tokens", u.get("cache_read_input_tokens", 0))
             if "id" in msg:
                 usage["request_id"] = msg["id"]
             if "model" in msg:
                 usage["model_served"] = msg["model"]
-        if "usage" in data and "message" not in data:
-            usage["output_tokens"] = data["usage"].get("output_tokens", 0)
+
+        # Anthropic message_delta / OpenAI 最后一个 chunk (data.usage)
+        if "usage" in data:
+            u = data["usage"]
+            _set_if_nonzero(
+                usage, "output_tokens",
+                u.get("output_tokens", 0) or u.get("completion_tokens", 0),
+            )
+            _set_if_nonzero(
+                usage, "input_tokens",
+                u.get("input_tokens", 0) or u.get("prompt_tokens", 0),
+            )
+
+        # request_id fallback (OpenAI 格式下 id 在顶层)
+        if "id" in data and not usage.get("request_id"):
+            usage["request_id"] = data["id"]
 
 
 class RequestRouter:
@@ -103,6 +133,11 @@ class RequestRouter:
                     yield chunk, tier.name
 
                 info = self._build_usage_info(usage)
+                if info.input_tokens == 0 and info.output_tokens > 0:
+                    logger.warning(
+                        "Stream completed with input_tokens=0, output_tokens=%d, tier=%s",
+                        info.output_tokens, tier.name,
+                    )
                 tier.record_success(info.input_tokens + info.output_tokens)
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
