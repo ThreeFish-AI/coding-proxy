@@ -8,6 +8,31 @@ from rich.table import Table
 from .db import TokenLogger
 
 
+def _format_model_display(model_value: str | None) -> str:
+    """格式化模型显示，处理 None 或空值."""
+    if not model_value or model_value.strip() == "":
+        return "[dim]<未知>[/dim]"
+    return model_value
+
+
+def _detect_model_variants(failover_stats: list[dict]) -> bool:
+    """检测是否存在模型差异，用于决定是否建议详细模式."""
+    if not failover_stats or "model_requested" not in failover_stats[0]:
+        return False
+
+    # 计算唯一的模型对
+    model_pairs = {
+        (stat.get("model_requested", ""), stat.get("model_served", ""))
+        for stat in failover_stats
+    }
+    # 检查是否存在模型映射（请求模型与实际模型不同）
+    return any(
+        pair[0] != pair[1]
+        for pair in model_pairs
+        if pair[0] and pair[1]
+    )
+
+
 async def show_usage(logger: TokenLogger, days: int = 7, backend: str | None = None,
                      model: str | None = None) -> None:
     """展示 Token 使用统计."""
