@@ -10,7 +10,7 @@ from rich.table import Table
 from .db import TokenLogger
 
 if TYPE_CHECKING:
-    from ..pricing import PricingCache
+    from ..pricing import PricingTable
 
 
 def _format_model_display(model_value: str | None) -> str:
@@ -54,7 +54,7 @@ async def show_usage(
     days: int = 7,
     backend: str | None = None,
     model: str | None = None,
-    pricing_cache: "PricingCache | None" = None,
+    pricing_table: "PricingTable | None" = None,
 ) -> None:
     """展示 Token 使用统计."""
     console = Console()
@@ -87,8 +87,8 @@ async def show_usage(
 
         backend_name = str(row.get("backend", ""))
         model_served = str(row.get("model_served", ""))
-        if pricing_cache is not None:
-            cost = pricing_cache.compute_cost(
+        if pricing_table is not None:
+            cost = pricing_table.compute_cost(
                 backend_name, model_served,
                 total_input, total_output, total_cache_creation, total_cache_read,
             )
