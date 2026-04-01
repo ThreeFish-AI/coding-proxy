@@ -70,6 +70,20 @@ failover:
     - "usage cap"
 
 model_mapping:
+  # Tier 1: Copilot 可用模型（通过 /api/copilot/models 诊断获取）
+  - pattern: "claude-sonnet-.*"
+    backends: ["copilot"]
+    target: "claude-sonnet-4.6"
+    is_regex: true
+  - pattern: "claude-opus-.*"
+    backends: ["copilot"]
+    target: "claude-opus-4.6"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    backends: ["copilot"]
+    target: "claude-haiku-4.5"
+    is_regex: true
+  # Tier 2: Antigravity 模型映射
   - pattern: "claude-sonnet-.*"
     backends: ["antigravity"]
     target: "claude-sonnet-4-6-thinking"
@@ -78,6 +92,7 @@ model_mapping:
     backends: ["antigravity"]
     target: "claude-opus-4-6-thinking"
     is_regex: true
+  # Tier 3: 智谱 GLM 兜底映射
   - pattern: "claude-sonnet-.*"
     backends: ["fallback"]
     target: "glm-5.1"

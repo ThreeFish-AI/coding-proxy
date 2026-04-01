@@ -247,7 +247,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     if config.copilot.enabled:
         copilot_cfg = _resolve_copilot_credentials(config.copilot, token_store)
         tiers.append(BackendTier(
-            backend=CopilotBackend(copilot_cfg, config.failover),
+            backend=CopilotBackend(copilot_cfg, config.failover, mapper),
             circuit_breaker=_build_circuit_breaker(config.copilot_circuit_breaker),
             quota_guard=_build_quota_guard(config.copilot_quota_guard),
         ))
