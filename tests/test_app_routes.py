@@ -179,21 +179,41 @@ def test_copilot_models_endpoint_returns_probe_data():
 def test_incompatible_request_returns_400():
     """当所有可用后端都无法保持请求语义时，返回明确错误而不是误降级.
 
-    ZhipuBackend (fallback) 不支持 extended thinking；
-    当 Anthropic 主后端禁用且请求包含 thinking 参数时，无兼容后端 → 400。
+    通过 patch 后端能力声明模拟不兼容场景，验证 NoCompatibleBackendError → 400。
     """
-    with _make_app(primary_enabled=False) as client:
-        resp = client.post(
-            "/v1/messages",
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "messages": [{"role": "user", "content": "Hi"}],
-                "thinking": {"type": "enabled", "budget_tokens": 1000},
-            },
-        )
-        assert resp.status_code == 400
-        data = resp.json()
-        assert data["error"]["type"] == "invalid_request_error"
+    from coding.proxy.backends.base import BackendCapabilities
+
+    config = ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+    )
+    app = create_app(config)
+
+    # Patch 唯一可用后端的能力声明，使其拒绝 thinking 请求
+    restrictive_caps = BackendCapabilities(
+        supports_tools=True,
+        supports_thinking=False,
+        supports_images=True,
+        supports_metadata=True,
+    )
+    with patch.object(
+        type(app.state.router.tiers[0].backend),
+        "get_capabilities",
+        return_value=restrictive_caps,
+    ):
+        with TestClient(app) as client:
+            resp = client.post(
+                "/v1/messages",
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "thinking": {"type": "enabled", "budget_tokens": 1000},
+                },
+            )
+            assert resp.status_code == 400
+            data = resp.json()
+            assert data["error"]["type"] == "invalid_request_error"
 
 
 def test_stream_http_status_error_returns_anthropic_sse_error():
