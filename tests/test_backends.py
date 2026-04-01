@@ -94,6 +94,36 @@ def test_zhipu_never_triggers_failover():
     assert not backend.should_trigger_failover(500, {"error": {"type": "rate_limit_error"}})
 
 
+def test_zhipu_supports_tools():
+    """ZhipuBackend 应声明支持 tools，避免含工具请求被路由器跳过."""
+    from coding.proxy.backends.base import RequestCapabilities
+    mapper = ModelMapper([])
+    backend = ZhipuBackend(ZhipuConfig(), mapper)
+    caps = backend.get_capabilities()
+    assert caps.supports_tools is True
+    assert caps.emits_vendor_tool_events is False
+    # 含工具的请求应被接受
+    supported, reasons = backend.supports_request(RequestCapabilities(has_tools=True))
+    assert supported is True
+    assert reasons == []
+
+
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_strips_metadata():
+    """ZhipuBackend._prepare_request 应静默剥离 metadata 字段."""
+    mapper = ModelMapper([])
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), mapper)
+    body = {
+        "model": "claude-sonnet-4-20250514",
+        "messages": [],
+        "metadata": {"user_id": "u123"},
+    }
+    prepared_body, _ = await backend._prepare_request(body, {})
+    assert "metadata" not in prepared_body
+    # 原始 body 不应被修改
+    assert "metadata" in body
+
+
 def test_backend_response_defaults():
     resp = BackendResponse()
     assert resp.status_code == 200

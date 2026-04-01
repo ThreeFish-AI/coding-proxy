@@ -177,14 +177,18 @@ def test_copilot_models_endpoint_returns_probe_data():
 
 
 def test_incompatible_request_returns_400():
-    """当所有可用后端都无法保持工具语义时，返回明确错误而不是误降级."""
+    """当所有可用后端都无法保持请求语义时，返回明确错误而不是误降级.
+
+    ZhipuBackend (fallback) 不支持 extended thinking；
+    当 Anthropic 主后端禁用且请求包含 thinking 参数时，无兼容后端 → 400。
+    """
     with _make_app(primary_enabled=False) as client:
         resp = client.post(
             "/v1/messages",
             json={
                 "model": "claude-sonnet-4-20250514",
                 "messages": [{"role": "user", "content": "Hi"}],
-                "tools": [{"name": "analyze_image"}],
+                "thinking": {"type": "enabled", "budget_tokens": 1000},
             },
         )
         assert resp.status_code == 400
