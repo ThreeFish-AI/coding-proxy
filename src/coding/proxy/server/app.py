@@ -30,10 +30,13 @@ from ..backends.zhipu import ZhipuBackend
 from ..config.loader import load_config
 from ..config.schema import (
     AntigravityConfig,
+    AnthropicConfig,
     CircuitBreakerConfig,
     CopilotConfig,
     ProxyConfig,
     QuotaGuardConfig,
+    TierConfig,
+    ZhipuConfig,
 )
 from ..logging.db import TokenLogger
 from ..routing.circuit_breaker import CircuitBreaker
@@ -80,6 +83,57 @@ def _build_quota_guard(cfg: QuotaGuardConfig) -> QuotaGuard:
         threshold_percent=cfg.threshold_percent,
         probe_interval_seconds=cfg.probe_interval_seconds,
     )
+
+
+def _create_backend_from_tier(
+    tier_cfg: TierConfig,
+    failover_cfg: Any,
+    mapper: Any,
+    token_store: TokenStoreManager,
+) -> Any:
+    """根据 tier_cfg.backend 创建对应后端实例（Strategy + Factory 模式）."""
+    match tier_cfg.backend:
+        case "anthropic":
+            cfg = AnthropicConfig(
+                enabled=tier_cfg.enabled,
+                base_url=tier_cfg.base_url or "https://api.anthropic.com",
+                timeout_ms=tier_cfg.timeout_ms,
+            )
+            return AnthropicBackend(cfg, failover_cfg)
+        case "copilot":
+            cfg = CopilotConfig(
+                enabled=tier_cfg.enabled,
+                github_token=tier_cfg.github_token,
+                account_type=tier_cfg.account_type,
+                token_url=tier_cfg.token_url,
+                base_url=tier_cfg.base_url,
+                models_cache_ttl_seconds=tier_cfg.models_cache_ttl_seconds,
+                timeout_ms=tier_cfg.timeout_ms,
+            )
+            cfg = _resolve_copilot_credentials(cfg, token_store)
+            return CopilotBackend(cfg, failover_cfg, mapper)
+        case "antigravity":
+            cfg = AntigravityConfig(
+                enabled=tier_cfg.enabled,
+                client_id=tier_cfg.client_id,
+                client_secret=tier_cfg.client_secret,
+                refresh_token=tier_cfg.refresh_token,
+                base_url=tier_cfg.base_url or "https://generativelanguage.googleapis.com/v1beta",
+                model_endpoint=tier_cfg.model_endpoint,
+                timeout_ms=tier_cfg.timeout_ms,
+            )
+            cfg = _resolve_antigravity_credentials(cfg, token_store)
+            return AntigravityBackend(cfg, failover_cfg, mapper)
+        case "zhipu":
+            cfg = ZhipuConfig(
+                enabled=tier_cfg.enabled,
+                base_url=tier_cfg.base_url or "https://open.bigmodel.cn/api/anthropic",
+                api_key=tier_cfg.api_key,
+                timeout_ms=tier_cfg.timeout_ms,
+            )
+            return ZhipuBackend(cfg, mapper)
+        case _:
+            raise ValueError(f"未知的 backend 类型: {tier_cfg.backend!r}")
 
 
 def _resolve_copilot_credentials(
@@ -238,40 +292,15 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     )
     token_store.load()
 
-    # 构建后端层级链
+    # 按 config.tiers 列表顺序构建后端层级链（列表顺序即优先级）
     tiers: list[BackendTier] = []
-
-    # Tier 0: Anthropic (主后端)
-    if config.primary.enabled:
-        tiers.append(BackendTier(
-            backend=AnthropicBackend(config.primary, config.failover),
-            circuit_breaker=_build_circuit_breaker(config.circuit_breaker),
-            quota_guard=_build_quota_guard(config.quota_guard),
-        ))
-
-    # Tier 1: GitHub Copilot (中间层)
-    if config.copilot.enabled:
-        copilot_cfg = _resolve_copilot_credentials(config.copilot, token_store)
-        tiers.append(BackendTier(
-            backend=CopilotBackend(copilot_cfg, config.failover, mapper),
-            circuit_breaker=_build_circuit_breaker(config.copilot_circuit_breaker),
-            quota_guard=_build_quota_guard(config.copilot_quota_guard),
-        ))
-
-    # Tier 2: Google Antigravity Claude (中间层)
-    if config.antigravity.enabled:
-        antigravity_cfg = _resolve_antigravity_credentials(config.antigravity, token_store)
-        tiers.append(BackendTier(
-            backend=AntigravityBackend(antigravity_cfg, config.failover, mapper),
-            circuit_breaker=_build_circuit_breaker(config.antigravity_circuit_breaker),
-            quota_guard=_build_quota_guard(config.antigravity_quota_guard),
-        ))
-
-    # Tier N: Zhipu (终端 fallback，无熔断器/配额守卫)
-    if config.fallback.enabled:
-        tiers.append(BackendTier(
-            backend=ZhipuBackend(config.fallback, mapper),
-        ))
+    for tier_cfg in config.tiers:
+        if not tier_cfg.enabled:
+            continue
+        backend = _create_backend_from_tier(tier_cfg, config.failover, mapper, token_store)
+        cb = _build_circuit_breaker(tier_cfg.circuit_breaker) if tier_cfg.circuit_breaker else None
+        qg = _build_quota_guard(tier_cfg.quota_guard)
+        tiers.append(BackendTier(backend=backend, circuit_breaker=cb, quota_guard=qg))
 
     # 构建运行时重认证协调器
     reauth_providers: dict[str, Any] = {}
