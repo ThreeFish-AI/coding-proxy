@@ -256,8 +256,15 @@ def start(
     # 自动登录检查
     asyncio.run(_auto_login_if_needed(cfg_path))
 
+    from .logging import build_log_config
+
     fastapi_app = create_app(cfg)
-    uvicorn.run(fastapi_app, host=cfg.server.host, port=cfg.server.port, log_level="info")
+    uvicorn.run(
+        fastapi_app,
+        host=cfg.server.host,
+        port=cfg.server.port,
+        log_config=build_log_config(cfg.logging.level),
+    )
 
 
 @app.command()

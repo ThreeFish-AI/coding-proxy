@@ -199,6 +199,7 @@ class RequestRouter:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = usage.get("model_served") or tier.backend.map_model(model)
+                logger.info("Routed: backend=%s model=%s duration=%dms", tier.name, model_served, duration)
                 await self._record_usage(
                     tier.name, model, model_served,
                     info, duration, True,
@@ -289,6 +290,7 @@ class RequestRouter:
                     duration = int((time.monotonic() - start) * 1000)
                     model = body.get("model", "unknown")
                     model_served = resp.model_served or model
+                    logger.info("Routed: backend=%s model=%s duration=%dms", tier.name, model_served, duration)
                     await self._record_usage(
                         tier.name, model, model_served,
                         resp.usage, duration, True,
@@ -322,6 +324,7 @@ class RequestRouter:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = resp.model_served or model
+                logger.info("Routed: backend=%s model=%s duration=%dms", tier.name, model_served, duration)
                 await self._record_usage(
                     tier.name, model, model_served,
                     resp.usage, duration, resp.status_code < 400,
