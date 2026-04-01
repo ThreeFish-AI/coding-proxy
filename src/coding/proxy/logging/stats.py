@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from rich.console import Console
 from rich.table import Table
 
 from .db import TokenLogger
+
+if TYPE_CHECKING:
+    from ..pricing import PricingCache
 
 
 def _format_model_display(model_value: str | None) -> str:
@@ -33,8 +38,13 @@ def _detect_model_variants(failover_stats: list[dict]) -> bool:
     )
 
 
-async def show_usage(logger: TokenLogger, days: int = 7, backend: str | None = None,
-                     model: str | None = None) -> None:
+async def show_usage(
+    logger: TokenLogger,
+    days: int = 7,
+    backend: str | None = None,
+    model: str | None = None,
+    pricing_cache: "PricingCache | None" = None,
+) -> None:
     """展示 Token 使用统计."""
     console = Console()
     rows = await logger.query_daily(days=days, backend=backend, model=model)
@@ -53,19 +63,40 @@ async def show_usage(logger: TokenLogger, days: int = 7, backend: str | None = N
     table.add_column("输出 Token", justify="right", style="blue")
     table.add_column("缓存创建 Token", justify="right", style="dim blue")
     table.add_column("缓存读取 Token", justify="right", style="dim cyan")
+    table.add_column("总 Token", justify="right", style="bold white")
+    table.add_column("Cost (USD)", justify="right", style="bold green")
     table.add_column("平均耗时(ms)", justify="right")
 
     for row in rows:
+        total_input = row.get("total_input", 0) or 0
+        total_output = row.get("total_output", 0) or 0
+        total_cache_creation = row.get("total_cache_creation", 0) or 0
+        total_cache_read = row.get("total_cache_read", 0) or 0
+        total_tokens = total_input + total_output + total_cache_creation + total_cache_read
+
+        backend_name = str(row.get("backend", ""))
+        model_served = str(row.get("model_served", ""))
+        if pricing_cache is not None:
+            cost = pricing_cache.compute_cost(
+                backend_name, model_served,
+                total_input, total_output, total_cache_creation, total_cache_read,
+            )
+            cost_str = f"${cost:.4f}" if cost is not None else "-"
+        else:
+            cost_str = "-"
+
         table.add_row(
             str(row.get("date", "")),
-            str(row.get("backend", "")),
+            backend_name,
             str(row.get("model_requested", "")),
-            str(row.get("model_served", "")),
+            model_served,
             str(row.get("total_requests", 0)),
-            str(row.get("total_input", 0)),
-            str(row.get("total_output", 0)),
-            str(row.get("total_cache_creation", 0) or 0),
-            str(row.get("total_cache_read", 0) or 0),
+            str(total_input),
+            str(total_output),
+            str(total_cache_creation),
+            str(total_cache_read),
+            str(total_tokens),
+            cost_str,
             str(int(row.get("avg_duration_ms", 0) or 0)),
         )
 
