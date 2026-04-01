@@ -16,6 +16,7 @@ from ..config.schema import CopilotConfig, FailoverConfig
 from ..convert.anthropic_to_openai import convert_request as convert_openai_request
 from ..convert.openai_to_anthropic import convert_response as convert_openai_response
 from ..streaming.anthropic_compat import normalize_anthropic_compatible_stream
+from ..routing.model_mapper import ModelMapper
 from .base import (
     PROXY_SKIP_HEADERS,
     BackendCapabilities,
@@ -350,16 +351,22 @@ class CopilotBackend(BaseBackend):
     """GitHub Copilot API 后端.
 
     通过内置 token 交换访问 GitHub Copilot 的 Anthropic 兼容端点.
-    透传请求体（无模型映射），Claude 模型名原生支持.
+    模型解析：优先使用配置规则（model_mapping），其次依赖内部家族匹配策略.
     """
 
-    def __init__(self, config: CopilotConfig, failover_config: FailoverConfig) -> None:
+    def __init__(
+        self,
+        config: CopilotConfig,
+        failover_config: FailoverConfig,
+        model_mapper: ModelMapper | None = None,
+    ) -> None:
         self._account_type = (config.account_type or "individual").strip().lower()
         self._configured_base_url = config.base_url
         self._models_cache_ttl_seconds = max(int(config.models_cache_ttl_seconds), 0)
         self._candidate_base_urls = build_copilot_candidate_base_urls(self._account_type, config.base_url)
         self._resolved_base_url = resolve_copilot_base_url(self._account_type, config.base_url)
         self._model_catalog = CopilotModelCatalog()
+        self._model_mapper = model_mapper
         self._last_request_adaptations: list[str] = []
         self._last_request_base_url = ""
         self._last_421_base_url = ""
@@ -529,6 +536,17 @@ class CopilotBackend(BaseBackend):
         force_refresh: bool,
         refresh_reason: str,
     ) -> str:
+        # 优先：配置规则显式映射（model_mapping backends: ["copilot"]）
+        if self._model_mapper is not None:
+            mapped = self._model_mapper.map(requested_model, backend="copilot", default=requested_model)
+            if mapped != requested_model:
+                self._last_requested_model = requested_model
+                self._last_normalized_model = requested_model
+                self._last_resolved_model = mapped
+                self._last_model_resolution_reason = "config_model_mapping"
+                return mapped
+
+        # 次级：内部家族匹配策略（精确 → 规范化 → 同家族最高版本）
         normalized_model = normalize_copilot_requested_model(requested_model)
         available_models = await self._get_available_models(
             force_refresh=force_refresh,

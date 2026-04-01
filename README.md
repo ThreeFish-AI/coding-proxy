@@ -5,7 +5,7 @@
 **面向 Claude Code 的多后端高可用透明智能代理**
 
 [![Python Version](https://img.shields.io/badge/python-3.13%2B-blue?style=flat-square&logo=python)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](#)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](#)
 [![Package Manager](https://img.shields.io/badge/pkg-uv-purple?style=flat-square)](https://github.com/astral-sh/uv)
 [![Architecture](https://img.shields.io/badge/architecture-N--tier-orange?style=flat-square)](#)
 
@@ -21,16 +21,16 @@
 - 💸 **配额耗尽 (Usage Cap)**：激烈的代码生成导致单日/当月额度耗尽，直接返回 `403` 错误。
 - 🌋 **服务过载 (Overloaded)**：Anthropic 官方服务器高峰期宕机，甩回无情的 `503 overloaded_error`。
 
-**coding-proxy** 便是为终结这些痛点而生。它作为一个**纯透明**的中间代理层，能让你的 Claude Code 具备毫秒级的“N-tier 链式降级容灾”能力。当主后端不可用时，它能在**无需人工干预**、**无感知**的情况下，瞬间将请求平滑切换至下一个可用的智能后备方案（如 GitHub Copilot、Antigravity Claude 乃至智谱 GLM）。
+**coding-proxy** 便是为终结这些痛点而生。它作为一个**纯透明**的中间代理层，能让你的 Claude Code 具备毫秒级的“N-tier 链式降级容灾”能力。当主后端不可用时，它能在**无需人工干预**、**无感知**的情况下，瞬间将请求平滑切换至下一个可用的智能后备方案（如 GitHub Copilot、Google Antigravity 乃至智谱 GLM）。
 
 ---
 
 ## 🌟 核心特性 (Core Features)
 
-- **⛓️ N-tier 链式故障转移 (Failover)**：自动从 Anthropic 依次降级至 GitHub Copilot、Antigravity Claude，最后由智谱 GLM 终端兜底。
+- **⛓️ N-tier 链式故障转移 (Failover)**：自动从 Claude 官方 Plans 依次降级至 GitHub Copilot、Google Antigravity，最后由智谱 GLM 兜底。
 - **🛡️ 智能弹性与容灾守卫**：每个后端节点独立配备 **熔断器 (Circuit Breaker)** 与 **配额守卫 (Quota Guard)**，防雪崩、主动避险。
 - **👻 透明无感代理机制**：对客户端 **100% 透明**！无需修改任何代码，仅需一行配置覆盖 `ANTHROPIC_BASE_URL` 即可接入。
-- **🔄 跨模型与全格式转换**：原生支持 Anthropic ←→ Gemini 的请求与流式响应（SSE）双向转换，并自动映射模型名称（如 `claude-*` 至 `glm-*`）。
+- **🔄 跨模型与全格式转换**：原生支持 Anthropic ←→ Gemini 的请求与流式响应（SSE）双向转换，并支持自动/自助映射模型名称（如 `claude-*` 至 `glm-*`）。
 - **📊 极致可观测性 (Observability)**：内置基于 `SQLite WAL` 的本地监控追踪，CLI 提供一键输出详细的 Token 用量统计面板（`coding-proxy usage`）。
 - **⚡ 超轻量单机部署**：全异步架构 (`FastAPI` + `httpx`)，无需依赖 Redis、消息队列等外部组件，对开发者机器无额外负担。
 
@@ -43,7 +43,7 @@
 
 ### 2. 获取源码并安装
 ```bash
-git clone <your-repo-url> coding-proxy
+git clone https://github.com/ThreeFish-AI/coding-proxy
 cd coding-proxy
 uv sync
 ```
@@ -75,12 +75,12 @@ claude
 
 `coding-proxy` 附带了强大的 CLI 工具套件，帮助您全面掌控代理状态。
 
-| 指令 | 说明 | 示例用法 |
-| :--- | :--- | :--- |
-| `start` | **启动代理服务器**。支持自定义端口与配置路径。 | `coding-proxy start -p 8080 -c ~/config.yaml` |
-| `status` | **查看代理健康状态**。展示各层级熔断器（OPEN/CLOSED）与配额状态。 | `coding-proxy status` |
-| `usage` | **Token 统计看板**。按天/后端/模型维度追踪每一次的 Token 消耗、故障转移及耗时。 | `coding-proxy usage -d 7 -b anthropic` |
-| `reset` | **强制一键重置**。人工确认主后端恢复可用后，立刻初始化所有熔断器和配额状态。 | `coding-proxy reset` |
+| 指令     | 说明                                                                            | 示例用法                                      |
+| :------- | :------------------------------------------------------------------------------ | :-------------------------------------------- |
+| `start`  | **启动代理服务器**。支持自定义端口与配置路径。                                  | `coding-proxy start -p 8080 -c ~/config.yaml` |
+| `status` | **查看代理健康状态**。展示各层级熔断器（OPEN/CLOSED）与配额状态。               | `coding-proxy status`                         |
+| `usage`  | **Token 统计看板**。按天/后端/模型维度追踪每一次的 Token 消耗、故障转移及耗时。 | `coding-proxy usage -d 7 -b anthropic`        |
+| `reset`  | **强制一键重置**。人工确认主后端恢复可用后，立刻初始化所有熔断器和配额状态。    | `coding-proxy reset`                          |
 
 ---
 
@@ -102,21 +102,21 @@ graph TD
     Router --> T2
     Router --> TN
 
-    subgraph T0["Tier 0: Anthropic"]
+    subgraph T0["Tier 0: Claude Plans"]
         direction LR
         A_BE["AnthropicBackend"]
         A_CB["CB (熔断器)"]
         A_QG["QG (配额守卫)"]
     end
 
-    subgraph T1["Tier 1: Copilot"]
+    subgraph T1["Tier 1: GitHub Copilot"]
         direction LR
         C_BE["CopilotBackend"]
         C_CB["CB (熔断器)"]
         C_QG["QG (配额守卫)"]
     end
 
-    subgraph T2["Tier 2: Antigravity"]
+    subgraph T2["Tier 2: Google Antigravity"]
         direction LR
         G_BE["AntigravityBackend"]
         G_CB["CB (熔断器)"]
