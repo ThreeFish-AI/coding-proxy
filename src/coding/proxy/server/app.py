@@ -258,7 +258,9 @@ async def lifespan(app: FastAPI):
 
     # 从配置加载模型定价表
     from ..pricing import PricingTable
-    app.state.pricing_table = PricingTable(config.pricing)
+    pricing_table = PricingTable(config.pricing)
+    app.state.pricing_table = pricing_table
+    router.set_pricing_table(pricing_table)
 
     # 为每个有 QuotaGuard 的 tier 加载基线
     for tier in router.tiers:

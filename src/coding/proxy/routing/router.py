@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 import httpx
+
+if TYPE_CHECKING:
+    from ..pricing import PricingTable
 
 from ..backends.base import BackendResponse, UsageInfo
 from ..backends.base import NoCompatibleBackendError, RequestCapabilities
@@ -230,6 +233,11 @@ class RequestRouter:
         self._tiers = tiers
         self._token_logger = token_logger
         self._reauth_coordinator = reauth_coordinator
+        self._pricing_table: PricingTable | None = None
+
+    def set_pricing_table(self, table: PricingTable) -> None:
+        """注入 PricingTable 实例（由 lifespan 在启动阶段调用）."""
+        self._pricing_table = table
 
     @property
     def tiers(self) -> list[BackendTier]:
@@ -243,6 +251,36 @@ class RequestRouter:
             cache_creation_tokens=usage.get("cache_creation_tokens", 0),
             cache_read_tokens=usage.get("cache_read_tokens", 0),
             request_id=usage.get("request_id", ""),
+        )
+
+    def _log_model_call(
+        self,
+        *,
+        backend: str,
+        model_requested: str,
+        model_served: str,
+        duration_ms: int,
+        usage: UsageInfo,
+    ) -> None:
+        """打印模型调用级别的详细 Access Log."""
+        cost_str = "-"
+        if self._pricing_table is not None:
+            cost = self._pricing_table.compute_cost(
+                backend=backend,
+                model_served=model_served,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_creation_tokens=usage.cache_creation_tokens,
+                cache_read_tokens=usage.cache_read_tokens,
+            )
+            if cost is not None:
+                cost_str = f"${cost:.4f}"
+        logger.info(
+            "ModelCall: backend=%s model_requested=%s model_served=%s "
+            "duration=%dms tokens=[in:%d out:%d cache_create:%d cache_read:%d] cost=%s",
+            backend, model_requested, model_served, duration_ms,
+            usage.input_tokens, usage.output_tokens,
+            usage.cache_creation_tokens, usage.cache_read_tokens, cost_str,
         )
 
     @staticmethod
@@ -302,7 +340,10 @@ class RequestRouter:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = usage.get("model_served") or tier.backend.map_model(model)
-                logger.info("Routed: backend=%s model=%s duration=%dms", tier.name, model_served, duration)
+                self._log_model_call(
+                    backend=tier.name, model_requested=model,
+                    model_served=model_served, duration_ms=duration, usage=info,
+                )
                 await self._record_usage(
                     tier.name, model, model_served,
                     info, duration, True,
@@ -399,7 +440,10 @@ class RequestRouter:
                     duration = int((time.monotonic() - start) * 1000)
                     model = body.get("model", "unknown")
                     model_served = resp.model_served or model
-                    logger.info("Routed: backend=%s model=%s duration=%dms", tier.name, model_served, duration)
+                    self._log_model_call(
+                        backend=tier.name, model_requested=model,
+                        model_served=model_served, duration_ms=duration, usage=resp.usage,
+                    )
                     await self._record_usage(
                         tier.name, model, model_served,
                         resp.usage, duration, True,
@@ -438,7 +482,10 @@ class RequestRouter:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = resp.model_served or model
-                logger.info("Routed: backend=%s model=%s duration=%dms", tier.name, model_served, duration)
+                self._log_model_call(
+                    backend=tier.name, model_requested=model,
+                    model_served=model_served, duration_ms=duration, usage=resp.usage,
+                )
                 await self._record_usage(
                     tier.name, model, model_served,
                     resp.usage, duration, resp.status_code < 400,
