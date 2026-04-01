@@ -72,6 +72,31 @@ async def test_openai_style_stream_is_converted():
     assert "message_start" in event_types
     assert event_types.count("content_block_delta") == 2
     assert "message_stop" in event_types
+    message_delta = next(event for event in events if event["event"] == "message_delta")
+    assert message_delta["data"]["usage"]["input_tokens"] == 5
+    assert message_delta["data"]["usage"]["output_tokens"] == 2
+
+
+@pytest.mark.asyncio
+async def test_openai_style_stream_preserves_cache_read_tokens():
+    """Copilot/OpenAI 风格流式 usage 中的 cache_read_input_tokens 会被保留."""
+    chunks = [
+        'data: {"id":"chatcmpl-1","model":"claude-sonnet-4","choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}\n\n',
+        'data: {"choices":[{"delta":{"content":" world"},"finish_reason":"stop"}],"usage":{"prompt_tokens":25,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":12}}}\n\n',
+        "data: [DONE]\n\n",
+    ]
+
+    collected = []
+    async for chunk in normalize_anthropic_compatible_stream(
+        _raw_chunks(chunks), model="claude-sonnet-4",
+    ):
+        collected.append(chunk)
+
+    events = _parse_events(collected)
+    message_delta = next(event for event in events if event["event"] == "message_delta")
+    assert message_delta["data"]["usage"]["input_tokens"] == 25
+    assert message_delta["data"]["usage"]["output_tokens"] == 3
+    assert message_delta["data"]["usage"]["cache_read_input_tokens"] == 12
 
 
 @pytest.mark.asyncio

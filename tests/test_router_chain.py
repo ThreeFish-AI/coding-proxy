@@ -683,6 +683,45 @@ async def test_route_stream_model_served_identity_backend():
     assert call_kwargs[1]["model_served"] == "claude-sonnet-4-20250514"
 
 
+@pytest.mark.asyncio
+async def test_route_stream_copilot_logs_cache_evidence():
+    """Copilot 流式请求应额外写入 cache evidence 记录."""
+    logger_mock = AsyncMock()
+    chunk = (
+        b'event: message_start\n'
+        b'data: {"type":"message_start","message":{"id":"msg_cache","model":"claude-sonnet-4","usage":{"input_tokens":25}}}\n\n'
+        b'event: message_delta\n'
+        b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":3,"cache_read_input_tokens":12}}\n\n'
+        b'data: [DONE]\n\n'
+    )
+    backend = FakeBackend("copilot", stream_chunks=[chunk])
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    async for _ in router.route_stream(_body(), _headers()):
+        pass
+
+    logger_mock.log.assert_awaited_once()
+    logger_mock.log_evidence.assert_awaited()
+    evidence_kwargs = logger_mock.log_evidence.call_args[1]
+    assert evidence_kwargs["backend"] == "copilot"
+    assert evidence_kwargs["request_id"] == "msg_cache"
+    assert evidence_kwargs["parsed_cache_read_tokens"] == 12
+    assert evidence_kwargs["cache_signal_present"] is True
+
+
+@pytest.mark.asyncio
+async def test_route_message_non_copilot_does_not_log_evidence():
+    """非 Copilot 后端不应写 usage evidence."""
+    logger_mock = AsyncMock()
+    backend = FakeBackend("anthropic", response=BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    await router.route_message(_body(), _headers())
+
+    logger_mock.log.assert_awaited_once()
+    logger_mock.log_evidence.assert_not_awaited()
+
+
 # --- 故障转移语义测试 ---
 
 

@@ -87,6 +87,20 @@ def test_openai_zhipu_final_chunk():
     assert usage["request_id"] == "chatcmpl-1"
 
 
+def test_openai_final_chunk_with_cache_tokens():
+    """OpenAI/Copilot 风格最终 chunk 应提取 cache read / creation tokens."""
+    usage: dict = {}
+    _parse_usage_from_chunk(_sse(
+        '{"id":"chatcmpl-cache","usage":{"prompt_tokens":120,"completion_tokens":30,'
+        '"cache_read_input_tokens":40,"cache_creation_input_tokens":10}}'
+    ), usage)
+    assert usage["input_tokens"] == 120
+    assert usage["output_tokens"] == 30
+    assert usage["cache_read_tokens"] == 40
+    assert usage["cache_creation_tokens"] == 10
+    assert usage["request_id"] == "chatcmpl-cache"
+
+
 def test_openai_zhipu_content_chunks_no_usage():
     """Zhipu 中间 chunk 不含 usage，不应干扰."""
     usage: dict = {}

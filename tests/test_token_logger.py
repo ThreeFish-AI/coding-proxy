@@ -21,6 +21,29 @@ async def test_query_window_total_empty(logger):
 
 
 @pytest.mark.asyncio
+async def test_log_evidence_and_query_by_request_id(logger):
+    await logger.log_evidence(
+        backend="copilot",
+        request_id="req_cache_1",
+        model_served="claude-sonnet-4",
+        evidence_kind="data_usage",
+        raw_usage_json='{"cache_read_input_tokens":42,"prompt_tokens":100}',
+        parsed_input_tokens=100,
+        parsed_output_tokens=20,
+        parsed_cache_read_tokens=42,
+        cache_signal_present=True,
+        source_field_map_json='{"cache_read_tokens":"cache_read_input_tokens"}',
+    )
+
+    rows = await logger.query_evidence("req_cache_1")
+    assert len(rows) == 1
+    assert rows[0]["backend"] == "copilot"
+    assert rows[0]["evidence_kind"] == "data_usage"
+    assert rows[0]["parsed_cache_read_tokens"] == 42
+    assert rows[0]["cache_signal_present"] == 1
+
+
+@pytest.mark.asyncio
 async def test_query_window_total_sums_correctly(logger):
     await logger.log(
         backend="anthropic", model_requested="claude-sonnet-4",
