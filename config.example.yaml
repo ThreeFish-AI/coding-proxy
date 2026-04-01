@@ -32,18 +32,18 @@ tiers:
       success_threshold: 2
     quota_guard:
       enabled: true
-      token_budget: 45000000        # 5 小时 token 预算（根据订阅计划调整）
+      token_budget: 45000000 # 5 小时 token 预算（根据订阅计划调整）
       window_hours: 5.0
       threshold_percent: 99.0
       probe_interval_seconds: 300
 
   # Tier 1: GitHub Copilot Team Plan（中间层，默认禁用）
   - backend: copilot
-    enabled: false                  # 启用需 OAuth 登录或手动配置 github_token
+    enabled: false # 启用需 OAuth 登录或手动配置 github_token
     github_token: "${GITHUB_TOKEN}" # GitHub token（可选，运行 coding-proxy auth login 自动获取）
-    account_type: "individual"      # individual / business / enterprise
+    account_type: "individual" # individual / business / enterprise
     token_url: "https://api.github.com/copilot_internal/v2/token"
-    base_url: ""                    # 留空时按 account_type 自动解析；仅在特殊网络环境下显式覆盖
+    base_url: "" # 留空时按 account_type 自动解析；仅在特殊网络环境下显式覆盖
     timeout_ms: 300000
     circuit_breaker:
       failure_threshold: 3
@@ -58,10 +58,10 @@ tiers:
 
   # Tier 2: Google Antigravity Claude（中间层，默认禁用）
   - backend: antigravity
-    enabled: false                          # 启用需配置 OAuth 凭据
-    client_id: "${GOOG_CLIENT_ID}"          # Google OAuth2 Client ID
-    client_secret: "${GOOG_CLIENT_SECRET}"  # Google OAuth2 Client Secret
-    refresh_token: "${GOOG_REFRESH_TOKEN}"  # Google OAuth2 Refresh Token
+    enabled: false # 启用需配置 OAuth 凭据
+    client_id: "${GOOG_CLIENT_ID}" # Google OAuth2 Client ID
+    client_secret: "${GOOG_CLIENT_SECRET}" # Google OAuth2 Client Secret
+    refresh_token: "${GOOG_REFRESH_TOKEN}" # Google OAuth2 Refresh Token
     base_url: "https://generativelanguage.googleapis.com/v1beta"
     model_endpoint: "models/claude-sonnet-4-20250514"
     timeout_ms: 300000
@@ -70,7 +70,7 @@ tiers:
       recovery_timeout_seconds: 300
       success_threshold: 2
     quota_guard:
-      enabled: false                        # 启用后按 Premium Requests 配额管理
+      enabled: false # 启用后按 Premium Requests 配额管理
       token_budget: 0
       window_hours: 24.0
       threshold_percent: 95.0
@@ -145,43 +145,3 @@ auth:
 
 logging:
   level: "INFO"
-
-# =============================================================================
-# 向后兼容：旧 flat 格式（仍然有效，自动迁移为 tiers）
-# =============================================================================
-# 若配置文件中不存在 tiers 字段，系统会自动将以下旧格式转换为 tiers 列表。
-# 建议迁移至上方的 tiers 格式以获得更灵活的配置体验。
-#
-# primary:
-#   enabled: true
-#   base_url: "https://api.anthropic.com"
-#   timeout_ms: 300000
-#
-# copilot:
-#   enabled: false
-#   github_token: "${GITHUB_TOKEN}"
-#   ...
-#
-# antigravity:
-#   enabled: false
-#   client_id: "${GOOG_CLIENT_ID}"
-#   ...
-#
-# fallback:
-#   enabled: true
-#   base_url: "https://open.bigmodel.cn/api/anthropic"
-#   api_key: "${ZHIPU_API_KEY}"
-#
-# circuit_breaker:           # Anthropic 熔断器
-#   failure_threshold: 3
-#   ...
-# copilot_circuit_breaker:   # Copilot 熔断器
-#   ...
-# antigravity_circuit_breaker:  # Antigravity 熔断器
-#   ...
-# quota_guard:               # Anthropic 配额守卫
-#   ...
-# copilot_quota_guard:       # Copilot 配额守卫
-#   ...
-# antigravity_quota_guard:   # Antigravity 配额守卫
-#   ...
