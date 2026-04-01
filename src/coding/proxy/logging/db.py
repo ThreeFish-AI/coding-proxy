@@ -86,6 +86,8 @@ class TokenLogger:
                    COUNT(*) AS total_requests,
                    SUM(input_tokens) AS total_input,
                    SUM(output_tokens) AS total_output,
+                   SUM(cache_creation_tokens) AS total_cache_creation,
+                   SUM(cache_read_tokens) AS total_cache_read,
                    SUM(CASE WHEN failover THEN 1 ELSE 0 END) AS total_failovers,
                    AVG(duration_ms) AS avg_duration_ms
                FROM usage_log WHERE ts >= datetime('now', ? || ' days')"""

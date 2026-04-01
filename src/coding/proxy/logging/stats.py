@@ -51,6 +51,8 @@ async def show_usage(logger: TokenLogger, days: int = 7, backend: str | None = N
     table.add_column("请求数", justify="right")
     table.add_column("输入 Token", justify="right", style="blue")
     table.add_column("输出 Token", justify="right", style="blue")
+    table.add_column("缓存创建 Token", justify="right", style="dim blue")
+    table.add_column("缓存读取 Token", justify="right", style="dim cyan")
     table.add_column("平均耗时(ms)", justify="right")
 
     for row in rows:
@@ -62,6 +64,8 @@ async def show_usage(logger: TokenLogger, days: int = 7, backend: str | None = N
             str(row.get("total_requests", 0)),
             str(row.get("total_input", 0)),
             str(row.get("total_output", 0)),
+            str(row.get("total_cache_creation", 0) or 0),
+            str(row.get("total_cache_read", 0) or 0),
             str(int(row.get("avg_duration_ms", 0) or 0)),
         )
 
