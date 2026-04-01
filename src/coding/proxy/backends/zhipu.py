@@ -31,11 +31,11 @@ class ZhipuBackend(BaseBackend):
 
     def get_capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
-            supports_tools=False,
-            supports_thinking=False,
+            supports_tools=True,              # GLM 支持 function calling
+            supports_thinking=True,           # GLM-5.1 原生支持深度思考
             supports_images=True,
-            emits_vendor_tool_events=True,
-            supports_metadata=False,
+            emits_vendor_tool_events=False,   # normalize_anthropic_compatible_stream 已规范化输出
+            supports_metadata=True,           # metadata 在 _prepare_request 中静默剥离
         )
 
     def map_model(self, model: str) -> str:
@@ -47,8 +47,13 @@ class ZhipuBackend(BaseBackend):
         request_body: dict[str, Any],
         headers: dict[str, str],
     ) -> tuple[dict[str, Any], dict[str, str]]:
-        """映射模型名、替换认证头."""
+        """映射模型名、替换认证头，并剥离智谱 API 不支持的字段."""
         body = {**request_body}
+        body.pop("metadata", None)  # 智谱 API 不支持 metadata，静默剥离
+        # 将 Anthropic thinking 格式转换为智谱格式（剥离 budget_tokens）
+        thinking = body.get("thinking")
+        if isinstance(thinking, dict):
+            body["thinking"] = {"type": thinking.get("type", "enabled")}
         if "model" in body:
             body["model"] = self._model_mapper.map(body["model"], backend="fallback")
 

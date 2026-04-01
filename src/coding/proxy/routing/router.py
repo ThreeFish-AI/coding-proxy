@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 import httpx
+
+if TYPE_CHECKING:
+    from ..pricing import PricingTable
 
 from ..backends.base import BackendResponse, UsageInfo
 from ..backends.base import NoCompatibleBackendError, RequestCapabilities
@@ -54,6 +57,89 @@ def _set_if_nonzero(usage: dict, key: str, value: int) -> None:
         usage[key] = value
 
 
+def _append_usage_evidence(
+    usage: dict[str, Any],
+    *,
+    evidence_kind: str,
+    raw_usage: dict[str, Any],
+    request_id: str | None = None,
+    model_served: str | None = None,
+) -> None:
+    entries = usage.setdefault("_usage_evidence", [])
+    if not isinstance(entries, list):
+        return
+    entries.append({
+        "evidence_kind": evidence_kind,
+        "raw_usage": raw_usage,
+        "request_id": request_id or "",
+        "model_served": model_served or "",
+        "source_field_map": {
+            "input_tokens": next(
+                (key for key in ("input_tokens", "prompt_tokens") if key in raw_usage),
+                "",
+            ),
+            "output_tokens": next(
+                (key for key in ("output_tokens", "completion_tokens") if key in raw_usage),
+                "",
+            ),
+            "cache_creation_tokens": next(
+                (key for key in ("cache_creation_input_tokens",) if key in raw_usage),
+                "",
+            ),
+            "cache_read_tokens": next(
+                (
+                    key for key in (
+                        "cache_read_input_tokens",
+                        "cached_tokens",
+                    ) if key in raw_usage
+                ),
+                "",
+            ),
+        },
+        "cache_signal_present": any(
+            key in raw_usage
+            for key in ("cache_creation_input_tokens", "cache_read_input_tokens", "cached_tokens")
+        ),
+    })
+
+
+def _build_usage_evidence_records(
+    usage: dict[str, Any],
+    *,
+    backend: str,
+    model_served: str,
+    request_id: str,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    entries = usage.get("_usage_evidence", [])
+    if not isinstance(entries, list):
+        return records
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        raw_usage = entry.get("raw_usage")
+        if not isinstance(raw_usage, dict):
+            continue
+        source_field_map = entry.get("source_field_map")
+        if not isinstance(source_field_map, dict):
+            source_field_map = {}
+        records.append({
+            "backend": backend,
+            "request_id": str(entry.get("request_id") or request_id or ""),
+            "model_served": str(entry.get("model_served") or model_served or ""),
+            "evidence_kind": str(entry.get("evidence_kind") or "stream_usage"),
+            "raw_usage_json": json.dumps(raw_usage, ensure_ascii=False, sort_keys=True),
+            "parsed_input_tokens": usage.get("input_tokens", 0),
+            "parsed_output_tokens": usage.get("output_tokens", 0),
+            "parsed_cache_creation_tokens": usage.get("cache_creation_tokens", 0),
+            "parsed_cache_read_tokens": usage.get("cache_read_tokens", 0),
+            "cache_signal_present": bool(entry.get("cache_signal_present")),
+            "source_field_map_json": json.dumps(source_field_map, ensure_ascii=False, sort_keys=True),
+        })
+    return records
+
+
 def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
     """从 SSE chunk 提取 token 用量.
 
@@ -87,12 +173,22 @@ def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
                 usage["request_id"] = msg["id"]
             if "model" in msg:
                 usage["model_served"] = msg["model"]
+            if isinstance(u, dict):
+                _append_usage_evidence(
+                    usage,
+                    evidence_kind="message_usage",
+                    raw_usage=dict(u),
+                    request_id=msg.get("id"),
+                    model_served=msg.get("model"),
+                )
 
         # Anthropic message_delta / OpenAI 最后一个 chunk (data.usage)
         if "usage" in data:
             u = data["usage"]
             output_tokens = u.get("output_tokens", 0) or u.get("completion_tokens", 0)
             input_tokens = u.get("input_tokens", 0) or u.get("prompt_tokens", 0)
+            cache_creation_tokens = u.get("cache_creation_input_tokens", 0)
+            cache_read_tokens = u.get("cache_read_input_tokens", 0)
 
             if output_tokens > 0:
                 logger.debug("Extracted output tokens from data.usage: %d", output_tokens)
@@ -101,6 +197,16 @@ def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
 
             _set_if_nonzero(usage, "output_tokens", output_tokens)
             _set_if_nonzero(usage, "input_tokens", input_tokens)
+            _set_if_nonzero(usage, "cache_creation_tokens", cache_creation_tokens)
+            _set_if_nonzero(usage, "cache_read_tokens", cache_read_tokens)
+            if isinstance(u, dict):
+                _append_usage_evidence(
+                    usage,
+                    evidence_kind="data_usage",
+                    raw_usage=dict(u),
+                    request_id=data.get("id"),
+                    model_served=data.get("model"),
+                )
 
         # request_id fallback (OpenAI 格式下 id 在顶层)
         if "id" in data and not usage.get("request_id"):
@@ -127,6 +233,11 @@ class RequestRouter:
         self._tiers = tiers
         self._token_logger = token_logger
         self._reauth_coordinator = reauth_coordinator
+        self._pricing_table: PricingTable | None = None
+
+    def set_pricing_table(self, table: PricingTable) -> None:
+        """注入 PricingTable 实例（由 lifespan 在启动阶段调用）."""
+        self._pricing_table = table
 
     @property
     def tiers(self) -> list[BackendTier]:
@@ -140,6 +251,36 @@ class RequestRouter:
             cache_creation_tokens=usage.get("cache_creation_tokens", 0),
             cache_read_tokens=usage.get("cache_read_tokens", 0),
             request_id=usage.get("request_id", ""),
+        )
+
+    def _log_model_call(
+        self,
+        *,
+        backend: str,
+        model_requested: str,
+        model_served: str,
+        duration_ms: int,
+        usage: UsageInfo,
+    ) -> None:
+        """打印模型调用级别的详细 Access Log."""
+        cost_str = "-"
+        if self._pricing_table is not None:
+            cost = self._pricing_table.compute_cost(
+                backend=backend,
+                model_served=model_served,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_creation_tokens=usage.cache_creation_tokens,
+                cache_read_tokens=usage.cache_read_tokens,
+            )
+            if cost is not None:
+                cost_str = f"${cost:.4f}"
+        logger.info(
+            "ModelCall: backend=%s model_requested=%s model_served=%s "
+            "duration=%dms tokens=[in:%d out:%d cache_create:%d cache_read:%d] cost=%s",
+            backend, model_requested, model_served, duration_ms,
+            usage.input_tokens, usage.output_tokens,
+            usage.cache_creation_tokens, usage.cache_read_tokens, cost_str,
         )
 
     @staticmethod
@@ -199,10 +340,20 @@ class RequestRouter:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = usage.get("model_served") or tier.backend.map_model(model)
+                self._log_model_call(
+                    backend=tier.name, model_requested=model,
+                    model_served=model_served, duration_ms=duration, usage=info,
+                )
                 await self._record_usage(
                     tier.name, model, model_served,
                     info, duration, True,
                     failed_tier_name is not None, failed_tier_name,
+                    evidence_records=_build_usage_evidence_records(
+                        usage,
+                        backend=tier.name,
+                        model_served=model_served,
+                        request_id=info.request_id,
+                    ),
                 )
                 return
             except TokenAcquireError as exc:
@@ -289,10 +440,19 @@ class RequestRouter:
                     duration = int((time.monotonic() - start) * 1000)
                     model = body.get("model", "unknown")
                     model_served = resp.model_served or model
+                    self._log_model_call(
+                        backend=tier.name, model_requested=model,
+                        model_served=model_served, duration_ms=duration, usage=resp.usage,
+                    )
                     await self._record_usage(
                         tier.name, model, model_served,
                         resp.usage, duration, True,
                         failed_tier_name is not None, failed_tier_name,
+                        evidence_records=self._build_nonstream_evidence_records(
+                            backend=tier.name,
+                            model_served=model_served,
+                            usage=resp.usage,
+                        ),
                     )
                     return resp
 
@@ -322,10 +482,19 @@ class RequestRouter:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = resp.model_served or model
+                self._log_model_call(
+                    backend=tier.name, model_requested=model,
+                    model_served=model_served, duration_ms=duration, usage=resp.usage,
+                )
                 await self._record_usage(
                     tier.name, model, model_served,
                     resp.usage, duration, resp.status_code < 400,
                     failed_tier_name is not None, failed_tier_name,
+                    evidence_records=self._build_nonstream_evidence_records(
+                        backend=tier.name,
+                        model_served=model_served,
+                        usage=resp.usage,
+                    ),
                 )
                 return resp
 
@@ -365,6 +534,7 @@ class RequestRouter:
         success: bool,
         failover: bool,
         failover_from: str | None = None,
+        evidence_records: list[dict[str, Any]] | None = None,
     ) -> None:
         if not self._token_logger:
             return
@@ -382,6 +552,48 @@ class RequestRouter:
             failover_from=failover_from,
             request_id=usage.request_id,
         )
+        if not evidence_records or backend != "copilot":
+            return
+        if not hasattr(self._token_logger, "log_evidence"):
+            return
+        for record in evidence_records:
+            await self._token_logger.log_evidence(**record)
+
+    @staticmethod
+    def _build_nonstream_evidence_records(
+        *,
+        backend: str,
+        model_served: str,
+        usage: UsageInfo,
+    ) -> list[dict[str, Any]]:
+        if backend != "copilot":
+            return []
+        raw_usage = {
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+        }
+        if usage.cache_creation_tokens > 0:
+            raw_usage["cache_creation_input_tokens"] = usage.cache_creation_tokens
+        if usage.cache_read_tokens > 0:
+            raw_usage["cache_read_input_tokens"] = usage.cache_read_tokens
+        return [{
+            "backend": backend,
+            "request_id": usage.request_id,
+            "model_served": model_served,
+            "evidence_kind": "nonstream_usage_summary",
+            "raw_usage_json": json.dumps(raw_usage, ensure_ascii=False, sort_keys=True),
+            "parsed_input_tokens": usage.input_tokens,
+            "parsed_output_tokens": usage.output_tokens,
+            "parsed_cache_creation_tokens": usage.cache_creation_tokens,
+            "parsed_cache_read_tokens": usage.cache_read_tokens,
+            "cache_signal_present": usage.cache_creation_tokens > 0 or usage.cache_read_tokens > 0,
+            "source_field_map_json": json.dumps({
+                "input_tokens": "input_tokens",
+                "output_tokens": "output_tokens",
+                "cache_creation_tokens": "cache_creation_input_tokens" if usage.cache_creation_tokens > 0 else "",
+                "cache_read_tokens": "cache_read_input_tokens" if usage.cache_read_tokens > 0 else "",
+            }, ensure_ascii=False, sort_keys=True),
+        }]
 
     async def close(self) -> None:
         for tier in self._tiers:

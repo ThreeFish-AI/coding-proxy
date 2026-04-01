@@ -21,6 +21,7 @@ class BackendTier:
     backend: BaseBackend
     circuit_breaker: CircuitBreaker | None = field(default=None)
     quota_guard: QuotaGuard | None = field(default=None)
+    weekly_quota_guard: QuotaGuard | None = field(default=None)
 
     # Rate Limit 精确截止时间（monotonic timestamp），0 表示无限制
     _rate_limit_deadline: float = field(default=0.0, repr=False)
@@ -50,6 +51,8 @@ class BackendTier:
             return False
         if self.quota_guard and not self.quota_guard.can_use_primary():
             return False
+        if self.weekly_quota_guard and not self.weekly_quota_guard.can_use_primary():
+            return False
         return True
 
     def record_success(self, usage_tokens: int = 0) -> None:
@@ -60,6 +63,10 @@ class BackendTier:
             self.quota_guard.record_primary_success()
             if usage_tokens > 0:
                 self.quota_guard.record_usage(usage_tokens)
+        if self.weekly_quota_guard:
+            self.weekly_quota_guard.record_primary_success()
+            if usage_tokens > 0:
+                self.weekly_quota_guard.record_usage(usage_tokens)
         self._rate_limit_deadline = 0.0
 
     def record_failure(
@@ -80,6 +87,8 @@ class BackendTier:
             self.circuit_breaker.record_failure(retry_after_seconds=retry_after_seconds)
         if self.quota_guard and is_cap_error:
             self.quota_guard.notify_cap_error(retry_after_seconds=retry_after_seconds)
+        if self.weekly_quota_guard and is_cap_error:
+            self.weekly_quota_guard.notify_cap_error(retry_after_seconds=retry_after_seconds)
 
         if rate_limit_deadline is not None and rate_limit_deadline > self._rate_limit_deadline:
             self._rate_limit_deadline = rate_limit_deadline
@@ -109,8 +118,9 @@ class BackendTier:
 
         cb_allows = self.circuit_breaker.can_execute() if self.circuit_breaker else True
         qg_allows = self.quota_guard.can_use_primary() if self.quota_guard else True
+        wqg_allows = self.weekly_quota_guard.can_use_primary() if self.weekly_quota_guard else True
 
-        if not cb_allows and not qg_allows:
+        if not cb_allows and not qg_allows and not wqg_allows:
             return False
 
         # 检测是否为探测场景
@@ -122,9 +132,12 @@ class BackendTier:
             # QG 允许探测（在 QUOTA_EXCEEDED 状态下但返回 True）
             if self.quota_guard._state == QuotaState.QUOTA_EXCEEDED and qg_allows:
                 is_probe_scenario = True
+        if self.weekly_quota_guard:
+            if self.weekly_quota_guard._state == QuotaState.QUOTA_EXCEEDED and wqg_allows:
+                is_probe_scenario = True
 
         if not is_probe_scenario:
-            return cb_allows and qg_allows
+            return cb_allows and qg_allows and wqg_allows
 
         # ── 第二层: Health Check 门控 ──
         logger.info("Tier %s: probe scenario, running health check", self.name)

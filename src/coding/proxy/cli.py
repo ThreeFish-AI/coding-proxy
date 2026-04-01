@@ -6,9 +6,12 @@ import asyncio
 import inspect
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import typer
+
+if TYPE_CHECKING:
+    from .config.schema import ProxyConfig
 from rich.console import Console
 
 from .config.loader import load_config
@@ -256,8 +259,15 @@ def start(
     # 自动登录检查
     asyncio.run(_auto_login_if_needed(cfg_path))
 
+    from .logging import build_log_config
+
     fastapi_app = create_app(cfg)
-    uvicorn.run(fastapi_app, host=cfg.server.host, port=cfg.server.port, log_level="info")
+    uvicorn.run(
+        fastapi_app,
+        host=cfg.server.host,
+        port=cfg.server.port,
+        log_config=build_log_config(cfg.logging.level),
+    )
 
 
 @app.command()
@@ -293,13 +303,15 @@ def usage(
     """查看 Token 使用统计."""
     cfg = load_config(Path(db_path) if db_path else None)
     logger = TokenLogger(cfg.db_path)
-    asyncio.run(_run_usage(logger, days, backend, model))
+    asyncio.run(_run_usage(logger, days, backend, model, cfg))
 
 
 async def _run_usage(logger: TokenLogger, days: int, backend: str | None,
-                     model: str | None) -> None:
+                     model: str | None, cfg: "ProxyConfig") -> None:
+    from .pricing import PricingTable
     await logger.init()
-    await show_usage(logger, days, backend, model)
+    pricing_table = PricingTable(cfg.pricing)
+    await show_usage(logger, days, backend, model, pricing_table)
     await logger.close()
 
 

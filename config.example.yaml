@@ -6,60 +6,90 @@ server:
   host: "127.0.0.1"
   port: 8046
 
-# === 后端层级（按优先级排列） ===
+# === 后端层级（tiers 列表，列表顺序即优先级） ===
+#
+# 每个 tier 通过 backend 字段指定后端类型：
+#   anthropic | copilot | antigravity | zhipu
+#
+# 优先级规则：
+#   - Tier 0（列表第一项）> Tier 1 > Tier N（列表最后一项）
+#   - 无 circuit_breaker 的 Tier 自动成为终端层（不再向下故障转移）
+#
+# 示例：将 zhipu 置于 Tier 0，anthropic 置于 Tier 1：
+#   tiers:
+#     - backend: zhipu
+#       api_key: "${ZHIPU_API_KEY}"
+#     - backend: anthropic   # 终端层（无 circuit_breaker）
 
-# Tier 0: Anthropic Claude Team Plan（最高优先级）
-primary:
-  enabled: true
-  base_url: "https://api.anthropic.com"
-  timeout_ms: 300000
+tiers:
+  # Tier 0: Claude Plans（最高优先级）
+  - backend: anthropic
+    base_url: "https://api.anthropic.com"
+    timeout_ms: 300000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: true
+      token_budget: 45000000 # 5 小时 token 预算（根据订阅计划调整）
+      window_hours: 5.0
+      threshold_percent: 99.0
+      probe_interval_seconds: 300
+    weekly_quota_guard:
+      enabled: true
+      token_budget: 250000000 # 一周 token 预算（根据订阅计划调整）
+      window_hours: 168.0     # 7 天滑动窗口
+      threshold_percent: 99.0
+      probe_interval_seconds: 1800 # 每 30 分钟探测一次
 
-# Tier 1: GitHub Copilot Team Plan（中间优先级）
-copilot:
-  enabled: false                     # 默认禁用，启用需 OAuth 登录或手动配置 github_token
-  github_token: "${GITHUB_TOKEN}"    # GitHub token（可选，运行 coding-proxy auth login 自动获取）
-  account_type: "individual"         # individual / business / enterprise
-  token_url: "https://api.github.com/copilot_internal/v2/token"
-  base_url: ""                       # 留空时按 account_type 自动解析；仅在特殊网络环境下显式覆盖
-  timeout_ms: 300000
+  # Tier 1: GitHub Copilot Plans（中间层，默认禁用）
+  - backend: copilot
+    enabled: false # 启用需 OAuth 登录或手动配置 github_token
+    github_token: "${GITHUB_TOKEN}" # GitHub token（可选，运行 coding-proxy auth login 自动获取）
+    account_type: "individual" # individual / business / enterprise
+    token_url: "https://api.github.com/copilot_internal/v2/token"
+    base_url: "" # 留空时按 account_type 自动解析；仅在特殊网络环境下显式覆盖
+    timeout_ms: 300000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 0
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
 
-# Tier 2: Google Antigravity Claude（中间层）
-antigravity:
-  enabled: false                        # 默认禁用，启用需配置 OAuth 凭据
-  client_id: "${GOOG_CLIENT_ID}"        # Google OAuth2 Client ID
-  client_secret: "${GOOG_CLIENT_SECRET}" # Google OAuth2 Client Secret
-  refresh_token: "${GOOG_REFRESH_TOKEN}" # Google OAuth2 Refresh Token
-  base_url: "https://generativelanguage.googleapis.com/v1beta"
-  model_endpoint: "models/claude-sonnet-4-20250514"
-  timeout_ms: 300000
+  # Tier 2: Google Antigravity Plans（中间层，默认禁用）
+  - backend: antigravity
+    enabled: false # 启用需配置 OAuth 凭据
+    client_id: "${GOOG_CLIENT_ID}" # Google OAuth2 Client ID
+    client_secret: "${GOOG_CLIENT_SECRET}" # Google OAuth2 Client Secret
+    refresh_token: "${GOOG_REFRESH_TOKEN}" # Google OAuth2 Refresh Token
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+    model_endpoint: "models/claude-sonnet-4-20250514"
+    timeout_ms: 300000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false # 启用后按 Premium Requests 配额管理
+      token_budget: 0
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
 
-# Tier 3: 智谱 GLM（终端兜底）
-fallback:
-  enabled: true
-  base_url: "https://open.bigmodel.cn/api/anthropic"
-  api_key: "${ZHIPU_API_KEY}"
-  timeout_ms: 3000000
+  # Tier 3: 智谱 GLM（终端兜底，无 circuit_breaker）
+  - backend: zhipu
+    base_url: "https://open.bigmodel.cn/api/anthropic"
+    api_key: "${ZHIPU_API_KEY}"
+    timeout_ms: 3000000
+    # 不配置 circuit_breaker → 自动成为终端层，不触发向下故障转移
 
-# === 弹性配置 ===
-
-# Anthropic 熔断器
-circuit_breaker:
-  failure_threshold: 3
-  recovery_timeout_seconds: 300
-  success_threshold: 2
-
-# Copilot 熔断器
-copilot_circuit_breaker:
-  failure_threshold: 3
-  recovery_timeout_seconds: 300
-  success_threshold: 2
-
-# Antigravity 熔断器
-antigravity_circuit_breaker:
-  failure_threshold: 3
-  recovery_timeout_seconds: 300
-  success_threshold: 2
-
+# === 故障转移触发条件 ===
 failover:
   status_codes: [429, 403, 503, 500]
   error_types:
@@ -69,8 +99,9 @@ failover:
     - "quota"
     - "usage cap"
 
+# === 模型映射 ===
 model_mapping:
-  # Tier 1: Copilot 可用模型（通过 /api/copilot/models 诊断获取）
+  # Copilot 可用模型（通过 /api/copilot/models 诊断获取）
   - pattern: "claude-sonnet-.*"
     backends: ["copilot"]
     target: "claude-sonnet-4.6"
@@ -83,7 +114,7 @@ model_mapping:
     backends: ["copilot"]
     target: "claude-haiku-4.5"
     is_regex: true
-  # Tier 2: Antigravity 模型映射
+  # Antigravity 模型映射
   - pattern: "claude-sonnet-.*"
     backends: ["antigravity"]
     target: "claude-sonnet-4-6-thinking"
@@ -92,43 +123,79 @@ model_mapping:
     backends: ["antigravity"]
     target: "claude-opus-4-6-thinking"
     is_regex: true
-  # Tier 3: 智谱 GLM 兜底映射
+  # 智谱 GLM 兜底映射
   - pattern: "claude-sonnet-.*"
-    backends: ["fallback"]
+    backends: ["zhipu"]
     target: "glm-5.1"
     is_regex: true
   - pattern: "claude-opus-.*"
-    backends: ["fallback"]
+    backends: ["zhipu"]
     target: "glm-5.1"
     is_regex: true
   - pattern: "claude-haiku-.*"
-    backends: ["fallback"]
+    backends: ["zhipu"]
     target: "glm-4.5-air"
     is_regex: true
 
-# Anthropic 配额守卫
-quota_guard:
-  enabled: true
-  token_budget: 45000000        # 5 小时 token 预算（根据订阅计划调整）
-  window_hours: 5.0
-  threshold_percent: 99.0
-  probe_interval_seconds: 300
-
-# Copilot 配额守卫
-copilot_quota_guard:
-  enabled: false
-  token_budget: 0
-  window_hours: 24.0
-  threshold_percent: 95.0
-  probe_interval_seconds: 300
-
-# Antigravity 配额守卫
-antigravity_quota_guard:
-  enabled: false                # 默认禁用；启用后按 Premium Requests 配额管理
-  token_budget: 0
-  window_hours: 24.0
-  threshold_percent: 95.0
-  probe_interval_seconds: 300
+# === 模型定价（USD / 1M tokens） ===
+# backend: 后端名称（对应 `usage` 统计表中的"后端"列）
+# model:   实际模型名（对应 `usage` 统计表中的"实际模型"列）
+# 未配置定价的模型在统计中 Cost 列显示 "-"
+pricing:
+  # ── Anthropic Claude ──
+  - backend: anthropic
+    model: claude-sonnet-4-6
+    input_cost_per_mtok: 3.0
+    output_cost_per_mtok: 15.0
+    cache_write_cost_per_mtok: 3.75
+    cache_read_cost_per_mtok: 0.30
+  - backend: anthropic
+    model: claude-opus-4-6
+    input_cost_per_mtok: 15.0
+    output_cost_per_mtok: 75.0
+    cache_write_cost_per_mtok: 18.75
+    cache_read_cost_per_mtok: 1.50
+  - backend: anthropic
+    model: claude-haiku-4-5-20251001
+    input_cost_per_mtok: 0.8
+    output_cost_per_mtok: 4.0
+    cache_write_cost_per_mtok: 1.0
+    cache_read_cost_per_mtok: 0.08
+  # ── GitHub Copilot（透传 Claude，参照 Anthropic 定价估算） ──
+  - backend: copilot
+    model: claude-sonnet-4-6
+    input_cost_per_mtok: 3.0
+    output_cost_per_mtok: 15.0
+    cache_write_cost_per_mtok: 3.75
+    cache_read_cost_per_mtok: 0.30
+  - backend: copilot
+    model: claude-sonnet-4.6
+    input_cost_per_mtok: 3.0
+    output_cost_per_mtok: 15.0
+    cache_write_cost_per_mtok: 3.75
+    cache_read_cost_per_mtok: 0.30
+  - backend: copilot
+    model: claude-haiku-4.5
+    input_cost_per_mtok: 0.8
+    output_cost_per_mtok: 4.0
+    cache_write_cost_per_mtok: 1.0
+    cache_read_cost_per_mtok: 0.08
+  - backend: copilot
+    model: claude-haiku-4-5-20251001
+    input_cost_per_mtok: 0.8
+    output_cost_per_mtok: 4.0
+    cache_write_cost_per_mtok: 1.0
+    cache_read_cost_per_mtok: 0.08
+  # ── 智谱 GLM ──
+  - backend: zhipu
+    model: glm-4.5-air
+    input_cost_per_mtok: 0.11    # ¥0.8/1M ÷ 7.25
+    output_cost_per_mtok: 0.28   # ¥2/1M ÷ 7.25
+  - backend: zhipu
+    model: glm-5.1
+    input_cost_per_mtok: 1.0
+    output_cost_per_mtok: 3.2
+    cache_read_cost_per_mtok: 0.2
 
 database:
   path: "~/.coding-proxy/usage.db"

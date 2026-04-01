@@ -28,6 +28,23 @@ CREATE TABLE IF NOT EXISTS usage_log (
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_log(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_backend ON usage_log(backend);
+CREATE TABLE IF NOT EXISTS usage_evidence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    backend TEXT NOT NULL,
+    request_id TEXT DEFAULT '',
+    model_served TEXT NOT NULL DEFAULT '',
+    evidence_kind TEXT NOT NULL,
+    raw_usage_json TEXT NOT NULL DEFAULT '{}',
+    parsed_input_tokens INTEGER DEFAULT 0,
+    parsed_output_tokens INTEGER DEFAULT 0,
+    parsed_cache_creation_tokens INTEGER DEFAULT 0,
+    parsed_cache_read_tokens INTEGER DEFAULT 0,
+    cache_signal_present BOOLEAN NOT NULL DEFAULT 0,
+    source_field_map_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_usage_evidence_request_id ON usage_evidence(request_id);
+CREATE INDEX IF NOT EXISTS idx_usage_evidence_backend ON usage_evidence(backend);
 """
 
 
@@ -78,6 +95,62 @@ class TokenLogger:
              duration_ms, success, failover, failover_from, request_id))
         await self._db.commit()
 
+    async def log_evidence(
+        self,
+        *,
+        backend: str,
+        request_id: str = "",
+        model_served: str = "",
+        evidence_kind: str,
+        raw_usage_json: str,
+        parsed_input_tokens: int = 0,
+        parsed_output_tokens: int = 0,
+        parsed_cache_creation_tokens: int = 0,
+        parsed_cache_read_tokens: int = 0,
+        cache_signal_present: bool = False,
+        source_field_map_json: str = "{}",
+    ) -> None:
+        if not self._db:
+            return
+        await self._db.execute(
+            """INSERT INTO usage_evidence
+               (backend, request_id, model_served, evidence_kind, raw_usage_json,
+                parsed_input_tokens, parsed_output_tokens,
+                parsed_cache_creation_tokens, parsed_cache_read_tokens,
+                cache_signal_present, source_field_map_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                backend,
+                request_id,
+                model_served,
+                evidence_kind,
+                raw_usage_json,
+                parsed_input_tokens,
+                parsed_output_tokens,
+                parsed_cache_creation_tokens,
+                parsed_cache_read_tokens,
+                cache_signal_present,
+                source_field_map_json,
+            ),
+        )
+        await self._db.commit()
+
+    async def query_evidence(self, request_id: str) -> list[dict]:
+        if not self._db:
+            return []
+        cursor = await self._db.execute(
+            """SELECT backend, request_id, model_served, evidence_kind, raw_usage_json,
+                      parsed_input_tokens, parsed_output_tokens,
+                      parsed_cache_creation_tokens, parsed_cache_read_tokens,
+                      cache_signal_present, source_field_map_json
+               FROM usage_evidence
+               WHERE request_id = ?
+               ORDER BY id ASC""",
+            (request_id,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
     async def query_daily(self, days: int = 7, backend: str | None = None,
                           model: str | None = None) -> list[dict]:
         if not self._db:
@@ -86,6 +159,8 @@ class TokenLogger:
                    COUNT(*) AS total_requests,
                    SUM(input_tokens) AS total_input,
                    SUM(output_tokens) AS total_output,
+                   SUM(cache_creation_tokens) AS total_cache_creation,
+                   SUM(cache_read_tokens) AS total_cache_read,
                    SUM(CASE WHEN failover THEN 1 ELSE 0 END) AS total_failovers,
                    AVG(duration_ms) AS avg_duration_ms
                FROM usage_log WHERE ts >= datetime('now', ? || ' days')"""

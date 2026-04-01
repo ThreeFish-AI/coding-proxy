@@ -26,10 +26,13 @@ class _OpenAICompatState:
         self.stopped = False
         self.input_tokens = 0
         self.output_tokens = 0
+        self.cache_creation_tokens = 0
+        self.cache_read_tokens = 0
         self.block_index = 0
         self.content_block_open = False
         self.tool_calls: dict[int, dict[str, Any]] = {}
         self.usage_updated = False  # 标记是否已收到 usage 信息
+        self.thinking_block_open = False
 
     def ensure_started(self) -> list[bytes]:
         if self.started:
@@ -47,6 +50,14 @@ class _OpenAICompatState:
                     "usage": {
                         "input_tokens": self.input_tokens,
                         "output_tokens": 0,
+                        **(
+                            {"cache_creation_input_tokens": self.cache_creation_tokens}
+                            if self.cache_creation_tokens > 0 else {}
+                        ),
+                        **(
+                            {"cache_read_input_tokens": self.cache_read_tokens}
+                            if self.cache_read_tokens > 0 else {}
+                        ),
                     },
                 },
             }),
@@ -67,6 +78,10 @@ class _OpenAICompatState:
         usage_data = {"output_tokens": self.output_tokens}
         if self.usage_updated and self.input_tokens > 0:
             usage_data["input_tokens"] = self.input_tokens
+        if self.cache_creation_tokens > 0:
+            usage_data["cache_creation_input_tokens"] = self.cache_creation_tokens
+        if self.cache_read_tokens > 0:
+            usage_data["cache_read_input_tokens"] = self.cache_read_tokens
 
         chunks.append(_make_event("message_delta", {
             "type": "message_delta",
@@ -102,11 +117,13 @@ def _normalize_direct_event(data: dict[str, Any], event_name: str | None) -> lis
     event_type = data.get("type")
     if event_type == "content_block_start":
         block = data.get("content_block", {})
-        if block.get("type") != "text":
+        # 放行标准 Anthropic 内容块类型，过滤供应商私有类型
+        if block.get("type") not in {"text", "tool_use", "thinking"}:
             return []
     if event_type == "content_block_delta":
         delta = data.get("delta", {})
-        if delta.get("type") != "text_delta":
+        # 放行标准 delta 类型，过滤供应商私有类型
+        if delta.get("type") not in {"text_delta", "input_json_delta", "thinking_delta"}:
             return []
     if event_type not in _DIRECT_EVENTS:
         return []
@@ -119,6 +136,35 @@ def _normalize_stream_event(data: dict[str, Any], event_name: str | None) -> lis
         return []
     nested_name = event_name or nested.get("type")
     return _normalize_direct_event(nested, nested_name)
+
+
+def _extract_prompt_tokens_details(usage: dict[str, Any]) -> dict[str, Any]:
+    details = usage.get("prompt_tokens_details")
+    return details if isinstance(details, dict) else {}
+
+
+def _extract_cache_read_tokens(usage: dict[str, Any]) -> int:
+    details = _extract_prompt_tokens_details(usage)
+    for value in (
+        usage.get("cache_read_input_tokens"),
+        details.get("cached_tokens"),
+        details.get("cache_read_tokens"),
+    ):
+        if isinstance(value, int):
+            return value
+    return 0
+
+
+def _extract_cache_creation_tokens(usage: dict[str, Any]) -> int:
+    details = _extract_prompt_tokens_details(usage)
+    for value in (
+        usage.get("cache_creation_input_tokens"),
+        details.get("cache_creation_input_tokens"),
+        details.get("cache_creation_tokens"),
+    ):
+        if isinstance(value, int):
+            return value
+    return 0
 
 
 def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> list[bytes]:
@@ -134,6 +180,16 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
         state.output_tokens = usage.get("completion_tokens", state.output_tokens)
         state.usage_updated = True
 
+    cache_read_tokens = _extract_cache_read_tokens(usage)
+    if cache_read_tokens > 0:
+        state.cache_read_tokens = cache_read_tokens
+        state.usage_updated = True
+
+    cache_creation_tokens = _extract_cache_creation_tokens(usage)
+    if cache_creation_tokens > 0:
+        state.cache_creation_tokens = cache_creation_tokens
+        state.usage_updated = True
+
     choices = data.get("choices", [])
     if not choices:
         return chunks
@@ -142,9 +198,37 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
     delta = choice.get("delta", {})
     finish_reason = choice.get("finish_reason")
 
+    # ── 处理 reasoning_content（智谱 OpenAI 格式的深度思考内容） ──
+    reasoning_content = delta.get("reasoning_content")
+    if reasoning_content:
+        chunks.extend(state.ensure_started())
+        if not state.thinking_block_open:
+            chunks.append(_make_event("content_block_start", {
+                "type": "content_block_start",
+                "index": state.block_index,
+                "content_block": {"type": "thinking", "thinking": ""},
+            }))
+            state.thinking_block_open = True
+            state.content_block_open = True
+        chunks.append(_make_event("content_block_delta", {
+            "type": "content_block_delta",
+            "index": state.block_index,
+            "delta": {"type": "thinking_delta", "thinking": reasoning_content},
+        }))
+
     text_fragments = _extract_text_fragments(delta.get("content"))
     if text_fragments:
         chunks.extend(state.ensure_started())
+        # 如果 thinking 块开着，先关闭它再打开 text 块
+        if state.thinking_block_open:
+            chunks.append(_make_event("content_block_stop", {
+                "type": "content_block_stop",
+                "index": state.block_index,
+            }))
+            state.block_index += 1
+            state.thinking_block_open = False
+            state.content_block_open = False
+
         if state.content_block_open and any(
             tool.get("anthropic_block_index") == state.block_index
             for tool in state.tool_calls.values()

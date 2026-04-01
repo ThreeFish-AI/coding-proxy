@@ -260,3 +260,58 @@ async def test_health_check_failure_blocks_probe():
 
     result = await tier.can_execute_with_health_check()
     assert result is False
+
+
+# --- weekly_quota_guard ---
+
+
+def test_can_execute_weekly_qg_exceeded():
+    """weekly guard 超限时 can_execute() 返回 False."""
+    wqg = QuotaGuard(enabled=True, token_budget=100, window_seconds=604800, probe_interval_seconds=99999)
+    wqg.notify_cap_error()
+    tier = BackendTier(backend=_make_backend(), weekly_quota_guard=wqg)
+    assert not tier.can_execute()
+
+
+def test_can_execute_qg_ok_weekly_qg_exceeded():
+    """5h guard 正常但 weekly guard 超限 → 不可执行."""
+    qg = QuotaGuard(enabled=True, token_budget=100000, window_seconds=18000)
+    wqg = QuotaGuard(enabled=True, token_budget=100, window_seconds=604800, probe_interval_seconds=99999)
+    wqg.notify_cap_error()
+    tier = BackendTier(backend=_make_backend(), quota_guard=qg, weekly_quota_guard=wqg)
+    assert not tier.can_execute()
+
+
+def test_both_guards_must_pass():
+    """5h guard EXCEEDED + weekly guard EXCEEDED → 不可执行."""
+    qg = QuotaGuard(enabled=True, token_budget=100, window_seconds=18000, probe_interval_seconds=99999)
+    qg.notify_cap_error()
+    wqg = QuotaGuard(enabled=True, token_budget=100, window_seconds=604800, probe_interval_seconds=99999)
+    wqg.notify_cap_error()
+    tier = BackendTier(backend=_make_backend(), quota_guard=qg, weekly_quota_guard=wqg)
+    assert not tier.can_execute()
+
+
+def test_record_success_updates_weekly_qg():
+    """record_success() 传播 usage_tokens 到 weekly guard."""
+    wqg = QuotaGuard(enabled=True, token_budget=1000, window_seconds=604800)
+    tier = BackendTier(backend=_make_backend(), weekly_quota_guard=wqg)
+    tier.record_success(500)
+    info = wqg.get_info()
+    assert info["window_usage_tokens"] == 500
+
+
+def test_record_failure_cap_error_notifies_weekly_qg():
+    """is_cap_error=True 时同时通知 weekly guard."""
+    wqg = QuotaGuard(enabled=True, token_budget=1000, window_seconds=604800, probe_interval_seconds=99999)
+    tier = BackendTier(backend=_make_backend(), weekly_quota_guard=wqg)
+    tier.record_failure(is_cap_error=True)
+    assert not wqg.can_use_primary()
+
+
+def test_record_failure_non_cap_no_weekly_qg_notify():
+    """非 cap error 不通知 weekly guard."""
+    wqg = QuotaGuard(enabled=True, token_budget=1000, window_seconds=604800)
+    tier = BackendTier(backend=_make_backend(), weekly_quota_guard=wqg)
+    tier.record_failure(is_cap_error=False)
+    assert wqg.can_use_primary()
