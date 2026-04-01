@@ -19,7 +19,8 @@ from coding.proxy.backends.copilot import (
     _select_copilot_model,
 )
 from coding.proxy.backends.token_manager import TokenAcquireError, TokenErrorKind
-from coding.proxy.config.schema import CopilotConfig, FailoverConfig
+from coding.proxy.config.schema import CopilotConfig, FailoverConfig, ModelMappingRule
+from coding.proxy.routing.model_mapper import ModelMapper
 
 
 class _AsyncRequestClientStub:
@@ -782,3 +783,85 @@ async def test_copilot_send_message_handles_non_json_success_without_crash():
     )
     assert resp.status_code == 502
     assert resp.error_type == "api_error"
+
+
+# ===== ModelMapper 集成测试 =====
+
+def _make_copilot_mapper(rules: list[ModelMappingRule]) -> ModelMapper:
+    return ModelMapper(rules)
+
+
+def _make_copilot_backend(mapper: ModelMapper | None = None) -> CopilotBackend:
+    return CopilotBackend(CopilotConfig(github_token="ghp_test"), FailoverConfig(), model_mapper=mapper)
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_uses_config_mapping_when_rule_matches():
+    """配置规则命中时直接返回目标模型，不走内部解析（不调用 _get_available_models）."""
+    mapper = _make_copilot_mapper([
+        ModelMappingRule(pattern="claude-sonnet-.*", target="claude-sonnet-4.6", is_regex=True, backends=["copilot"]),
+    ])
+    backend = _make_copilot_backend(mapper)
+    backend._get_available_models = AsyncMock(side_effect=AssertionError("不应调用 _get_available_models"))
+
+    resolved = await backend._resolve_request_model(
+        "claude-sonnet-4-20250514", force_refresh=False, refresh_reason="test"
+    )
+
+    assert resolved == "claude-sonnet-4.6"
+    assert backend._last_resolved_model == "claude-sonnet-4.6"
+    assert backend._last_model_resolution_reason == "config_model_mapping"
+    assert backend._last_requested_model == "claude-sonnet-4-20250514"
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_falls_back_to_internal_when_no_copilot_rule():
+    """配置规则无 copilot 条目时，走内部家族匹配策略."""
+    mapper = _make_copilot_mapper([
+        ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True, backends=["fallback"]),
+    ])
+    backend = _make_copilot_backend(mapper)
+    backend._get_available_models = AsyncMock(return_value=["claude-sonnet-4.6", "claude-opus-4.6"])
+
+    resolved = await backend._resolve_request_model(
+        "claude-sonnet-4-20250514", force_refresh=False, refresh_reason="test"
+    )
+
+    assert resolved == "claude-sonnet-4.6"
+    assert backend._last_model_resolution_reason == "same_family_highest_version"
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_without_mapper_uses_internal_resolution():
+    """model_mapper=None 时向后兼容，走内部家族匹配策略."""
+    backend = _make_copilot_backend(mapper=None)
+    backend._get_available_models = AsyncMock(return_value=["claude-haiku-4.5", "claude-sonnet-4.6"])
+
+    resolved = await backend._resolve_request_model(
+        "claude-haiku-4-20250514", force_refresh=False, refresh_reason="test"
+    )
+
+    assert resolved == "claude-haiku-4.5"
+    assert backend._last_model_resolution_reason == "same_family_highest_version"
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_config_mapping_all_three_families():
+    """三个家族（sonnet / opus / haiku）的 copilot 规则均正确命中."""
+    mapper = _make_copilot_mapper([
+        ModelMappingRule(pattern="claude-sonnet-.*", target="claude-sonnet-4.6", is_regex=True, backends=["copilot"]),
+        ModelMappingRule(pattern="claude-opus-.*", target="claude-opus-4.6", is_regex=True, backends=["copilot"]),
+        ModelMappingRule(pattern="claude-haiku-.*", target="claude-haiku-4.5", is_regex=True, backends=["copilot"]),
+    ])
+
+    cases = [
+        ("claude-sonnet-4-20250514", "claude-sonnet-4.6"),
+        ("claude-opus-4-20250514", "claude-opus-4.6"),
+        ("claude-haiku-4-20250514", "claude-haiku-4.5"),
+    ]
+    for requested, expected in cases:
+        backend = _make_copilot_backend(mapper)
+        backend._get_available_models = AsyncMock(side_effect=AssertionError("不应调用"))
+        resolved = await backend._resolve_request_model(requested, force_refresh=False, refresh_reason="test")
+        assert resolved == expected, f"{requested} 期望 {expected}，实际 {resolved}"
+        assert backend._last_model_resolution_reason == "config_model_mapping"
