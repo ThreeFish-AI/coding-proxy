@@ -116,11 +116,13 @@ def _normalize_direct_event(data: dict[str, Any], event_name: str | None) -> lis
     event_type = data.get("type")
     if event_type == "content_block_start":
         block = data.get("content_block", {})
-        if block.get("type") != "text":
+        # 放行标准 Anthropic 内容块类型（text + tool_use），过滤供应商私有类型
+        if block.get("type") not in {"text", "tool_use"}:
             return []
     if event_type == "content_block_delta":
         delta = data.get("delta", {})
-        if delta.get("type") != "text_delta":
+        # 放行标准 delta 类型（text_delta + input_json_delta），过滤供应商私有类型
+        if delta.get("type") not in {"text_delta", "input_json_delta"}:
             return []
     if event_type not in _DIRECT_EVENTS:
         return []
