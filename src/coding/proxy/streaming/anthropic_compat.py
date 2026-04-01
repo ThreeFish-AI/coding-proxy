@@ -32,6 +32,7 @@ class _OpenAICompatState:
         self.content_block_open = False
         self.tool_calls: dict[int, dict[str, Any]] = {}
         self.usage_updated = False  # 标记是否已收到 usage 信息
+        self.thinking_block_open = False
 
     def ensure_started(self) -> list[bytes]:
         if self.started:
@@ -116,13 +117,13 @@ def _normalize_direct_event(data: dict[str, Any], event_name: str | None) -> lis
     event_type = data.get("type")
     if event_type == "content_block_start":
         block = data.get("content_block", {})
-        # 放行标准 Anthropic 内容块类型（text + tool_use），过滤供应商私有类型
-        if block.get("type") not in {"text", "tool_use"}:
+        # 放行标准 Anthropic 内容块类型，过滤供应商私有类型
+        if block.get("type") not in {"text", "tool_use", "thinking"}:
             return []
     if event_type == "content_block_delta":
         delta = data.get("delta", {})
-        # 放行标准 delta 类型（text_delta + input_json_delta），过滤供应商私有类型
-        if delta.get("type") not in {"text_delta", "input_json_delta"}:
+        # 放行标准 delta 类型，过滤供应商私有类型
+        if delta.get("type") not in {"text_delta", "input_json_delta", "thinking_delta"}:
             return []
     if event_type not in _DIRECT_EVENTS:
         return []
@@ -197,9 +198,37 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
     delta = choice.get("delta", {})
     finish_reason = choice.get("finish_reason")
 
+    # ── 处理 reasoning_content（智谱 OpenAI 格式的深度思考内容） ──
+    reasoning_content = delta.get("reasoning_content")
+    if reasoning_content:
+        chunks.extend(state.ensure_started())
+        if not state.thinking_block_open:
+            chunks.append(_make_event("content_block_start", {
+                "type": "content_block_start",
+                "index": state.block_index,
+                "content_block": {"type": "thinking", "thinking": ""},
+            }))
+            state.thinking_block_open = True
+            state.content_block_open = True
+        chunks.append(_make_event("content_block_delta", {
+            "type": "content_block_delta",
+            "index": state.block_index,
+            "delta": {"type": "thinking_delta", "thinking": reasoning_content},
+        }))
+
     text_fragments = _extract_text_fragments(delta.get("content"))
     if text_fragments:
         chunks.extend(state.ensure_started())
+        # 如果 thinking 块开着，先关闭它再打开 text 块
+        if state.thinking_block_open:
+            chunks.append(_make_event("content_block_stop", {
+                "type": "content_block_stop",
+                "index": state.block_index,
+            }))
+            state.block_index += 1
+            state.thinking_block_open = False
+            state.content_block_open = False
+
         if state.content_block_open and any(
             tool.get("anthropic_block_index") == state.block_index
             for tool in state.tool_calls.values()

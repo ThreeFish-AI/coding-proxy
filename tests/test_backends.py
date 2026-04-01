@@ -94,16 +94,21 @@ def test_zhipu_never_triggers_failover():
     assert not backend.should_trigger_failover(500, {"error": {"type": "rate_limit_error"}})
 
 
-def test_zhipu_supports_tools():
-    """ZhipuBackend 应声明支持 tools，避免含工具请求被路由器跳过."""
+def test_zhipu_supports_tools_and_thinking():
+    """ZhipuBackend 应声明支持 tools 和 thinking，避免含工具/思考请求被路由器跳过."""
     from coding.proxy.backends.base import RequestCapabilities
     mapper = ModelMapper([])
     backend = ZhipuBackend(ZhipuConfig(), mapper)
     caps = backend.get_capabilities()
     assert caps.supports_tools is True
+    assert caps.supports_thinking is True
     assert caps.emits_vendor_tool_events is False
     # 含工具的请求应被接受
     supported, reasons = backend.supports_request(RequestCapabilities(has_tools=True))
+    assert supported is True
+    assert reasons == []
+    # 含 thinking 的请求应被接受
+    supported, reasons = backend.supports_request(RequestCapabilities(has_thinking=True))
     assert supported is True
     assert reasons == []
 
@@ -122,6 +127,25 @@ async def test_zhipu_prepare_request_strips_metadata():
     assert "metadata" not in prepared_body
     # 原始 body 不应被修改
     assert "metadata" in body
+
+
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_translates_thinking():
+    """ZhipuBackend._prepare_request 应将 Anthropic thinking 格式转换为智谱格式."""
+    mapper = ModelMapper([])
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), mapper)
+    body = {
+        "model": "claude-sonnet-4-20250514",
+        "messages": [],
+        "thinking": {"type": "enabled", "budget_tokens": 10000},
+    }
+    prepared_body, _ = await backend._prepare_request(body, {})
+    # type 被保留
+    assert prepared_body["thinking"]["type"] == "enabled"
+    # budget_tokens 被剥离（智谱不支持）
+    assert "budget_tokens" not in prepared_body["thinking"]
+    # 原始 body 不应被修改
+    assert body["thinking"]["budget_tokens"] == 10000
 
 
 def test_backend_response_defaults():
