@@ -167,3 +167,15 @@ def test_antigravity_quota_guard_defaults():
     """Antigravity 配额守卫默认禁用."""
     cfg = load_config(Path("/nonexistent/path"))
     assert cfg.antigravity_quota_guard.enabled is False
+
+
+def test_model_mapping_backends_from_yaml(tmp_path: Path):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "model_mapping:\n"
+        "  - pattern: claude-sonnet-*\n"
+        "    target: claude-sonnet-4-6-thinking\n"
+        "    backends: [antigravity]\n"
+    )
+    cfg = load_config(cfg_file)
+    assert cfg.model_mapping[0].backends == ["antigravity"]

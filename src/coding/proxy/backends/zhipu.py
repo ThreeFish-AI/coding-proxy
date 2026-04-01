@@ -40,7 +40,7 @@ class ZhipuBackend(BaseBackend):
 
     def map_model(self, model: str) -> str:
         """将 Claude 模型名映射为智谱模型名."""
-        return self._model_mapper.map(model)
+        return self._model_mapper.map(model, backend="fallback")
 
     async def _prepare_request(
         self,
@@ -50,7 +50,7 @@ class ZhipuBackend(BaseBackend):
         """映射模型名、替换认证头."""
         body = {**request_body}
         if "model" in body:
-            body["model"] = self._model_mapper.map(body["model"])
+            body["model"] = self._model_mapper.map(body["model"], backend="fallback")
 
         new_headers = {
             "content-type": "application/json",

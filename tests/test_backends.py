@@ -224,7 +224,7 @@ async def test_antigravity_check_health_token_success():
     config = AntigravityConfig(
         client_id="cid", client_secret="csecret", refresh_token="rtoken",
     )
-    backend = AntigravityBackend(config, FailoverConfig())
+    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
     # Mock token manager 返回有效 token
     backend._token_manager.get_token = AsyncMock(return_value="valid-token")
 
@@ -241,7 +241,7 @@ async def test_antigravity_check_health_token_failure():
     config = AntigravityConfig(
         client_id="cid", client_secret="csecret", refresh_token="rtoken",
     )
-    backend = AntigravityBackend(config, FailoverConfig())
+    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
     # Mock token manager 抛出异常
     backend._token_manager.get_token = AsyncMock(side_effect=Exception("refresh failed"))
 

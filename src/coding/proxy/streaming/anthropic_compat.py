@@ -126,9 +126,6 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
     usage = data.get("usage", {})
 
     # 处理 token 统计更新
-    old_input_tokens = state.input_tokens
-    old_output_tokens = state.output_tokens
-
     if "prompt_tokens" in usage:
         state.input_tokens = usage.get("prompt_tokens", state.input_tokens)
         state.usage_updated = True
@@ -136,16 +133,6 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
     if "completion_tokens" in usage:
         state.output_tokens = usage.get("completion_tokens", state.output_tokens)
         state.usage_updated = True
-
-    # 如果 usage 信息已更新且 message 已开始，发送 token 补偿事件
-    if state.started and state.usage_updated and (old_input_tokens != state.input_tokens):
-        chunks.append(_make_event("message_delta", {
-            "type": "message_delta",
-            "usage": {
-                "input_tokens": state.input_tokens,
-                "output_tokens": state.output_tokens,
-            },
-        }))
 
     choices = data.get("choices", [])
     if not choices:

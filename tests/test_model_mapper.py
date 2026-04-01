@@ -52,3 +52,24 @@ def test_regex_fullmatch():
 def test_empty_rules_use_default():
     mapper = _make_mapper([])
     assert mapper.map("any-model") == "glm-5.1"
+
+
+def test_backend_scoped_mapping():
+    mapper = _make_mapper([
+        ModelMappingRule(pattern="claude-sonnet-*", target="claude-sonnet-4-6-thinking", backends=["antigravity"]),
+        ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1", backends=["fallback"]),
+    ])
+    assert mapper.map("claude-sonnet-4-20250514", backend="antigravity") == "claude-sonnet-4-6-thinking"
+    assert mapper.map("claude-sonnet-4-20250514", backend="zhipu") == "glm-5.1"
+
+
+def test_legacy_rule_only_applies_to_fallback():
+    mapper = _make_mapper([
+        ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1"),
+    ])
+    assert mapper.map("claude-sonnet-4-20250514", backend="fallback") == "glm-5.1"
+    assert mapper.map(
+        "claude-sonnet-4-20250514",
+        backend="antigravity",
+        default="claude-sonnet-4-20250514",
+    ) == "claude-sonnet-4-20250514"

@@ -71,12 +71,23 @@ failover:
 
 model_mapping:
   - pattern: "claude-sonnet-.*"
+    backends: ["antigravity"]
+    target: "claude-sonnet-4-6-thinking"
+    is_regex: true
+  - pattern: "claude-opus-.*"
+    backends: ["antigravity"]
+    target: "claude-opus-4-6-thinking"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    backends: ["fallback"]
     target: "glm-5.1"
     is_regex: true
   - pattern: "claude-opus-.*"
+    backends: ["fallback"]
     target: "glm-5.1"
     is_regex: true
   - pattern: "claude-haiku-.*"
+    backends: ["fallback"]
     target: "glm-4.5-air"
     is_regex: true
 

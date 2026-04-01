@@ -50,7 +50,7 @@ def _set_if_nonzero(usage: dict, key: str, value: int) -> None:
 
     同时处理 None 值，确保数据类型正确性。
     """
-    if value is not None and value > 0:
+    if value is not None and value != 0:
         usage[key] = value
 
 

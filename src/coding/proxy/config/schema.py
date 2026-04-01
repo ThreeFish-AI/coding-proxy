@@ -73,6 +73,7 @@ class ModelMappingRule(BaseModel):
     pattern: str
     target: str
     is_regex: bool = False
+    backends: list[str] = Field(default_factory=list)
 
 
 class QuotaGuardConfig(BaseModel):
