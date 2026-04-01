@@ -20,6 +20,17 @@ def _format_model_display(model_value: str | None) -> str:
     return model_value
 
 
+def _format_tokens(n: int) -> str:
+    """将 Token 数量格式化为 K/M/B 计量单位显示（最多 2 位小数）."""
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.2f}".rstrip("0").rstrip(".") + "B"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.2f}".rstrip("0").rstrip(".") + "M"
+    if n >= 1_000:
+        return f"{n / 1_000:.2f}".rstrip("0").rstrip(".") + "K"
+    return str(n)
+
+
 def _detect_model_variants(failover_stats: list[dict]) -> bool:
     """检测是否存在模型差异，用于决定是否建议详细模式."""
     if not failover_stats or "model_requested" not in failover_stats[0]:
@@ -91,11 +102,11 @@ async def show_usage(
             str(row.get("model_requested", "")),
             model_served,
             str(row.get("total_requests", 0)),
-            str(total_input),
-            str(total_output),
-            str(total_cache_creation),
-            str(total_cache_read),
-            str(total_tokens),
+            _format_tokens(total_input),
+            _format_tokens(total_output),
+            _format_tokens(total_cache_creation),
+            _format_tokens(total_cache_read),
+            _format_tokens(total_tokens),
             cost_str,
             str(int(row.get("avg_duration_ms", 0) or 0)),
         )
