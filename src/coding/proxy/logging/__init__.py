@@ -40,5 +40,10 @@ def build_log_config(level: str = "INFO") -> dict:
                 "level": "INFO",
                 "propagate": False,
             },
+            "coding.proxy": {
+                "handlers": ["default"],
+                "level": level,
+                "propagate": False,
+            },
         },
     }
