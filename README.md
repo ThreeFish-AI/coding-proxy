@@ -1,8 +1,10 @@
+[English](./README.md) | [简体中文](./docs/zh-CN/README.md)
+
 <div align="center">
 
 # ⚡ coding-proxy
 
-**面向 Claude Code 的多后端高可用透明智能代理**
+**A High-Availability, Transparent, and Smart Multi-Backend Proxy for Claude Code**
 
 [![Python Version](https://img.shields.io/badge/python-3.13%2B-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](#)
@@ -13,57 +15,57 @@
 
 ---
 
-## 💡 为什么需要 coding-proxy？
+## 💡 Why Do We Even Need coding-proxy?
 
-当我们在使用 **Claude Code** 或其他依赖 Anthropic Messages API 的 AI 编程助手时，沉浸式的编程心流常常被以下问题无情打断：
+When you're deeply immersed in your coding "zone" with **Claude Code** (or any AI assistant relying on Anthropic's Messages API), there's nothing quite as soul-crushing as having your flow violently interrupted by:
 
-- 🛑 **限流 (Rate Limiting)**：高频调用触发 `429 rate_limit_error`，被迫发呆等待。
-- 💸 **配额耗尽 (Usage Cap)**：激烈的代码生成导致单日/当月额度耗尽，直接返回 `403` 错误。
-- 🌋 **服务过载 (Overloaded)**：Anthropic 官方服务器高峰期宕机，甩回无情的 `503 overloaded_error`。
+- 🛑 **Rate Limiting**: High-frequency pings trigger the dreaded `429 rate_limit_error`. Forced to stare at the screen and rethink your life choices.
+- 💸 **Usage Cap**: Aggressive code generation drains your daily/monthly quota, slamming you with a cold, heartless `403` error.
+- 🌋 **Overloaded Servers**: Anthropic's official servers melt down during peak hours, tossing back a merciless `503 overloaded_error`.
 
-**coding-proxy** 便是为终结这些痛点而生。它作为一个**纯透明**的中间代理层，能让你的 Claude Code 具备毫秒级的“N-tier 链式降级容灾”能力。当主后端不可用时，它能在**无需人工干预**、**无感知**的情况下，瞬间将请求平滑切换至下一个可用的智能后备方案（如 GitHub Copilot、Google Antigravity 乃至智谱 GLM）。
-
----
-
-## 🌟 核心特性 (Core Features)
-
-- **⛓️ N-tier 链式故障转移 (Failover)**：自动从 Claude 官方 Plans 依次降级至 GitHub Copilot、Google Antigravity，最后由智谱 GLM 兜底。
-- **🛡️ 智能弹性与容灾守卫**：每个后端节点独立配备 **熔断器 (Circuit Breaker)** 与 **配额守卫 (Quota Guard)**，防雪崩、主动避险。
-- **👻 透明无感代理机制**：对客户端 **100% 透明**！无需修改任何代码，仅需一行配置覆盖 `ANTHROPIC_BASE_URL` 即可接入。
-- **🔄 跨模型与全格式转换**：原生支持 Anthropic ←→ Gemini 的请求与流式响应（SSE）双向转换，并支持自动/自助映射模型名称（如 `claude-*` 至 `glm-*`）。
-- **📊 极致可观测性 (Observability)**：内置基于 `SQLite WAL` 的本地监控追踪，CLI 提供一键输出详细的 Token 用量统计面板（`coding-proxy usage`）。
-- **⚡ 超轻量单机部署**：全异步架构 (`FastAPI` + `httpx`)，无需依赖 Redis、消息队列等外部组件，对开发者机器无额外负担。
+**coding-proxy** was forged in the developer fires to terminate these exact pain points. Serving as a **purely transparent** intermediate layer, it blesses your Claude Code with millisecond-level "N-tier chained fallback disaster recovery." When your primary backend goes belly up, it seamlessly and instantly switches your requests to the next smartest available fallback (like GitHub Copilot, Google Antigravity, or even Zhipu GLM)—**with zero manual intervention, and zero perceived interruption.**
 
 ---
 
-## 🚀 快速上手 (Quick Start)
+## 🌟 Core Features
 
-### 1. 环境准备
-确保您的计算机上已安装 **Python 3.13+** 以及包管理器 **`uv`**（强烈推荐）。
+- **⛓️ N-tier Chained Failover**: Automatically downgrades from official Claude Plans, gracefully falling back to GitHub Copilot, then Google Antigravity, with Zhipu GLM acting as the ultimate safety net.
+- **🛡️ Smart Resilience & Quota Guardians**: Every single backend node comes fully armed with an independent **Circuit Breaker** and **Quota Guard** to proactively dodge avalanches without breaking a sweat.
+- **👻 Phantom-like Transparency**: **100% transparent** to the client! No code tweaks required. Overwrite `ANTHROPIC_BASE_URL` with a single line, and you're good to go.
+- **🔄 Universal Alchemy (Formats & Models)**: Native support for two-way request/streaming (SSE) translations between Anthropic ←→ Gemini. Plus, auto/DIY model name mapping (e.g., effortlessly morphing `claude-*` into `glm-*`).
+- **📊 Extreme Observability**: Built-in, zero-BS local monitoring powered by a `SQLite WAL`. The CLI provides a one-click detailed Token usage dashboard (`coding-proxy usage`).
+- **⚡ Featherweight Standalone Deployment**: A fully asynchronous architecture (`FastAPI` + `httpx`). Zero dependency on Redis, message queues, or other heavy machinery—absolutely no extra baggage for your dev rig.
 
-### 2. 获取源码并安装
+---
+
+## 🚀 Quick Start
+
+### 1. Prerequisite Checks
+Make sure your rig has **Python 3.13+** and the **`uv`** package manager installed (highly recommended, because life is too short for slow package managers).
+
+### 2. Grab the Code & Install
 ```bash
 git clone https://github.com/ThreeFish-AI/coding-proxy
 cd coding-proxy
 uv sync
 ```
 
-### 3. 配置密钥 (以智谱 GLM 兜底为例)
+### 3. Configure Keys (Using Zhipu GLM as a fallback example)
 ```bash
 cp config.example.yaml config.yaml
-# 使用环境变量注入保护你的密钥
+# Use environment variables to defensively inject your keys
 export ZHIPU_API_KEY="your-api-key-here"
 ```
 
-### 4. 启动代理服务
+### 4. Ignite the Proxy Server
 ```bash
 coding-proxy start
 #  INFO:     Started server process
 #  INFO:     Uvicorn running on http://127.0.0.1:8046 (Press CTRL+C to quit)
 ```
 
-### 5. 一键接入 Claude Code
-打开一个新的终端标签页，启动 Claude Code 时指向代理服务器即可享受不中断的编程体验：
+### 5. Seamless Claude Code Integration
+Open a fresh terminal tab, point to the proxy server when firing up Claude Code, and enjoy blissful, uninterrupted coding nirvana:
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8046
 claude
@@ -71,26 +73,26 @@ claude
 
 ---
 
-## 🛠️ CLI 控制台指南
+## 🛠️ The CLI Console Guide
 
-`coding-proxy` 附带了强大的 CLI 工具套件，帮助您全面掌控代理状态。
+`coding-proxy` comes equipped with a badass suite of CLI tools to help you boss around your proxy state.
 
-| 指令     | 说明                                                                            | 示例用法                                      |
+| Command | Description | Example Usage |
 | :------- | :------------------------------------------------------------------------------ | :-------------------------------------------- |
-| `start`  | **启动代理服务器**。支持自定义端口与配置路径。                                  | `coding-proxy start -p 8080 -c ~/config.yaml` |
-| `status` | **查看代理健康状态**。展示各层级熔断器（OPEN/CLOSED）与配额状态。               | `coding-proxy status`                         |
-| `usage`  | **Token 统计看板**。按天/后端/模型维度追踪每一次的 Token 消耗、故障转移及耗时。 | `coding-proxy usage -d 7 -b anthropic`        |
-| `reset`  | **强制一键重置**。人工确认主后端恢复可用后，立刻初始化所有熔断器和配额状态。    | `coding-proxy reset`                          |
+| `start`  | **Fire up the proxy server.** Supports custom ports and configuration paths. | `coding-proxy start -p 8080 -c ~/config.yaml` |
+| `status` | **Check proxy health.** Shows circuit breaker states (OPEN/CLOSED) and quota status across all tiers. | `coding-proxy status`                         |
+| `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/backend/model dimensions. | `coding-proxy usage -d 7 -b anthropic`        |
+| `reset`  | **The emergency flush button.** Force-reset all circuit breakers and quotas instantly when you've confirmed the main backend is back from the dead. | `coding-proxy reset`                          |
 
 ---
 
-## 📐 架构全景图
+## 📐 Architectural Panorama
 
-当请求到达时，`RequestRouter` 会顺着 N-tier 树形层级，结合熔断与计算配额，决定发往哪一具体通道：
+When a request inevitably hits the fan, the `RequestRouter` slides gracefully down the N-tier tree, juggling circuit breakers and token quotas to decide the ultimate destination:
 
 ```mermaid
 graph TD
-    Client["Claude Code 客户端"]
+    Client["Claude Code Client"]
     Server["FastAPI Server<br/><code>server/app.py</code>"]
     Router["RequestRouter<br/><code>routing/router.py</code>"]
 
@@ -105,32 +107,32 @@ graph TD
     subgraph T0["Tier 0: Claude Plans"]
         direction LR
         A_BE["AnthropicBackend"]
-        A_CB["CB (熔断器)"]
-        A_QG["QG (配额守卫)"]
+        A_CB["CB (Circuit Breaker)"]
+        A_QG["QG (Quota Guard)"]
     end
 
     subgraph T1["Tier 1: GitHub Copilot"]
         direction LR
         C_BE["CopilotBackend"]
-        C_CB["CB (熔断器)"]
-        C_QG["QG (配额守卫)"]
+        C_CB["CB (Circuit Breaker)"]
+        C_QG["QG (Quota Guard)"]
     end
 
     subgraph T2["Tier 2: Google Antigravity"]
         direction LR
         G_BE["AntigravityBackend"]
-        G_CB["CB (熔断器)"]
-        G_QG["QG (配额守卫)"]
+        G_CB["CB (Circuit Breaker)"]
+        G_QG["QG (Quota Guard)"]
     end
 
-    subgraph TN["Tier N: Zhipu（兜底）"]
+    subgraph TN["Tier N: Zhipu (Safety Net)"]
         Z_BE["ZhipuBackend"]
     end
 
     A_BE --> API_A["Anthropic API"]
     C_BE --> API_C["GitHub Copilot API"]
     G_BE --> API_G["Google Gemini API"]
-    Z_BE --> API_Z["智谱 GLM API"]
+    Z_BE --> API_Z["Zhipu GLM API"]
 
     style T0 fill:#1a5276,color:#fff
     style T1 fill:#1a5276,color:#fff
@@ -138,29 +140,29 @@ graph TD
     style TN fill:#7b241c,color:#fff
 ```
 
-*详细架构设计与机制，请深入阅读 [framework.md](./docs/framework.md)*
+*For a deep dive into the architecture and under-the-hood wizardry, consult [framework.md](./docs/framework.md) (Currently in Chinese).*
 
 ---
 
-## 📚 详细文档地图
+## 📚 Detailed Documentation Map
 
-为了保障长期的项目可维护性，我们提供了循证工程级别 (Evidence-Based) 的详尽文档：
+To ensure this project outlives us all (long-term maintainability), we offer exhaustive, Evidence-Based documentation:
 
-- 📖 **[用户操作指引 (User Guide)](./docs/user-guide.md)** — 从安装、最小配置要求，到每一项配置文件（`config.yaml`）的具体语义和常见排障指南。
-- 🏗️ **[架构设计与工程方案 (Architecture Framework)](./docs/framework.md)** — 详细解码底层设计模式（Template Method、Circuit Breaker、State Machine 等），适用于希望深入了解源码或贡献新后端的开发者。
-- 🤝 **[工程准则 (AGENTS.md)](./AGENTS.md)** — 系统的上下文心法和 AI Agent 协作协议，强调**重构、复用与正交抽象**，是本仓库一切开发的指导方针。
+- 📖 **[User Guide](./docs/user-guide.md)** — From installation and bare-minimum configs to the semantic breakdown of every `config.yaml` field and common troubleshooting manuals. (Currently in Chinese)
+- 🏗️ **[Architecture Framework](./docs/framework.md)** — A meticulous decoding of underlying design patterns (Template Method, Circuit Breaker, State Machine, etc.), targeted at devs who want to peek into the matrix or contribute new backends. (Currently in Chinese)
+- 🤝 **[Engineering Guidelines (AGENTS.md)](./AGENTS.md)** — The systemic context mindset and AI Agent collaboration protocol. It preaches **refactoring, reuse, and orthogonal abstractions** and serves as the ultimate guiding light for all development in this repository.
 
 ---
 
-## 💡 开发灵感与致谢 (Inspiration & Acknowledgements)
+## 💡 Inspiration & Acknowledgements
 
-本项目在工程化的探索和实践过程中，受到了一些前沿技术生态和设计的激励。特此感谢：
+During our chaotic yet rewarding exploration of engineering practices, we were heavily inspired by cutting-edge tech ecosystems and brilliant designs. Special shoutouts:
 
-- 特别感谢 **[Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code)** 激发了我们不断打造更加极致无缝编程助手的发心。
-- 感谢开源社区各类 **API Proxy** 项目在反向代理、高可用性设计（熔断机制/流式代理）及路由分发方面的宝贵探索经验，为 `coding-proxy` 的 N-Tier 弹性机制提供了坚实的理论启发。
+- A massive thank you to **[Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code)** for sparking our obsession with crafting the ultimate, seamless programming assistant experience.
+- Endless gratitude to the open-source community's myriad of **API Proxy** projects. Your trailblazing in reverse proxies, high-availability setups (circuit breakers/streaming proxies), and dynamic routing provided the rock-solid theoretical foundation for `coding-proxy`'s elastic N-Tier mechanisms.
 
 ---
 
 <div align="center">
-  <sub>Built with 🧠 and ❤️ by ThreeFish-AI </sub>
+  <sub>Built with 🧠, ❤️, and an absurd amount of coffee by ThreeFish-AI </sub>
 </div>
