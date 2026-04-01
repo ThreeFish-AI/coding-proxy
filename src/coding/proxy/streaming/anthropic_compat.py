@@ -26,6 +26,8 @@ class _OpenAICompatState:
         self.stopped = False
         self.input_tokens = 0
         self.output_tokens = 0
+        self.cache_creation_tokens = 0
+        self.cache_read_tokens = 0
         self.block_index = 0
         self.content_block_open = False
         self.tool_calls: dict[int, dict[str, Any]] = {}
@@ -47,6 +49,14 @@ class _OpenAICompatState:
                     "usage": {
                         "input_tokens": self.input_tokens,
                         "output_tokens": 0,
+                        **(
+                            {"cache_creation_input_tokens": self.cache_creation_tokens}
+                            if self.cache_creation_tokens > 0 else {}
+                        ),
+                        **(
+                            {"cache_read_input_tokens": self.cache_read_tokens}
+                            if self.cache_read_tokens > 0 else {}
+                        ),
                     },
                 },
             }),
@@ -67,6 +77,10 @@ class _OpenAICompatState:
         usage_data = {"output_tokens": self.output_tokens}
         if self.usage_updated and self.input_tokens > 0:
             usage_data["input_tokens"] = self.input_tokens
+        if self.cache_creation_tokens > 0:
+            usage_data["cache_creation_input_tokens"] = self.cache_creation_tokens
+        if self.cache_read_tokens > 0:
+            usage_data["cache_read_input_tokens"] = self.cache_read_tokens
 
         chunks.append(_make_event("message_delta", {
             "type": "message_delta",
@@ -121,6 +135,35 @@ def _normalize_stream_event(data: dict[str, Any], event_name: str | None) -> lis
     return _normalize_direct_event(nested, nested_name)
 
 
+def _extract_prompt_tokens_details(usage: dict[str, Any]) -> dict[str, Any]:
+    details = usage.get("prompt_tokens_details")
+    return details if isinstance(details, dict) else {}
+
+
+def _extract_cache_read_tokens(usage: dict[str, Any]) -> int:
+    details = _extract_prompt_tokens_details(usage)
+    for value in (
+        usage.get("cache_read_input_tokens"),
+        details.get("cached_tokens"),
+        details.get("cache_read_tokens"),
+    ):
+        if isinstance(value, int):
+            return value
+    return 0
+
+
+def _extract_cache_creation_tokens(usage: dict[str, Any]) -> int:
+    details = _extract_prompt_tokens_details(usage)
+    for value in (
+        usage.get("cache_creation_input_tokens"),
+        details.get("cache_creation_input_tokens"),
+        details.get("cache_creation_tokens"),
+    ):
+        if isinstance(value, int):
+            return value
+    return 0
+
+
 def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> list[bytes]:
     chunks: list[bytes] = []
     usage = data.get("usage", {})
@@ -132,6 +175,16 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
 
     if "completion_tokens" in usage:
         state.output_tokens = usage.get("completion_tokens", state.output_tokens)
+        state.usage_updated = True
+
+    cache_read_tokens = _extract_cache_read_tokens(usage)
+    if cache_read_tokens > 0:
+        state.cache_read_tokens = cache_read_tokens
+        state.usage_updated = True
+
+    cache_creation_tokens = _extract_cache_creation_tokens(usage)
+    if cache_creation_tokens > 0:
+        state.cache_creation_tokens = cache_creation_tokens
         state.usage_updated = True
 
     choices = data.get("choices", [])
