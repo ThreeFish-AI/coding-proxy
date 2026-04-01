@@ -294,7 +294,7 @@ logging:
 | `model_endpoint` | string | `"models/claude-sonnet-4-20250514"`                        | 模型端点路径                                            |
 | `timeout_ms`     | int    | `300000`                                                   | 请求超时，默认 5 分钟                                   |
 
-> **Antigravity 说明**：Antigravity 后端通过 Google Generative Language API 调用 Claude 模型。代理自动处理 Anthropic ↔ Gemini 格式的双向转换，对 Claude Code 客户端透明。OAuth2 凭据可通过 Google Cloud Console 获取。
+> **Antigravity 说明**：Antigravity 后端通过 Google Generative Language API 调用 Claude / Gemini 模型。代理自动处理 Anthropic ↔ Gemini 格式的双向转换，并对 `thinking`、通用 `tools`、搜索类工具与 `metadata` 做兼容适配；无法安全透传的字段会记录到 diagnostics。`model_endpoint` 仅作为未命中映射时的默认模型。
 
 #### fallback — 终端兜底后端（智谱）
 
@@ -333,12 +333,13 @@ logging:
 | 字段       | 类型   | 说明                             |
 | ---------- | ------ | -------------------------------- |
 | `pattern`  | string | 匹配模式                         |
+| `backends` | list[str] | 规则作用的后端范围，支持 `antigravity`、`copilot`、`fallback`/`zhipu`；留空时为兼容旧配置，仅作用于 `fallback` |
 | `target`   | string | 目标模型名称                     |
 | `is_regex` | bool   | 是否为正则表达式（默认 `false`） |
 
-**匹配优先级**：精确匹配 > 正则匹配（按规则顺序） > 默认值 (`glm-5.1`)
+**匹配优先级**：同一后端内精确匹配 > 正则匹配（按规则顺序） > 后端默认值
 
-> **兜底规则**：默认配置包含 `claude-.*` → `glm-5.1` 的通用正则兜底规则，确保所有 Claude 模型变体都能映射到有效的 GLM 模型。
+> **兼容规则**：未设置 `backends` 的历史规则默认只作用于 `fallback`/`zhipu`，避免旧的 `glm-*` 映射误套到 Antigravity 或 Copilot。
 
 #### quota_guard — 配额守卫
 

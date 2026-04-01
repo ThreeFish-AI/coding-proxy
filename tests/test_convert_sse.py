@@ -242,3 +242,50 @@ async def test_auto_generated_request_id():
     events = _parse_events(collected)
     msg_start = next(e for e in events if e["event"] == "message_start")
     assert msg_start["data"]["message"]["id"].startswith("msg_")
+
+
+@pytest.mark.asyncio
+async def test_stream_function_call_maps_to_tool_use():
+    gemini_data = json.dumps({
+        "candidates": [{
+            "content": {"parts": [{
+                "functionCall": {"id": "fc_1", "name": "search_docs", "args": {"query": "gemini"}},
+            }], "role": "model"},
+            "finishReason": "STOP",
+        }],
+        "usageMetadata": {"candidatesTokenCount": 3},
+    })
+
+    collected = []
+    async for chunk in adapt_sse_stream(_chunks_from([gemini_data]), model="claude-sonnet-4"):
+        collected.append(chunk)
+
+    events = _parse_events(collected)
+    start = next(e for e in events if e["event"] == "content_block_start")
+    delta = next(e for e in events if e["event"] == "content_block_delta")
+    msg_delta = next(e for e in events if e["event"] == "message_delta")
+    assert start["data"]["content_block"]["type"] == "tool_use"
+    assert start["data"]["content_block"]["name"] == "search_docs"
+    assert delta["data"]["delta"]["type"] == "input_json_delta"
+    assert msg_delta["data"]["delta"]["stop_reason"] == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_stream_thought_part_maps_to_thinking_delta():
+    gemini_data = json.dumps({
+        "candidates": [{
+            "content": {"parts": [{"text": "先分析", "thought": True}], "role": "model"},
+            "finishReason": "STOP",
+        }],
+    })
+
+    collected = []
+    async for chunk in adapt_sse_stream(_chunks_from([gemini_data]), model="claude-sonnet-4"):
+        collected.append(chunk)
+
+    events = _parse_events(collected)
+    start = next(e for e in events if e["event"] == "content_block_start")
+    delta = next(e for e in events if e["event"] == "content_block_delta")
+    assert start["data"]["content_block"]["type"] == "thinking"
+    assert delta["data"]["delta"]["type"] == "thinking_delta"
+    assert delta["data"]["delta"]["thinking"] == "先分析"

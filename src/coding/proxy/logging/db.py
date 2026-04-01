@@ -126,7 +126,8 @@ class TokenLogger:
             # 保持原有的聚合逻辑确保向后兼容
             sql = """SELECT failover_from, backend,
                        COUNT(*) AS count
-                   FROM usa                WHERE failover = 1atetime('now', ? || ' days')
+                   FROM usage_log
+                   WHERE failover = 1 AND ts >= datetime('now', ? || ' days')
                    GROUP BY failover_from, backend
                    ORDER BY count DESC"""
 

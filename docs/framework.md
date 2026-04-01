@@ -747,6 +747,7 @@ Pydantic 默认值
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `pattern` | str | 匹配模式（支持精确匹配、glob 通配符、正则表达式） |
+| `backends` | list[str] | 规则作用的后端范围；留空时仅作用于 `fallback`/`zhipu`（兼容旧配置） |
 | `target` | str | 目标模型名称 |
 | `is_regex` | bool | 是否为正则表达式（默认 `false`） |
 

@@ -13,10 +13,13 @@ from ..config.schema import AntigravityConfig, FailoverConfig
 from ..convert.anthropic_to_gemini import convert_request
 from ..convert.gemini_to_anthropic import convert_response, extract_usage
 from ..convert.gemini_sse_adapter import adapt_sse_stream
+from ..routing.model_mapper import ModelMapper
 from .base import (
+    CapabilityLossReason,
     BackendCapabilities,
     BackendResponse,
     BaseBackend,
+    RequestCapabilities,
     UsageInfo,
     _sanitize_headers_for_synthetic_response,
 )
@@ -101,23 +104,63 @@ class AntigravityBackend(BaseBackend):
     发往 Generative AI 端点，并将响应转回 Anthropic 格式.
     """
 
-    def __init__(self, config: AntigravityConfig, failover_config: FailoverConfig) -> None:
+    def __init__(
+        self,
+        config: AntigravityConfig,
+        failover_config: FailoverConfig,
+        model_mapper: ModelMapper,
+    ) -> None:
         super().__init__(config.base_url, config.timeout_ms, failover_config)
         self._token_manager = GoogleOAuthTokenManager(
             config.client_id, config.client_secret, config.refresh_token,
         )
         self._model_endpoint = config.model_endpoint
+        self._model_mapper = model_mapper
+        self._default_model = config.model_endpoint.removeprefix("models/")
+        self._last_request_adaptations: list[str] = []
+        self._last_resolved_model = ""
+        self._last_requested_model = ""
+        self._last_model_resolution_reason = ""
 
     def get_name(self) -> str:
         return "antigravity"
 
     def get_capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
-            supports_tools=False,
-            supports_thinking=False,
+            supports_tools=True,
+            supports_thinking=True,
             supports_images=True,
-            supports_metadata=False,
+            supports_metadata=True,
         )
+
+    def supports_request(
+        self, request_caps: RequestCapabilities,
+    ) -> tuple[bool, list[CapabilityLossReason]]:
+        supported, reasons = super().supports_request(request_caps)
+        if not supported:
+            reasons = [
+                reason for reason in reasons
+                if reason not in {
+                    CapabilityLossReason.THINKING,
+                    CapabilityLossReason.TOOLS,
+                    CapabilityLossReason.METADATA,
+                }
+            ]
+        return len(reasons) == 0, reasons
+
+    def map_model(self, model: str) -> str:
+        resolved = self._model_mapper.map(
+            model,
+            backend="antigravity",
+            default=self._default_model,
+        )
+        self._last_requested_model = model
+        self._last_resolved_model = resolved
+        self._last_model_resolution_reason = (
+            "configured_mapping" if resolved != self._default_model or model == self._default_model
+            else "config_default_model_endpoint"
+        )
+        return resolved
 
     async def _prepare_request(
         self,
@@ -125,7 +168,10 @@ class AntigravityBackend(BaseBackend):
         headers: dict[str, str],
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """转换 Anthropic 请求为 Gemini 格式，注入 Google OAuth token."""
-        gemini_body = convert_request(request_body)
+        resolved_model = self.map_model(request_body.get("model", "unknown"))
+        converted = convert_request(request_body, model=resolved_model)
+        gemini_body = converted.body
+        self._last_request_adaptations = converted.adaptations
         token = await self._token_manager.get_token()
         new_headers = {
             "content-type": "application/json",
@@ -160,9 +206,18 @@ class AntigravityBackend(BaseBackend):
 
     def get_diagnostics(self) -> dict[str, Any]:
         diagnostics = self._token_manager.get_diagnostics()
-        if not diagnostics:
-            return {}
-        return {"token_manager": diagnostics}
+        result: dict[str, Any] = {}
+        if diagnostics:
+            result["token_manager"] = diagnostics
+        if self._last_request_adaptations:
+            result["request_adaptations"] = self._last_request_adaptations
+        if self._last_requested_model:
+            result["requested_model"] = self._last_requested_model
+        if self._last_resolved_model:
+            result["resolved_model"] = self._last_resolved_model
+        if self._last_model_resolution_reason:
+            result["model_resolution_reason"] = self._last_model_resolution_reason
+        return result
 
     async def send_message(
         self,
@@ -172,7 +227,8 @@ class AntigravityBackend(BaseBackend):
         """覆写: Gemini 端点 + 响应逆转换."""
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
-        endpoint = f"/{self._model_endpoint}:generateContent"
+        resolved_model = self.map_model(request_body.get('model', 'unknown'))
+        endpoint = f"/models/{resolved_model}:generateContent"
 
         response = await client.post(endpoint, json=body, headers=prepared_headers)
 
@@ -200,7 +256,7 @@ class AntigravityBackend(BaseBackend):
                 input_tokens=usage_data.get("input_tokens", 0),
                 output_tokens=usage_data.get("output_tokens", 0),
             ),
-            model_served=model,
+            model_served=resolved_model,
         )
 
     async def send_message_stream(
@@ -211,7 +267,8 @@ class AntigravityBackend(BaseBackend):
         """覆写: Gemini SSE 流 → Anthropic SSE 流适配."""
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
-        endpoint = f"/{self._model_endpoint}:streamGenerateContent?alt=sse"
+        resolved_model = self.map_model(request_body.get("model", "unknown"))
+        endpoint = f"/models/{resolved_model}:streamGenerateContent?alt=sse"
 
         async with client.stream(
             "POST", endpoint, json=body, headers=prepared_headers,

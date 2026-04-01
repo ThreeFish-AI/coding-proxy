@@ -256,7 +256,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     if config.antigravity.enabled:
         antigravity_cfg = _resolve_antigravity_credentials(config.antigravity, token_store)
         tiers.append(BackendTier(
-            backend=AntigravityBackend(antigravity_cfg, config.failover),
+            backend=AntigravityBackend(antigravity_cfg, config.failover, mapper),
             circuit_breaker=_build_circuit_breaker(config.antigravity_circuit_breaker),
             quota_guard=_build_quota_guard(config.antigravity_quota_guard),
         ))
