@@ -256,11 +256,9 @@ async def lifespan(app: FastAPI):
 
     await token_logger.init()
 
-    # 尝试从 LiteLLM 官方预取最新定价数据（失败仅打印警告，不阻断启动）
-    from ..pricing import PricingCache
-    pricing_cache = PricingCache()
-    await pricing_cache.fetch()
-    app.state.pricing_cache = pricing_cache
+    # 从配置加载模型定价表
+    from ..pricing import PricingTable
+    app.state.pricing_table = PricingTable(config.pricing)
 
     # 为每个有 QuotaGuard 的 tier 加载基线
     for tier in router.tiers:

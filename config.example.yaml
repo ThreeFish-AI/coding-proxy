@@ -137,6 +137,66 @@ model_mapping:
     target: "glm-4.5-air"
     is_regex: true
 
+# === 模型定价（USD / 1M tokens） ===
+# backend: 后端名称（对应 `usage` 统计表中的"后端"列）
+# model:   实际模型名（对应 `usage` 统计表中的"实际模型"列）
+# 未配置定价的模型在统计中 Cost 列显示 "-"
+pricing:
+  # ── Anthropic Claude ──
+  - backend: anthropic
+    model: claude-sonnet-4-6
+    input_cost_per_mtok: 3.0
+    output_cost_per_mtok: 15.0
+    cache_write_cost_per_mtok: 3.75
+    cache_read_cost_per_mtok: 0.30
+  - backend: anthropic
+    model: claude-opus-4-6
+    input_cost_per_mtok: 15.0
+    output_cost_per_mtok: 75.0
+    cache_write_cost_per_mtok: 18.75
+    cache_read_cost_per_mtok: 1.50
+  - backend: anthropic
+    model: claude-haiku-4-5-20251001
+    input_cost_per_mtok: 0.8
+    output_cost_per_mtok: 4.0
+    cache_write_cost_per_mtok: 1.0
+    cache_read_cost_per_mtok: 0.08
+  # ── GitHub Copilot（透传 Claude，参照 Anthropic 定价估算） ──
+  - backend: copilot
+    model: claude-sonnet-4-6
+    input_cost_per_mtok: 3.0
+    output_cost_per_mtok: 15.0
+    cache_write_cost_per_mtok: 3.75
+    cache_read_cost_per_mtok: 0.30
+  - backend: copilot
+    model: claude-sonnet-4.6
+    input_cost_per_mtok: 3.0
+    output_cost_per_mtok: 15.0
+    cache_write_cost_per_mtok: 3.75
+    cache_read_cost_per_mtok: 0.30
+  - backend: copilot
+    model: claude-haiku-4.5
+    input_cost_per_mtok: 0.8
+    output_cost_per_mtok: 4.0
+    cache_write_cost_per_mtok: 1.0
+    cache_read_cost_per_mtok: 0.08
+  - backend: copilot
+    model: claude-haiku-4-5-20251001
+    input_cost_per_mtok: 0.8
+    output_cost_per_mtok: 4.0
+    cache_write_cost_per_mtok: 1.0
+    cache_read_cost_per_mtok: 0.08
+  # ── 智谱 GLM ──
+  - backend: zhipu
+    model: glm-4.5-air
+    input_cost_per_mtok: 0.11    # ¥0.8/1M ÷ 7.25
+    output_cost_per_mtok: 0.28   # ¥2/1M ÷ 7.25
+  - backend: zhipu
+    model: glm-5.1
+    input_cost_per_mtok: 1.0
+    output_cost_per_mtok: 3.2
+    cache_read_cost_per_mtok: 0.2
+
 database:
   path: "~/.coding-proxy/usage.db"
 

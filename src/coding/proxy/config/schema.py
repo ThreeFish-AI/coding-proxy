@@ -76,6 +76,17 @@ class ModelMappingRule(BaseModel):
     backends: list[str] = Field(default_factory=list)
 
 
+class ModelPricingEntry(BaseModel):
+    """单个模型的定价配置（USD / 1M tokens）."""
+
+    backend: str                            # 后端名称（对应 usage 表"后端"列）
+    model: str                              # 实际模型名（对应 usage 表"实际模型"列）
+    input_cost_per_mtok: float = 0.0        # 输入 Token 单价
+    output_cost_per_mtok: float = 0.0       # 输出 Token 单价
+    cache_write_cost_per_mtok: float = 0.0  # 缓存创建 Token 单价
+    cache_read_cost_per_mtok: float = 0.0   # 缓存读取 Token 单价
+
+
 class QuotaGuardConfig(BaseModel):
     enabled: bool = False
     token_budget: int = 0
@@ -167,6 +178,8 @@ class ProxyConfig(BaseModel):
     auth: AuthConfig = AuthConfig()
     database: DatabaseConfig = DatabaseConfig()
     logging: LoggingConfig = LoggingConfig()
+    # 模型定价（USD / 1M tokens），按 (backend, model) 匹配
+    pricing: list[ModelPricingEntry] = Field(default_factory=list)
     # 新格式：tiers 列表，列表顺序即优先级
     tiers: list[TierConfig] = Field(default_factory=list)
 
