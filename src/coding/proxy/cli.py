@@ -305,8 +305,11 @@ def usage(
 
 async def _run_usage(logger: TokenLogger, days: int, backend: str | None,
                      model: str | None) -> None:
+    from .pricing import PricingCache
     await logger.init()
-    await show_usage(logger, days, backend, model)
+    pricing_cache = PricingCache()
+    await pricing_cache.fetch()
+    await show_usage(logger, days, backend, model, pricing_cache)
     await logger.close()
 
 
