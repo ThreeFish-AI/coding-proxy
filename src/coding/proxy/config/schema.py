@@ -119,6 +119,7 @@ class TierConfig(BaseModel):
     # 弹性配置（None = 终端层，无熔断器）
     circuit_breaker: CircuitBreakerConfig | None = None
     quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
+    weekly_quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
 
 
 class DatabaseConfig(BaseModel):

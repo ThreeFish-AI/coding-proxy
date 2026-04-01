@@ -270,6 +270,12 @@ async def lifespan(app: FastAPI):
                 backend=tier.name,
             )
             tier.quota_guard.load_baseline(total)
+        if tier.weekly_quota_guard and tier.weekly_quota_guard.enabled:
+            total = await token_logger.query_window_total(
+                tier.weekly_quota_guard.window_hours,
+                backend=tier.name,
+            )
+            tier.weekly_quota_guard.load_baseline(total)
 
     logger.info("coding-proxy started: host=%s port=%d", config.server.host, config.server.port)
     yield
@@ -300,7 +306,8 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         backend = _create_backend_from_tier(tier_cfg, config.failover, mapper, token_store)
         cb = _build_circuit_breaker(tier_cfg.circuit_breaker) if tier_cfg.circuit_breaker else None
         qg = _build_quota_guard(tier_cfg.quota_guard)
-        tiers.append(BackendTier(backend=backend, circuit_breaker=cb, quota_guard=qg))
+        wqg = _build_quota_guard(tier_cfg.weekly_quota_guard)
+        tiers.append(BackendTier(backend=backend, circuit_breaker=cb, quota_guard=qg, weekly_quota_guard=wqg))
 
     # 构建运行时重认证协调器
     reauth_providers: dict[str, Any] = {}
@@ -384,6 +391,8 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                 info["circuit_breaker"] = tier.circuit_breaker.get_info()
             if tier.quota_guard and tier.quota_guard.enabled:
                 info["quota_guard"] = tier.quota_guard.get_info()
+            if tier.weekly_quota_guard and tier.weekly_quota_guard.enabled:
+                info["weekly_quota_guard"] = tier.weekly_quota_guard.get_info()
             info["rate_limit"] = tier.get_rate_limit_info()
             diagnostics = tier.backend.get_diagnostics()
             if diagnostics:
@@ -444,6 +453,8 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                 tier.circuit_breaker.reset()
             if tier.quota_guard:
                 tier.quota_guard.reset()
+            if tier.weekly_quota_guard:
+                tier.weekly_quota_guard.reset()
             tier.reset_rate_limit()
         return {"status": "ok"}
 
