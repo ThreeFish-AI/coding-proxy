@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, AsyncIterator
 
 import httpx
@@ -15,6 +17,52 @@ logger = logging.getLogger(__name__)
 
 # 代理转发时应跳过的 hop-by-hop 请求头
 PROXY_SKIP_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
+
+# 构造合成 Response 时需移除的头部（避免 httpx 二次解压已解压内容）
+_SYNTHETIC_RESPONSE_SKIP_HEADERS = {"content-encoding", "content-length", "transfer-encoding"}
+
+
+def _sanitize_headers_for_synthetic_response(headers: httpx.Headers) -> dict[str, str]:
+    """移除 content-encoding 等头部，避免合成 httpx.Response 时触发二次解压."""
+    return {k: v for k, v in headers.items() if k.lower() not in _SYNTHETIC_RESPONSE_SKIP_HEADERS}
+
+
+def _decode_json_body(response: httpx.Response) -> dict[str, Any] | list[Any] | None:
+    """安全解析 JSON 响应.
+
+    若 content-type 未声明 JSON 或内容非法，返回 None，而不是抛 JSONDecodeError。
+    """
+    if not response.content:
+        return None
+
+    content_type = response.headers.get("content-type", "").lower()
+    if "json" not in content_type:
+        try:
+            return json.loads(response.content)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+            return None
+
+    try:
+        return response.json()
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return None
+
+
+def _extract_error_message(response: httpx.Response, resp_body: dict[str, Any] | list[Any] | None) -> str | None:
+    if isinstance(resp_body, dict):
+        error = resp_body.get("error")
+        if isinstance(error, dict):
+            return error.get("message")
+        if isinstance(error, str):
+            return error
+        message = resp_body.get("message")
+        if isinstance(message, str):
+            return message
+
+    if not response.content:
+        return None
+    text = response.text.strip()
+    return text[:500] if text else None
 
 
 @dataclass
@@ -28,6 +76,37 @@ class UsageInfo:
     request_id: str = ""
 
 
+class CapabilityLossReason(Enum):
+    """请求语义与后端能力不匹配的原因."""
+
+    TOOLS = "tools"
+    THINKING = "thinking"
+    IMAGES = "images"
+    VENDOR_TOOLS = "vendor_tools"
+    METADATA = "metadata"
+
+
+@dataclass(frozen=True)
+class RequestCapabilities:
+    """一次请求实际使用到的能力画像."""
+
+    has_tools: bool = False
+    has_thinking: bool = False
+    has_images: bool = False
+    has_metadata: bool = False
+
+
+@dataclass(frozen=True)
+class BackendCapabilities:
+    """后端能力声明."""
+
+    supports_tools: bool = True
+    supports_thinking: bool = True
+    supports_images: bool = True
+    emits_vendor_tool_events: bool = False
+    supports_metadata: bool = True
+
+
 @dataclass
 class BackendResponse:
     """后端响应结果."""
@@ -38,6 +117,16 @@ class BackendResponse:
     raw_body: bytes = b"{}"
     error_type: str | None = None
     error_message: str | None = None
+    model_served: str | None = None
+    response_headers: dict[str, str] = field(default_factory=dict)
+
+
+class NoCompatibleBackendError(RuntimeError):
+    """当前请求没有可安全承接的后端."""
+
+    def __init__(self, message: str, *, reasons: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.reasons = reasons or []
 
 
 class BaseBackend(ABC):
@@ -66,6 +155,41 @@ class BaseBackend(ABC):
     def get_name(self) -> str:
         """返回后端名称（用于日志）."""
 
+    def map_model(self, model: str) -> str:
+        """将请求模型名映射为后端实际使用的模型名.
+
+        默认实现为恒等映射（无转换）.
+        有模型映射需求的后端（如 Zhipu）应覆写此方法.
+        """
+        return model
+
+    def get_capabilities(self) -> BackendCapabilities:
+        """返回后端能力声明.
+
+        默认视为 Anthropic 兼容后端。
+        """
+        return BackendCapabilities()
+
+    def supports_request(
+        self, request_caps: RequestCapabilities,
+    ) -> tuple[bool, list[CapabilityLossReason]]:
+        """判断后端是否能无损承接该请求."""
+        backend_caps = self.get_capabilities()
+        reasons: list[CapabilityLossReason] = []
+
+        if request_caps.has_tools and not backend_caps.supports_tools:
+            reasons.append(CapabilityLossReason.TOOLS)
+        if request_caps.has_thinking and not backend_caps.supports_thinking:
+            reasons.append(CapabilityLossReason.THINKING)
+        if request_caps.has_images and not backend_caps.supports_images:
+            reasons.append(CapabilityLossReason.IMAGES)
+        if request_caps.has_metadata and not backend_caps.supports_metadata:
+            reasons.append(CapabilityLossReason.METADATA)
+        if request_caps.has_tools and backend_caps.emits_vendor_tool_events:
+            reasons.append(CapabilityLossReason.VENDOR_TOOLS)
+
+        return len(reasons) == 0, reasons
+
     @abstractmethod
     async def _prepare_request(
         self,
@@ -80,6 +204,10 @@ class BaseBackend(ABC):
 
     def _on_error_status(self, status_code: int) -> None:
         """响应错误状态码时的钩子（如 token 失效标记）."""
+
+    def get_diagnostics(self) -> dict[str, Any]:
+        """返回后端运行时诊断信息."""
+        return {}
 
     def should_trigger_failover(self, status_code: int, body: dict[str, Any] | None) -> bool:
         """基于 FailoverConfig 的通用故障转移判断.
@@ -101,6 +229,14 @@ class BaseBackend(ABC):
                     return True
         # 429/503 即使无法解析 body 也触发故障转移
         return status_code in (429, 503)
+
+    async def check_health(self) -> bool:
+        """检查后端健康状态（轻量级探测）.
+
+        默认实现返回 True（假定健康）。
+        子类可覆写以实现低成本的认证层检查。
+        """
+        return True
 
     async def send_message_stream(
         self,
@@ -131,7 +267,7 @@ class BaseBackend(ABC):
                     response=httpx.Response(
                         response.status_code,
                         content=error_body,
-                        headers=response.headers,
+                        headers=_sanitize_headers_for_synthetic_response(response.headers),
                         request=response.request,
                     ),
                 )
@@ -155,28 +291,30 @@ class BaseBackend(ABC):
         )
 
         raw_content = response.content
-        resp_body = response.json() if response.content else None
+        resp_body = _decode_json_body(response)
 
         if response.status_code >= 400:
             self._on_error_status(response.status_code)
             return BackendResponse(
                 status_code=response.status_code,
                 raw_body=raw_content,
-                error_type=resp_body.get("error", {}).get("type") if resp_body else None,
-                error_message=resp_body.get("error", {}).get("message") if resp_body else None,
+                error_type=resp_body.get("error", {}).get("type") if isinstance(resp_body, dict) and isinstance(resp_body.get("error"), dict) else None,
+                error_message=_extract_error_message(response, resp_body),
+                response_headers=dict(response.headers),
             )
 
-        usage = resp_body.get("usage", {}) if resp_body else {}
+        usage = resp_body.get("usage", {}) if isinstance(resp_body, dict) else {}
         return BackendResponse(
             status_code=response.status_code,
             raw_body=raw_content,
             usage=UsageInfo(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
+                input_tokens=usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0) or usage.get("completion_tokens", 0),
                 cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
                 cache_read_tokens=usage.get("cache_read_input_tokens", 0),
-                request_id=resp_body.get("id", "") if resp_body else "",
+                request_id=resp_body.get("id", "") if isinstance(resp_body, dict) else "",
             ),
+            model_served=resp_body.get("model") if isinstance(resp_body, dict) else None,
         )
 
     async def close(self) -> None:

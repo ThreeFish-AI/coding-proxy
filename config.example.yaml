@@ -16,10 +16,11 @@ primary:
 
 # Tier 1: GitHub Copilot Team Plan（中间优先级）
 copilot:
-  enabled: false                     # 默认禁用，启用需配置 github_token
-  github_token: "${GITHUB_TOKEN}"    # GitHub PAT（需 Copilot 权限）
-  token_url: "https://github.com/github-copilot/chat/token"
-  base_url: "https://api.individual.githubcopilot.com"
+  enabled: false                     # 默认禁用，启用需 OAuth 登录或手动配置 github_token
+  github_token: "${GITHUB_TOKEN}"    # GitHub token（可选，运行 coding-proxy auth login 自动获取）
+  account_type: "individual"         # individual / business / enterprise
+  token_url: "https://api.github.com/copilot_internal/v2/token"
+  base_url: ""                       # 留空时按 account_type 自动解析；仅在特殊网络环境下显式覆盖
   timeout_ms: 300000
 
 # Tier 2: Google Antigravity Claude（中间层）
@@ -70,12 +71,23 @@ failover:
 
 model_mapping:
   - pattern: "claude-sonnet-.*"
+    backends: ["antigravity"]
+    target: "claude-sonnet-4-6-thinking"
+    is_regex: true
+  - pattern: "claude-opus-.*"
+    backends: ["antigravity"]
+    target: "claude-opus-4-6-thinking"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    backends: ["fallback"]
     target: "glm-5.1"
     is_regex: true
   - pattern: "claude-opus-.*"
+    backends: ["fallback"]
     target: "glm-5.1"
     is_regex: true
   - pattern: "claude-haiku-.*"
+    backends: ["fallback"]
     target: "glm-4.5-air"
     is_regex: true
 
@@ -105,6 +117,15 @@ antigravity_quota_guard:
 
 database:
   path: "~/.coding-proxy/usage.db"
+
+# === OAuth 登录配置 ===
+auth:
+  # GitHub Device Flow client_id（默认使用 Copilot VS Code 扩展公开 ID）
+  # github_client_id: "Iv1.b507a08c87ecfe98"
+  # Google OAuth 凭据（默认使用 Antigravity Enterprise 公开凭据，无需手动配置）
+  # google_client_id: ""
+  # google_client_secret: ""
+  token_store_path: "~/.coding-proxy/tokens.json"
 
 logging:
   level: "INFO"

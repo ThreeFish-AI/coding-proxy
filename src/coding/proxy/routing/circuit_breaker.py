@@ -70,8 +70,13 @@ class CircuitBreaker:
                 # 正常状态下成功，无需操作
                 pass
 
-    def record_failure(self) -> None:
-        """记录一次失败调用."""
+    def record_failure(self, retry_after_seconds: float | None = None) -> None:
+        """记录一次失败调用.
+
+        Args:
+            retry_after_seconds: 从响应头解析出的建议恢复时间（秒）。
+                若提供且大于当前指数退避值，将覆盖以避免过早探测。
+        """
         with self._lock:
             self._failure_count += 1
             self._success_count = 0
@@ -79,7 +84,7 @@ class CircuitBreaker:
 
             if self._state == CircuitState.HALF_OPEN:
                 self._transition_to(CircuitState.OPEN)
-                self._backoff_recovery()
+                self._backoff_recovery(hint_seconds=retry_after_seconds)
                 logger.warning(
                     "Circuit breaker: HALF_OPEN → OPEN (recovery failed, next retry in %ds)",
                     self._current_recovery,
@@ -87,9 +92,14 @@ class CircuitBreaker:
             elif self._state == CircuitState.CLOSED:
                 if self._failure_count >= self._failure_threshold:
                     self._transition_to(CircuitState.OPEN)
+                    if retry_after_seconds and retry_after_seconds > self._current_recovery:
+                        self._current_recovery = min(
+                            retry_after_seconds, self._max_recovery,
+                        )
                     logger.warning(
-                        "Circuit breaker: CLOSED → OPEN (%d consecutive failures)",
+                        "Circuit breaker: CLOSED → OPEN (%d consecutive failures, next retry in %ds)",
                         self._failure_count,
+                        self._current_recovery,
                     )
 
     def reset(self) -> None:
@@ -132,9 +142,11 @@ class CircuitBreaker:
         elif new_state == CircuitState.HALF_OPEN:
             self._success_count = 0
 
-    def _backoff_recovery(self) -> None:
-        """指数退避恢复超时."""
-        self._current_recovery = min(
-            self._current_recovery * 2,
-            self._max_recovery,
-        )
+    def _backoff_recovery(self, hint_seconds: float | None = None) -> None:
+        """指数退避恢复超时，支持 server-hinted 覆盖."""
+        exponential = min(self._current_recovery * 2, self._max_recovery)
+        if hint_seconds is not None and hint_seconds > exponential:
+            # Server 告知的恢复时间优先于指数退避
+            self._current_recovery = min(hint_seconds, self._max_recovery)
+        else:
+            self._current_recovery = exponential

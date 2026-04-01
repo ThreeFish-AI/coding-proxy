@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from coding.proxy.backends.antigravity import AntigravityBackend, GoogleOAuthTokenManager
-from coding.proxy.config.schema import AntigravityConfig, FailoverConfig
+from coding.proxy.backends.base import RequestCapabilities
+from coding.proxy.backends.token_manager import TokenAcquireError, TokenErrorKind
+from coding.proxy.config.schema import AntigravityConfig, FailoverConfig, ModelMappingRule
+from coding.proxy.routing.model_mapper import ModelMapper
 
 
 # --- GoogleOAuthTokenManager ---
@@ -123,12 +126,37 @@ async def test_token_manager_close():
     mock_client.aclose.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_token_manager_insufficient_scope_requires_reauth():
+    """refresh 成功但 scope 不足时，应要求重新授权."""
+    tm = GoogleOAuthTokenManager("cid", "secret", "refresh")
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "goog_abc",
+        "expires_in": 3600,
+        "scope": "https://www.googleapis.com/auth/cloud-platform",
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+    mock_client.is_closed = False
+    tm._client = mock_client
+
+    with pytest.raises(TokenAcquireError) as exc_info:
+        await tm.get_token()
+
+    assert exc_info.value.needs_reauth is True
+    assert exc_info.value.kind == TokenErrorKind.INSUFFICIENT_SCOPE
+
+
 # --- AntigravityBackend ---
 
 
 def test_get_name():
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, FailoverConfig())
+    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
     assert backend.get_name() == "antigravity"
 
 
@@ -136,7 +164,7 @@ def test_get_name():
 async def test_prepare_request_converts_and_injects_token():
     """_prepare_request 转换为 Gemini 格式并注入 OAuth token."""
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, FailoverConfig())
+    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
     backend._token_manager.get_token = AsyncMock(return_value="goog_token")
 
     body = {
@@ -157,10 +185,32 @@ async def test_prepare_request_converts_and_injects_token():
     assert prepared_headers["content-type"] == "application/json"
 
 
+@pytest.mark.asyncio
+async def test_prepare_request_resolves_model_from_mapping():
+    mapper = ModelMapper([
+        ModelMappingRule(
+            pattern="claude-sonnet-*",
+            target="claude-sonnet-4-6-thinking",
+            backends=["antigravity"],
+        )
+    ])
+    backend = AntigravityBackend(AntigravityConfig(), FailoverConfig(), mapper)
+    backend._token_manager.get_token = AsyncMock(return_value="goog_token")
+
+    prepared_body, _ = await backend._prepare_request({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }, {})
+
+    assert prepared_body["contents"][0]["parts"] == [{"text": "Hello"}]
+    diagnostics = backend.get_diagnostics()
+    assert diagnostics["resolved_model"] == "claude-sonnet-4-6-thinking"
+
+
 def test_on_error_status_invalidates_token():
     """401/403 触发 token 失效."""
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, FailoverConfig())
+    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
 
     # 设置一个有效的 expires_at
     backend._token_manager._expires_at = 999999999.0
@@ -172,7 +222,7 @@ def test_on_error_status_invalidates_token():
 def test_on_error_status_ignores_other_codes():
     """非 401/403 不触发 token 失效."""
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, FailoverConfig())
+    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
     backend._token_manager._expires_at = 999999999.0
 
     backend._on_error_status(429)
@@ -183,7 +233,7 @@ def test_inherits_failover():
     """继承基类 failover 判断."""
     failover = FailoverConfig(status_codes=[429, 503], error_types=["rate_limit_error"])
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, failover)
+    backend = AntigravityBackend(config, failover, ModelMapper([]))
 
     assert backend.should_trigger_failover(429, None)
     assert not backend.should_trigger_failover(200, None)
@@ -195,5 +245,24 @@ def test_inherits_failover():
 def test_model_endpoint_in_config():
     """model_endpoint 可配置."""
     config = AntigravityConfig(model_endpoint="models/claude-opus-4-20250514")
-    backend = AntigravityBackend(config, FailoverConfig())
+    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
     assert backend._model_endpoint == "models/claude-opus-4-20250514"
+
+
+def test_mark_scope_error_if_needed():
+    """识别 ACCESS_TOKEN_SCOPE_INSUFFICIENT 并写入诊断."""
+    backend = AntigravityBackend(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
+    backend._mark_scope_error_if_needed("ACCESS_TOKEN_SCOPE_INSUFFICIENT")
+    diagnostics = backend.get_diagnostics()
+    assert diagnostics["token_manager"]["error_kind"] == "insufficient_scope"
+
+
+def test_antigravity_supports_request_with_tools_thinking_and_metadata():
+    backend = AntigravityBackend(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
+    supported, reasons = backend.supports_request(RequestCapabilities(
+        has_tools=True,
+        has_thinking=True,
+        has_metadata=True,
+    ))
+    assert supported is True
+    assert reasons == []

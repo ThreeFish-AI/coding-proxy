@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, AsyncIterator
 
 from ..config.schema import ZhipuConfig
 from ..routing.model_mapper import ModelMapper
-from .base import BaseBackend
+from ..streaming.anthropic_compat import normalize_anthropic_compatible_stream
+from .base import BackendCapabilities, BaseBackend
 
 
 class ZhipuBackend(BaseBackend):
@@ -28,6 +29,19 @@ class ZhipuBackend(BaseBackend):
     def get_name(self) -> str:
         return "zhipu"
 
+    def get_capabilities(self) -> BackendCapabilities:
+        return BackendCapabilities(
+            supports_tools=False,
+            supports_thinking=False,
+            supports_images=True,
+            emits_vendor_tool_events=True,
+            supports_metadata=False,
+        )
+
+    def map_model(self, model: str) -> str:
+        """将 Claude 模型名映射为智谱模型名."""
+        return self._model_mapper.map(model, backend="fallback")
+
     async def _prepare_request(
         self,
         request_body: dict[str, Any],
@@ -36,7 +50,7 @@ class ZhipuBackend(BaseBackend):
         """映射模型名、替换认证头."""
         body = {**request_body}
         if "model" in body:
-            body["model"] = self._model_mapper.map(body["model"])
+            body["model"] = self._model_mapper.map(body["model"], backend="fallback")
 
         new_headers = {
             "content-type": "application/json",
@@ -44,3 +58,14 @@ class ZhipuBackend(BaseBackend):
             "anthropic-version": headers.get("anthropic-version", "2023-06-01"),
         }
         return body, new_headers
+
+    async def send_message_stream(
+        self,
+        request_body: dict[str, Any],
+        headers: dict[str, str],
+    ) -> AsyncIterator[bytes]:
+        upstream = super().send_message_stream(request_body, headers)
+        async for chunk in normalize_anthropic_compatible_stream(
+            upstream, model=self.map_model(request_body.get("model", "unknown")),
+        ):
+            yield chunk

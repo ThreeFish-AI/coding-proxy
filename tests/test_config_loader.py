@@ -88,7 +88,9 @@ def test_copilot_config_defaults():
     cfg = load_config(Path("/nonexistent/path"))
     assert cfg.copilot.enabled is False
     assert cfg.copilot.github_token == ""
-    assert cfg.copilot.base_url == "https://api.individual.githubcopilot.com"
+    assert cfg.copilot.account_type == "individual"
+    assert cfg.copilot.base_url == ""
+    assert cfg.copilot.models_cache_ttl_seconds == 300
 
 
 def test_copilot_config_from_yaml(tmp_path: Path, monkeypatch):
@@ -105,6 +107,7 @@ def test_copilot_config_from_yaml(tmp_path: Path, monkeypatch):
     cfg = load_config(cfg_file)
     assert cfg.copilot.enabled is True
     assert cfg.copilot.github_token == "ghp_yaml_test"
+    assert cfg.copilot.account_type == "individual"
     assert cfg.copilot_circuit_breaker.failure_threshold == 5
 
 
@@ -164,3 +167,15 @@ def test_antigravity_quota_guard_defaults():
     """Antigravity 配额守卫默认禁用."""
     cfg = load_config(Path("/nonexistent/path"))
     assert cfg.antigravity_quota_guard.enabled is False
+
+
+def test_model_mapping_backends_from_yaml(tmp_path: Path):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "model_mapping:\n"
+        "  - pattern: claude-sonnet-*\n"
+        "    target: claude-sonnet-4-6-thinking\n"
+        "    backends: [antigravity]\n"
+    )
+    cfg = load_config(cfg_file)
+    assert cfg.model_mapping[0].backends == ["antigravity"]

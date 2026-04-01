@@ -17,7 +17,7 @@ def _expand_env(value: str) -> str:
     """将 ${VAR} 替换为环境变量值."""
     def _replacer(match: re.Match) -> str:
         var_name = match.group(1)
-        return os.environ.get(var_name, match.group(0))
+        return os.environ.get(var_name, "")
     return _ENV_VAR_RE.sub(_replacer, value)
 
 

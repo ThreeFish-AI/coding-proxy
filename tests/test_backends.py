@@ -1,12 +1,21 @@
 """后端基类与子类单元测试."""
 
+import httpx
 import pytest
 
+from coding.proxy.backends.antigravity import AntigravityBackend
 from coding.proxy.backends.anthropic import AnthropicBackend
-from coding.proxy.backends.base import BaseBackend, BackendResponse, UsageInfo
+from coding.proxy.backends.base import (
+    BaseBackend,
+    BackendResponse,
+    UsageInfo,
+    _decode_json_body,
+    _sanitize_headers_for_synthetic_response,
+)
 from coding.proxy.backends.zhipu import ZhipuBackend
 from coding.proxy.config.schema import (
     AnthropicConfig,
+    AntigravityConfig,
     FailoverConfig,
     ModelMappingRule,
     ZhipuConfig,
@@ -135,3 +144,106 @@ def test_base_failover_without_config_returns_false():
         "error": {"type": "rate_limit_error", "message": "limited"}
     })
     assert not backend.should_trigger_failover(503, None)
+
+
+# --- _sanitize_headers_for_synthetic_response ---
+
+
+def test_sanitize_headers_removes_encoding():
+    """移除 content-encoding/content-length/transfer-encoding."""
+    raw = httpx.Headers({
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+        "content-length": "123",
+        "transfer-encoding": "chunked",
+        "x-request-id": "abc",
+    })
+    result = _sanitize_headers_for_synthetic_response(raw)
+    assert "content-type" in result
+    assert "x-request-id" in result
+    assert "content-encoding" not in result
+    assert "content-length" not in result
+    assert "transfer-encoding" not in result
+
+
+def test_sanitize_headers_preserves_other():
+    """非跳过头部全部保留."""
+    raw = httpx.Headers({
+        "retry-after": "60",
+        "x-ratelimit-remaining": "0",
+    })
+    result = _sanitize_headers_for_synthetic_response(raw)
+    assert result["retry-after"] == "60"
+    assert result["x-ratelimit-remaining"] == "0"
+
+
+def test_synthetic_response_no_decompression_error():
+    """验证清洗后的头部构造 httpx.Response 不触发 zlib 解压错误."""
+    # 这是原始 bug 的精确复现: 已解压的 content + gzip header → zlib error
+    raw_headers = httpx.Headers({
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+    })
+    clean_headers = _sanitize_headers_for_synthetic_response(raw_headers)
+    # 使用已解压的 JSON 文本构造 Response — 不应抛异常
+    resp = httpx.Response(
+        429,
+        content=b'{"error": "rate limit"}',
+        headers=clean_headers,
+        request=httpx.Request("POST", "https://api.example.com/v1/messages"),
+    )
+    assert resp.status_code == 429
+    assert b"rate limit" in resp.content
+
+
+def test_decode_json_body_returns_none_for_html():
+    resp = httpx.Response(
+        200,
+        content=b"<html>not json</html>",
+        headers={"content-type": "text/html"},
+    )
+    assert _decode_json_body(resp) is None
+
+
+# --- check_health 测试 ---
+
+
+@pytest.mark.asyncio
+async def test_anthropic_check_health_returns_true():
+    """Anthropic 透明代理策略：check_health 始终返回 True."""
+    backend = AnthropicBackend(AnthropicConfig(), FailoverConfig())
+    result = await backend.check_health()
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_antigravity_check_health_token_success():
+    """Antigravity 健康检查：token 刷新成功 → True."""
+    from unittest.mock import AsyncMock
+
+    config = AntigravityConfig(
+        client_id="cid", client_secret="csecret", refresh_token="rtoken",
+    )
+    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
+    # Mock token manager 返回有效 token
+    backend._token_manager.get_token = AsyncMock(return_value="valid-token")
+
+    result = await backend.check_health()
+    assert result is True
+    backend._token_manager.get_token.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_antigravity_check_health_token_failure():
+    """Antigravity 健康检查：token 刷新失败 → False."""
+    from unittest.mock import AsyncMock
+
+    config = AntigravityConfig(
+        client_id="cid", client_secret="csecret", refresh_token="rtoken",
+    )
+    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
+    # Mock token manager 抛出异常
+    backend._token_manager.get_token = AsyncMock(side_effect=Exception("refresh failed"))
+
+    result = await backend.check_health()
+    assert result is False

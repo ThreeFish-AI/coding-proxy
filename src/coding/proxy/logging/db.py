@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 import aiosqlite
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS usage_log (
@@ -19,6 +23,7 @@ CREATE TABLE IF NOT EXISTS usage_log (
     duration_ms INTEGER DEFAULT 0,
     success BOOLEAN NOT NULL DEFAULT 1,
     failover BOOLEAN NOT NULL DEFAULT 0,
+    failover_from TEXT DEFAULT NULL,
     request_id TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_log(ts);
@@ -37,13 +42,27 @@ class TokenLogger:
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(_CREATE_TABLE)
+        await self._migrate_add_failover_from()
         await self._db.commit()
+
+    async def _migrate_add_failover_from(self) -> None:
+        """幂等迁移：为已有数据库添加 failover_from 列."""
+        if not self._db:
+            return
+        cursor = await self._db.execute("PRAGMA table_info(usage_log)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        if "failover_from" not in columns:
+            await self._db.execute(
+                "ALTER TABLE usage_log ADD COLUMN failover_from TEXT DEFAULT NULL"
+            )
+            logger.info("Migration: added failover_from column to usage_log")
 
     async def log(self, backend: str, model_requested: str, model_served: str,
                   input_tokens: int = 0, output_tokens: int = 0,
                   cache_creation_tokens: int = 0, cache_read_tokens: int = 0,
                   duration_ms: int = 0, success: bool = True,
-                  failover: bool = False, request_id: str = "") -> None:
+                  failover: bool = False, failover_from: str | None = None,
+                  request_id: str = "") -> None:
         if not self._db:
             return
         await self._db.execute(
@@ -51,12 +70,12 @@ class TokenLogger:
                (backend, model_requested, model_served,
                 input_tokens, output_tokens,
                 cache_creation_tokens, cache_read_tokens,
-                duration_ms, success, failover, request_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                duration_ms, success, failover, failover_from, request_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (backend, model_requested, model_served,
              input_tokens, output_tokens,
              cache_creation_tokens, cache_read_tokens,
-             duration_ms, success, failover, request_id))
+             duration_ms, success, failover, failover_from, request_id))
         await self._db.commit()
 
     async def query_daily(self, days: int = 7, backend: str | None = None,
@@ -80,6 +99,39 @@ class TokenLogger:
         sql += (" GROUP BY date(ts), backend, model_requested, model_served"
                 " ORDER BY date(ts) DESC, backend, model_requested, model_served")
         cursor = await self._db.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    async def query_failover_stats(self, days: int = 7, include_model_info: bool = False) -> list[dict]:
+        """
+        按 failover_from → backend 聚合故障转移次数.
+
+        Args:
+            days: 查询天数
+            include_model_info: 是否在聚合中包含模型信息
+                              - False: 按 (failover_from, backend) 聚合 (默认,向后兼容)
+                              - True: 按 (failover_from, backend, model_requested, model_served) 聚合
+        """
+        if not self._db:
+            return []
+
+        if include_model_info:
+            sql = """SELECT failover_from, backend, model_requested, model_served,
+                       COUNT(*) AS count
+                   FROM usage_log
+                   WHERE failover = 1 AND ts >= datetime('now', ? || ' days')
+                   GROUP BY failover_from, backend, model_requested, model_served
+                   ORDER BY count DESC"""
+        else:
+            # 保持原有的聚合逻辑确保向后兼容
+            sql = """SELECT failover_from, backend,
+                       COUNT(*) AS count
+                   FROM usage_log
+                   WHERE failover = 1 AND ts >= datetime('now', ? || ' days')
+                   GROUP BY failover_from, backend
+                   ORDER BY count DESC"""
+
+        cursor = await self._db.execute(sql, [f"-{days}"])
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 

@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from coding.proxy.backends.base import BackendResponse, BaseBackend, UsageInfo
+from coding.proxy.backends.base import BackendCapabilities, BackendResponse, BaseBackend, UsageInfo
+from coding.proxy.backends.copilot import CopilotBackend
+from coding.proxy.backends.token_manager import TokenAcquireError
+from coding.proxy.config.schema import CopilotConfig, FailoverConfig
 from coding.proxy.routing.circuit_breaker import CircuitBreaker
 from coding.proxy.routing.quota_guard import QuotaGuard
 from coding.proxy.routing.router import RequestRouter
@@ -449,3 +452,429 @@ async def test_four_tier_stream_failover():
     assert b1.call_count == 1
     assert b2.call_count == 1
     assert b3.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_four_tier_failover_when_copilot_token_acquire_fails():
+    """Anthropic 429 后，Copilot token 获取失败仍应降级到 Antigravity."""
+    from coding.proxy.config.schema import FailoverConfig
+
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b0._failover_config = FailoverConfig()
+
+    b1 = FakeBackend("copilot", raise_on_call=TokenAcquireError("Copilot token 交换返回非预期响应"))
+    b2 = FakeBackend("antigravity", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=40)))
+    b3 = FakeBackend("zhipu")
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b3),
+    ])
+
+    resp = await router.route_message(_body(), _headers())
+    assert resp.status_code == 200
+    assert b0.call_count == 1
+    assert b1.call_count == 1
+    assert b2.call_count == 1
+    assert b3.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_four_tier_stream_failover_when_copilot_token_acquire_fails():
+    """流式请求下，Copilot token 获取失败也应继续降级."""
+    b0 = FakeBackend("anthropic", raise_on_call=httpx.ConnectError("refused"))
+    b1 = FakeBackend("copilot", raise_on_call=TokenAcquireError("Copilot token 交换返回非预期响应"))
+    b2 = FakeBackend("antigravity", stream_chunks=[b"data: ok\n\n"])
+    b3 = FakeBackend("zhipu")
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b3),
+    ])
+
+    collected = []
+    async for chunk, name in router.route_stream(_body(), _headers()):
+        collected.append((chunk, name))
+
+    assert len(collected) == 1
+    assert collected[0][1] == "antigravity"
+
+
+@pytest.mark.asyncio
+async def test_stream_failover_to_copilot_even_when_request_has_thinking():
+    """Anthropic 429 且请求含 thinking 时，Copilot 仍应通过适配层接管."""
+    from coding.proxy.config.schema import FailoverConfig as RouterFailoverConfig
+
+    b0 = FakeBackend("anthropic", raise_on_call=httpx.HTTPStatusError(
+        "anthropic API error: 429",
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        response=httpx.Response(
+            429,
+            content=b'{"error":{"type":"rate_limit_error","message":"limited"}}',
+            headers={"content-type": "application/json"},
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        ),
+    ))
+    b0._failover_config = RouterFailoverConfig()
+
+    copilot = CopilotBackend(CopilotConfig(github_token="ghp_test"), FailoverConfig())
+    copilot.check_health = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    async def _copilot_stream(_body, _headers):
+        yield b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-sonnet-4\",\"usage\":{\"input_tokens\":10}}}\n\n"
+        yield b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+    copilot.send_message_stream = _copilot_stream  # type: ignore[method-assign]
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=copilot, circuit_breaker=CircuitBreaker()),
+    ])
+
+    collected: list[tuple[bytes, str]] = []
+    async for chunk, name in router.route_stream({
+        **_body(),
+        "thinking": {"budget_tokens": 512},
+    }, _headers()):
+        collected.append((chunk, name))
+
+    assert collected
+    assert all(name == "copilot" for _, name in collected)
+
+
+@pytest.mark.asyncio
+async def test_incompatible_tool_request_skips_non_compatible_tiers():
+    """带 tools 的请求不会静默降级到不兼容的 antigravity/zhipu."""
+    b0 = FakeBackend("copilot", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+    b1 = FakeBackend("antigravity", BackendResponse(status_code=200))
+    b2 = FakeBackend("zhipu", BackendResponse(status_code=200))
+
+    b1.get_capabilities = lambda: BackendCapabilities(
+        supports_tools=False, supports_thinking=False, supports_images=True,
+    )
+    b2.get_capabilities = lambda: BackendCapabilities(
+        supports_tools=False, supports_thinking=False, supports_images=True,
+        emits_vendor_tool_events=True,
+    )
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b2),
+    ])
+
+    resp = await router.route_message({
+        **_body(),
+        "tools": [{"name": "analyze_image"}],
+    }, _headers())
+    assert resp.status_code == 200
+    assert b0.call_count == 1
+    assert b1.call_count == 0
+    assert b2.call_count == 0
+
+
+# --- model_served 测试 ---
+
+
+class MappingFakeBackend(FakeBackend):
+    """带模型映射的假后端."""
+
+    def __init__(self, name: str = "mapping-fake", mapped_model: str = "glm-5.1",
+                 response: BackendResponse | None = None,
+                 stream_chunks: list[bytes] | None = None) -> None:
+        super().__init__(name=name, response=response, stream_chunks=stream_chunks)
+        self._mapped_model = mapped_model
+
+    def map_model(self, model: str) -> str:
+        return self._mapped_model
+
+
+@pytest.mark.asyncio
+async def test_route_message_model_served_from_response():
+    """非流式：model_served 从响应体提取."""
+    logger_mock = AsyncMock()
+    resp = BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10), model_served="glm-5.1")
+    backend = FakeBackend("zhipu", response=resp)
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    await router.route_message(_body(), _headers())
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args
+    assert call_kwargs[1]["model_requested"] == "claude-sonnet-4-20250514"
+    assert call_kwargs[1]["model_served"] == "glm-5.1"
+
+
+@pytest.mark.asyncio
+async def test_route_message_model_served_fallback_when_none():
+    """非流式：model_served 为 None 时 fallback 到请求模型名."""
+    logger_mock = AsyncMock()
+    resp = BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10))
+    backend = FakeBackend("anthropic", response=resp)
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    await router.route_message(_body(), _headers())
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args
+    assert call_kwargs[1]["model_requested"] == "claude-sonnet-4-20250514"
+    assert call_kwargs[1]["model_served"] == "claude-sonnet-4-20250514"
+
+
+@pytest.mark.asyncio
+async def test_route_stream_model_served_from_sse():
+    """流式：model_served 从 SSE message_start 事件提取."""
+    logger_mock = AsyncMock()
+    sse_chunk = (
+        b'event: message_start\n'
+        b'data: {"type":"message_start","message":{"id":"msg_1","model":"glm-5.1","usage":{"input_tokens":10,"output_tokens":0}}}\n\n'
+        b'data: [DONE]\n\n'
+    )
+    backend = MappingFakeBackend(mapped_model="glm-5.1", stream_chunks=[sse_chunk])
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    collected = []
+    async for chunk, name in router.route_stream(_body(), _headers()):
+        collected.append(chunk)
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args
+    assert call_kwargs[1]["model_requested"] == "claude-sonnet-4-20250514"
+    assert call_kwargs[1]["model_served"] == "glm-5.1"
+
+
+@pytest.mark.asyncio
+async def test_route_stream_model_served_fallback_to_map_model():
+    """流式：SSE 未提供 model 时，fallback 到 backend.map_model()."""
+    logger_mock = AsyncMock()
+    chunks = [b"data: {}\n\n", b"data: [DONE]\n\n"]
+    backend = MappingFakeBackend(mapped_model="glm-4.5-air", stream_chunks=chunks)
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    async for _ in router.route_stream(
+        {"model": "claude-haiku-4-5-20251001", "messages": []}, _headers(),
+    ):
+        pass
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args
+    assert call_kwargs[1]["model_requested"] == "claude-haiku-4-5-20251001"
+    assert call_kwargs[1]["model_served"] == "glm-4.5-air"
+
+
+@pytest.mark.asyncio
+async def test_route_stream_model_served_identity_backend():
+    """流式：无映射后端，model_served 等于请求模型名."""
+    logger_mock = AsyncMock()
+    chunks = [b"data: {}\n\n", b"data: [DONE]\n\n"]
+    backend = FakeBackend("anthropic", stream_chunks=chunks)
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    async for _ in router.route_stream(_body(), _headers()):
+        pass
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args
+    assert call_kwargs[1]["model_requested"] == "claude-sonnet-4-20250514"
+    assert call_kwargs[1]["model_served"] == "claude-sonnet-4-20250514"
+
+
+# --- 故障转移语义测试 ---
+
+
+@pytest.mark.asyncio
+async def test_failover_records_source():
+    """真正故障转移时 failover_from 记录来源后端."""
+    from coding.proxy.config.schema import FailoverConfig
+
+    logger_mock = AsyncMock()
+    b0 = FakeBackend(
+        "anthropic",
+        BackendResponse(status_code=429, error_type="rate_limit_error", error_message="limit"),
+    )
+    b0._failover_config = FailoverConfig()
+    b1 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1),
+    ], token_logger=logger_mock)
+
+    resp = await router.route_message(_body(), _headers())
+    assert resp.status_code == 200
+
+    # zhipu 的记录应为 failover=True, failover_from="anthropic"
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["backend"] == "zhipu"
+    assert call_kwargs["failover"] is True
+    assert call_kwargs["failover_from"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_circuit_open_not_counted_as_failover():
+    """CB OPEN 跳过后的请求不算故障转移."""
+    logger_mock = AsyncMock()
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=200))
+    b1 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+
+    cb0 = CircuitBreaker(failure_threshold=1)
+    cb0.record_failure()  # anthropic CB OPEN
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=cb0),
+        BackendTier(backend=b1),
+    ], token_logger=logger_mock)
+
+    resp = await router.route_message(_body(), _headers())
+    assert resp.status_code == 200
+    assert b0.call_count == 0  # 被跳过
+
+    # 稳定降级：failover=False, failover_from=None
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["failover"] is False
+    assert call_kwargs["failover_from"] is None
+
+
+@pytest.mark.asyncio
+async def test_multi_tier_failover_tracks_source():
+    """多级故障转移记录最近失败来源."""
+    from coding.proxy.config.schema import FailoverConfig
+
+    logger_mock = AsyncMock()
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b0._failover_config = FailoverConfig()
+    b1 = FakeBackend("copilot", BackendResponse(status_code=503, error_type="overloaded_error", error_message="overloaded"))
+    b1._failover_config = FailoverConfig()
+    b2 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=30)))
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b2),
+    ], token_logger=logger_mock)
+
+    resp = await router.route_message(_body(), _headers())
+    assert resp.status_code == 200
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["failover"] is True
+    assert call_kwargs["failover_from"] == "copilot"  # 最近失败的 tier
+
+
+@pytest.mark.asyncio
+async def test_stream_failover_records_source():
+    """流式故障转移记录来源."""
+    logger_mock = AsyncMock()
+    b0 = FakeBackend("anthropic", raise_on_call=httpx.ConnectError("refused"))
+    b1 = FakeBackend("zhipu", stream_chunks=[b"data: ok\n\n"])
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1),
+    ], token_logger=logger_mock)
+
+    async for _ in router.route_stream(_body(), _headers()):
+        pass
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["failover"] is True
+    assert call_kwargs["failover_from"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_stream_circuit_open_not_failover():
+    """流式：CB OPEN 跳过后不算故障转移."""
+    logger_mock = AsyncMock()
+    b0 = FakeBackend("anthropic", stream_chunks=[b"data: ok\n\n"])
+    b1 = FakeBackend("zhipu", stream_chunks=[b"data: ok\n\n"])
+
+    cb0 = CircuitBreaker(failure_threshold=1)
+    cb0.record_failure()
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=cb0),
+        BackendTier(backend=b1),
+    ], token_logger=logger_mock)
+
+    async for _ in router.route_stream(_body(), _headers()):
+        pass
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["failover"] is False
+    assert call_kwargs["failover_from"] is None
+
+
+@pytest.mark.asyncio
+async def test_primary_success_no_failover():
+    """首层成功：无故障转移."""
+    logger_mock = AsyncMock()
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+    ], token_logger=logger_mock)
+
+    await router.route_message(_body(), _headers())
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args[1]
+    assert call_kwargs["failover"] is False
+    assert call_kwargs["failover_from"] is None
+
+
+# --- Rate Limit Deadline 集成测试 ---
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_deadline_prevents_premature_probe():
+    """CB HALF_OPEN 但 rate limit deadline 未到期 → 不探测，直达终端."""
+    import time
+
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=200))
+    b1 = FakeBackend("zhipu", BackendResponse(status_code=200))
+
+    cb0 = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=0)
+    cb0.record_failure()  # → OPEN → 立即 HALF_OPEN (recovery=0)
+
+    tier0 = BackendTier(backend=b0, circuit_breaker=cb0)
+    # 设置一个远未到期的 deadline
+    tier0._rate_limit_deadline = time.monotonic() + 300
+
+    router = RequestRouter([tier0, BackendTier(backend=b1)])
+    resp = await router.route_message(_body(), _headers())
+
+    assert resp.status_code == 200
+    assert b0.call_count == 0  # deadline 阻止了探测
+    assert b1.call_count == 1  # 降级到终端
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_deadline_allows_probe_after_expiry():
+    """rate limit deadline 已过期 → 允许探测，恢复正常路由."""
+    import time
+
+    b0 = FakeBackend("anthropic", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+    b1 = FakeBackend("zhipu", BackendResponse(status_code=200))
+
+    cb0 = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=0)
+    cb0.record_failure()  # → OPEN → 立即 HALF_OPEN (recovery=0)
+
+    tier0 = BackendTier(backend=b0, circuit_breaker=cb0)
+    # 设置已过期的 deadline
+    tier0._rate_limit_deadline = time.monotonic() - 1
+
+    router = RequestRouter([tier0, BackendTier(backend=b1)])
+    resp = await router.route_message(_body(), _headers())
+
+    assert resp.status_code == 200
+    assert b0.call_count == 1  # deadline 过期，允许探测
+    assert b1.call_count == 0  # 探测成功，无需降级
