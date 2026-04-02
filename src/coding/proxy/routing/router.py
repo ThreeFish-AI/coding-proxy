@@ -26,6 +26,41 @@ from .tier import BackendTier
 logger = logging.getLogger(__name__)
 
 
+def _extract_error_payload_from_http_status(exc: httpx.HTTPStatusError) -> dict[str, Any] | None:
+    response = exc.response
+    if response is None or not response.content:
+        return None
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _is_semantic_rejection(
+    *,
+    status_code: int,
+    error_type: str | None = None,
+    error_message: str | None = None,
+) -> bool:
+    if status_code != 400:
+        return False
+    normalized_type = (error_type or "").strip().lower()
+    if normalized_type == "invalid_request_error":
+        return True
+    normalized_message = (error_message or "").lower()
+    return any(
+        marker in normalized_message
+        for marker in (
+            "invalid_request_error",
+            "should match pattern",
+            "validation",
+            "tool_use_id",
+            "server_tool_use",
+        )
+    )
+
+
 def _build_request_capabilities(body: dict[str, Any]) -> RequestCapabilities:
     """从请求体提取能力画像."""
     has_images = False
@@ -370,6 +405,24 @@ class RequestRouter:
             except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
                 logger.warning("Tier %s stream failed: %s", tier.name, exc)
 
+                semantic_rejection = False
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+                    payload = _extract_error_payload_from_http_status(exc)
+                    error = payload.get("error", {}) if isinstance(payload, dict) else {}
+                    semantic_rejection = _is_semantic_rejection(
+                        status_code=exc.response.status_code,
+                        error_type=error.get("type") if isinstance(error, dict) else None,
+                        error_message=error.get("message") if isinstance(error, dict) else None,
+                    )
+                if semantic_rejection and not is_last:
+                    logger.warning(
+                        "Tier %s semantic rejection, trying next tier without recording failure",
+                        tier.name,
+                    )
+                    failed_tier_name = tier.name
+                    last_exc = exc
+                    continue
+
                 # 从 HTTPStatusError 提取 rate limit 信息
                 retry_seconds = None
                 is_cap = False
@@ -455,6 +508,18 @@ class RequestRouter:
                         ),
                     )
                     return resp
+
+                if not is_last and _is_semantic_rejection(
+                    status_code=resp.status_code,
+                    error_type=resp.error_type,
+                    error_message=resp.error_message,
+                ):
+                    logger.warning(
+                        "Tier %s semantic rejection (%s), trying next tier without recording failure",
+                        tier.name, resp.error_type or resp.status_code,
+                    )
+                    failed_tier_name = tier.name
+                    continue
 
                 if not is_last and tier.backend.should_trigger_failover(
                     resp.status_code,

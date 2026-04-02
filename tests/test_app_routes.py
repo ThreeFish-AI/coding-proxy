@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from coding.proxy.backends.token_manager import TokenAcquireError
+from coding.proxy.backends.base import BackendResponse, UsageInfo
 from coding.proxy.config.schema import ProxyConfig
 from coding.proxy.server.app import create_app
 
@@ -253,3 +254,93 @@ def test_stream_http_status_error_returns_anthropic_sse_error():
     assert "event: error" in body
     assert '"type": "rate_limit_error"' in body
     assert "Too many requests" in body
+
+
+def test_messages_normalizes_vendor_tool_blocks_before_routing():
+    """入口应先规范化 server_tool_use，再交给高优先级 tier."""
+    app = create_app(ProxyConfig(
+        primary={"enabled": True},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+    ))
+
+    captured_body = {}
+
+    async def fake_route_message(body, headers):
+        captured_body["body"] = body
+        return BackendResponse(status_code=200, raw_body=b"{}", usage=UsageInfo())
+
+    app.state.router.route_message = fake_route_message
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-opus-4-6",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "server_tool_use",
+                                "id": "srvtoolu_bad_1",
+                                "name": "bash",
+                                "input": {"cmd": "pwd"},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "srvtoolu_bad_1",
+                                "content": "ok",
+                            },
+                        ],
+                    },
+                ],
+            },
+        )
+
+    assert resp.status_code == 200
+    assistant_block = captured_body["body"]["messages"][0]["content"][0]
+    user_block = captured_body["body"]["messages"][1]["content"][0]
+    assert assistant_block["type"] == "tool_use"
+    assert assistant_block["id"].startswith("toolu_normalized_")
+    assert user_block["tool_use_id"] == assistant_block["id"]
+
+
+def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
+    """reset 只清状态，不改 tier 顺序；下一次请求仍先尝试首层."""
+    config = ProxyConfig(
+        tiers=[
+            {"backend": "anthropic", "enabled": True, "circuit_breaker": {"failure_threshold": 3}},
+            {"backend": "zhipu", "enabled": True, "api_key": "sk-test"},
+        ],
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+    )
+    app = create_app(config)
+    call_order: list[str] = []
+
+    async def primary_route_message(body, headers):
+        call_order.append("anthropic")
+        return BackendResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
+
+    async def fallback_route_message(body, headers):
+        call_order.append("zhipu")
+        return BackendResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
+
+    app.state.router.tiers[0].backend.send_message = primary_route_message
+    app.state.router.tiers[1].backend.send_message = fallback_route_message
+
+    with TestClient(app) as client:
+        reset_resp = client.post("/api/reset")
+        assert reset_resp.status_code == 200
+        resp = client.post(
+            "/v1/messages",
+            json={"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "Hi"}]},
+        )
+
+    assert resp.status_code == 200
+    assert call_order == ["anthropic"]
