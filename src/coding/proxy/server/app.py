@@ -44,6 +44,7 @@ from ..routing.model_mapper import ModelMapper
 from ..routing.quota_guard import QuotaGuard
 from ..routing.router import RequestRouter
 from ..routing.tier import BackendTier
+from .request_normalizer import normalize_anthropic_request
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +340,12 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         """Anthropic Messages API 代理端点."""
         body = await request.json()
         headers = dict(request.headers)
+        normalization = normalize_anthropic_request(body)
+        body = normalization.body
         is_streaming = body.get("stream", False)
+
+        if normalization.adaptations:
+            logger.info("Request normalized before routing: %s", ", ".join(normalization.adaptations))
 
         if is_streaming:
             return StreamingResponse(
