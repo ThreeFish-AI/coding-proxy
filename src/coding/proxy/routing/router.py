@@ -254,6 +254,15 @@ def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
             usage["request_id"] = data["id"]
 
 
+def _has_missing_input_usage_signals(info: UsageInfo) -> bool:
+    """判断流式请求是否缺失可解释的输入 usage 信号."""
+    if info.output_tokens <= 0:
+        return False
+    if info.input_tokens > 0:
+        return False
+    return info.cache_creation_tokens <= 0 and info.cache_read_tokens <= 0
+
+
 class RequestRouter:
     """路由请求到合适的后端层级，按优先级链式故障转移."""
 
@@ -389,10 +398,15 @@ class RequestRouter:
                     yield chunk, tier.name
 
                 info = self._build_usage_info(usage)
-                if info.input_tokens == 0 and info.output_tokens > 0:
+                if _has_missing_input_usage_signals(info):
                     logger.warning(
-                        "Stream completed with input_tokens=0, output_tokens=%d, tier=%s, usage_data=%r",
-                        info.output_tokens, tier.name, usage,
+                        "Stream completed with missing input usage signals: output_tokens=%d, "
+                        "cache_creation_tokens=%d, cache_read_tokens=%d, tier=%s, usage_data=%r",
+                        info.output_tokens,
+                        info.cache_creation_tokens,
+                        info.cache_read_tokens,
+                        tier.name,
+                        usage,
                     )
                 tier.record_success(info.input_tokens + info.output_tokens)
                 duration = int((time.monotonic() - start) * 1000)

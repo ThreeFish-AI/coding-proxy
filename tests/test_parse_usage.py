@@ -71,6 +71,23 @@ def test_anthropic_empty_usage():
     assert usage["output_tokens"] == 30
 
 
+def test_anthropic_cache_only_input_signal():
+    """Anthropic prompt caching 场景下，cache tokens 本身就是有效输入信号."""
+    usage: dict = {}
+    _parse_usage_from_chunk(_sse(
+        '{"type":"message_start","message":{"id":"msg_cache_only","usage":'
+        '{"input_tokens":0,"cache_creation_input_tokens":720,"cache_read_input_tokens":82408}}}'
+    ), usage)
+    _parse_usage_from_chunk(_sse(
+        '{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8220}}'
+    ), usage)
+
+    assert usage.get("input_tokens", 0) == 0
+    assert usage["cache_creation_tokens"] == 720
+    assert usage["cache_read_tokens"] == 82408
+    assert usage["output_tokens"] == 8220
+
+
 # --- OpenAI / Zhipu 格式 ---
 
 

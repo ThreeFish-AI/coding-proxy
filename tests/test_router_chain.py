@@ -802,6 +802,51 @@ async def test_route_stream_copilot_logs_cache_evidence():
 
 
 @pytest.mark.asyncio
+async def test_route_stream_cache_only_input_does_not_warn(caplog):
+    """cache-only 输入信号不应被误判为缺失 usage."""
+    logger_mock = AsyncMock()
+    chunk = (
+        b'event: message_start\n'
+        b'data: {"type":"message_start","message":{"id":"msg_cache_only","model":"claude-haiku-4-5-20251001",'
+        b'"usage":{"input_tokens":0,"cache_creation_input_tokens":1920,"cache_read_input_tokens":80488}}}\n\n'
+        b'event: message_delta\n'
+        b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":368}}\n\n'
+        b'data: [DONE]\n\n'
+    )
+    backend = FakeBackend("anthropic", stream_chunks=[chunk])
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    caplog.set_level("WARNING")
+
+    async for _ in router.route_stream(_body(), _headers()):
+        pass
+
+    assert "missing input usage signals" not in caplog.text
+    logger_mock.log.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_route_stream_missing_input_signals_still_warns(caplog):
+    """真正缺失所有输入信号时，仍应保留 WARNING."""
+    logger_mock = AsyncMock()
+    chunk = (
+        b'event: message_delta\n'
+        b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":9}}\n\n'
+        b'data: [DONE]\n\n'
+    )
+    backend = FakeBackend("anthropic", stream_chunks=[chunk])
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    caplog.set_level("WARNING")
+
+    async for _ in router.route_stream(_body(), _headers()):
+        pass
+
+    assert "missing input usage signals" in caplog.text
+    logger_mock.log.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_route_message_non_copilot_does_not_log_evidence():
     """非 Copilot 后端不应写 usage evidence."""
     logger_mock = AsyncMock()
