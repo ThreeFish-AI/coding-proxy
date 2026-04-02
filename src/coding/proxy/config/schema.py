@@ -57,6 +57,16 @@ class CircuitBreakerConfig(BaseModel):
     max_recovery_seconds: int = 3600
 
 
+class RetryConfig(BaseModel):
+    """传输层重试配置."""
+
+    max_retries: int = 2
+    initial_delay_ms: int = 500
+    max_delay_ms: int = 5000
+    backoff_multiplier: float = 2.0
+    jitter: bool = True
+
+
 class FailoverConfig(BaseModel):
     status_codes: list[int] = Field(
         default=[429, 403, 503, 500],
@@ -129,6 +139,7 @@ class TierConfig(BaseModel):
 
     # 弹性配置（None = 终端层，无熔断器）
     circuit_breaker: CircuitBreakerConfig | None = None
+    retry: RetryConfig = Field(default_factory=RetryConfig)
     quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
     weekly_quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
 

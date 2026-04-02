@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from ..backends.base import BaseBackend
 from .circuit_breaker import CircuitBreaker, CircuitState
 from .quota_guard import QuotaGuard, QuotaState
+from .retry import RetryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ class BackendTier:
     circuit_breaker: CircuitBreaker | None = field(default=None)
     quota_guard: QuotaGuard | None = field(default=None)
     weekly_quota_guard: QuotaGuard | None = field(default=None)
+    retry_config: RetryConfig | None = field(default=None)
 
     # Rate Limit 精确截止时间（monotonic timestamp），0 表示无限制
     _rate_limit_deadline: float = field(default=0.0, repr=False)
