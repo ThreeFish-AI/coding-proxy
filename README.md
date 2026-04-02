@@ -77,11 +77,11 @@ claude
 
 `coding-proxy` comes equipped with a badass suite of CLI tools to help you boss around your proxy state.
 
-| Command | Description | Example Usage |
-| :------- | :------------------------------------------------------------------------------ | :-------------------------------------------- |
-| `start`  | **Fire up the proxy server.** Supports custom ports and configuration paths. | `coding-proxy start -p 8080 -c ~/config.yaml` |
-| `status` | **Check proxy health.** Shows circuit breaker states (OPEN/CLOSED) and quota status across all tiers. | `coding-proxy status`                         |
-| `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/backend/model dimensions. | `coding-proxy usage -d 7 -b anthropic`        |
+| Command  | Description                                                                                                                                         | Example Usage                                 |
+| :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------- |
+| `start`  | **Fire up the proxy server.** Supports custom ports and configuration paths.                                                                        | `coding-proxy start -p 8080 -c ~/config.yaml` |
+| `status` | **Check proxy health.** Shows circuit breaker states (OPEN/CLOSED) and quota status across all tiers.                                               | `coding-proxy status`                         |
+| `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/backend/model dimensions.                | `coding-proxy usage -d 7 -b anthropic`        |
 | `reset`  | **The emergency flush button.** Force-reset all circuit breakers and quotas instantly when you've confirmed the main backend is back from the dead. | `coding-proxy reset`                          |
 
 ---
@@ -158,7 +158,7 @@ To ensure this project outlives us all (long-term maintainability), we offer exh
 
 During our chaotic yet rewarding exploration of engineering practices, we were heavily inspired by cutting-edge tech ecosystems and brilliant designs. Special shoutouts:
 
-- A massive thank you to **[Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code)** for sparking our obsession with crafting the ultimate, seamless programming assistant experience.
+- A massive thank you to **[Claude Code](https://platform.claude.com/docs/en/intro)** for sparking our obsession with crafting the ultimate, seamless programming assistant experience.
 - Endless gratitude to the open-source community's myriad of **API Proxy** projects. Your trailblazing in reverse proxies, high-availability setups (circuit breakers/streaming proxies), and dynamic routing provided the rock-solid theoretical foundation for `coding-proxy`'s elastic N-Tier mechanisms.
 
 ---
