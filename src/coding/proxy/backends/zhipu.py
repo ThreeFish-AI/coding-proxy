@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, AsyncIterator
 
 from ..config.schema import ZhipuConfig
 from ..routing.model_mapper import ModelMapper
 from ..streaming.anthropic_compat import normalize_anthropic_compatible_stream
 from .base import BackendCapabilities, BaseBackend
+
+logger = logging.getLogger(__name__)
 
 
 class ZhipuBackend(BaseBackend):
@@ -56,6 +59,12 @@ class ZhipuBackend(BaseBackend):
             body["thinking"] = {"type": thinking.get("type", "enabled")}
         if "model" in body:
             body["model"] = self._model_mapper.map(body["model"], backend="fallback")
+
+        # 诊断：记录工具调用请求信息
+        tools = body.get("tools", [])
+        if tools:
+            tool_names = [t.get("name", "?") for t in tools if isinstance(t, dict)]
+            logger.debug("Zhipu request with %d tools: %s", len(tools), tool_names)
 
         new_headers = {
             "content-type": "application/json",

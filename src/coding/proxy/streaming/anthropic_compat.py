@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any, AsyncIterator
+
+logger = logging.getLogger(__name__)
 
 _DIRECT_EVENTS = {
     "message_start",
@@ -113,19 +116,66 @@ def _extract_text_fragments(delta: Any) -> list[str]:
     return []
 
 
+# 智谱等供应商可能使用的非标准内容块类型别名
+_TOOL_USE_BLOCK_TYPES = {"text", "tool_use", "tool_call", "function_call", "thinking"}
+
+# 智谱等供应商可能使用的非标准 delta 类型别名
+_INPUT_JSON_DELTA_TYPES = {"input_json_delta", "arguments_delta", "tool_call_delta"}
+
+
 def _normalize_direct_event(data: dict[str, Any], event_name: str | None) -> list[bytes]:
     event_type = data.get("type")
     if event_type == "content_block_start":
         block = data.get("content_block", {})
-        # 放行标准 Anthropic 内容块类型，过滤供应商私有类型
-        if block.get("type") not in {"text", "tool_use", "thinking"}:
+        block_type = block.get("type")
+        if block_type not in _TOOL_USE_BLOCK_TYPES:
+            logger.debug("Filtered non-standard content_block_start type: %s", block_type)
             return []
+        # 智谱可能在 content_block_start.input 中内联返回完整工具参数
+        if block_type == "tool_use":
+            result = [_make_event(event_name or event_type, data)]
+            inline_input = block.get("input")
+            if isinstance(inline_input, dict) and inline_input:
+                logger.debug(
+                    "Tool_use block with inline input: name=%s args=%s",
+                    block.get("name", "?"),
+                    json.dumps(inline_input, ensure_ascii=False)[:200],
+                )
+                result.append(_make_event("content_block_delta", {
+                    "type": "content_block_delta",
+                    "index": data.get("index", 0),
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": json.dumps(inline_input, ensure_ascii=False),
+                    },
+                }))
+            return result
+        # 非标准类型归一化为 tool_use
+        if block_type in ("tool_call", "function_call"):
+            logger.debug("Normalizing non-standard block type '%s' to 'tool_use'", block_type)
+            normalized_block = {**block, "type": "tool_use"}
+            normalized_data = {**data, "content_block": normalized_block}
+            return [_make_event(event_name or event_type, normalized_data)]
+
     if event_type == "content_block_delta":
         delta = data.get("delta", {})
-        # 放行标准 delta 类型，过滤供应商私有类型
-        if delta.get("type") not in {"text_delta", "input_json_delta", "thinking_delta"}:
-            return []
+        delta_type = delta.get("type")
+        # 放行标准 delta 类型
+        if delta_type in {"text_delta", "input_json_delta", "thinking_delta"}:
+            return [_make_event(event_name or event_type, data)]
+        # 归一化非标准 input_json_delta 别名（智谱可能使用 arguments_delta 等）
+        if delta_type in _INPUT_JSON_DELTA_TYPES:
+            normalized_delta = {**delta, "type": "input_json_delta"}
+            if "partial_json" not in normalized_delta and "arguments" in normalized_delta:
+                normalized_delta["partial_json"] = normalized_delta.pop("arguments")
+            logger.debug("Normalizing non-standard delta type '%s' to 'input_json_delta'", delta_type)
+            return [_make_event(event_name or event_type, {**data, "delta": normalized_delta})]
+        # 其他 delta 类型过滤
+        logger.debug("Filtered non-standard content_block_delta type: %s", delta_type)
+        return []
+
     if event_type not in _DIRECT_EVENTS:
+        logger.debug("Filtered non-standard event type: %s", event_type)
         return []
     return [_make_event(event_name or event_type, data)]
 
@@ -288,17 +338,24 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
             state.content_block_open = True
 
         function = tool_call.get("function")
-        if isinstance(function, dict) and function.get("arguments"):
+        if isinstance(function, dict):
             tool_info = state.tool_calls.get(tool_index)
-            if tool_info:
+            arguments = function.get("arguments")
+            if tool_info and arguments:
                 chunks.append(_make_event("content_block_delta", {
                     "type": "content_block_delta",
                     "index": tool_info["anthropic_block_index"],
                     "delta": {
                         "type": "input_json_delta",
-                        "partial_json": function["arguments"],
+                        "partial_json": arguments,
                     },
                 }))
+            elif tool_info and arguments is None and finish_reason in ("tool_calls", "stop"):
+                # 智谱等供应商有时在 finish 时仍返回 null arguments
+                logger.debug(
+                    "Tool call '%s' has null arguments at finish_reason=%s",
+                    tool_info.get("name", "?"), finish_reason,
+                )
 
     if finish_reason:
         stop_reason = "max_tokens" if finish_reason == "length" else "end_turn"
@@ -358,6 +415,17 @@ async def normalize_anthropic_compatible_stream(
             elif data_type == "stream_event":
                 chunks = _normalize_stream_event(data, current_event)
             elif "choices" in data:
+                # 诊断：记录含工具调用的 OpenAI 格式 chunk
+                choices = data.get("choices", [])
+                if choices and any(
+                    isinstance(c.get("delta", {}).get("tool_calls"), list)
+                    for c in choices
+                    if isinstance(c, dict)
+                ):
+                    logger.debug(
+                        "OpenAI tool_call chunk: %s",
+                        json.dumps(data, ensure_ascii=False)[:500],
+                    )
                 chunks = _normalize_openai_chunk(data, state)
 
             for chunk in chunks:
