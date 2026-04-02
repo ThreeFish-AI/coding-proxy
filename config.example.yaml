@@ -39,7 +39,7 @@ tiers:
     weekly_quota_guard:
       enabled: true
       token_budget: 250000000 # 一周 token 预算（根据订阅计划调整）
-      window_hours: 168.0     # 7 天滑动窗口
+      window_hours: 168.0 # 7 天滑动窗口
       threshold_percent: 99.0
       probe_interval_seconds: 1800 # 每 30 分钟探测一次
 
@@ -144,26 +144,32 @@ model_mapping:
 pricing:
   # ── Anthropic Claude ──
   - backend: anthropic
+    model: claude-opus-4-6
+    input_cost_per_mtok: 5.0
+    output_cost_per_mtok: 25.0
+    cache_write_cost_per_mtok: 6.25
+    cache_read_cost_per_mtok: 0.50
+  - backend: anthropic
     model: claude-sonnet-4-6
     input_cost_per_mtok: 3.0
     output_cost_per_mtok: 15.0
     cache_write_cost_per_mtok: 3.75
     cache_read_cost_per_mtok: 0.30
   - backend: anthropic
-    model: claude-opus-4-6
-    input_cost_per_mtok: 15.0
-    output_cost_per_mtok: 75.0
-    cache_write_cost_per_mtok: 18.75
-    cache_read_cost_per_mtok: 1.50
-  - backend: anthropic
     model: claude-haiku-4-5-20251001
-    input_cost_per_mtok: 0.8
-    output_cost_per_mtok: 4.0
-    cache_write_cost_per_mtok: 1.0
-    cache_read_cost_per_mtok: 0.08
+    input_cost_per_mtok: 1
+    output_cost_per_mtok: 5
+    cache_write_cost_per_mtok: 1.25
+    cache_read_cost_per_mtok: 0.10
   # ── GitHub Copilot（透传 Claude，参照 Anthropic 定价估算） ──
   - backend: copilot
-    model: claude-sonnet-4-6
+    model: claude-opus-4.6
+    input_cost_per_mtok: 5.0
+    output_cost_per_mtok: 25.0
+    cache_write_cost_per_mtok: 6.25
+    cache_read_cost_per_mtok: 0.50
+  - backend: copilot
+    model: Claude Sonnet 4.6
     input_cost_per_mtok: 3.0
     output_cost_per_mtok: 15.0
     cache_write_cost_per_mtok: 3.75
@@ -176,23 +182,51 @@ pricing:
     cache_read_cost_per_mtok: 0.30
   - backend: copilot
     model: claude-haiku-4.5
-    input_cost_per_mtok: 0.8
-    output_cost_per_mtok: 4.0
-    cache_write_cost_per_mtok: 1.0
-    cache_read_cost_per_mtok: 0.08
+    input_cost_per_mtok: 1
+    output_cost_per_mtok: 5
+    cache_write_cost_per_mtok: 1.25
+    cache_read_cost_per_mtok: 0.10
   - backend: copilot
     model: claude-haiku-4-5-20251001
-    input_cost_per_mtok: 0.8
-    output_cost_per_mtok: 4.0
-    cache_write_cost_per_mtok: 1.0
-    cache_read_cost_per_mtok: 0.08
+    input_cost_per_mtok: 1
+    output_cost_per_mtok: 5
+    cache_write_cost_per_mtok: 1.25
+    cache_read_cost_per_mtok: 0.10
+  # ── Google Antigravity（参照 Anthropic 定价估算） ──
+  - backend: antigravity
+    model: claude-opus-4-6-thinking
+    input_cost_per_mtok: 5.0
+    output_cost_per_mtok: 25.0
+    cache_write_cost_per_mtok: 6.25
+    cache_read_cost_per_mtok: 0.50
+  - backend: antigravity
+    model: claude-sonnet-4-6-thinking
+    input_cost_per_mtok: 3.0
+    output_cost_per_mtok: 15.0
+    cache_write_cost_per_mtok: 3.75
+    cache_read_cost_per_mtok: 0.30
+  - backend: antigravity
+    model: gemini-3.1-pro
+    input_cost_per_mtok: 2.0
+    output_cost_per_mtok: 12.0
+    cache_read_cost_per_mtok: 0.20
+  - backend: antigravity
+    model: gemini-3-flash
+    input_cost_per_mtok: 0.50
+    output_cost_per_mtok: 3.00
+    cache_read_cost_per_mtok: 0.05
   # ── 智谱 GLM ──
   - backend: zhipu
     model: glm-4.5-air
-    input_cost_per_mtok: 0.11    # ¥0.8/1M ÷ 7.25
-    output_cost_per_mtok: 0.28   # ¥2/1M ÷ 7.25
+    input_cost_per_mtok: 0.2
+    output_cost_per_mtok: 1.1
   - backend: zhipu
     model: glm-5.1
+    input_cost_per_mtok: 1.0
+    output_cost_per_mtok: 3.2
+    cache_read_cost_per_mtok: 0.2
+  - backend: zhipu
+    model: glm-5
     input_cost_per_mtok: 1.0
     output_cost_per_mtok: 3.2
     cache_read_cost_per_mtok: 0.2
