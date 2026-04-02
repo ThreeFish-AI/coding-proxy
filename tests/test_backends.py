@@ -13,6 +13,8 @@ from coding.proxy.backends.base import (
     _sanitize_headers_for_synthetic_response,
 )
 from coding.proxy.backends.zhipu import ZhipuBackend
+from coding.proxy.compat.canonical import CompatibilityTrace
+from coding.proxy.compat.session_store import CompatSessionRecord
 from coding.proxy.config.schema import (
     AnthropicConfig,
     AntigravityConfig,
@@ -44,7 +46,7 @@ async def test_anthropic_prepare_request_filters_headers():
 @pytest.mark.asyncio
 async def test_zhipu_prepare_request_maps_model():
     mapper = ModelMapper([
-        ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True),
+        ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5v-turbo", is_regex=True),
     ])
     config = ZhipuConfig(api_key="test-key")
     backend = ZhipuBackend(config, mapper)
@@ -53,10 +55,24 @@ async def test_zhipu_prepare_request_maps_model():
     headers = {"anthropic-version": "2023-06-01"}
     prepared_body, prepared_headers = await backend._prepare_request(body, headers)
 
-    assert prepared_body["model"] == "glm-5.1"
+    assert prepared_body["model"] == "glm-5v-turbo"
     assert prepared_headers["x-api-key"] == "test-key"
     assert "model" in body  # 原始 body 未被修改
     assert body["model"] == "claude-sonnet-4-20250514"
+
+
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_uses_default_family_mapping():
+    backend = ZhipuBackend(ZhipuConfig(api_key="test-key"), ModelMapper([]))
+
+    sonnet_body = {"model": "claude-sonnet-4-20250514", "messages": []}
+    haiku_body = {"model": "claude-haiku-4-5-20251001", "messages": []}
+
+    prepared_sonnet, _ = await backend._prepare_request(sonnet_body, {})
+    prepared_haiku, _ = await backend._prepare_request(haiku_body, {})
+
+    assert prepared_sonnet["model"] == "glm-5v-turbo"
+    assert prepared_haiku["model"] == "glm-4.5-air"
 
 
 def test_anthropic_should_trigger_failover():
@@ -125,6 +141,7 @@ async def test_zhipu_prepare_request_strips_metadata():
     }
     prepared_body, _ = await backend._prepare_request(body, {})
     assert "metadata" not in prepared_body
+    assert prepared_body["user_id"] == "u123"
     # 原始 body 不应被修改
     assert "metadata" in body
 
@@ -146,6 +163,123 @@ async def test_zhipu_prepare_request_translates_thinking():
     assert "budget_tokens" not in prepared_body["thinking"]
     # 原始 body 不应被修改
     assert body["thinking"]["budget_tokens"] == 10000
+
+
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_preserves_anthropic_beta_header():
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+    body = {"model": "claude-opus-4-6", "messages": []}
+    _, prepared_headers = await backend._prepare_request(body, {
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "computer-use-2025-01-24",
+        "x-request-id": "req-1",
+    })
+    assert prepared_headers["anthropic-beta"] == "computer-use-2025-01-24"
+    assert prepared_headers["x-request-id"] == "req-1"
+
+
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_narrows_tools_for_specific_tool_choice():
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [],
+        "tools": [
+            {"name": "Task", "input_schema": {"type": "object"}},
+            {"name": "Bash", "input_schema": {"type": "object"}},
+        ],
+        "tool_choice": {"type": "tool", "name": "Task"},
+    }
+
+    prepared_body, _ = await backend._prepare_request(body, {})
+
+    assert [tool["name"] for tool in prepared_body["tools"]] == ["Task"]
+    assert prepared_body["tool_choice"] == {"type": "tool", "name": "Task"}
+    assert backend.get_diagnostics()["tool_choice_projection"] == "tool"
+
+
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_removes_tools_for_none_tool_choice():
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [],
+        "tools": [{"name": "Task", "input_schema": {"type": "object"}}],
+        "tool_choice": {"type": "none"},
+    }
+
+    prepared_body, _ = await backend._prepare_request(body, {})
+
+    assert "tools" not in prepared_body
+    assert backend.get_diagnostics()["tool_choice_projection"] == "none"
+    assert "tool_choice_none_removed_tools" in backend.get_diagnostics()["request_adaptations"]
+
+
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_updates_compat_session_state():
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+    session_record = CompatSessionRecord(session_key="session-1")
+    backend.set_compat_context(
+        trace=CompatibilityTrace(
+            trace_id="trace-1",
+            backend="zhipu",
+            session_key="session-1",
+            provider_protocol="zhipu_chat_completions",
+            compat_mode="simulated",
+        ),
+        session_record=session_record,
+    )
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [{
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "a.txt"}}],
+        }],
+        "tools": [{"name": "Read", "input_schema": {"type": "object"}}],
+        "tool_choice": {"type": "any"},
+    }
+
+    prepared_body, _ = await backend._prepare_request(body, {})
+
+    assert prepared_body["model"] == "glm-5v-turbo"
+    assert session_record.tool_call_map == {"toolu_1": "Read"}
+    assert session_record.provider_state["zhipu"]["tool_choice_mode"] == "any"
+    assert session_record.provider_state["zhipu"]["tool_names"] == ["Read"]
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "input_payload"),
+    [
+        ("Task", {"description": "sub task", "prompt": "do it", "subagent_type": "general"}),
+        ("Bash", {"command": "pwd", "description": "check cwd"}),
+        ("Grep", {"pattern": "TODO", "path": "."}),
+        ("Glob", {"pattern": "**/*.py", "path": "."}),
+        ("Edit", {"file_path": "a.py", "old_string": "x", "new_string": "y"}),
+        ("Write", {"file_path": "a.py", "content": "print('x')\n"}),
+        ("Read", {"file_path": "a.py", "offset": 1, "limit": 10}),
+        ("TodoWrite", {"todos": [{"content": "task-1", "status": "pending", "priority": "high"}]}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_preserves_claude_code_tool_shapes(tool_name, input_payload):
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [{
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": tool_name, "input": input_payload}],
+        }],
+        "tools": [{"name": tool_name, "input_schema": {"type": "object", "properties": {"payload": {"type": "string"}}}}],
+        "tool_choice": {"type": "any"},
+    }
+
+    prepared_body, prepared_headers = await backend._prepare_request(body, {"anthropic-beta": "code-tools-1"})
+
+    assert prepared_body["tools"][0]["name"] == tool_name
+    assert prepared_body["messages"][0]["content"][0]["name"] == tool_name
+    assert prepared_body["messages"][0]["content"][0]["input"] == input_payload
+    assert prepared_headers["anthropic-beta"] == "code-tools-1"
+    assert backend.get_diagnostics()["tool_choice_projection"] == "any"
 
 
 def test_backend_response_defaults():

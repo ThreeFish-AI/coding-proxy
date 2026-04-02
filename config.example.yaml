@@ -126,11 +126,11 @@ model_mapping:
   # 智谱 GLM 兜底映射
   - pattern: "claude-sonnet-.*"
     backends: ["zhipu"]
-    target: "glm-5.1"
+    target: "glm-5v-turbo"
     is_regex: true
   - pattern: "claude-opus-.*"
     backends: ["zhipu"]
-    target: "glm-5.1"
+    target: "glm-5v-turbo"
     is_regex: true
   - pattern: "claude-haiku-.*"
     backends: ["zhipu"]
