@@ -492,7 +492,7 @@ class RequestRouter:
                     tier.record_success(resp.usage.input_tokens + resp.usage.output_tokens)
                     duration = int((time.monotonic() - start) * 1000)
                     model = body.get("model", "unknown")
-                    model_served = resp.model_served or model
+                    model_served = resp.model_served or tier.backend.map_model(model)
                     self._log_model_call(
                         backend=tier.name, model_requested=model,
                         model_served=model_served, duration_ms=duration, usage=resp.usage,
@@ -546,7 +546,7 @@ class RequestRouter:
 
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
-                model_served = resp.model_served or model
+                model_served = resp.model_served or tier.backend.map_model(model)
                 self._log_model_call(
                     backend=tier.name, model_requested=model,
                     model_served=model_served, duration_ms=duration, usage=resp.usage,

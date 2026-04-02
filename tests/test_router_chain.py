@@ -697,6 +697,27 @@ async def test_route_message_model_served_fallback_when_none():
 
 
 @pytest.mark.asyncio
+async def test_route_message_model_served_fallback_to_map_model():
+    """非流式：model_served 为 None 且后端有映射时，fallback 到 map_model()."""
+    logger_mock = AsyncMock()
+    resp = BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10))
+    # model_served 默认为 None，但后端有模型映射
+    backend = MappingFakeBackend(
+        name="zhipu", mapped_model="glm-4.5-air", response=resp,
+    )
+    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+
+    await router.route_message(
+        {"model": "claude-haiku-4-5-20251001", "messages": []}, _headers(),
+    )
+
+    logger_mock.log.assert_awaited_once()
+    call_kwargs = logger_mock.log.call_args
+    assert call_kwargs[1]["model_requested"] == "claude-haiku-4-5-20251001"
+    assert call_kwargs[1]["model_served"] == "glm-4.5-air"
+
+
+@pytest.mark.asyncio
 async def test_route_stream_model_served_from_sse():
     """流式：model_served 从 SSE message_start 事件提取."""
     logger_mock = AsyncMock()
