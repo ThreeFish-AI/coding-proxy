@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, AsyncIterator
 
+from ..compat.canonical import CompatibilityProfile, CompatibilityStatus
 from ..config.schema import ZhipuConfig
 from ..routing.model_mapper import ModelMapper
 from ..streaming.anthropic_compat import normalize_anthropic_compatible_stream
@@ -41,9 +42,21 @@ class ZhipuBackend(BaseBackend):
             supports_metadata=True,           # metadata 在 _prepare_request 中静默剥离
         )
 
+    def get_compatibility_profile(self) -> CompatibilityProfile:
+        return CompatibilityProfile(
+            thinking=CompatibilityStatus.NATIVE,
+            tool_calling=CompatibilityStatus.NATIVE,
+            tool_streaming=CompatibilityStatus.SIMULATED,
+            mcp_tools=CompatibilityStatus.SIMULATED,
+            images=CompatibilityStatus.NATIVE,
+            metadata=CompatibilityStatus.SIMULATED,
+            json_output=CompatibilityStatus.SIMULATED,
+            usage_tokens=CompatibilityStatus.SIMULATED,
+        )
+
     def map_model(self, model: str) -> str:
         """将 Claude 模型名映射为智谱模型名."""
-        return self._model_mapper.map(model, backend="fallback")
+        return self._model_mapper.map(model, backend="zhipu")
 
     async def _prepare_request(
         self,
@@ -52,13 +65,26 @@ class ZhipuBackend(BaseBackend):
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """映射模型名、替换认证头，并剥离智谱 API 不支持的字段."""
         body = {**request_body}
-        body.pop("metadata", None)  # 智谱 API 不支持 metadata，静默剥离
+        metadata = body.pop("metadata", None)
         # 将 Anthropic thinking 格式转换为智谱格式（剥离 budget_tokens）
         thinking = body.get("thinking")
         if isinstance(thinking, dict):
             body["thinking"] = {"type": thinking.get("type", "enabled")}
         if "model" in body:
-            body["model"] = self._model_mapper.map(body["model"], backend="fallback")
+            body["model"] = self._model_mapper.map(body["model"], backend="zhipu")
+
+        if isinstance(metadata, dict):
+            user_id = metadata.get("user_id")
+            if isinstance(user_id, str) and user_id:
+                body["user_id"] = user_id
+
+        request_id = body.get("request_id")
+        if not isinstance(request_id, str) and self._compat_trace is not None:
+            body["request_id"] = self._compat_trace.trace_id
+
+        response_format = body.get("response_format")
+        if isinstance(response_format, dict) and response_format.get("type"):
+            body["response_format"] = response_format
 
         # 诊断：记录工具调用请求信息
         tools = body.get("tools", [])
@@ -72,6 +98,9 @@ class ZhipuBackend(BaseBackend):
             "anthropic-version": headers.get("anthropic-version", "2023-06-01"),
         }
         return body, new_headers
+
+    def get_diagnostics(self) -> dict[str, Any]:
+        return super().get_diagnostics()
 
     async def send_message_stream(
         self,
