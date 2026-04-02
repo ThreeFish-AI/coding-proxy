@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator
 import httpx
 
 from ..auth.providers.google import GoogleOAuthProvider
+from ..compat.canonical import CompatibilityProfile, CompatibilityStatus
 from ..config.schema import AntigravityConfig, FailoverConfig
 from ..convert.anthropic_to_gemini import convert_request
 from ..convert.gemini_to_anthropic import convert_response, extract_usage
@@ -133,6 +134,18 @@ class AntigravityBackend(BaseBackend):
             supports_metadata=True,
         )
 
+    def get_compatibility_profile(self) -> CompatibilityProfile:
+        return CompatibilityProfile(
+            thinking=CompatibilityStatus.NATIVE,
+            tool_calling=CompatibilityStatus.NATIVE,
+            tool_streaming=CompatibilityStatus.SIMULATED,
+            mcp_tools=CompatibilityStatus.UNKNOWN,
+            images=CompatibilityStatus.NATIVE,
+            metadata=CompatibilityStatus.SIMULATED,
+            json_output=CompatibilityStatus.UNKNOWN,
+            usage_tokens=CompatibilityStatus.SIMULATED,
+        )
+
     def supports_request(
         self, request_caps: RequestCapabilities,
     ) -> tuple[bool, list[CapabilityLossReason]]:
@@ -206,7 +219,7 @@ class AntigravityBackend(BaseBackend):
 
     def get_diagnostics(self) -> dict[str, Any]:
         diagnostics = self._token_manager.get_diagnostics()
-        result: dict[str, Any] = {}
+        result: dict[str, Any] = super().get_diagnostics()
         if diagnostics:
             result["token_manager"] = diagnostics
         if self._last_request_adaptations:

@@ -15,6 +15,12 @@ if TYPE_CHECKING:
 from ..backends.base import BackendResponse, UsageInfo
 from ..backends.base import NoCompatibleBackendError, RequestCapabilities
 from ..backends.token_manager import TokenAcquireError
+from ..compat.canonical import (
+    CompatibilityStatus,
+    CompatibilityTrace,
+    build_canonical_request,
+)
+from ..compat.session_store import CompatSessionRecord, CompatSessionStore
 from ..logging.db import TokenLogger
 from .rate_limit import (
     compute_effective_retry_seconds,
@@ -262,6 +268,7 @@ class RequestRouter:
         tiers: list[BackendTier],
         token_logger: TokenLogger | None = None,
         reauth_coordinator: Any | None = None,
+        compat_session_store: CompatSessionStore | None = None,
     ) -> None:
         if not tiers:
             raise ValueError("至少需要一个后端层级")
@@ -269,6 +276,7 @@ class RequestRouter:
         self._token_logger = token_logger
         self._reauth_coordinator = reauth_coordinator
         self._pricing_table: PricingTable | None = None
+        self._compat_session_store = compat_session_store
 
     def set_pricing_table(self, table: PricingTable) -> None:
         """注入 PricingTable 实例（由 lifespan 在启动阶段调用）."""
@@ -336,6 +344,8 @@ class RequestRouter:
         last_exc: Exception | None = None
         failed_tier_name: str | None = None
         request_caps = _build_request_capabilities(body)
+        canonical_request = build_canonical_request(body, headers)
+        session_record = await self._get_or_create_session_record(canonical_request.session_key, canonical_request.trace_id)
         incompatible_reasons: list[str] = []
 
         for i, tier in enumerate(self._tiers):
@@ -349,6 +359,19 @@ class RequestRouter:
                     tier.name, reason_text,
                 )
                 continue
+
+            decision = tier.backend.make_compatibility_decision(canonical_request)
+            if decision.status is CompatibilityStatus.UNSAFE:
+                reason_text = ",".join(sorted(decision.unsupported_semantics))
+                incompatible_reasons.append(f"{tier.name}:{reason_text}")
+                logger.info("Tier %s skipped due to compatibility decision: %s", tier.name, reason_text)
+                continue
+            self._apply_compat_context(
+                tier=tier,
+                canonical_request=canonical_request,
+                decision=decision,
+                session_record=session_record,
+            )
 
             # 非终端层使用健康检查门控
             if not is_last:
@@ -379,6 +402,7 @@ class RequestRouter:
                     backend=tier.name, model_requested=model,
                     model_served=model_served, duration_ms=duration, usage=info,
                 )
+                await self._persist_compat_session(tier.backend.get_compat_trace(), session_record)
                 await self._record_usage(
                     tier.name, model, model_served,
                     info, duration, True,
@@ -464,6 +488,8 @@ class RequestRouter:
         start = time.monotonic()
         failed_tier_name: str | None = None
         request_caps = _build_request_capabilities(body)
+        canonical_request = build_canonical_request(body, headers)
+        session_record = await self._get_or_create_session_record(canonical_request.session_key, canonical_request.trace_id)
         incompatible_reasons: list[str] = []
 
         for i, tier in enumerate(self._tiers):
@@ -477,6 +503,19 @@ class RequestRouter:
                     tier.name, reason_text,
                 )
                 continue
+
+            decision = tier.backend.make_compatibility_decision(canonical_request)
+            if decision.status is CompatibilityStatus.UNSAFE:
+                reason_text = ",".join(sorted(decision.unsupported_semantics))
+                incompatible_reasons.append(f"{tier.name}:{reason_text}")
+                logger.info("Tier %s skipped due to compatibility decision: %s", tier.name, reason_text)
+                continue
+            self._apply_compat_context(
+                tier=tier,
+                canonical_request=canonical_request,
+                decision=decision,
+                session_record=session_record,
+            )
 
             # 非终端层使用健康检查门控
             if not is_last:
@@ -497,6 +536,7 @@ class RequestRouter:
                         backend=tier.name, model_requested=model,
                         model_served=model_served, duration_ms=duration, usage=resp.usage,
                     )
+                    await self._persist_compat_session(tier.backend.get_compat_trace(), session_record)
                     await self._record_usage(
                         tier.name, model, model_served,
                         resp.usage, duration, True,
@@ -663,3 +703,60 @@ class RequestRouter:
     async def close(self) -> None:
         for tier in self._tiers:
             await tier.backend.close()
+
+    async def _get_or_create_session_record(
+        self,
+        session_key: str,
+        trace_id: str,
+    ) -> CompatSessionRecord | None:
+        if self._compat_session_store is None:
+            return None
+        record = await self._compat_session_store.get(session_key)
+        if record is not None:
+            return record
+        return CompatSessionRecord(session_key=session_key, trace_id=trace_id)
+
+    def _apply_compat_context(
+        self,
+        *,
+        tier: BackendTier,
+        canonical_request: Any,
+        decision: Any,
+        session_record: CompatSessionRecord | None,
+    ) -> None:
+        provider_protocol = {
+            "copilot": "openai_chat_completions",
+            "antigravity": "gemini_generate_content",
+            "zhipu": "zhipu_chat_completions",
+            "anthropic": "anthropic_messages",
+        }.get(tier.name, "unknown")
+        compat_trace = CompatibilityTrace(
+            trace_id=canonical_request.trace_id,
+            backend=tier.name,
+            session_key=canonical_request.session_key,
+            provider_protocol=provider_protocol,
+            compat_mode=decision.status.value,
+            simulation_actions=list(decision.simulation_actions),
+            unsupported_semantics=list(decision.unsupported_semantics),
+            session_state_hits=1 if session_record else 0,
+            request_adaptations=[],
+        )
+        tier.backend.set_compat_context(trace=compat_trace, session_record=session_record)
+
+    async def _persist_compat_session(
+        self,
+        trace: CompatibilityTrace | None,
+        session_record: CompatSessionRecord | None,
+    ) -> None:
+        if self._compat_session_store is None or trace is None or session_record is None:
+            return
+        provider_states = dict(session_record.provider_state)
+        provider_states[trace.backend] = {
+            "compat_mode": trace.compat_mode,
+            "simulation_actions": trace.simulation_actions,
+            "unsupported_semantics": trace.unsupported_semantics,
+            "trace_id": trace.trace_id,
+        }
+        session_record.trace_id = trace.trace_id
+        session_record.provider_state = provider_states
+        await self._compat_session_store.upsert(session_record)

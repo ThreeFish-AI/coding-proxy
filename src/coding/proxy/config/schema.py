@@ -146,6 +146,8 @@ class TierConfig(BaseModel):
 
 class DatabaseConfig(BaseModel):
     path: str = "~/.coding-proxy/usage.db"
+    compat_state_path: str = "~/.coding-proxy/compat.db"
+    compat_state_ttl_seconds: int = 86400
 
 
 class LoggingConfig(BaseModel):
@@ -261,3 +263,7 @@ class ProxyConfig(BaseModel):
     @property
     def db_path(self) -> Path:
         return Path(self.database.path).expanduser()
+
+    @property
+    def compat_state_path(self) -> Path:
+        return Path(self.database.compat_state_path).expanduser()

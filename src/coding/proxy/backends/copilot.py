@@ -13,6 +13,7 @@ from uuid import uuid4
 import httpx
 
 from ..config.schema import CopilotConfig, FailoverConfig
+from ..compat.canonical import CompatibilityProfile, CompatibilityStatus
 from ..convert.anthropic_to_openai import convert_request as convert_openai_request
 from ..convert.openai_to_anthropic import convert_response as convert_openai_response
 from ..streaming.anthropic_compat import normalize_anthropic_compatible_stream
@@ -389,6 +390,18 @@ class CopilotBackend(BaseBackend):
             supports_images=True,
             emits_vendor_tool_events=False,
             supports_metadata=True,
+        )
+
+    def get_compatibility_profile(self) -> CompatibilityProfile:
+        return CompatibilityProfile(
+            thinking=CompatibilityStatus.SIMULATED,
+            tool_calling=CompatibilityStatus.NATIVE,
+            tool_streaming=CompatibilityStatus.SIMULATED,
+            mcp_tools=CompatibilityStatus.UNKNOWN,
+            images=CompatibilityStatus.NATIVE,
+            metadata=CompatibilityStatus.SIMULATED,
+            json_output=CompatibilityStatus.NATIVE,
+            usage_tokens=CompatibilityStatus.SIMULATED,
         )
 
     def supports_request(
@@ -790,6 +803,7 @@ class CopilotBackend(BaseBackend):
             "candidate_base_urls": self._candidate_base_urls,
             "available_models_cache": self._model_catalog.available_models,
         }
+        diagnostics.update(super().get_diagnostics())
         token_manager = self._token_manager.get_diagnostics()
         if token_manager:
             diagnostics["token_manager"] = token_manager

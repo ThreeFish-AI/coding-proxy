@@ -11,6 +11,14 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from ..compat.canonical import (
+    CanonicalRequest,
+    CompatibilityDecision,
+    CompatibilityProfile,
+    CompatibilityStatus,
+    CompatibilityTrace,
+)
+from ..compat.session_store import CompatSessionRecord
 from ..config.schema import FailoverConfig
 
 logger = logging.getLogger(__name__)
@@ -142,6 +150,8 @@ class BaseBackend(ABC):
         self._timeout_ms = timeout_ms
         self._failover_config = failover_config
         self._client: httpx.AsyncClient | None = None
+        self._compat_trace: CompatibilityTrace | None = None
+        self._compat_session_record: CompatSessionRecord | None = None
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -169,6 +179,78 @@ class BaseBackend(ABC):
         默认视为 Anthropic 兼容后端。
         """
         return BackendCapabilities()
+
+    def get_compatibility_profile(self) -> CompatibilityProfile:
+        caps = self.get_capabilities()
+        native_or_unsafe = lambda supported: CompatibilityStatus.NATIVE if supported else CompatibilityStatus.UNSAFE
+        return CompatibilityProfile(
+            thinking=native_or_unsafe(caps.supports_thinking),
+            tool_calling=native_or_unsafe(caps.supports_tools),
+            tool_streaming=CompatibilityStatus.SIMULATED if caps.supports_tools else CompatibilityStatus.UNSAFE,
+            mcp_tools=CompatibilityStatus.UNKNOWN,
+            images=native_or_unsafe(caps.supports_images),
+            metadata=native_or_unsafe(caps.supports_metadata),
+            json_output=CompatibilityStatus.UNKNOWN,
+            usage_tokens=CompatibilityStatus.SIMULATED,
+        )
+
+    def make_compatibility_decision(self, request: CanonicalRequest) -> CompatibilityDecision:
+        profile = self.get_compatibility_profile()
+        simulation_actions: list[str] = []
+        unsupported: list[str] = []
+
+        if request.thinking.enabled and profile.thinking is CompatibilityStatus.SIMULATED:
+            simulation_actions.append("thinking_simulation")
+        elif request.thinking.enabled and profile.thinking not in {
+            CompatibilityStatus.NATIVE, CompatibilityStatus.SIMULATED,
+        }:
+            unsupported.append("thinking")
+
+        if request.tool_names and profile.tool_calling is CompatibilityStatus.SIMULATED:
+            simulation_actions.append("tool_calling_simulation")
+        elif request.tool_names and profile.tool_calling not in {
+            CompatibilityStatus.NATIVE, CompatibilityStatus.SIMULATED,
+        }:
+            unsupported.append("tools")
+
+        if request.metadata and profile.metadata is CompatibilityStatus.SIMULATED:
+            simulation_actions.append("metadata_projection")
+        elif request.metadata and profile.metadata not in {
+            CompatibilityStatus.NATIVE, CompatibilityStatus.SIMULATED,
+        }:
+            unsupported.append("metadata")
+
+        if request.supports_json_output and profile.json_output is CompatibilityStatus.SIMULATED:
+            simulation_actions.append("json_output_projection")
+        elif request.supports_json_output and profile.json_output not in {
+            CompatibilityStatus.NATIVE, CompatibilityStatus.SIMULATED,
+        }:
+            unsupported.append("response_format")
+
+        if unsupported:
+            return CompatibilityDecision(
+                status=CompatibilityStatus.UNSAFE,
+                simulation_actions=simulation_actions,
+                unsupported_semantics=unsupported,
+            )
+        if simulation_actions:
+            return CompatibilityDecision(
+                status=CompatibilityStatus.SIMULATED,
+                simulation_actions=simulation_actions,
+            )
+        return CompatibilityDecision(status=CompatibilityStatus.NATIVE)
+
+    def set_compat_context(
+        self,
+        *,
+        trace: CompatibilityTrace,
+        session_record: CompatSessionRecord | None,
+    ) -> None:
+        self._compat_trace = trace
+        self._compat_session_record = session_record
+
+    def get_compat_trace(self) -> CompatibilityTrace | None:
+        return self._compat_trace
 
     def supports_request(
         self, request_caps: RequestCapabilities,
@@ -207,7 +289,10 @@ class BaseBackend(ABC):
 
     def get_diagnostics(self) -> dict[str, Any]:
         """返回后端运行时诊断信息."""
-        return {}
+        diagnostics: dict[str, Any] = {}
+        if self._compat_trace is not None:
+            diagnostics["compat"] = self._compat_trace.to_dict()
+        return diagnostics
 
     def should_trigger_failover(self, status_code: int, body: dict[str, Any] | None) -> bool:
         """基于 FailoverConfig 的通用故障转移判断.

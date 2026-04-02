@@ -28,6 +28,7 @@ from ..backends.copilot import CopilotBackend
 from ..backends.token_manager import TokenAcquireError
 from ..backends.zhipu import ZhipuBackend
 from ..config.loader import load_config
+from ..compat.session_store import CompatSessionStore
 from ..config.schema import (
     AntigravityConfig,
     AnthropicConfig,
@@ -253,9 +254,11 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理（启动 / 关闭）."""
     router: RequestRouter = app.state.router
     token_logger: TokenLogger = app.state.token_logger
+    compat_session_store: CompatSessionStore = app.state.compat_session_store
     config: ProxyConfig = app.state.config
 
     await token_logger.init()
+    await compat_session_store.init()
 
     # 从配置加载模型定价表
     from ..pricing import PricingTable
@@ -281,6 +284,7 @@ async def lifespan(app: FastAPI):
     logger.info("coding-proxy started: host=%s port=%d", config.server.host, config.server.port)
     yield
     await router.close()
+    await compat_session_store.close()
     await token_logger.close()
     logger.info("coding-proxy stopped")
 
@@ -291,6 +295,10 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         config = load_config()
 
     token_logger = TokenLogger(config.db_path)
+    compat_session_store = CompatSessionStore(
+        config.compat_state_path,
+        ttl_seconds=config.database.compat_state_ttl_seconds,
+    )
     mapper = ModelMapper(config.model_mapping)
 
     # 加载 Token Store 用于凭证合并
@@ -327,11 +335,12 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             token_store, reauth_providers, token_updaters,
         )
 
-    router = RequestRouter(tiers, token_logger, reauth_coordinator)
+    router = RequestRouter(tiers, token_logger, reauth_coordinator, compat_session_store)
 
     app = FastAPI(title="coding-proxy", version="0.1.0", lifespan=lifespan)
     app.state.router = router
     app.state.token_logger = token_logger
+    app.state.compat_session_store = compat_session_store
     app.state.config = config
     app.state.reauth_coordinator = reauth_coordinator
 
