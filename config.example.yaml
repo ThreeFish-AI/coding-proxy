@@ -221,6 +221,11 @@ pricing:
     input_cost_per_mtok: 0.2
     output_cost_per_mtok: 1.1
   - backend: zhipu
+    model: glm-5v-turbo
+    input_cost_per_mtok: 1.20
+    output_cost_per_mtok: 5.00
+    cache_read_cost_per_mtok: 0.30
+  - backend: zhipu
     model: glm-5.1
     input_cost_per_mtok: 1.0
     output_cost_per_mtok: 3.2

@@ -12,5 +12,6 @@ build/
 
 # Custom
 .idea/
+.temp/
 config.yaml
 .claude/.prompts.md
