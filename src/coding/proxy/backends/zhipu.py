@@ -82,10 +82,11 @@ class ZhipuBackend(BaseBackend):
         if "model" in body:
             body["model"] = self.map_model(body["model"])
 
-        # 替换认证头
+        # 剥离原始认证头（authorization / x-api-key），由下方 new_headers 重建
         filtered = {
             k: v for k, v in headers.items()
-            if k.lower() not in PROXY_SKIP_HEADERS and k.lower() != "x-api-key"
+            if k.lower() not in PROXY_SKIP_HEADERS
+            and k.lower() not in ("x-api-key", "authorization")
         }
         new_headers = {
             "content-type": "application/json",
