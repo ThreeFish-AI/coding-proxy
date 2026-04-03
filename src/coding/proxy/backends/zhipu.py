@@ -18,6 +18,7 @@ import httpx
 from ..config.schema import ZhipuConfig
 from ..routing.model_mapper import ModelMapper
 from .base import PROXY_SKIP_HEADERS, BackendCapabilities, BackendResponse, BaseBackend
+from .types import _sanitize_headers_for_synthetic_response
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,9 @@ class ZhipuBackend(BaseBackend):
 
     通过官方 /api/anthropic 端点转发请求，
     仅替换模型名和认证头，其余原样透传。
+
+    401 错误归一化通过基类响应处理钩子（_normalize_error_response）实现，
+    无需完整覆写 send_message / send_message_stream。
     """
 
     def __init__(
@@ -98,7 +102,90 @@ class ZhipuBackend(BaseBackend):
                 new_headers[key] = value
         return body, new_headers
 
-    # ── 401 错误归一化 ──────────────────────────────────────
+    # ── 响应处理钩子 ──────────────────────────────────────
+
+    async def send_message(
+        self,
+        request_body: dict[str, Any],
+        headers: dict[str, str],
+    ) -> BackendResponse:
+        """最小化覆写：API key 缺失时快速返回 401 响应，其余委托基类（含 _normalize_error_response 钩子）."""
+        if not self._api_key:
+            raw = json.dumps(self._missing_api_key_payload(), ensure_ascii=False).encode()
+            return BackendResponse(
+                status_code=401,
+                raw_body=raw,
+                error_type="authentication_error",
+                error_message="Zhipu API key 未配置，无法访问 Claude 兼容端点",
+                response_headers={"content-type": "application/json"},
+            )
+        return await super().send_message(request_body, headers)
+
+    def _normalize_error_response(
+        self,
+        status_code: int,
+        response: httpx.Response,
+        backend_resp: BackendResponse,
+    ) -> BackendResponse:
+        """仅对 401 错误执行归一化，其余状态码透传."""
+        if status_code != 401:
+            return backend_resp
+        raw_body, payload = self._normalize_backend_error(
+            status_code,
+            response.content if response else backend_resp.raw_body,
+        )
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        return BackendResponse(
+            status_code=status_code,
+            raw_body=raw_body,
+            error_type=error.get("type") if isinstance(error, dict) else "authentication_error",
+            error_message=error.get("message") if isinstance(error, dict) else "Zhipu API 认证失败",
+            response_headers=backend_resp.response_headers,
+            usage=backend_resp.usage,
+            model_served=backend_resp.model_served,
+        )
+
+    # ── 流式 401 归一化包装 ───────────────────────────────
+
+    async def send_message_stream(
+        self,
+        request_body: dict[str, Any],
+        headers: dict[str, str],
+    ) -> AsyncIterator[bytes]:
+        """轻量包装：API key 缺失时快速失败，否则委托基类流式发送并捕获 401 归一化."""
+        if not self._api_key:
+            payload = self._missing_api_key_payload()
+            raw = json.dumps(payload, ensure_ascii=False).encode()
+            request = httpx.Request("POST", f"{self._base_url}{self._get_endpoint()}")
+            raise httpx.HTTPStatusError(
+                "zhipu API error: 401",
+                request=request,
+                response=httpx.Response(401, content=raw, headers={"content-type": "application/json"}, request=request),
+            )
+        try:
+            async for chunk in super().send_message_stream(request_body, headers):
+                yield chunk
+        except httpx.HTTPStatusError as exc:
+            response = exc.response
+            if response is not None and response.status_code == 401:
+                raw_body = response.content or b"{}"
+                normalized_raw, _ = self._normalize_backend_error(
+                    response.status_code,
+                    raw_body,
+                )
+                raise httpx.HTTPStatusError(
+                    str(exc),
+                    request=exc.request,
+                    response=httpx.Response(
+                        response.status_code,
+                        content=normalized_raw,
+                        headers=dict(response.headers),
+                        request=exc.request,
+                    ),
+                ) from exc
+            raise
+
+    # ── 401 错误归一化工具方法 ────────────────────────────
 
     @staticmethod
     def _normalize_auth_error_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -150,74 +237,3 @@ class ZhipuBackend(BaseBackend):
         payload = self._normalize_auth_error_payload(payload)
         body = copy.deepcopy(payload)
         return json.dumps(body, ensure_ascii=False).encode(), body
-
-    # ── 请求发送（覆写基类以处理 401 归一化） ───────────────
-
-    async def send_message_stream(
-        self,
-        request_body: dict[str, Any],
-        headers: dict[str, str],
-    ) -> AsyncIterator[bytes]:
-        if not self._api_key:
-            payload = self._missing_api_key_payload()
-            raw = json.dumps(payload, ensure_ascii=False).encode()
-            request = httpx.Request("POST", f"{self._base_url}{self._get_endpoint()}")
-            raise httpx.HTTPStatusError(
-                "zhipu API error: 401",
-                request=request,
-                response=httpx.Response(401, content=raw, headers={"content-type": "application/json"}, request=request),
-            )
-        try:
-            async for chunk in super().send_message_stream(request_body, headers):
-                yield chunk
-        except httpx.HTTPStatusError as exc:
-            response = exc.response
-            if response is not None and response.status_code == 401:
-                raw_body = response.content or b"{}"
-                normalized_raw, _ = self._normalize_backend_error(
-                    response.status_code,
-                    raw_body,
-                )
-                raise httpx.HTTPStatusError(
-                    str(exc),
-                    request=exc.request,
-                    response=httpx.Response(
-                        response.status_code,
-                        content=normalized_raw,
-                        headers=dict(response.headers),
-                        request=exc.request,
-                    ),
-                ) from exc
-            raise
-
-    async def send_message(
-        self,
-        request_body: dict[str, Any],
-        headers: dict[str, str],
-    ) -> BackendResponse:
-        if not self._api_key:
-            raw = json.dumps(self._missing_api_key_payload(), ensure_ascii=False).encode()
-            return BackendResponse(
-                status_code=401,
-                raw_body=raw,
-                error_type="authentication_error",
-                error_message="Zhipu API key 未配置，无法访问 Claude 兼容端点",
-                response_headers={"content-type": "application/json"},
-            )
-        response = await super().send_message(request_body, headers)
-        if response.status_code != 401:
-            return response
-        raw_body, payload = self._normalize_backend_error(
-            response.status_code,
-            response.raw_body,
-        )
-        error = payload.get("error", {}) if isinstance(payload, dict) else {}
-        return BackendResponse(
-            status_code=response.status_code,
-            raw_body=raw_body,
-            error_type=error.get("type") if isinstance(error, dict) else "authentication_error",
-            error_message=error.get("message") if isinstance(error, dict) else "Zhipu API 认证失败",
-            response_headers=response.response_headers,
-            usage=response.usage,
-            model_served=response.model_served,
-        )
