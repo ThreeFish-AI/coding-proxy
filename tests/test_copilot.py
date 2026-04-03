@@ -336,7 +336,7 @@ async def test_copilot_prepare_request_filters_and_injects_token():
 
     # Mock token manager
     backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
-    backend._fetch_available_models = AsyncMock(return_value=["claude-sonnet-4.6"])  # type: ignore[method-assign]
+    backend._model_resolver.fetch_available = AsyncMock(return_value=["claude-sonnet-4.6"])  # type: ignore[method-assign]
 
     body = {"model": "claude-sonnet-4-20250514", "messages": []}
     headers = {
@@ -394,7 +394,7 @@ async def test_copilot_prepare_request_records_thinking_adaptations():
     config = CopilotConfig(github_token="ghp_test")
     backend = CopilotBackend(config, FailoverConfig())
     backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
-    backend._fetch_available_models = AsyncMock(return_value=["claude-sonnet-4.6"])  # type: ignore[method-assign]
+    backend._model_resolver.fetch_available = AsyncMock(return_value=["claude-sonnet-4.6"])  # type: ignore[method-assign]
 
     body = {
         "model": "claude-sonnet-4-20250514",
@@ -424,9 +424,9 @@ async def test_copilot_prepare_request_uses_cached_models_without_refetch():
     config = CopilotConfig(github_token="ghp_test", models_cache_ttl_seconds=300)
     backend = CopilotBackend(config, FailoverConfig())
     backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
-    backend._model_catalog.available_models = ["claude-sonnet-4.6"]
-    backend._model_catalog.fetched_at_unix = int(time.time())
-    backend._fetch_available_models = AsyncMock(side_effect=AssertionError("should not refetch"))  # type: ignore[method-assign]
+    backend._model_resolver.catalog.available_models = ["claude-sonnet-4.6"]
+    backend._model_resolver.catalog.fetched_at_unix = int(time.time())
+    backend._model_resolver.fetch_available = AsyncMock(side_effect=AssertionError("should not refetch"))  # type: ignore[method-assign]
 
     prepared_body, _ = await backend._prepare_request(
         {"model": "claude-sonnet-4-20250514", "messages": []},
@@ -570,12 +570,12 @@ async def test_copilot_stream_retries_after_model_not_supported():
 
     refreshed = False
 
-    async def _fake_fetch_available_models(*, refresh_reason: str) -> list[str]:
+    async def _fake_fetch_available_models(*, refresh_reason: str, **kwargs) -> list[str]:
         nonlocal refreshed
         refreshed = refreshed or refresh_reason == "model_not_supported_retry"
         return ["claude-sonnet-4.5"] if not refreshed else ["claude-sonnet-4.6"]
 
-    backend._fetch_available_models = _fake_fetch_available_models  # type: ignore[method-assign]
+    backend._model_resolver.fetch_available = _fake_fetch_available_models  # type: ignore[method-assign]
 
     stream_models: list[str] = []
 
@@ -640,7 +640,7 @@ async def test_copilot_send_message_translates_openai_response_to_anthropic():
     config = CopilotConfig(github_token="ghp_test")
     backend = CopilotBackend(config, FailoverConfig())
     backend._token_manager.get_token = AsyncMock(return_value="cop_token")
-    backend._fetch_available_models = AsyncMock(return_value=["claude-opus-4.6"])  # type: ignore[method-assign]
+    backend._model_resolver.fetch_available = AsyncMock(return_value=["claude-opus-4.6"])  # type: ignore[method-assign]
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -683,12 +683,12 @@ async def test_copilot_send_message_retries_after_model_not_supported():
 
     refreshed = False
 
-    async def _fake_fetch_available_models(*, refresh_reason: str) -> list[str]:
+    async def _fake_fetch_available_models(*, refresh_reason: str, **kwargs) -> list[str]:
         nonlocal refreshed
         refreshed = refreshed or refresh_reason == "model_not_supported_retry"
         return ["claude-sonnet-4.5"] if not refreshed else ["claude-sonnet-4.6"]
 
-    backend._fetch_available_models = _fake_fetch_available_models  # type: ignore[method-assign]
+    backend._model_resolver.fetch_available = _fake_fetch_available_models  # type: ignore[method-assign]
 
     first_request = httpx.Request("POST", "https://api.individual.githubcopilot.com/chat/completions")
     success_payload = {
@@ -737,7 +737,7 @@ async def test_copilot_send_message_returns_enriched_model_error_when_family_mis
     config = CopilotConfig(github_token="ghp_test")
     backend = CopilotBackend(config, FailoverConfig())
     backend._token_manager.get_token = AsyncMock(return_value="cop_token")
-    backend._fetch_available_models = AsyncMock(return_value=["claude-opus-4.6"])  # type: ignore[method-assign]
+    backend._model_resolver.fetch_available = AsyncMock(return_value=["claude-opus-4.6"])  # type: ignore[method-assign]
 
     request = httpx.Request("POST", "https://api.individual.githubcopilot.com/chat/completions")
     model_error = httpx.Response(
@@ -806,7 +806,7 @@ async def test_resolve_model_uses_config_mapping_when_rule_matches():
         ModelMappingRule(pattern="claude-sonnet-.*", target="claude-sonnet-4.6", is_regex=True, backends=["copilot"]),
     ])
     backend = _make_copilot_backend(mapper)
-    backend._get_available_models = AsyncMock(side_effect=AssertionError("不应调用 _get_available_models"))
+    backend._model_resolver.get_available = AsyncMock(side_effect=AssertionError("不应调用 get_available"))
 
     resolved = await backend._resolve_request_model(
         "claude-sonnet-4-20250514", force_refresh=False, refresh_reason="test"
@@ -825,7 +825,7 @@ async def test_resolve_model_falls_back_to_internal_when_no_copilot_rule():
         ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True, backends=["fallback"]),
     ])
     backend = _make_copilot_backend(mapper)
-    backend._get_available_models = AsyncMock(return_value=["claude-sonnet-4.6", "claude-opus-4.6"])
+    backend._model_resolver.get_available = AsyncMock(return_value=["claude-sonnet-4.6", "claude-opus-4.6"])
 
     resolved = await backend._resolve_request_model(
         "claude-sonnet-4-20250514", force_refresh=False, refresh_reason="test"
@@ -839,7 +839,7 @@ async def test_resolve_model_falls_back_to_internal_when_no_copilot_rule():
 async def test_resolve_model_without_mapper_uses_internal_resolution():
     """model_mapper=None 时向后兼容，走内部家族匹配策略."""
     backend = _make_copilot_backend(mapper=None)
-    backend._get_available_models = AsyncMock(return_value=["claude-haiku-4.5", "claude-sonnet-4.6"])
+    backend._model_resolver.get_available = AsyncMock(return_value=["claude-haiku-4.5", "claude-sonnet-4.6"])
 
     resolved = await backend._resolve_request_model(
         "claude-haiku-4-20250514", force_refresh=False, refresh_reason="test"
@@ -865,7 +865,7 @@ async def test_resolve_model_config_mapping_all_three_families():
     ]
     for requested, expected in cases:
         backend = _make_copilot_backend(mapper)
-        backend._get_available_models = AsyncMock(side_effect=AssertionError("不应调用"))
+        backend._model_resolver.get_available = AsyncMock(side_effect=AssertionError("不应调用"))
         resolved = await backend._resolve_request_model(requested, force_refresh=False, refresh_reason="test")
         assert resolved == expected, f"{requested} 期望 {expected}，实际 {resolved}"
         assert backend._last_model_resolution_reason == "config_model_mapping"

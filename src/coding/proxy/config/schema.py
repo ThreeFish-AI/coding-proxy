@@ -1,254 +1,52 @@
-"""Pydantic 配置模型."""
+"""Pydantic 配置模型 — 聚合层（re-export 所有子模块符号）.
+
+本文件为向后兼容的聚合入口点，所有配置模型已正交拆分至以下子模块：
+
+- :mod:`.server`        – ServerConfig / DatabaseConfig / LoggingConfig
+- :mod:`.backends`       – AnthropicConfig / CopilotConfig / AntigravityConfig / ZhipuConfig
+- :mod:`.resiliency`     – CircuitBreakerConfig / RetryConfig / FailoverConfig / QuotaGuardConfig
+- :mod:`.routing`        – BackendType / TierConfig / ModelMappingRule / ModelPricingEntry
+- :mod:`.auth_schema`    – AuthConfig
+
+:py:class:`ProxyConfig` 及其旧格式迁移逻辑保留在此文件中。
+"""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+# ── 子模块 re-export ────────────────────────────────────────────
+
+from .server import ServerConfig, DatabaseConfig, LoggingConfig  # noqa: F401
+from .backends import (                                 # noqa: F401
+    AnthropicConfig,
+    CopilotConfig,
+    AntigravityConfig,
+    ZhipuConfig,
+)
+from .resiliency import (                              # noqa: F401
+    CircuitBreakerConfig,
+    RetryConfig,
+    FailoverConfig,
+    QuotaGuardConfig,
+)
+from .routing import (                                  # noqa: F401
+    BackendType,
+    TierConfig,
+    ModelMappingRule,
+    ModelPricingEntry,
+    _COPILOT_FIELDS,
+    _ANTIGRAVITY_FIELDS,
+    _ZHIPU_FIELDS,
+    _BACKEND_EXCLUSIVE_FIELDS,
+)
+from .auth_schema import AuthConfig                     # noqa: F401
+
 logger = logging.getLogger(__name__)
-
-# ── 后端专属字段分组映射 ────────────────────────────────────────
-# 每个 backend 类型对应其专属字段集合，用于 TierConfig 的语义标注与校验
-
-_COPILOT_FIELDS: frozenset[str] = frozenset({
-    "github_token", "account_type", "token_url", "models_cache_ttl_seconds",
-})
-_ANTIGRAVITY_FIELDS: frozenset[str] = frozenset({
-    "client_id", "client_secret", "refresh_token", "model_endpoint",
-})
-_ZHIPU_FIELDS: frozenset[str] = frozenset({"api_key",})
-
-_BACKEND_EXCLUSIVE_FIELDS: dict[str, frozenset[str]] = {
-    "copilot": _COPILOT_FIELDS,
-    "antigravity": _ANTIGRAVITY_FIELDS,
-    "zhipu": _ZHIPU_FIELDS,
-}
-
-
-class ServerConfig(BaseModel):
-    host: str = "127.0.0.1"
-    port: int = 8046
-
-
-class AnthropicConfig(BaseModel):
-    enabled: bool = True
-    base_url: str = "https://api.anthropic.com"
-    timeout_ms: int = 300000
-
-
-class CopilotConfig(BaseModel):
-    """GitHub Copilot 后端配置."""
-
-    enabled: bool = False
-    github_token: str = ""
-    account_type: str = "individual"
-    token_url: str = "https://api.github.com/copilot_internal/v2/token"
-    base_url: str = ""
-    models_cache_ttl_seconds: int = 300
-    timeout_ms: int = 300000
-
-
-class AntigravityConfig(BaseModel):
-    """Google Antigravity Claude 后端配置."""
-
-    enabled: bool = False
-    client_id: str = ""
-    client_secret: str = ""
-    refresh_token: str = ""
-    base_url: str = "https://generativelanguage.googleapis.com/v1beta"
-    model_endpoint: str = "models/claude-sonnet-4-20250514"
-    timeout_ms: int = 300000
-    safety_settings: dict[str, str] | None = None
-
-
-class ZhipuConfig(BaseModel):
-    """智谱 GLM 后端配置（原生 Anthropic 兼容端点）.
-
-    官方端点已完整支持 Anthropic Messages API 协议，
-    无需工具截断、thinking 剥离等适配逻辑。
-    """
-
-    enabled: bool = True
-    base_url: str = "https://open.bigmodel.cn/api/anthropic"
-    api_key: str = ""
-    timeout_ms: int = 3000000
-
-
-class CircuitBreakerConfig(BaseModel):
-    failure_threshold: int = 3
-    recovery_timeout_seconds: int = 300
-    success_threshold: int = 2
-    max_recovery_seconds: int = 3600
-
-
-class RetryConfig(BaseModel):
-    """传输层重试配置."""
-
-    max_retries: int = 2
-    initial_delay_ms: int = 500
-    max_delay_ms: int = 5000
-    backoff_multiplier: float = 2.0
-    jitter: bool = True
-
-
-class FailoverConfig(BaseModel):
-    status_codes: list[int] = Field(
-        default=[429, 403, 503, 500],
-    )
-    error_types: list[str] = Field(
-        default=["rate_limit_error", "overloaded_error", "api_error"],
-    )
-    error_message_patterns: list[str] = Field(
-        default=["quota", "limit exceeded", "usage cap", "capacity"],
-    )
-
-
-class ModelMappingRule(BaseModel):
-    pattern: str
-    target: str
-    is_regex: bool = False
-    backends: list[str] = Field(default_factory=list)
-
-
-class ModelPricingEntry(BaseModel):
-    """单个模型的定价配置（USD / 1M tokens）."""
-
-    backend: str                            # 后端名称（对应 usage 表"后端"列）
-    model: str                              # 实际模型名（对应 usage 表"实际模型"列）
-    input_cost_per_mtok: float = 0.0        # 输入 Token 单价
-    output_cost_per_mtok: float = 0.0       # 输出 Token 单价
-    cache_write_cost_per_mtok: float = 0.0  # 缓存创建 Token 单价
-    cache_read_cost_per_mtok: float = 0.0   # 缓存读取 Token 单价
-
-
-class QuotaGuardConfig(BaseModel):
-    enabled: bool = False
-    token_budget: int = 0
-    window_hours: float = 5.0
-    threshold_percent: float = 99.0
-    probe_interval_seconds: int = 300
-
-
-BackendType = Literal["anthropic", "copilot", "antigravity", "zhipu"]
-
-
-class TierConfig(BaseModel):
-    """单个 Tier 的统一配置（支持所有后端类型）.
-
-    列表顺序即优先级：index 越小优先级越高。
-    无 circuit_breaker 的 Tier 为终端层（不触发故障转移）。
-
-    各后端类型的专属字段已通过 ``Field(description=...)`` 标注适用范围，
-    非当前 backend 类型的专属字段在验证阶段会发出 warning 日志。
-    """
-
-    backend: BackendType
-
-    # ── 通用字段（所有后端共用） ──────────────────────────────
-    enabled: bool = True
-    base_url: str = Field(
-        default="",
-        description="后端 API 基础 URL；留空时使用各后端默认值",
-    )
-    timeout_ms: int = Field(
-        default=300000,
-        description="请求超时时间（毫秒），适用于所有后端",
-    )
-
-    # ── Copilot 专属字段 ─────────────────────────────────────
-    github_token: str = Field(
-        default="",
-        description="[copilot] GitHub Personal Access Token 或 OAuth Token",
-    )
-    account_type: str = Field(
-        default="individual",
-        description="[copilot] Copilot 账户类型：individual / business / enterprise",
-    )
-    token_url: str = Field(
-        default="https://api.github.com/copilot_internal/v2/token",
-        description="[copilot] Copilot Token 交换端点 URL",
-    )
-    models_cache_ttl_seconds: int = Field(
-        default=300,
-        description="[copilot] 模型列表缓存 TTL（秒）",
-    )
-
-    # ── Antigravity 专属字段 ──────────────────────────────────
-    client_id: str = Field(
-        default="",
-        description="[antigravity] Google OAuth2 Client ID",
-    )
-    client_secret: str = Field(
-        default="",
-        description="[antigravity] Google OAuth2 Client Secret",
-    )
-    refresh_token: str = Field(
-        default="",
-        description="[antigravity] Google OAuth2 Refresh Token",
-    )
-    model_endpoint: str = Field(
-        default="models/claude-sonnet-4-20250514",
-        description="[antigravity] Antigravity 模型端点路径",
-    )
-
-    # ── Zhipu 专属字段 ────────────────────────────────────────
-    api_key: str = Field(
-        default="",
-        description="[zhipu] 智谱 GLM API Key",
-    )
-
-    # ── 弹性配置 ──────────────────────────────────────────────
-    circuit_breaker: CircuitBreakerConfig | None = Field(
-        default=None,
-        description="熔断器配置；None 表示终端层（不触发故障转移）",
-    )
-    retry: RetryConfig = Field(default_factory=RetryConfig)
-    quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
-    weekly_quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
-
-    @model_validator(mode="after")
-    def _warn_irrelevant_fields(self) -> "TierConfig":
-        """对非当前 backend 类型的非空专属字段发出 warning."""
-        exclusive = _BACKEND_EXCLUSIVE_FIELDS.get(self.backend)
-        if not exclusive:
-            return self
-        for backend_type, fields in _BACKEND_EXCLUSIVE_FIELDS.items():
-            if backend_type == self.backend:
-                continue
-            for field_name in fields:
-                value = getattr(self, field_name, None)
-                if value and value != getattr(TierConfig.model_fields[field_name], "default", None):
-                    logger.warning(
-                        "TierConfig(backend=%s): 字段 %s 属于 %s 后端，当前值将被忽略",
-                        self.backend, field_name, backend_type,
-                    )
-        return self
-
-
-class DatabaseConfig(BaseModel):
-    path: str = "~/.coding-proxy/usage.db"
-    compat_state_path: str = "~/.coding-proxy/compat.db"
-    compat_state_ttl_seconds: int = 86400
-
-
-class LoggingConfig(BaseModel):
-    level: str = "INFO"
-    file: Optional[str] = None
-
-
-class AuthConfig(BaseModel):
-    """OAuth 登录配置."""
-
-    github_client_id: str = "Iv1.b507a08c87ecfe98"
-    google_client_id: str = (
-        "1071006060591-tmhssin2h21lcre235vtolojh4g403ep"
-        ".apps.googleusercontent.com"
-    )
-    google_client_secret: str = "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"
-    token_store_path: str = "~/.coding-proxy/tokens.json"
 
 
 class ProxyConfig(BaseModel):
@@ -405,3 +203,20 @@ class ProxyConfig(BaseModel):
     @property
     def compat_state_path(self) -> Path:
         return Path(self.database.compat_state_path).expanduser()
+
+
+__all__ = [
+    "ProxyConfig",
+    # server
+    "ServerConfig", "DatabaseConfig", "LoggingConfig",
+    # backends
+    "AnthropicConfig", "CopilotConfig", "AntigravityConfig", "ZhipuConfig",
+    # resiliency
+    "CircuitBreakerConfig", "RetryConfig", "FailoverConfig", "QuotaGuardConfig",
+    # routing
+    "BackendType", "TierConfig", "ModelMappingRule", "ModelPricingEntry",
+    "_COPILOT_FIELDS", "_ANTIGRAVITY_FIELDS", "_ZHIPU_FIELDS",
+    "_BACKEND_EXCLUSIVE_FIELDS",
+    # auth
+    "AuthConfig",
+]

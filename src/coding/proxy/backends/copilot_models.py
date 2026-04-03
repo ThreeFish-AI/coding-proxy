@@ -1,11 +1,36 @@
-"""Copilot 模型解析纯函数与诊断数据类."""
+"""Copilot 模型解析纯函数、诊断数据类与模型目录管理策略."""
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Awaitable, Callable, Protocol
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+
+# ── 回调协议 ────────────────────────────────────────────
+
+
+class _HttpRequestFn(Protocol):
+    """HTTP 请求回调协议（由 CopilotBackend 注入）."""
+
+    async def __call__(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        headers: dict[str, str],
+        json_body: dict[str, Any] | None = None,
+    ) -> httpx.Response: ...
+
+
+# ── 纯函数（模型解析） ───────────────────────────────────
 
 
 def normalize_copilot_requested_model(model: str) -> str:
@@ -146,6 +171,221 @@ class CopilotModelCatalog:
         if not self.fetched_at_unix:
             return None
         return max(int(time.time()) - self.fetched_at_unix, 0)
+
+
+# ── CopilotModelResolver 策略类 ───────────────────────────
+
+
+class CopilotModelResolver:
+    """Copilot 模型目录管理与解析策略.
+
+    职责:
+    - 维护模型目录缓存（CopilotModelCatalog）及 TTL
+    - 通过注入的 HTTP 回调获取可用模型列表
+    - 基于配置规则或家族匹配策略解析最终模型名
+
+    设计: 不直接持有 HTTP client 或 Backend 引用，通过 ``request_fn`` 回调
+    注入请求能力，实现 Dependency Inversion.
+    """
+
+    def __init__(
+        self,
+        models_cache_ttl_seconds: int,
+        model_mapper: Any = None,
+    ) -> None:
+        self._catalog = CopilotModelCatalog()
+        self._ttl = max(models_cache_ttl_seconds, 0)
+        self._model_mapper = model_mapper
+        # 诊断字段
+        self.last_normalized_model = ""
+        self.last_model_refresh_reason = ""
+
+    @property
+    def catalog(self) -> CopilotModelCatalog:
+        return self._catalog
+
+    # ── 目录新鲜度 ─────────────────────────────────────
+
+    def is_fresh(self) -> bool:
+        if not self._catalog.available_models:
+            return False
+        if self._ttl == 0:
+            return False
+        age = self._catalog.age_seconds()
+        return age is not None and age < self._ttl
+
+    # ── 模型列表获取 ───────────────────────────────────
+
+    async def fetch_available(
+        self,
+        *,
+        request_fn: _HttpRequestFn,
+        headers_fn: Callable[[], dict[str, str]],
+        refresh_reason: str,
+    ) -> list[str]:
+        """从 Copilot API 获取可用模型列表并更新目录."""
+        response = await request_fn(
+            "GET",
+            "/models",
+            headers=headers_fn(),
+        )
+        from .base import _decode_json_body  # 延迟导入避免循环依赖
+
+        payload = _decode_json_body(response)
+        if response.status_code >= 400:
+            self.last_model_refresh_reason = f"{refresh_reason}:probe_error"
+            return []
+
+        available_models = extract_available_models(payload)
+        self._catalog = CopilotModelCatalog(
+            available_models=available_models,
+            fetched_at_unix=int(time.time()),
+        )
+        self.last_model_refresh_reason = refresh_reason
+        return available_models
+
+    async def get_available(
+        self,
+        *,
+        force_refresh: bool,
+        request_fn: _HttpRequestFn,
+        headers_fn: Callable[[], dict[str, str]],
+        refresh_reason: str,
+    ) -> list[str]:
+        """获取可用模型列表（带 TTL 缓存）."""
+        if force_refresh or not self.is_fresh():
+            self.last_model_refresh_reason = refresh_reason
+            available_models = await self.fetch_available(
+                request_fn=request_fn,
+                headers_fn=headers_fn,
+                refresh_reason=refresh_reason,
+            )
+            if available_models:
+                self._catalog = CopilotModelCatalog(
+                    available_models=list(available_models),
+                    fetched_at_unix=int(time.time()),
+                )
+            return available_models
+        return list(self._catalog.available_models)
+
+    # ── 模型解析 ───────────────────────────────────────
+
+    async def resolve(
+        self,
+        requested_model: str,
+        *,
+        force_refresh: bool,
+        request_fn: _HttpRequestFn,
+        headers_fn: Callable[[], dict[str, str]],
+        refresh_reason: str,
+        # 以下为诊断回写目标（由调用方传入的可变对象）
+        diagnostics: dict[str, str],
+    ) -> str:
+        """解析请求模型名为最终模型名.
+
+        Returns:
+            解析后的模型名字符串. 同时将中间结果写入 *diagnostics* 字典.
+        """
+        # 优先：配置规则显式映射
+        if self._model_mapper is not None:
+            mapped = self._model_mapper.map(
+                requested_model, backend="copilot", default=requested_model,
+            )
+            if mapped != requested_model:
+                diagnostics["requested_model"] = requested_model
+                diagnostics["normalized_model"] = requested_model
+                diagnostics["resolved_model"] = mapped
+                diagnostics["resolution_reason"] = "config_model_mapping"
+                self.last_normalized_model = requested_model
+                return mapped
+
+        # 次级：内部家族匹配策略
+        normalized_model = normalize_copilot_requested_model(requested_model)
+        available_models = await self.get_available(
+            force_refresh=force_refresh,
+            request_fn=request_fn,
+            headers_fn=headers_fn,
+            refresh_reason=refresh_reason,
+        )
+        resolved_model, resolution_reason = select_copilot_model(
+            requested_model, available_models,
+        )
+        if not resolved_model:
+            resolved_model = normalized_model or requested_model
+            resolution_reason = (
+                "catalog_unavailable_fallback_to_normalized"
+                if not available_models else
+                "no_same_family_model_fallback_to_normalized"
+            )
+
+        diagnostics["requested_model"] = requested_model
+        diagnostics["normalized_model"] = normalized_model
+        diagnostics["resolved_model"] = resolved_model
+        diagnostics["resolution_reason"] = resolution_reason
+        self.last_normalized_model = normalized_model
+        return resolved_model
+
+    # ── 错误响应构建 ───────────────────────────────────
+
+    @staticmethod
+    def build_model_not_supported_response(
+        response: httpx.Response,
+        *,
+        requested_model: str,
+        normalized_model: str,
+        resolved_model: str,
+        available_models: list[str],
+    ) -> httpx.Response:
+        """构建 model_not_supported 错误响应."""
+        payload = {
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Copilot 当前账号未开放与请求同家族匹配的模型",
+                "code": "model_not_supported",
+                "param": "model",
+                "details": {
+                    "requested_model": requested_model,
+                    "normalized_model": normalized_model,
+                    "resolved_model": resolved_model,
+                    "available_models": available_models,
+                },
+            }
+        }
+        return httpx.Response(
+            400,
+            content=json.dumps(payload, ensure_ascii=False).encode(),
+            headers={"content-type": "application/json"},
+            request=response.request,
+        )
+
+    @staticmethod
+    def is_model_not_supported_response(response: httpx.Response | None) -> bool:
+        """检测响应是否为 model_not_supported 错误."""
+        if response is None or response.status_code != 400:
+            return False
+        from .base import _decode_json_body  # 延迟导入避免循环依赖
+
+        payload = _decode_json_body(response)
+        if not isinstance(payload, dict):
+            return False
+        error = payload.get("error")
+        if not isinstance(error, dict):
+            return False
+        return error.get("code") == "model_not_supported"
+
+
+def extract_available_models(payload: dict[str, Any] | list[Any] | None) -> list[str]:
+    """从 Copilot /models 响应中提取模型 ID 列表."""
+    if not isinstance(payload, dict):
+        return []
+    models = payload.get("data", [])
+    if not isinstance(models, list):
+        return []
+    return [
+        item.get("id")
+        for item in models
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id")
+    ]
 
 
 # 向后兼容别名（旧名称带下划线前缀）
