@@ -262,3 +262,133 @@ async def test_openai_tool_call_stream_is_converted():
     assert tool_start["data"]["content_block"]["name"] == "get_weather"
     assert tool_delta["data"]["delta"]["type"] == "input_json_delta"
     assert message_delta["data"]["delta"]["stop_reason"] == "tool_use"
+
+
+# --- 智谱 GLM 工具调用兼容性测试 ---
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_tool_use_with_inline_arguments():
+    """智谱在 content_block_start.input 中内联返回完整工具参数.
+
+    Anthropic 标准约定 input 为空字典，参数通过 input_json_delta 流式传输。
+    智谱可能直接在 content_block_start.input 中返回完整参数，
+    需合成 input_json_delta 事件确保 Claude Code 能解析参数。
+    """
+    chunks = [
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"glm-5.1","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01","name":"Task","input":{"description":"test task","prompt":"do something","subagent_type":"general"}}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]
+
+    collected = []
+    async for chunk in normalize_anthropic_compatible_stream(
+        _raw_chunks(chunks), model="glm-5.1",
+    ):
+        collected.append(chunk)
+
+    events = _parse_events(collected)
+    # 验证 content_block_start 被保留
+    tool_start = next(
+        (event for event in events if event["event"] == "content_block_start"),
+        None,
+    )
+    assert tool_start is not None, "tool_use content_block_start should be preserved"
+    assert tool_start["data"]["content_block"]["type"] == "tool_use"
+    assert tool_start["data"]["content_block"]["name"] == "Task"
+    # 验证合成的 input_json_delta 事件携带了内联参数
+    tool_delta = next(
+        (event for event in events if event["event"] == "content_block_delta"),
+        None,
+    )
+    assert tool_delta is not None, "Should emit synthetic input_json_delta for inline args"
+    assert tool_delta["data"]["delta"]["type"] == "input_json_delta"
+    args = json.loads(tool_delta["data"]["delta"]["partial_json"])
+    assert args["description"] == "test task"
+    assert args["prompt"] == "do something"
+    assert args["subagent_type"] == "general"
+
+
+@pytest.mark.asyncio
+async def test_openai_tool_call_with_null_arguments():
+    """OpenAI 格式工具调用 arguments 为 null 时不崩溃."""
+    chunks = [
+        'data: {"id":"chatcmpl-1","model":"glm-5.1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"Task","arguments":null}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}\n\n',
+        "data: [DONE]\n\n",
+    ]
+
+    collected = []
+    async for chunk in normalize_anthropic_compatible_stream(
+        _raw_chunks(chunks), model="glm-5.1",
+    ):
+        collected.append(chunk)
+
+    events = _parse_events(collected)
+    tool_start = next(event for event in events if event["event"] == "content_block_start")
+    assert tool_start["data"]["content_block"]["type"] == "tool_use"
+    assert tool_start["data"]["content_block"]["name"] == "Task"
+    # 应正常完成，不崩溃
+    message_delta = next(event for event in events if event["event"] == "message_delta")
+    assert message_delta["data"]["delta"]["stop_reason"] == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_nonstandard_tool_call_block_type():
+    """智谱可能使用 'tool_call' 而非 'tool_use' 作为内容块类型."""
+    chunks = [
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"glm-5.1","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_call","id":"toolu_01","name":"bash","input":{}}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"cmd\\":\\"ls\\"}"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]
+
+    collected = []
+    async for chunk in normalize_anthropic_compatible_stream(
+        _raw_chunks(chunks), model="glm-5.1",
+    ):
+        collected.append(chunk)
+
+    events = _parse_events(collected)
+    tool_start = next(
+        (event for event in events if event["event"] == "content_block_start"),
+        None,
+    )
+    assert tool_start is not None, "tool_call block type should not be filtered"
+    # 归一化为 tool_use
+    assert tool_start["data"]["content_block"]["type"] == "tool_use"
+    assert tool_start["data"]["content_block"]["name"] == "bash"
+    tool_delta = next(
+        (event for event in events if event["event"] == "content_block_delta"),
+        None,
+    )
+    assert tool_delta is not None, "input_json_delta should be preserved"
+
+
+@pytest.mark.asyncio
+async def test_nonstandard_arguments_delta_type():
+    """智谱可能使用 'arguments_delta' 而非 'input_json_delta'."""
+    chunks = [
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"glm-5.1","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01","name":"bash","input":{}}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"arguments_delta","partial_json":"{\\"cmd\\":\\"ls\\"}"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]
+
+    collected = []
+    async for chunk in normalize_anthropic_compatible_stream(
+        _raw_chunks(chunks), model="glm-5.1",
+    ):
+        collected.append(chunk)
+
+    events = _parse_events(collected)
+    tool_delta = next(
+        (event for event in events if event["event"] == "content_block_delta"),
+        None,
+    )
+    assert tool_delta is not None, "arguments_delta should be mapped to input_json_delta"
+    assert tool_delta["data"]["delta"]["type"] == "input_json_delta"
+    assert tool_delta["data"]["delta"]["partial_json"] == '{"cmd":"ls"}'

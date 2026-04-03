@@ -59,7 +59,7 @@ export ZHIPU_API_KEY="your-api-key-here"
 
 ### 4. 启动代理服务
 ```bash
-coding-proxy start
+uv run coding-proxy start
 #  INFO:     Started server process
 #  INFO:     Uvicorn running on http://127.0.0.1:8046 (Press CTRL+C to quit)
 ```
@@ -158,7 +158,7 @@ graph TD
 
 本项目在工程化的探索和实践过程中，受到了一些前沿技术生态和设计的激励。特此感谢：
 
-- 特别感谢 **[Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code)** 激发了我们不断打造更加极致无缝编程助手的发心。
+- 特别感谢 **[Claude Code](https://platform.claude.com/docs/en/intro)** 激发了我们不断打造更加极致无缝编程助手的发心。
 - 感谢开源社区各类 **API Proxy** 项目在反向代理、高可用性设计（熔断机制/流式代理）及路由分发方面的宝贵探索经验，为 `coding-proxy` 的 N-Tier 弹性机制提供了坚实的理论启发。
 
 ---

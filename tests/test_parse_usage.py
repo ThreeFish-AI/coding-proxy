@@ -1,6 +1,8 @@
 """SSE chunk 用量解析单元测试 — 覆盖 Anthropic / OpenAI(Zhipu) / 混合格式."""
 
-from coding.proxy.routing.router import _parse_usage_from_chunk, _set_if_nonzero
+import logging
+
+from coding.proxy.routing.usage_parser import _parse_usage_from_chunk, _set_if_nonzero
 
 
 def _sse(data_str: str) -> bytes:
@@ -69,6 +71,23 @@ def test_anthropic_empty_usage():
         '{"type":"message_delta","delta":{},"usage":{"output_tokens":30}}'
     ), usage)
     assert usage["output_tokens"] == 30
+
+
+def test_anthropic_cache_only_input_signal():
+    """Anthropic prompt caching 场景下，cache tokens 本身就是有效输入信号."""
+    usage: dict = {}
+    _parse_usage_from_chunk(_sse(
+        '{"type":"message_start","message":{"id":"msg_cache_only","usage":'
+        '{"input_tokens":0,"cache_creation_input_tokens":720,"cache_read_input_tokens":82408}}}'
+    ), usage)
+    _parse_usage_from_chunk(_sse(
+        '{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8220}}'
+    ), usage)
+
+    assert usage.get("input_tokens", 0) == 0
+    assert usage["cache_creation_tokens"] == 720
+    assert usage["cache_read_tokens"] == 82408
+    assert usage["output_tokens"] == 8220
 
 
 # --- OpenAI / Zhipu 格式 ---
@@ -211,3 +230,55 @@ def test_multiple_sse_lines_in_single_chunk():
     _parse_usage_from_chunk(chunk, usage)
     assert usage["input_tokens"] == 80
     assert usage["output_tokens"] == 20
+
+
+# --- vendor_label 日志标签 ---
+
+
+def test_vendor_label_anthropic(caplog):
+    """传入 vendor_label=Anthropic 时，日志应标注 (Anthropic)."""
+    caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.usage_parser")
+    usage: dict = {}
+    _parse_usage_from_chunk(
+        _sse('{"type":"message_delta","delta":{},"usage":{"output_tokens":42,"input_tokens":10}}'),
+        usage,
+        vendor_label="Anthropic",
+    )
+    assert any("(Anthropic)" in r.message for r in caplog.records)
+
+
+def test_vendor_label_openai(caplog):
+    """传入 vendor_label=OpenAI 时，日志应标注 (OpenAI)."""
+    caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.usage_parser")
+    usage: dict = {}
+    _parse_usage_from_chunk(
+        _sse('{"usage":{"prompt_tokens":100,"completion_tokens":25}}'),
+        usage,
+        vendor_label="OpenAI",
+    )
+    assert any("(OpenAI)" in r.message for r in caplog.records)
+
+
+def test_vendor_label_gemini(caplog):
+    """传入 vendor_label=Gemini 时，日志应标注 (Gemini)."""
+    caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.usage_parser")
+    usage: dict = {}
+    _parse_usage_from_chunk(
+        _sse('{"type":"message_delta","delta":{},"usage":{"output_tokens":30,"input_tokens":200}}'),
+        usage,
+        vendor_label="Gemini",
+    )
+    assert any("(Gemini)" in r.message for r in caplog.records)
+
+
+def test_no_vendor_label_omits_parenthesis(caplog):
+    """不传 vendor_label 时，日志不应包含括号标签."""
+    caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.usage_parser")
+    usage: dict = {}
+    _parse_usage_from_chunk(
+        _sse('{"type":"message_delta","delta":{},"usage":{"output_tokens":10}}'),
+        usage,
+    )
+    # 不应有任何带括号的 vendor 标签
+    for record in caplog.records:
+        assert "(" not in record.message or "Extracted" not in record.message or ") " not in record.message[record.message.index("("):]

@@ -9,20 +9,22 @@ from typing import Any, AsyncIterator
 import httpx
 
 from ..auth.providers.google import GoogleOAuthProvider
+from ..compat.canonical import CompatibilityProfile, CompatibilityStatus
 from ..config.schema import AntigravityConfig, FailoverConfig
 from ..convert.anthropic_to_gemini import convert_request
 from ..convert.gemini_to_anthropic import convert_response, extract_usage
 from ..convert.gemini_sse_adapter import adapt_sse_stream
 from ..routing.model_mapper import ModelMapper
 from .base import (
-    CapabilityLossReason,
+    BaseBackend,
     BackendCapabilities,
     BackendResponse,
-    BaseBackend,
+    CapabilityLossReason,
     RequestCapabilities,
     UsageInfo,
     _sanitize_headers_for_synthetic_response,
 )
+from .mixins import TokenBackendMixin
 from .token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
 
 logger = logging.getLogger(__name__)
@@ -97,7 +99,7 @@ class GoogleOAuthTokenManager(BaseTokenManager):
         self.invalidate()
 
 
-class AntigravityBackend(BaseBackend):
+class AntigravityBackend(TokenBackendMixin, BaseBackend):
     """Google Antigravity Claude API 后端.
 
     通过 Google OAuth2 认证，将 Anthropic 格式请求转换为 Gemini 格式
@@ -110,17 +112,15 @@ class AntigravityBackend(BaseBackend):
         failover_config: FailoverConfig,
         model_mapper: ModelMapper,
     ) -> None:
-        super().__init__(config.base_url, config.timeout_ms, failover_config)
-        self._token_manager = GoogleOAuthTokenManager(
+        token_manager = GoogleOAuthTokenManager(
             config.client_id, config.client_secret, config.refresh_token,
         )
+        TokenBackendMixin.__init__(self, token_manager)
+        BaseBackend.__init__(self, config.base_url, config.timeout_ms, failover_config)
         self._model_endpoint = config.model_endpoint
         self._model_mapper = model_mapper
         self._default_model = config.model_endpoint.removeprefix("models/")
         self._last_request_adaptations: list[str] = []
-        self._last_resolved_model = ""
-        self._last_requested_model = ""
-        self._last_model_resolution_reason = ""
 
     def get_name(self) -> str:
         return "antigravity"
@@ -131,6 +131,18 @@ class AntigravityBackend(BaseBackend):
             supports_thinking=True,
             supports_images=True,
             supports_metadata=True,
+        )
+
+    def get_compatibility_profile(self) -> CompatibilityProfile:
+        return CompatibilityProfile(
+            thinking=CompatibilityStatus.NATIVE,
+            tool_calling=CompatibilityStatus.NATIVE,
+            tool_streaming=CompatibilityStatus.SIMULATED,
+            mcp_tools=CompatibilityStatus.UNKNOWN,
+            images=CompatibilityStatus.NATIVE,
+            metadata=CompatibilityStatus.SIMULATED,
+            json_output=CompatibilityStatus.UNKNOWN,
+            usage_tokens=CompatibilityStatus.SIMULATED,
         )
 
     def supports_request(
@@ -180,11 +192,6 @@ class AntigravityBackend(BaseBackend):
         }
         return gemini_body, new_headers
 
-    def _on_error_status(self, status_code: int) -> None:
-        """401/403 时标记 token 失效以触发被动刷新."""
-        if status_code in (401, 403):
-            self._token_manager.invalidate()
-
     def _mark_scope_error_if_needed(self, error_text: str) -> None:
         lowered = error_text.lower()
         if "access_token_scope_insufficient" not in lowered:
@@ -195,20 +202,9 @@ class AntigravityBackend(BaseBackend):
             needs_reauth=True,
         )
 
-    async def check_health(self) -> bool:
-        """检查 Google OAuth token 是否可刷新（免费操作）."""
-        try:
-            token = await self._token_manager.get_token()
-            return bool(token)
-        except Exception:
-            logger.warning("Antigravity health check failed: token refresh error")
-            return False
-
     def get_diagnostics(self) -> dict[str, Any]:
-        diagnostics = self._token_manager.get_diagnostics()
-        result: dict[str, Any] = {}
-        if diagnostics:
-            result["token_manager"] = diagnostics
+        result: dict[str, Any] = BaseBackend.get_diagnostics(self)
+        result.update(self._get_token_diagnostics())
         if self._last_request_adaptations:
             result["request_adaptations"] = self._last_request_adaptations
         if self._last_requested_model:
@@ -300,4 +296,4 @@ class AntigravityBackend(BaseBackend):
 
     async def close(self) -> None:
         await self._token_manager.close()
-        await super().close()
+        await BaseBackend.close(self)

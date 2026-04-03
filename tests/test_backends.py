@@ -59,6 +59,22 @@ async def test_zhipu_prepare_request_maps_model():
     assert body["model"] == "claude-sonnet-4-20250514"
 
 
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_uses_default_family_mapping():
+    """空映射规则时回退到 ModelMapper 默认目标（glm-5.1）."""
+    backend = ZhipuBackend(ZhipuConfig(api_key="test-key"), ModelMapper([]))
+
+    sonnet_body = {"model": "claude-sonnet-4-20250514", "messages": []}
+    haiku_body = {"model": "claude-haiku-4-5-20251001", "messages": []}
+
+    prepared_sonnet, _ = await backend._prepare_request(sonnet_body, {})
+    prepared_haiku, _ = await backend._prepare_request(haiku_body, {})
+
+    # 无显式规则时，全部回退到 _DEFAULT_TARGET（glm-5.1）
+    assert prepared_sonnet["model"] == "glm-5.1"
+    assert prepared_haiku["model"] == "glm-5.1"
+
+
 def test_anthropic_should_trigger_failover():
     failover = FailoverConfig(
         status_codes=[429, 503],
@@ -95,8 +111,10 @@ def test_zhipu_never_triggers_failover():
 
 
 def test_zhipu_supports_tools_and_thinking():
-    """ZhipuBackend 应声明支持 tools 和 thinking，避免含工具/思考请求被路由器跳过."""
+    """ZhipuBackend 应声明全部能力为 NATIVE（原生 Anthropic 兼容端点）."""
     from coding.proxy.backends.base import RequestCapabilities
+    from coding.proxy.compat.canonical import CompatibilityStatus
+
     mapper = ModelMapper([])
     backend = ZhipuBackend(ZhipuConfig(), mapper)
     caps = backend.get_capabilities()
@@ -111,11 +129,18 @@ def test_zhipu_supports_tools_and_thinking():
     supported, reasons = backend.supports_request(RequestCapabilities(has_thinking=True))
     assert supported is True
     assert reasons == []
+    # 兼容性画像应全部为 NATIVE
+    profile = backend.get_compatibility_profile()
+    assert profile.thinking is CompatibilityStatus.NATIVE
+    assert profile.tool_calling is CompatibilityStatus.NATIVE
+    assert profile.tool_streaming is CompatibilityStatus.NATIVE
+    assert profile.images is CompatibilityStatus.NATIVE
+    assert profile.metadata is CompatibilityStatus.NATIVE
 
 
 @pytest.mark.asyncio
-async def test_zhipu_prepare_request_strips_metadata():
-    """ZhipuBackend._prepare_request 应静默剥离 metadata 字段."""
+async def test_zhipu_prepare_request_preserves_metadata():
+    """ZhipuBackend._prepare_request 应原样保留 metadata 字段（原生端点支持）."""
     mapper = ModelMapper([])
     backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), mapper)
     body = {
@@ -124,14 +149,16 @@ async def test_zhipu_prepare_request_strips_metadata():
         "metadata": {"user_id": "u123"},
     }
     prepared_body, _ = await backend._prepare_request(body, {})
-    assert "metadata" not in prepared_body
+    # metadata 原样透传，不再剥离或投影
+    assert "metadata" in prepared_body
+    assert prepared_body["metadata"] == {"user_id": "u123"}
     # 原始 body 不应被修改
-    assert "metadata" in body
+    assert body["metadata"] == {"user_id": "u123"}
 
 
 @pytest.mark.asyncio
-async def test_zhipu_prepare_request_translates_thinking():
-    """ZhipuBackend._prepare_request 应将 Anthropic thinking 格式转换为智谱格式."""
+async def test_zhipu_prepare_request_preserves_thinking():
+    """ZhipuBackend._prepare_request 应原样保留 thinking 字段（原生端点支持）."""
     mapper = ModelMapper([])
     backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), mapper)
     body = {
@@ -140,12 +167,124 @@ async def test_zhipu_prepare_request_translates_thinking():
         "thinking": {"type": "enabled", "budget_tokens": 10000},
     }
     prepared_body, _ = await backend._prepare_request(body, {})
-    # type 被保留
-    assert prepared_body["thinking"]["type"] == "enabled"
-    # budget_tokens 被剥离（智谱不支持）
-    assert "budget_tokens" not in prepared_body["thinking"]
+    # thinking 原样透传，不再剥离任何字段
+    assert prepared_body["thinking"] == {"type": "enabled", "budget_tokens": 10000}
     # 原始 body 不应被修改
     assert body["thinking"]["budget_tokens"] == 10000
+
+
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_preserves_anthropic_beta_header():
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+    body = {"model": "claude-opus-4-6", "messages": []}
+    _, prepared_headers = await backend._prepare_request(body, {
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "computer-use-2025-01-24",
+        "x-request-id": "req-1",
+    })
+    assert prepared_headers["anthropic-beta"] == "computer-use-2025-01-24"
+    assert prepared_headers["x-request-id"] == "req-1"
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "input_payload"),
+    [
+        ("Task", {"description": "sub task", "prompt": "do it", "subagent_type": "general"}),
+        ("Bash", {"command": "pwd", "description": "check cwd"}),
+        ("Grep", {"pattern": "TODO", "path": "."}),
+        ("Glob", {"pattern": "**/*.py", "path": "."}),
+        ("Edit", {"file_path": "a.py", "old_string": "x", "new_string": "y"}),
+        ("Write", {"file_path": "a.py", "content": "print('x')\n"}),
+        ("Read", {"file_path": "a.py", "offset": 1, "limit": 10}),
+        ("TodoWrite", {"todos": [{"content": "task-1", "status": "pending", "priority": "high"}]}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_preserves_claude_code_tool_shapes(tool_name, input_payload):
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [{
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": tool_name, "input": input_payload}],
+        }],
+        "tools": [{"name": tool_name, "input_schema": {"type": "object", "properties": {"payload": {"type": "string"}}}}],
+        "tool_choice": {"type": "any"},
+    }
+
+    prepared_body, prepared_headers = await backend._prepare_request(body, {"anthropic-beta": "code-tools-1"})
+
+    assert prepared_body["tools"][0]["name"] == tool_name
+    assert prepared_body["messages"][0]["content"][0]["name"] == tool_name
+    assert prepared_body["messages"][0]["content"][0]["input"] == input_payload
+    assert prepared_headers["anthropic-beta"] == "code-tools-1"
+    # 工具列表原样透传，不做任何截断或修改
+    assert len(prepared_body["tools"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_zhipu_send_message_normalizes_401_auth_error():
+    """ZhipuBackend._normalize_error_response 钩子将 401 错误类型归一化为 authentication_error."""
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+
+    raw_body = '{"error":{"type":"401","message":"令牌已过期或验证不正确"}}'.encode()
+    input_resp = BackendResponse(
+        status_code=401,
+        raw_body=raw_body,
+        error_type="401",
+        error_message="令牌已过期或验证不正确",
+        response_headers={"content-type": "application/json"},
+    )
+
+    # 直接测试 _normalize_error_response 钩子（无需 mock 基类 send_message）
+    result = backend._normalize_error_response(401, httpx.Response(401, content=raw_body), input_resp)
+
+    assert result.status_code == 401
+    assert result.error_type == "authentication_error"
+    assert result.error_message == "令牌已过期或验证不正确"
+    assert b'"authentication_error"' in result.raw_body
+
+
+def test_zhipu_normalize_error_response_passthrough_non_401():
+    """非 401 状态码应透传原始响应，不做归一化."""
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+
+    input_resp = BackendResponse(
+        status_code=429,
+        raw_body=b'{"error":{"type":"rate_limit_error","message":"Too many requests"}}',
+        error_type="rate_limit_error",
+        error_message="Too many requests",
+    )
+
+    result = backend._normalize_error_response(429, httpx.Response(429, content=input_resp.raw_body), input_resp)
+
+    assert result.error_type == "rate_limit_error"
+    assert result is input_resp  # 透传：返回同一对象
+
+
+@pytest.mark.asyncio
+async def test_zhipu_send_message_without_api_key_fails_fast():
+    backend = ZhipuBackend(ZhipuConfig(api_key=""), ModelMapper([]))
+
+    resp = await backend.send_message({"model": "claude-opus-4-6", "messages": {}}, {})
+
+    assert resp.status_code == 401
+    assert resp.error_type == "authentication_error"
+    assert "API key 未配置" in (resp.error_message or "")
+
+
+def test_zhipu_normalize_backend_error_accepts_raw_bytes():
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+
+    raw_body, payload = backend._normalize_backend_error(
+        401,
+        '{"error":{"type":"401","message":"令牌已过期或验证不正确"}}'.encode(),
+    )
+
+    assert payload is not None
+    assert payload["error"]["type"] == "authentication_error"
+    assert payload["error"]["message"] == "令牌已过期或验证不正确"
+    assert b'"authentication_error"' in raw_body
 
 
 def test_backend_response_defaults():

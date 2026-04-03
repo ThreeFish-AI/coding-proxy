@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time
-from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
 import httpx
 
 from ..config.schema import CopilotConfig, FailoverConfig
+from ..compat.canonical import CompatibilityProfile, CompatibilityStatus
 from ..convert.anthropic_to_openai import convert_request as convert_openai_request
 from ..convert.openai_to_anthropic import convert_response as convert_openai_response
 from ..streaming.anthropic_compat import normalize_anthropic_compatible_stream
@@ -28,181 +27,31 @@ from .base import (
     _decode_json_body,
     _extract_error_message,
 )
+from .copilot_models import (  # noqa: F401
+    CopilotExchangeDiagnostics,
+    CopilotMisdirectedRequest,
+    CopilotModelCatalog,
+    _copilot_model_family,
+    _copilot_model_major,
+    _copilot_model_version_rank,
+    _select_copilot_model,
+    normalize_copilot_requested_model,
+)
+from .copilot_urls import (  # noqa: F401
+    _EDITOR_PLUGIN_VERSION,
+    _EDITOR_VERSION,
+    _GITHUB_API_VERSION,
+    _USER_AGENT,
+    _normalize_base_url,
+    build_copilot_candidate_base_urls,
+    resolve_copilot_base_url,
+)
+from .copilot_retry import Copilot421RetryHandler
+from .mixins import TokenBackendMixin
 from .token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
 
 logger = logging.getLogger(__name__)
 
-_COPILOT_VERSION = "0.26.7"
-_EDITOR_VERSION = "vscode/1.98.0"
-_EDITOR_PLUGIN_VERSION = f"copilot-chat/{_COPILOT_VERSION}"
-_USER_AGENT = f"GitHubCopilotChat/{_COPILOT_VERSION}"
-_GITHUB_API_VERSION = "2025-04-01"
-
-
-def _normalize_base_url(url: str) -> str:
-    return url.rstrip("/")
-
-
-def build_copilot_candidate_base_urls(account_type: str, configured_base_url: str) -> list[str]:
-    """构建 Copilot 候选基础地址列表."""
-    if configured_base_url.strip():
-        return [_normalize_base_url(configured_base_url.strip())]
-
-    normalized = (account_type or "individual").strip().lower() or "individual"
-    candidates = [f"https://api.{normalized}.githubcopilot.com"]
-    candidates.append("https://api.githubcopilot.com")
-
-    unique_candidates: list[str] = []
-    for candidate in candidates:
-        normalized_candidate = _normalize_base_url(candidate)
-        if normalized_candidate not in unique_candidates:
-            unique_candidates.append(normalized_candidate)
-    return unique_candidates
-
-
-def resolve_copilot_base_url(account_type: str, configured_base_url: str) -> str:
-    """解析 Copilot API 基础地址.
-
-    保留用户显式覆盖；仅当值为空时按账号类型回退到官方推荐域名。
-    """
-    return build_copilot_candidate_base_urls(account_type, configured_base_url)[0]
-
-
-def normalize_copilot_requested_model(model: str) -> str:
-    """将 Anthropic 请求模型规范化为 Copilot 可协商的家族模型."""
-    value = (model or "").strip()
-    if not value:
-        return value
-
-    family_aliases = (
-        ("claude-sonnet-", "claude-sonnet"),
-        ("claude-opus-", "claude-opus"),
-        ("claude-haiku-", "claude-haiku"),
-    )
-    for prefix, family in family_aliases:
-        if value.startswith(prefix):
-            remainder = value[len(prefix):]
-            major = remainder.split("-", 1)[0].split(".", 1)[0]
-            if major.isdigit():
-                return f"{family}-{major}"
-            return family
-    return value
-
-
-def _copilot_model_family(model: str) -> str:
-    normalized = normalize_copilot_requested_model(model)
-    parts = normalized.split("-")
-    if len(parts) >= 3 and parts[0] == "claude":
-        return "-".join(parts[:2])
-    return normalized
-
-
-def _copilot_model_major(model: str) -> int | None:
-    normalized = normalize_copilot_requested_model(model)
-    match = re.search(r"-(\d+)$", normalized)
-    if not match:
-        return None
-    return int(match.group(1))
-
-
-def _copilot_model_version_rank(model: str) -> tuple[int, ...]:
-    match = re.search(r"-(\d+(?:\.\d+)*)$", model)
-    if not match:
-        return ()
-    return tuple(int(part) for part in match.group(1).split("."))
-
-
-def _select_copilot_model(
-    requested_model: str,
-    available_models: list[str],
-) -> tuple[str | None, str]:
-    """基于 Copilot 目录选择最终模型，同家族优先，不跨家族静默降级."""
-    if not available_models:
-        return None, "available_models_empty"
-
-    unique_available = [model for model in dict.fromkeys(available_models) if model]
-    if requested_model in unique_available:
-        return requested_model, "exact_requested_model"
-
-    normalized_model = normalize_copilot_requested_model(requested_model)
-    if normalized_model in unique_available:
-        return normalized_model, "normalized_requested_model"
-
-    requested_family = _copilot_model_family(requested_model)
-    requested_major = _copilot_model_major(requested_model)
-
-    family_candidates = [
-        model for model in unique_available
-        if _copilot_model_family(model) == requested_family
-        and (requested_major is None or _copilot_model_major(model) == requested_major)
-    ]
-    if not family_candidates:
-        family_candidates = [
-            model for model in unique_available
-            if _copilot_model_family(model) == requested_family
-        ]
-    if not family_candidates:
-        return None, "no_same_family_model_available"
-
-    ranked = sorted(
-        family_candidates,
-        key=lambda item: (
-            len(_copilot_model_version_rank(item)) == 0,
-            _copilot_model_version_rank(item),
-            item,
-        ),
-        reverse=True,
-    )
-    return ranked[0], "same_family_highest_version"
-
-
-@dataclass
-class CopilotMisdirectedRequest:
-    base_url: str
-    status_code: int
-    request: httpx.Request
-    headers: httpx.Headers
-    body: bytes
-
-
-@dataclass
-class CopilotExchangeDiagnostics:
-    """最近一次 Copilot token 交换的运行时诊断."""
-
-    raw_shape: str = ""
-    token_field: str = ""
-    expires_in_seconds: int = 0
-    expires_at_unix: int = 0
-    capabilities: dict[str, Any] = field(default_factory=dict)
-    updated_at_unix: int = 0
-
-    def to_dict(self) -> dict[str, Any]:
-        data: dict[str, Any] = {}
-        if self.raw_shape:
-            data["raw_shape"] = self.raw_shape
-        if self.token_field:
-            data["token_field"] = self.token_field
-        if self.expires_in_seconds:
-            data["expires_in_seconds"] = self.expires_in_seconds
-        if self.expires_at_unix:
-            data["expires_at_unix"] = self.expires_at_unix
-            data["ttl_seconds"] = max(self.expires_at_unix - int(time.time()), 0)
-        if self.capabilities:
-            data["capabilities"] = self.capabilities
-        if self.updated_at_unix:
-            data["updated_at_unix"] = self.updated_at_unix
-        return data
-
-
-@dataclass
-class CopilotModelCatalog:
-    available_models: list[str] = field(default_factory=list)
-    fetched_at_unix: int = 0
-
-    def age_seconds(self) -> int | None:
-        if not self.fetched_at_unix:
-            return None
-        return max(int(time.time()) - self.fetched_at_unix, 0)
 
 
 class CopilotTokenManager(BaseTokenManager):
@@ -347,7 +196,7 @@ class CopilotTokenManager(BaseTokenManager):
         self.invalidate()
 
 
-class CopilotBackend(BaseBackend):
+class CopilotBackend(TokenBackendMixin, BaseBackend):
     """GitHub Copilot API 后端.
 
     通过内置 token 交换访问 GitHub Copilot 的 Anthropic 兼容端点.
@@ -367,17 +216,19 @@ class CopilotBackend(BaseBackend):
         self._resolved_base_url = resolve_copilot_base_url(self._account_type, config.base_url)
         self._model_catalog = CopilotModelCatalog()
         self._model_mapper = model_mapper
-        self._last_request_adaptations: list[str] = []
+        # Copilot 特有诊断字段（不在 Mixin 中）
         self._last_request_base_url = ""
         self._last_421_base_url = ""
         self._last_retry_base_url = ""
-        self._last_requested_model = ""
+        # 421 重试处理器
+        self._421_handler = Copilot421RetryHandler(self)
         self._last_normalized_model = ""
-        self._last_resolved_model = ""
-        self._last_model_resolution_reason = ""
         self._last_model_refresh_reason = ""
-        super().__init__(self._resolved_base_url, config.timeout_ms, failover_config)
-        self._token_manager = CopilotTokenManager(config.github_token, config.token_url)
+        # TokenBackendMixin 诊断字段（_last_requested_model / _last_resolved_model /
+        # _last_model_resolution_reason / _last_request_adaptations）由 Mixin 提供
+        token_manager = CopilotTokenManager(config.github_token, config.token_url)
+        TokenBackendMixin.__init__(self, token_manager)
+        BaseBackend.__init__(self, self._resolved_base_url, config.timeout_ms, failover_config)
 
     def get_name(self) -> str:
         return "copilot"
@@ -389,6 +240,18 @@ class CopilotBackend(BaseBackend):
             supports_images=True,
             emits_vendor_tool_events=False,
             supports_metadata=True,
+        )
+
+    def get_compatibility_profile(self) -> CompatibilityProfile:
+        return CompatibilityProfile(
+            thinking=CompatibilityStatus.SIMULATED,
+            tool_calling=CompatibilityStatus.NATIVE,
+            tool_streaming=CompatibilityStatus.SIMULATED,
+            mcp_tools=CompatibilityStatus.UNKNOWN,
+            images=CompatibilityStatus.NATIVE,
+            metadata=CompatibilityStatus.SIMULATED,
+            json_output=CompatibilityStatus.NATIVE,
+            usage_tokens=CompatibilityStatus.SIMULATED,
         )
 
     def supports_request(
@@ -660,37 +523,10 @@ class CopilotBackend(BaseBackend):
         headers: dict[str, str],
         json_body: dict[str, Any] | None = None,
     ) -> httpx.Response:
-        current_base_url = self._resolved_base_url
-        self._begin_request(current_base_url)
-
-        response = await self._get_client().request(
-            method,
-            endpoint,
-            json=json_body,
-            headers=headers,
+        """同步请求的 421 Misdirected 重试 — 委托给 Copilot421RetryHandler."""
+        return await self._421_handler.execute_request_with_retry(
+            method, endpoint, headers=headers, json_body=json_body,
         )
-        if response.status_code != 421:
-            return response
-
-        self._last_421_base_url = current_base_url
-        last_response = response
-
-        for retry_base_url in self._retry_base_urls(current_base_url):
-            self._last_retry_base_url = retry_base_url
-            async with self._create_fresh_client(retry_base_url) as retry_client:
-                retry_response = await retry_client.request(
-                    method,
-                    endpoint,
-                    json=json_body,
-                    headers=headers,
-                )
-            last_response = retry_response
-            if retry_response.status_code != 421:
-                await self._activate_base_url(retry_base_url)
-                return retry_response
-            self._last_421_base_url = retry_base_url
-
-        return last_response
 
     async def _stream_from_client(
         self,
@@ -768,18 +604,7 @@ class CopilotBackend(BaseBackend):
         )
         return translated_body, prepared
 
-    def _on_error_status(self, status_code: int) -> None:
-        """401/403 时标记 token 失效以触发被动刷新."""
-        if status_code in (401, 403):
-            self._token_manager.invalidate()
-
-    async def check_health(self) -> bool:
-        """检查 Copilot token 交换是否有效（免费操作）."""
-        try:
-            token = await self._token_manager.get_token()
-            return bool(token)
-        except Exception:
-            return False
+    # _on_error_status / check_health 由 TokenBackendMixin 提供
 
     def get_diagnostics(self) -> dict[str, Any]:
         diagnostics: dict[str, Any] = {
@@ -790,28 +615,22 @@ class CopilotBackend(BaseBackend):
             "candidate_base_urls": self._candidate_base_urls,
             "available_models_cache": self._model_catalog.available_models,
         }
-        token_manager = self._token_manager.get_diagnostics()
-        if token_manager:
-            diagnostics["token_manager"] = token_manager
+        diagnostics.update(BaseBackend.get_diagnostics(self))
+        # TokenBackendMixin 提供标准诊断（token_manager / request_adaptations /
+        # requested_model / resolved_model / model_resolution_reason）
+        diagnostics.update(self._get_token_diagnostics())
+        # Copilot 特有诊断字段
         exchange = self._token_manager.get_exchange_diagnostics()
         if exchange:
             diagnostics["exchange"] = exchange
-        if self._last_request_adaptations:
-            diagnostics["request_adaptations"] = self._last_request_adaptations
         if self._last_request_base_url:
             diagnostics["last_request_base_url"] = self._last_request_base_url
         if self._last_421_base_url:
             diagnostics["last_421_base_url"] = self._last_421_base_url
         if self._last_retry_base_url:
             diagnostics["last_retry_base_url"] = self._last_retry_base_url
-        if self._last_requested_model:
-            diagnostics["requested_model"] = self._last_requested_model
         if self._last_normalized_model:
             diagnostics["normalized_model"] = self._last_normalized_model
-        if self._last_resolved_model:
-            diagnostics["resolved_model"] = self._last_resolved_model
-        if self._last_model_resolution_reason:
-            diagnostics["last_model_resolution_reason"] = self._last_model_resolution_reason
         if self._last_model_refresh_reason:
             diagnostics["last_model_refresh_reason"] = self._last_model_refresh_reason
         cache_age = self._model_catalog.age_seconds()
@@ -883,6 +702,7 @@ class CopilotBackend(BaseBackend):
         body, prepared_headers = await self._prepare_request(request_body, headers)
         request_model = request_body.get("model", "unknown")
 
+        # 首次尝试（含 421 重试）— 流式路径使用内联闭包以正确追踪 base_url
         async def _stream_with_421_retry(stream_body: dict[str, Any]) -> AsyncIterator[bytes]:
             current_base_url = self._resolved_base_url
             self._begin_request(current_base_url)
@@ -933,11 +753,9 @@ class CopilotBackend(BaseBackend):
             if not self._is_model_not_supported_response(exc.response):
                 raise
 
-        retried_body, prepared_headers = await self._prepare_request(
-            request_body,
-            headers,
-            force_model_refresh=True,
-            model_refresh_reason="model_not_supported_retry",
+        # 模型不支持时强制刷新模型列表后重试
+        retried_body, retried_headers = await self._prepare_request(
+            request_body, headers, force_model_refresh=True, model_refresh_reason="model_not_supported_retry",
         )
         try:
             async for chunk in _stream_with_421_retry(retried_body):

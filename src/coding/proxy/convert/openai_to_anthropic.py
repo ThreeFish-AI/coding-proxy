@@ -18,6 +18,9 @@ def convert_response(response: dict[str, Any]) -> dict[str, Any]:
             continue
         finish_reason = choice.get("finish_reason") or finish_reason
         message = choice.get("message", {})
+        reasoning_content = message.get("reasoning_content")
+        if isinstance(reasoning_content, str) and reasoning_content:
+            text_blocks.append({"type": "thinking", "thinking": reasoning_content})
         content = message.get("content")
         if isinstance(content, str) and content:
             text_blocks.append({"type": "text", "text": content})
@@ -47,7 +50,7 @@ def convert_response(response: dict[str, Any]) -> dict[str, Any]:
     content_blocks = [*text_blocks, *tool_use_blocks]
 
     return {
-        "id": response.get("id", ""),
+        "id": response.get("request_id", "") or response.get("id", ""),
         "type": "message",
         "role": "assistant",
         "model": response.get("model", ""),

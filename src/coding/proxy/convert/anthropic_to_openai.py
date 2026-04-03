@@ -32,6 +32,14 @@ def convert_request(body: dict[str, Any]) -> dict[str, Any]:
     if isinstance(metadata, dict) and metadata.get("user_id"):
         result["user"] = metadata["user_id"]
 
+    request_id = body.get("request_id")
+    if isinstance(request_id, str) and request_id:
+        result["request_id"] = request_id
+
+    response_format = body.get("response_format")
+    if isinstance(response_format, dict) and response_format.get("type"):
+        result["response_format"] = response_format
+
     tools = body.get("tools")
     if tools:
         result["tools"] = [_translate_tool(tool) for tool in tools]
@@ -40,6 +48,9 @@ def convert_request(body: dict[str, Any]) -> dict[str, Any]:
     translated_tool_choice = _translate_tool_choice(tool_choice)
     if translated_tool_choice is not None:
         result["tool_choice"] = translated_tool_choice
+
+    if body.get("stream"):
+        result["stream_options"] = {"include_usage": True}
 
     return result
 

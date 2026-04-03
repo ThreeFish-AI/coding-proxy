@@ -47,36 +47,37 @@ class ModelMapper:
 
         优先级：精确匹配 > 通配符/正则匹配 > default/_DEFAULT_TARGET。
         """
-        backend_name = self._normalize_backend(backend)
+        display_name = backend.strip().lower()
+        match_key = self._normalize_backend(backend)
         # 1. 精确匹配
         for rule in self._rules:
-            if not self._rule_applies_to_backend(rule, backend_name):
+            if not self._rule_applies_to_backend(rule, match_key):
                 continue
             if not rule.is_regex and "*" not in rule.pattern:
                 if rule.pattern == model:
                     logger.debug(
                         "Model mapped: %s -> %s (backend=%s exact)",
-                        model, rule.target, backend_name,
+                        model, rule.target, display_name,
                     )
                     return rule.target
 
         # 2. 通配符/正则匹配
         for rule in self._rules:
-            if not self._rule_applies_to_backend(rule, backend_name):
+            if not self._rule_applies_to_backend(rule, match_key):
                 continue
             if rule.is_regex:
                 compiled = self._compiled[rule.pattern]
                 if compiled.fullmatch(model):
                     logger.debug(
                         "Model mapped: %s -> %s (backend=%s regex=%s)",
-                        model, rule.target, backend_name, rule.pattern,
+                        model, rule.target, display_name, rule.pattern,
                     )
                     return rule.target
             elif "*" in rule.pattern:
                 if fnmatch.fnmatch(model, rule.pattern):
                     logger.debug(
                         "Model mapped: %s -> %s (backend=%s glob=%s)",
-                        model, rule.target, backend_name, rule.pattern,
+                        model, rule.target, display_name, rule.pattern,
                     )
                     return rule.target
 
@@ -84,6 +85,6 @@ class ModelMapper:
         fallback_target = default or _DEFAULT_TARGET
         logger.debug(
             "Model unmapped: %s -> %s (backend=%s default)",
-            model, fallback_target, backend_name,
+            model, fallback_target, display_name,
         )
         return fallback_target
