@@ -119,6 +119,24 @@ async def test_route_message_failover_to_tier1():
 
 
 @pytest.mark.asyncio
+async def test_route_message_read_error_failover_to_tier1():
+    """首层 ReadError → 次层接管."""
+    b0 = FakeBackend("primary", raise_on_call=httpx.ReadError("boom"))
+    b1 = FakeBackend("copilot", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=20)))
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1),
+    ])
+
+    resp = await router.route_message(_body(), _headers())
+
+    assert resp.status_code == 200
+    assert b0.call_count == 1
+    assert b1.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_route_message_failover_to_terminal():
     """前两层都失败 → 终端层接管."""
     from coding.proxy.config.schema import FailoverConfig
@@ -279,6 +297,25 @@ async def test_route_stream_primary_success():
 async def test_route_stream_failover():
     """流式：首层异常 → 次层接管."""
     b0 = FakeBackend("primary", raise_on_call=httpx.ConnectError("refused"))
+    b1 = FakeBackend("fallback", stream_chunks=[b"data: ok\n\n"])
+
+    router = RequestRouter([
+        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(backend=b1),
+    ])
+
+    collected = []
+    async for chunk, name in router.route_stream(_body(), _headers()):
+        collected.append((chunk, name))
+
+    assert len(collected) == 1
+    assert collected[0][1] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_route_stream_read_error_failover():
+    """流式：首层 ReadError → 次层接管."""
+    b0 = FakeBackend("primary", raise_on_call=httpx.ReadError("boom"))
     b1 = FakeBackend("fallback", stream_chunks=[b"data: ok\n\n"])
 
     router = RequestRouter([

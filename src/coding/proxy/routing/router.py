@@ -440,7 +440,7 @@ class RequestRouter:
                 last_exc = exc
                 if is_last:
                     raise
-            except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
+            except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
                 logger.warning("Tier %s stream failed: %s", tier.name, exc)
 
                 semantic_rejection = False
@@ -628,7 +628,7 @@ class RequestRouter:
                 if is_last:
                     raise
                 continue
-            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
                 logger.warning("Tier %s connection error: %s", tier.name, exc)
                 tier.record_failure()  # 连接错误无 rate limit 信息
                 failed_tier_name = tier.name

@@ -282,6 +282,95 @@ async def test_zhipu_prepare_request_preserves_claude_code_tool_shapes(tool_name
     assert backend.get_diagnostics()["tool_choice_projection"] == "any"
 
 
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_caps_tools_for_glm_4_5_air():
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test", max_tools_haiku=3), ModelMapper([]))
+    body = {
+        "model": "claude-haiku-4-5-20251001",
+        "messages": [],
+        "tools": [
+            {"name": "Task", "input_schema": {"type": "object"}},
+            {"name": "Bash", "input_schema": {"type": "object"}},
+            {"name": "Read", "input_schema": {"type": "object"}},
+            {"name": "mcp__playwright__browser_click", "input_schema": {"type": "object"}},
+            {"name": "mcp__vibe_kanban__create_issue", "input_schema": {"type": "object"}},
+        ],
+        "tool_choice": {"type": "auto"},
+    }
+
+    prepared_body, _ = await backend._prepare_request(body, {})
+
+    assert prepared_body["model"] == "glm-4.5-air"
+    assert [tool["name"] for tool in prepared_body["tools"]] == ["Task", "Bash", "Read"]
+    assert "zhipu_tools_capped_3" in backend.get_diagnostics()["request_adaptations"]
+
+
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_can_disable_browser_and_mcp_tools():
+    backend = ZhipuBackend(
+        ZhipuConfig(
+            api_key="sk-test",
+            disable_mcp_tools=True,
+            disable_browser_tools=True,
+        ),
+        ModelMapper([]),
+    )
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [],
+        "tools": [
+            {"name": "Task", "input_schema": {"type": "object"}},
+            {"name": "mcp__playwright__browser_click", "input_schema": {"type": "object"}},
+            {"name": "mcp__vibe_kanban__create_issue", "input_schema": {"type": "object"}},
+        ],
+    }
+
+    prepared_body, _ = await backend._prepare_request(body, {})
+
+    assert [tool["name"] for tool in prepared_body["tools"]] == ["Task"]
+    adaptations = backend.get_diagnostics()["request_adaptations"]
+    assert "zhipu_mcp_tools_disabled" in adaptations
+    assert "zhipu_browser_tools_disabled" in adaptations
+
+
+@pytest.mark.asyncio
+async def test_zhipu_send_message_normalizes_401_auth_error():
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+
+    from unittest.mock import AsyncMock, patch
+
+    with patch.object(
+        BaseBackend,
+        "send_message",
+        AsyncMock(
+            return_value=BackendResponse(
+                status_code=401,
+                raw_body='{"error":{"type":"401","message":"令牌已过期或验证不正确"}}'.encode(),
+                error_type="401",
+                error_message="令牌已过期或验证不正确",
+                response_headers={"content-type": "application/json"},
+            )
+        ),
+    ):
+        resp = await backend.send_message({"model": "claude-opus-4-6", "messages": []}, {})
+
+    assert resp.status_code == 401
+    assert resp.error_type == "authentication_error"
+    assert resp.error_message == "令牌已过期或验证不正确"
+    assert b'"authentication_error"' in resp.raw_body
+
+
+@pytest.mark.asyncio
+async def test_zhipu_send_message_without_api_key_fails_fast():
+    backend = ZhipuBackend(ZhipuConfig(api_key=""), ModelMapper([]))
+
+    resp = await backend.send_message({"model": "claude-opus-4-6", "messages": []}, {})
+
+    assert resp.status_code == 401
+    assert resp.error_type == "authentication_error"
+    assert "API key 未配置" in (resp.error_message or "")
+
+
 def test_backend_response_defaults():
     resp = BackendResponse()
     assert resp.status_code == 200
