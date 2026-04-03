@@ -1,5 +1,7 @@
 """SSE chunk 用量解析单元测试 — 覆盖 Anthropic / OpenAI(Zhipu) / 混合格式."""
 
+import logging
+
 from coding.proxy.routing.usage_parser import _parse_usage_from_chunk, _set_if_nonzero
 
 
@@ -228,3 +230,55 @@ def test_multiple_sse_lines_in_single_chunk():
     _parse_usage_from_chunk(chunk, usage)
     assert usage["input_tokens"] == 80
     assert usage["output_tokens"] == 20
+
+
+# --- vendor_label 日志标签 ---
+
+
+def test_vendor_label_anthropic(caplog):
+    """传入 vendor_label=Anthropic 时，日志应标注 (Anthropic)."""
+    caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.usage_parser")
+    usage: dict = {}
+    _parse_usage_from_chunk(
+        _sse('{"type":"message_delta","delta":{},"usage":{"output_tokens":42,"input_tokens":10}}'),
+        usage,
+        vendor_label="Anthropic",
+    )
+    assert any("(Anthropic)" in r.message for r in caplog.records)
+
+
+def test_vendor_label_openai(caplog):
+    """传入 vendor_label=OpenAI 时，日志应标注 (OpenAI)."""
+    caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.usage_parser")
+    usage: dict = {}
+    _parse_usage_from_chunk(
+        _sse('{"usage":{"prompt_tokens":100,"completion_tokens":25}}'),
+        usage,
+        vendor_label="OpenAI",
+    )
+    assert any("(OpenAI)" in r.message for r in caplog.records)
+
+
+def test_vendor_label_gemini(caplog):
+    """传入 vendor_label=Gemini 时，日志应标注 (Gemini)."""
+    caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.usage_parser")
+    usage: dict = {}
+    _parse_usage_from_chunk(
+        _sse('{"type":"message_delta","delta":{},"usage":{"output_tokens":30,"input_tokens":200}}'),
+        usage,
+        vendor_label="Gemini",
+    )
+    assert any("(Gemini)" in r.message for r in caplog.records)
+
+
+def test_no_vendor_label_omits_parenthesis(caplog):
+    """不传 vendor_label 时，日志不应包含括号标签."""
+    caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.usage_parser")
+    usage: dict = {}
+    _parse_usage_from_chunk(
+        _sse('{"type":"message_delta","delta":{},"usage":{"output_tokens":10}}'),
+        usage,
+    )
+    # 不应有任何带括号的 vendor 标签
+    for record in caplog.records:
+        assert "(" not in record.message or "Extracted" not in record.message or ") " not in record.message[record.message.index("("):]
