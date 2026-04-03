@@ -8,8 +8,6 @@ import logging
 from typing import Any, AsyncIterator
 
 import httpx
-
-from ..backends.base import _decode_json_body
 from ..compat.canonical import CompatibilityProfile, CompatibilityStatus
 from ..compat.session_store import CompatSessionRecord
 from ..config.schema import ZhipuConfig
@@ -389,9 +387,17 @@ class ZhipuBackend(BaseBackend):
         status_code: int,
         raw_body: bytes,
     ) -> tuple[bytes, dict[str, Any] | None]:
+        payload: dict[str, Any] | None = None
+        if raw_body:
+            try:
+                decoded = json.loads(raw_body)
+                if isinstance(decoded, dict):
+                    payload = decoded
+            except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+                payload = None
         if status_code != 401:
-            return raw_body, _decode_json_body(raw_body)
-        payload = self._normalize_auth_error_payload(_decode_json_body(raw_body))
+            return raw_body, payload
+        payload = self._normalize_auth_error_payload(payload)
         body = copy.deepcopy(payload)
         return json.dumps(body, ensure_ascii=False).encode(), body
 
