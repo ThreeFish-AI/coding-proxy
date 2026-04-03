@@ -97,6 +97,7 @@ class TestRequestPassthrough:
 
     @pytest.mark.asyncio
     async def test_headers_replaces_auth(self, zhipu_backend):
+        """验证 x-api-key 被正确设置，authorization 被剥离."""
         _, prepared_headers = await zhipu_backend._prepare_request(
             {"model": "claude-sonnet-4-20250514", "messages": []},
             {
@@ -108,8 +109,38 @@ class TestRequestPassthrough:
         )
         assert prepared_headers["x-api-key"] == "test-zhipu-key"
         assert prepared_headers["anthropic-version"] == "2023-06-01"
-        # authorization 不在 PROXY_SKIP_HEADERS 中，会透传（上游以 x-api-key 为准）
+        # authorization 必须被剥离（防止 Anthropic Bearer token 泄漏到智谱）
+        assert "authorization" not in prepared_headers
         assert prepared_headers["x-custom-header"] == "keep-me"
+
+    @pytest.mark.asyncio
+    async def test_headers_strips_authorization(self, zhipu_backend):
+        """验证 Claude Code 发来的 authorization: Bearer 头被完全移除.
+
+        这是 401 认证失败的根因修复：智谱 /api/anthropic 端点仅接受
+        x-api-key 认证，authorization 中的 Anthropic key 会导致冲突。
+        """
+        headers_in = {
+            "authorization": "Bearer sk-ant-api03-xxxxx",
+            "x-api-key": "sk-ant-api03-yyyyy",
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "prompt-caching-2024-07-31",
+            "host": "localhost:8046",
+            "content-length": "42",
+        }
+        _, prepared_headers = await zhipu_backend._prepare_request(
+            {"model": "claude-haiku-4-5-20251001", "messages": []},
+            headers_in,
+        )
+        # 两个认证头都必须被移除
+        assert "authorization" not in prepared_headers
+        assert prepared_headers.get("x-api-key") == "test-zhipu-key"
+        # hop-by-hop 头被移除
+        assert "host" not in prepared_headers
+        assert "content-length" not in prepared_headers
+        # 业务头保留
+        assert prepared_headers["anthropic-version"] == "2023-06-01"
+        assert prepared_headers["anthropic-beta"] == "prompt-caching-2024-07-31"
 
     @pytest.mark.asyncio
     async def test_tools_with_mcp_and_browser_preserved(self, zhipu_backend):
