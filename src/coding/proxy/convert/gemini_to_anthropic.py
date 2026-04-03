@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _FINISH_REASON_MAP = {
     "STOP": "end_turn",
@@ -35,7 +38,7 @@ def convert_response(
     usage = extract_usage(gemini_resp)
     msg_id = request_id or gemini_resp.get("responseId") or f"msg_{uuid.uuid4().hex[:24]}"
 
-    return {
+    result = {
         "id": msg_id,
         "type": "message",
         "role": "assistant",
@@ -45,6 +48,12 @@ def convert_response(
         "stop_sequence": None,
         "usage": usage,
     }
+    logger.debug(
+        "convert_response: %d content blocks, stop_reason=%s",
+        len(content_blocks),
+        stop_reason,
+    )
+    return result
 
 
 def extract_usage(gemini_resp: dict[str, Any]) -> dict[str, int]:

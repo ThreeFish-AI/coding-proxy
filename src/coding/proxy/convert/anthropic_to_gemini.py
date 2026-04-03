@@ -20,7 +20,16 @@ _TOOL_CHOICE_MODE = {
     "auto": "AUTO",
     "any": "ANY",
     "required": "ANY",
+    "none": "NONE",
 }
+
+# 默认安全设置：编码场景宽松策略（可通过 AntigravityConfig.safety_settings 覆盖）
+_DEFAULT_SAFETY_SETTINGS: list[dict[str, str]] = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
+]
 
 
 @dataclass
@@ -35,18 +44,24 @@ def convert_request(
     anthropic_body: dict[str, Any],
     *,
     model: str | None = None,
+    safety_settings: dict[str, str] | None = None,
 ) -> ConversionResult:
     """将 Anthropic Messages API 请求体转换为 Gemini 格式."""
     adaptations: list[str] = []
     tool_name_by_id: dict[str, str] = {}
     result: dict[str, Any] = {}
 
-    system_instruction = _convert_system(anthropic_body.get("system"))
+    system_instruction = _convert_system(anthropic_body.get("system"), adaptations)
     if system_instruction is not None:
         result["systemInstruction"] = system_instruction
 
     messages = anthropic_body.get("messages", [])
     result["contents"] = _convert_messages(messages, tool_name_by_id, adaptations)
+
+    # 空 contents 防护：Gemini 要求至少一个 content part
+    if not result["contents"]:
+        result["contents"] = [{"role": "user", "parts": [{"text": " "}]}]
+        adaptations.append("empty_contents_padded")
 
     generation_config = _build_generation_config(anthropic_body, model=model, adaptations=adaptations)
     if generation_config:
@@ -58,6 +73,14 @@ def convert_request(
     if tool_config:
         result["toolConfig"] = tool_config
 
+    # Safety Settings（默认编码场景宽松策略，可通过 config 覆盖）
+    if safety_settings is not None:
+        result["safetySettings"] = [
+            {"category": k, "threshold": v} for k, v in safety_settings.items()
+        ]
+    else:
+        result["safetySettings"] = _DEFAULT_SAFETY_SETTINGS
+
     if "metadata" in anthropic_body:
         metadata = anthropic_body.get("metadata") or {}
         if isinstance(metadata, dict) and metadata.get("user_id"):
@@ -65,14 +88,23 @@ def convert_request(
         else:
             adaptations.append("metadata_ignored")
 
-    return ConversionResult(body=result, adaptations=_dedupe(adaptations))
+    deduped = _dedupe(adaptations)
+    logger.debug(
+        "Anthropic→Gemini 转换完成: adaptations=%s, keys=%s",
+        deduped,
+        list(result.keys()),
+    )
+    return ConversionResult(body=result, adaptations=deduped)
 
 
 def _dedupe(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
-def _convert_system(system: str | list[dict] | None) -> dict[str, Any] | None:
+def _convert_system(
+    system: str | list[dict] | None,
+    adaptations: list[str] | None = None,
+) -> dict[str, Any] | None:
     if system is None:
         return None
     if isinstance(system, str):
@@ -80,6 +112,9 @@ def _convert_system(system: str | list[dict] | None) -> dict[str, Any] | None:
     parts = []
     for block in system:
         if isinstance(block, dict) and block.get("type") == "text":
+            if block.get("cache_control"):
+                if adaptations is not None:
+                    adaptations.append("cache_control_stripped_from_system")
             parts.append({"text": block["text"]})
     return {"parts": parts} if parts else None
 
@@ -112,6 +147,8 @@ def _convert_content(
         if block_type == "text":
             text = block.get("text", "")
             if text:
+                if block.get("cache_control"):
+                    adaptations.append("cache_control_stripped_from_content")
                 parts.append({"text": text})
         elif block_type == "thinking":
             text = block.get("thinking", "")
@@ -183,6 +220,9 @@ def _stringify_tool_content(content: Any) -> str:
                 chunks.append(block["text"])
             elif block.get("type") == "image":
                 chunks.append("[image]")
+                logger.debug(
+                    "tool_result 中的图片内容降级为 [image] 占位符",
+                )
         return "\n".join(chunks)
     return str(content)
 
@@ -215,9 +255,21 @@ def _build_generation_config(
             budget = thinking_cfg.get("budget_tokens")
             if isinstance(budget, int) and budget > 0:
                 config["thinkingConfig"]["thinkingBudget"] = budget
+            else:
+                # Gemini 要求 includeThoughts 时必须指定 thinkingBudget
+                config["thinkingConfig"]["thinkingBudget"] = 10000
+                adaptations.append("thinking_budget_defaulted_to_10k")
             effort = thinking_cfg.get("effort")
             if isinstance(effort, str) and effort:
                 config["thinkingConfig"]["thinkingLevel"] = effort
+
+    # Anthropic response_format → Gemini responseMimeType
+    response_format = body.get("response_format")
+    if isinstance(response_format, dict):
+        rf_type = str(response_format.get("type", ""))
+        if rf_type.startswith("json"):
+            config["responseMimeType"] = "application/json"
+            adaptations.append("response_format_json_mode")
 
     has_tools = bool(body.get("tools"))
     has_tool_use = any(
@@ -263,6 +315,13 @@ def _build_tools(
         if isinstance(input_schema, dict):
             declaration["parameters"] = input_schema
         function_declarations.append(declaration)
+
+    if len(function_declarations) > 100:
+        logger.warning(
+            "Large tool set (%d functionDeclarations) may exceed Gemini API limits",
+            len(function_declarations),
+        )
+        adaptations.append(f"large_tool_set_{len(function_declarations)}_declarations")
 
     tools: list[dict[str, Any]] = []
     if function_declarations:

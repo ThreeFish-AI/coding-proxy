@@ -121,6 +121,7 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
         self._model_mapper = model_mapper
         self._default_model = config.model_endpoint.removeprefix("models/")
         self._last_request_adaptations: list[str] = []
+        self._safety_settings = config.safety_settings
 
     def get_name(self) -> str:
         return "antigravity"
@@ -141,7 +142,7 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
             mcp_tools=CompatibilityStatus.UNKNOWN,
             images=CompatibilityStatus.NATIVE,
             metadata=CompatibilityStatus.SIMULATED,
-            json_output=CompatibilityStatus.UNKNOWN,
+            json_output=CompatibilityStatus.NATIVE,
             usage_tokens=CompatibilityStatus.SIMULATED,
         )
 
@@ -181,15 +182,25 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """转换 Anthropic 请求为 Gemini 格式，注入 Google OAuth token."""
         resolved_model = self.map_model(request_body.get("model", "unknown"))
-        converted = convert_request(request_body, model=resolved_model)
+        converted = convert_request(
+            request_body,
+            model=resolved_model,
+            safety_settings=self._safety_settings,
+        )
         gemini_body = converted.body
         self._last_request_adaptations = converted.adaptations
         token = await self._token_manager.get_token()
         new_headers = {
             "content-type": "application/json",
             "authorization": f"Bearer {token}",
-            "anthropic-beta": "claude-code-20250219",
         }
+        logger.debug(
+            "_prepare_request: model=%s → %s, endpoint=/models/%s:generateContent, adaptations=%s",
+            request_body.get("model", "?"),
+            resolved_model,
+            resolved_model,
+            converted.adaptations,
+        )
         return gemini_body, new_headers
 
     def _mark_scope_error_if_needed(self, error_text: str) -> None:
@@ -223,10 +234,12 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
         """覆写: Gemini 端点 + 响应逆转换."""
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
-        resolved_model = self.map_model(request_body.get('model', 'unknown'))
+        resolved_model = self._last_resolved_model
         endpoint = f"/models/{resolved_model}:generateContent"
 
+        logger.debug("send_message: POST %s", endpoint)
         response = await client.post(endpoint, json=body, headers=prepared_headers)
+        logger.debug("send_message: status=%d", response.status_code)
 
         if response.status_code >= 400:
             self._on_error_status(response.status_code)
@@ -263,8 +276,10 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
         """覆写: Gemini SSE 流 → Anthropic SSE 流适配."""
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
-        resolved_model = self.map_model(request_body.get("model", "unknown"))
+        resolved_model = self._last_resolved_model
         endpoint = f"/models/{resolved_model}:streamGenerateContent?alt=sse"
+
+        logger.debug("send_message_stream: POST %s", endpoint)
 
         async with client.stream(
             "POST", endpoint, json=body, headers=prepared_headers,

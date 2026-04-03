@@ -61,6 +61,7 @@ class AntigravityConfig(BaseModel):
     base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     model_endpoint: str = "models/claude-sonnet-4-20250514"
     timeout_ms: int = 300000
+    safety_settings: dict[str, str] | None = None
 
 
 class ZhipuConfig(BaseModel):
