@@ -48,6 +48,11 @@ class ZhipuConfig(BaseModel):
     base_url: str = "https://open.bigmodel.cn/api/anthropic"
     api_key: str = ""
     timeout_ms: int = 3000000
+    tool_compat_mode: Literal["full", "adaptive"] = "adaptive"
+    max_tools: int = 80
+    max_tools_haiku: int = 48
+    disable_mcp_tools: bool = False
+    disable_browser_tools: bool = False
 
 
 class CircuitBreakerConfig(BaseModel):
@@ -136,6 +141,11 @@ class TierConfig(BaseModel):
 
     # Zhipu 专属
     api_key: str = ""
+    tool_compat_mode: Literal["full", "adaptive"] = "adaptive"
+    max_tools: int = 80
+    max_tools_haiku: int = 48
+    disable_mcp_tools: bool = False
+    disable_browser_tools: bool = False
 
     # 弹性配置（None = 终端层，无熔断器）
     circuit_breaker: CircuitBreakerConfig | None = None

@@ -3,21 +3,31 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
 from typing import Any, AsyncIterator
 
+import httpx
+
+from ..backends.base import _decode_json_body
 from ..compat.canonical import CompatibilityProfile, CompatibilityStatus
 from ..compat.session_store import CompatSessionRecord
 from ..config.schema import ZhipuConfig
 from ..routing.model_mapper import ModelMapper
 from ..streaming.anthropic_compat import normalize_anthropic_compatible_stream
-from .base import PROXY_SKIP_HEADERS, BackendCapabilities, BaseBackend
+from .base import PROXY_SKIP_HEADERS, BackendCapabilities, BackendResponse, BaseBackend
 
 logger = logging.getLogger(__name__)
 
 _HAIKU_PREFIX = "claude-haiku-"
 _OPUS_PREFIX = "claude-opus-"
 _SONNET_PREFIX = "claude-sonnet-"
+_CORE_TOOL_NAMES = {
+    "Task", "TaskOutput", "Bash", "Glob", "Grep", "ExitPlanMode", "Read", "Edit",
+    "Write", "NotebookEdit", "WebFetch", "TodoWrite", "WebSearch", "TaskStop",
+    "AskUserQuestion", "Skill", "EnterPlanMode", "EnterWorktree",
+}
+_BROWSER_TOOL_PREFIXES = ("mcp__playwright__", "mcp__chrome_devtools__")
 
 
 class ZhipuBackend(BaseBackend):
@@ -40,6 +50,11 @@ class ZhipuBackend(BaseBackend):
         self._last_requested_model: str = ""
         self._last_resolved_model: str = ""
         self._last_tool_names: list[str] = []
+        self._tool_compat_mode = config.tool_compat_mode
+        self._max_tools = max(1, config.max_tools)
+        self._max_tools_haiku = max(1, config.max_tools_haiku)
+        self._disable_mcp_tools = config.disable_mcp_tools
+        self._disable_browser_tools = config.disable_browser_tools
 
     def get_name(self) -> str:
         return "zhipu"
@@ -158,6 +173,7 @@ class ZhipuBackend(BaseBackend):
 
         tool_choice = body.get("tool_choice")
         if not isinstance(tool_choice, dict):
+            self._project_tools_for_model(body, adaptations)
             return "auto"
 
         choice_type = str(tool_choice.get("type", "")).lower()
@@ -184,11 +200,77 @@ class ZhipuBackend(BaseBackend):
             return "none"
 
         if choice_type == "auto":
+            self._project_tools_for_model(body, adaptations)
             return "auto"
 
         body["tool_choice"] = {"type": "auto"}
         adaptations.append("tool_choice_unknown_downgraded_to_auto")
+        self._project_tools_for_model(body, adaptations)
         return "auto"
+
+    @staticmethod
+    def _tool_priority(name: str) -> tuple[int, int, str]:
+        if name in _CORE_TOOL_NAMES:
+            return (0, 0, name)
+        if name.startswith("mcp__"):
+            return (2, 1, name)
+        return (1, 0, name)
+
+    def _project_tools_for_model(
+        self,
+        body: dict[str, Any],
+        adaptations: list[str],
+    ) -> None:
+        tools = body.get("tools")
+        if self._tool_compat_mode != "adaptive" or not isinstance(tools, list):
+            return
+
+        resolved_model = str(body.get("model") or "")
+        limit = self._max_tools_haiku if resolved_model == "glm-4.5-air" else self._max_tools
+        explicit_choice_name = ""
+        tool_choice = body.get("tool_choice")
+        if isinstance(tool_choice, dict) and str(tool_choice.get("type", "")).lower() == "tool":
+            name = tool_choice.get("name")
+            if isinstance(name, str):
+                explicit_choice_name = name
+
+        filtered: list[dict[str, Any]] = []
+        dropped_mcp = False
+        dropped_browser = False
+
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            name = str(tool.get("name") or "")
+            if not name:
+                continue
+            if explicit_choice_name and name == explicit_choice_name:
+                filtered.append(tool)
+                continue
+            if self._disable_mcp_tools and name.startswith("mcp__"):
+                dropped_mcp = True
+                continue
+            if self._disable_browser_tools and name.startswith(_BROWSER_TOOL_PREFIXES):
+                dropped_browser = True
+                continue
+            filtered.append(tool)
+
+        if dropped_mcp:
+            adaptations.append("zhipu_mcp_tools_disabled")
+        if dropped_browser:
+            adaptations.append("zhipu_browser_tools_disabled")
+
+        if len(filtered) <= limit:
+            body["tools"] = filtered
+            return
+
+        sorted_tools = sorted(
+            enumerate(filtered),
+            key=lambda item: self._tool_priority(str(item[1].get("name") or "")) + (item[0],),
+        )
+        kept = [tool for _, tool in sorted_tools[:limit]]
+        body["tools"] = kept
+        adaptations.append(f"zhipu_tools_capped_{limit}")
 
     async def _prepare_request(
         self,
@@ -270,6 +352,49 @@ class ZhipuBackend(BaseBackend):
                 new_headers[key] = value
         return body, new_headers
 
+    @staticmethod
+    def _normalize_auth_error_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {
+                "error": {
+                    "type": "authentication_error",
+                    "message": "Zhipu API 认证失败，请检查 api_key 或兼容端点权限",
+                }
+            }
+        error = payload.get("error")
+        if not isinstance(error, dict):
+            payload["error"] = {
+                "type": "authentication_error",
+                "message": "Zhipu API 认证失败，请检查 api_key 或兼容端点权限",
+            }
+            return payload
+        payload["error"] = {
+            **error,
+            "type": "authentication_error",
+            "message": str(error.get("message") or "Zhipu API 认证失败，请检查 api_key 或兼容端点权限"),
+        }
+        return payload
+
+    @staticmethod
+    def _missing_api_key_payload() -> dict[str, Any]:
+        return {
+            "error": {
+                "type": "authentication_error",
+                "message": "Zhipu API key 未配置，无法访问 Claude 兼容端点",
+            }
+        }
+
+    def _normalize_backend_error(
+        self,
+        status_code: int,
+        raw_body: bytes,
+    ) -> tuple[bytes, dict[str, Any] | None]:
+        if status_code != 401:
+            return raw_body, _decode_json_body(raw_body)
+        payload = self._normalize_auth_error_payload(_decode_json_body(raw_body))
+        body = copy.deepcopy(payload)
+        return json.dumps(body, ensure_ascii=False).encode(), body
+
     def get_diagnostics(self) -> dict[str, Any]:
         diagnostics = super().get_diagnostics()
         if self._last_request_adaptations:
@@ -282,6 +407,7 @@ class ZhipuBackend(BaseBackend):
             diagnostics["resolved_model"] = self._last_resolved_model
         if self._last_tool_names:
             diagnostics["tool_names"] = self._last_tool_names
+        diagnostics["tool_compat_mode"] = self._tool_compat_mode
         return diagnostics
 
     async def send_message_stream(
@@ -289,8 +415,69 @@ class ZhipuBackend(BaseBackend):
         request_body: dict[str, Any],
         headers: dict[str, str],
     ) -> AsyncIterator[bytes]:
-        upstream = super().send_message_stream(request_body, headers)
-        async for chunk in normalize_anthropic_compatible_stream(
-            upstream, model=self.map_model(request_body.get("model", "unknown")),
-        ):
-            yield chunk
+        if not self._api_key:
+            payload = self._missing_api_key_payload()
+            raw = json.dumps(payload, ensure_ascii=False).encode()
+            request = httpx.Request("POST", f"{self._base_url}{self._get_endpoint()}")
+            raise httpx.HTTPStatusError(
+                "zhipu API error: 401",
+                request=request,
+                response=httpx.Response(401, content=raw, headers={"content-type": "application/json"}, request=request),
+            )
+        try:
+            upstream = super().send_message_stream(request_body, headers)
+            async for chunk in normalize_anthropic_compatible_stream(
+                upstream, model=self.map_model(request_body.get("model", "unknown")),
+            ):
+                yield chunk
+        except httpx.HTTPStatusError as exc:
+            response = exc.response
+            if response is not None and response.status_code == 401:
+                raw_body = response.content or b"{}"
+                normalized_raw, _ = self._normalize_backend_error(
+                    response.status_code,
+                    raw_body,
+                )
+                raise httpx.HTTPStatusError(
+                    str(exc),
+                    request=exc.request,
+                    response=httpx.Response(
+                        response.status_code,
+                        content=normalized_raw,
+                        headers=dict(response.headers),
+                        request=exc.request,
+                    ),
+                ) from exc
+            raise
+
+    async def send_message(
+        self,
+        request_body: dict[str, Any],
+        headers: dict[str, str],
+    ) -> BackendResponse:
+        if not self._api_key:
+            raw = json.dumps(self._missing_api_key_payload(), ensure_ascii=False).encode()
+            return BackendResponse(
+                status_code=401,
+                raw_body=raw,
+                error_type="authentication_error",
+                error_message="Zhipu API key 未配置，无法访问 Claude 兼容端点",
+                response_headers={"content-type": "application/json"},
+            )
+        response = await super().send_message(request_body, headers)
+        if response.status_code != 401:
+            return response
+        raw_body, payload = self._normalize_backend_error(
+            response.status_code,
+            response.raw_body,
+        )
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        return BackendResponse(
+            status_code=response.status_code,
+            raw_body=raw_body,
+            error_type=error.get("type") if isinstance(error, dict) else "authentication_error",
+            error_message=error.get("message") if isinstance(error, dict) else "Zhipu API 认证失败",
+            response_headers=response.response_headers,
+            usage=response.usage,
+            model_served=response.model_served,
+        )

@@ -256,6 +256,66 @@ def test_stream_http_status_error_returns_anthropic_sse_error():
     assert "Too many requests" in body
 
 
+def test_stream_read_error_returns_anthropic_sse_error():
+    """流式 ReadError 应收口为 Anthropic SSE error，不应冒泡为 500."""
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+    ))
+
+    async def failing_route_stream(body, headers):
+        raise httpx.ReadError("socket closed")
+        yield  # pragma: no cover
+
+    app.state.router.route_stream = failing_route_stream
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": True,
+            },
+        ) as resp:
+            body = b"".join(resp.iter_bytes()).decode()
+
+    assert resp.status_code == 200
+    assert "event: error" in body
+    assert '"type": "api_error"' in body
+    assert "socket closed" in body
+
+
+def test_message_read_error_returns_502():
+    """非流式 ReadError 应返回 502，而不是框架级 500."""
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+    ))
+
+    async def failing_route_message(body, headers):
+        raise httpx.ReadError("socket closed")
+
+    app.state.router.route_message = failing_route_message
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+        )
+
+    assert resp.status_code == 502
+    data = resp.json()
+    assert data["error"]["type"] == "api_error"
+    assert "socket closed" in data["error"]["message"]
+
+
 def test_messages_normalizes_vendor_tool_blocks_before_routing():
     """入口应先规范化 server_tool_use，再交给高优先级 tier."""
     app = create_app(ProxyConfig(

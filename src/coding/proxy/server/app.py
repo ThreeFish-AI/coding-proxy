@@ -132,6 +132,11 @@ def _create_backend_from_tier(
                 base_url=tier_cfg.base_url or "https://open.bigmodel.cn/api/anthropic",
                 api_key=tier_cfg.api_key,
                 timeout_ms=tier_cfg.timeout_ms,
+                tool_compat_mode=tier_cfg.tool_compat_mode,
+                max_tools=tier_cfg.max_tools,
+                max_tools_haiku=tier_cfg.max_tools_haiku,
+                disable_mcp_tools=tier_cfg.disable_mcp_tools,
+                disable_browser_tools=tier_cfg.disable_browser_tools,
             )
             return ZhipuBackend(cfg, mapper)
         case _:
@@ -381,7 +386,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                 error_type="authentication_error",
                 message=str(exc),
             )
-        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
             return _json_error_response(
                 502,
                 error_type="api_error",
@@ -511,7 +516,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                 status_code=response.status_code,
                 media_type="application/json",
             )
-        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
             logger.warning("count_tokens proxy failed: %s", exc)
             return Response(
                 content=b'{"error":{"type":"api_error","message":"count_tokens upstream unreachable"}}',
@@ -561,7 +566,7 @@ async def _stream_proxy(router: RequestRouter, body: dict, headers: dict) -> Any
             "event: error\n"
             f"data: {json.dumps({'type': 'error', 'error': {'type': 'authentication_error', 'message': str(exc)}}, ensure_ascii=False)}\n\n"
         ).encode()
-    except (httpx.TimeoutException, httpx.ConnectError) as exc:
+    except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
         yield _stream_error_event("api_error", f"上游不可达: {exc}")
     except httpx.HTTPStatusError as exc:
         error_type, message = _extract_stream_http_error(exc)
