@@ -236,7 +236,7 @@ class CopilotBackend(TokenBackendMixin, BaseBackend):
     def get_capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
             supports_tools=True,
-            supports_thinking=False,
+            supports_thinking=True,
             supports_images=True,
             emits_vendor_tool_events=False,
             supports_metadata=True,
@@ -246,7 +246,7 @@ class CopilotBackend(TokenBackendMixin, BaseBackend):
         return CompatibilityProfile(
             thinking=CompatibilityStatus.SIMULATED,
             tool_calling=CompatibilityStatus.NATIVE,
-            tool_streaming=CompatibilityStatus.SIMULATED,
+            tool_streaming=CompatibilityStatus.NATIVE,
             mcp_tools=CompatibilityStatus.UNKNOWN,
             images=CompatibilityStatus.NATIVE,
             metadata=CompatibilityStatus.SIMULATED,
@@ -290,18 +290,35 @@ class CopilotBackend(TokenBackendMixin, BaseBackend):
     def _collect_request_adaptations(request_body: dict[str, Any]) -> list[str]:
         adaptations: list[str] = []
 
-        if request_body.get("thinking") or request_body.get("extended_thinking"):
-            adaptations.append("thinking_downgraded_to_text")
+        extended_thinking = request_body.get("extended_thinking")
+        thinking = request_body.get("thinking")
+
+        if isinstance(extended_thinking, dict):
+            effort = extended_thinking.get("effort", "unknown")
+            budget = extended_thinking.get("budget_tokens")
+            label = f"extended_thinking_mapped_to_reasoning_effort(effort={effort})"
+            if isinstance(budget, int) and budget > 0:
+                label += f",budget_tokens_not_supported({budget})"
+            adaptations.append(label)
+        elif thinking is True or isinstance(thinking, dict):
+            adaptations.append("thinking_mapped_to_reasoning_effort(medium)")
 
         for message in request_body.get("messages", []):
             content = message.get("content")
             if not isinstance(content, list):
                 continue
-            if any(
+            has_thinking_block = any(
                 isinstance(block, dict) and block.get("type") == "thinking"
                 for block in content
-            ):
-                adaptations.append("thinking_block_merged_into_text")
+            )
+            has_text_block = any(
+                isinstance(block, dict) and block.get("type") == "text"
+                for block in content
+            )
+            if has_thinking_block and has_text_block:
+                adaptations.append("thinking_block_prefixed_as_context")
+            elif has_thinking_block:
+                adaptations.append("thinking_block_used_as_content_fallback")
                 break
 
         return adaptations

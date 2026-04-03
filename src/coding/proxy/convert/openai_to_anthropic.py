@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def convert_response(response: dict[str, Any]) -> dict[str, Any]:
@@ -19,8 +22,12 @@ def convert_response(response: dict[str, Any]) -> dict[str, Any]:
         finish_reason = choice.get("finish_reason") or finish_reason
         message = choice.get("message", {})
         reasoning_content = message.get("reasoning_content")
-        if isinstance(reasoning_content, str) and reasoning_content:
+        if isinstance(reasoning_content, str) and reasoning_content.strip():
             text_blocks.append({"type": "thinking", "thinking": reasoning_content})
+            logger.debug(
+                "copilot: response reasoning_content -> thinking block (%d chars)",
+                len(reasoning_content),
+            )
         content = message.get("content")
         if isinstance(content, str) and content:
             text_blocks.append({"type": "text", "text": content})
@@ -55,7 +62,7 @@ def convert_response(response: dict[str, Any]) -> dict[str, Any]:
         "role": "assistant",
         "model": response.get("model", ""),
         "content": content_blocks,
-        "stop_reason": _map_stop_reason(finish_reason),
+        "stop_reason": _map_stop_reason(finish_reason) or "end_turn",
         "stop_sequence": None,
         "usage": {
             "input_tokens": max((usage.get("prompt_tokens", 0) or 0) - cached_tokens, 0),
@@ -74,4 +81,8 @@ def _map_stop_reason(reason: str | None) -> str | None:
         "tool_calls": "tool_use",
         "content_filter": "end_turn",
     }
-    return mapping.get(reason, "end_turn")
+    mapped = mapping.get(reason)
+    if mapped is None:
+        logger.debug("copilot: unknown finish_reason '%s', defaulting to end_turn", reason)
+        return "end_turn"
+    return mapped

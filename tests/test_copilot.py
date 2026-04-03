@@ -370,13 +370,13 @@ def test_copilot_inherits_failover():
     })
 
 
-def test_copilot_capabilities_disable_thinking():
+def test_copilot_capabilities_enable_thinking():
     config = CopilotConfig(github_token="ghp_test")
     backend = CopilotBackend(config, FailoverConfig())
     caps = backend.get_capabilities()
     assert caps.supports_tools is True
     assert caps.supports_images is True
-    assert caps.supports_thinking is False
+    assert caps.supports_thinking is True
 
 
 def test_copilot_supports_request_with_thinking_via_adapter():
@@ -407,11 +407,15 @@ async def test_copilot_prepare_request_records_thinking_adaptations():
 
     prepared_body, _ = await backend._prepare_request(body, {"anthropic-version": "2023-06-01"})
 
+    # thinking/extended_thinking 已被映射为 reasoning_effort，不应保留原始字段
     assert "thinking" not in prepared_body
     assert "extended_thinking" not in prepared_body
+    # reasoning_effort 应存在（从 thinking dict 映射而来）
+    assert prepared_body.get("reasoning_effort") == "medium"
     diagnostics = backend.get_diagnostics()
-    assert "thinking_downgraded_to_text" in diagnostics["request_adaptations"]
-    assert "thinking_block_merged_into_text" in diagnostics["request_adaptations"]
+    # 适配标签应反映新的映射策略（thinking dict 触发）
+    assert any("thinking_mapped_to_reasoning_effort" in a for a in diagnostics["request_adaptations"])
+    assert any("thinking_block_used_as_content_fallback" in a for a in diagnostics["request_adaptations"])
     assert diagnostics["resolved_model"] == "claude-sonnet-4.6"
 
 
