@@ -46,6 +46,7 @@ from .copilot_urls import (  # noqa: F401
     build_copilot_candidate_base_urls,
     resolve_copilot_base_url,
 )
+from .copilot_retry import Copilot421RetryHandler
 from .mixins import TokenBackendMixin
 from .token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
 
@@ -219,6 +220,8 @@ class CopilotBackend(TokenBackendMixin, BaseBackend):
         self._last_request_base_url = ""
         self._last_421_base_url = ""
         self._last_retry_base_url = ""
+        # 421 重试处理器
+        self._421_handler = Copilot421RetryHandler(self)
         self._last_normalized_model = ""
         self._last_model_refresh_reason = ""
         # TokenBackendMixin 诊断字段（_last_requested_model / _last_resolved_model /
@@ -520,37 +523,10 @@ class CopilotBackend(TokenBackendMixin, BaseBackend):
         headers: dict[str, str],
         json_body: dict[str, Any] | None = None,
     ) -> httpx.Response:
-        current_base_url = self._resolved_base_url
-        self._begin_request(current_base_url)
-
-        response = await self._get_client().request(
-            method,
-            endpoint,
-            json=json_body,
-            headers=headers,
+        """同步请求的 421 Misdirected 重试 — 委托给 Copilot421RetryHandler."""
+        return await self._421_handler.execute_request_with_retry(
+            method, endpoint, headers=headers, json_body=json_body,
         )
-        if response.status_code != 421:
-            return response
-
-        self._last_421_base_url = current_base_url
-        last_response = response
-
-        for retry_base_url in self._retry_base_urls(current_base_url):
-            self._last_retry_base_url = retry_base_url
-            async with self._create_fresh_client(retry_base_url) as retry_client:
-                retry_response = await retry_client.request(
-                    method,
-                    endpoint,
-                    json=json_body,
-                    headers=headers,
-                )
-            last_response = retry_response
-            if retry_response.status_code != 421:
-                await self._activate_base_url(retry_base_url)
-                return retry_response
-            self._last_421_base_url = retry_base_url
-
-        return last_response
 
     async def _stream_from_client(
         self,
@@ -726,6 +702,7 @@ class CopilotBackend(TokenBackendMixin, BaseBackend):
         body, prepared_headers = await self._prepare_request(request_body, headers)
         request_model = request_body.get("model", "unknown")
 
+        # 首次尝试（含 421 重试）— 流式路径使用内联闭包以正确追踪 base_url
         async def _stream_with_421_retry(stream_body: dict[str, Any]) -> AsyncIterator[bytes]:
             current_base_url = self._resolved_base_url
             self._begin_request(current_base_url)
@@ -776,11 +753,9 @@ class CopilotBackend(TokenBackendMixin, BaseBackend):
             if not self._is_model_not_supported_response(exc.response):
                 raise
 
-        retried_body, prepared_headers = await self._prepare_request(
-            request_body,
-            headers,
-            force_model_refresh=True,
-            model_refresh_reason="model_not_supported_retry",
+        # 模型不支持时强制刷新模型列表后重试
+        retried_body, retried_headers = await self._prepare_request(
+            request_body, headers, force_model_refresh=True, model_refresh_reason="model_not_supported_retry",
         )
         try:
             async for chunk in _stream_with_421_retry(retried_body):
