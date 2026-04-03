@@ -123,14 +123,15 @@ model_mapping:
     backends: ["antigravity"]
     target: "claude-opus-4-6-thinking"
     is_regex: true
-  # 智谱 GLM 兜底映射
+  # 智谱 GLM 映射（官方原生 Anthropic 兼容端点）
+  # GLM-5.1 完整承载 Claude Code 满血能力（tool calling / thinking / 多模态）
   - pattern: "claude-sonnet-.*"
     backends: ["zhipu"]
-    target: "glm-5v-turbo"
+    target: "glm-5.1"
     is_regex: true
   - pattern: "claude-opus-.*"
     backends: ["zhipu"]
-    target: "glm-5v-turbo"
+    target: "glm-5.1"
     is_regex: true
   - pattern: "claude-haiku-.*"
     backends: ["zhipu"]

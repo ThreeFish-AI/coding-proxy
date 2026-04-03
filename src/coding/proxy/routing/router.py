@@ -741,7 +741,7 @@ class RequestRouter:
         provider_protocol = {
             "copilot": "openai_chat_completions",
             "antigravity": "gemini_generate_content",
-            "zhipu": "zhipu_chat_completions",
+            "zhipu": "anthropic_messages",
             "anthropic": "anthropic_messages",
         }.get(tier.name, "unknown")
         compat_trace = CompatibilityTrace(

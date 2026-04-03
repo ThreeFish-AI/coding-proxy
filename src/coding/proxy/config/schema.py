@@ -44,15 +44,16 @@ class AntigravityConfig(BaseModel):
 
 
 class ZhipuConfig(BaseModel):
+    """智谱 GLM 后端配置（原生 Anthropic 兼容端点）.
+
+    官方端点已完整支持 Anthropic Messages API 协议，
+    无需工具截断、thinking 剥离等适配逻辑。
+    """
+
     enabled: bool = True
     base_url: str = "https://open.bigmodel.cn/api/anthropic"
     api_key: str = ""
     timeout_ms: int = 3000000
-    tool_compat_mode: Literal["full", "adaptive"] = "adaptive"
-    max_tools: int = 80
-    max_tools_haiku: int = 48
-    disable_mcp_tools: bool = False
-    disable_browser_tools: bool = False
 
 
 class CircuitBreakerConfig(BaseModel):
@@ -141,11 +142,6 @@ class TierConfig(BaseModel):
 
     # Zhipu 专属
     api_key: str = ""
-    tool_compat_mode: Literal["full", "adaptive"] = "adaptive"
-    max_tools: int = 80
-    max_tools_haiku: int = 48
-    disable_mcp_tools: bool = False
-    disable_browser_tools: bool = False
 
     # 弹性配置（None = 终端层，无熔断器）
     circuit_breaker: CircuitBreakerConfig | None = None

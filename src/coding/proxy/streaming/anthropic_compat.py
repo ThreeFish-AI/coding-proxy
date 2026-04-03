@@ -116,10 +116,10 @@ def _extract_text_fragments(delta: Any) -> list[str]:
     return []
 
 
-# 智谱等供应商可能使用的非标准内容块类型别名
+# OpenAI 兼容协议供应商可能使用的非标准内容块类型别名（Copilot / Antigravity 等使用）
 _TOOL_USE_BLOCK_TYPES = {"text", "tool_use", "tool_call", "function_call", "thinking"}
 
-# 智谱等供应商可能使用的非标准 delta 类型别名
+# OpenAI 兼容协议供应商可能使用的非标准 delta 类型别名
 _INPUT_JSON_DELTA_TYPES = {"input_json_delta", "arguments_delta", "tool_call_delta"}
 
 
@@ -131,7 +131,7 @@ def _normalize_direct_event(data: dict[str, Any], event_name: str | None) -> lis
         if block_type not in _TOOL_USE_BLOCK_TYPES:
             logger.debug("Filtered non-standard content_block_start type: %s", block_type)
             return []
-        # 智谱可能在 content_block_start.input 中内联返回完整工具参数
+        # OpenAI 兼容供应商可能在 content_block_start.input 中内联返回完整工具参数
         if block_type == "tool_use":
             result = [_make_event(event_name or event_type, data)]
             inline_input = block.get("input")
@@ -163,7 +163,7 @@ def _normalize_direct_event(data: dict[str, Any], event_name: str | None) -> lis
         # 放行标准 delta 类型
         if delta_type in {"text_delta", "input_json_delta", "thinking_delta"}:
             return [_make_event(event_name or event_type, data)]
-        # 归一化非标准 input_json_delta 别名（智谱可能使用 arguments_delta 等）
+        # 归一化非标准 input_json_delta 别名（OpenAI 兼容供应商可能使用 arguments_delta 等）
         if delta_type in _INPUT_JSON_DELTA_TYPES:
             normalized_delta = {**delta, "type": "input_json_delta"}
             if "partial_json" not in normalized_delta and "arguments" in normalized_delta:
@@ -248,7 +248,7 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
     delta = choice.get("delta", {})
     finish_reason = choice.get("finish_reason")
 
-    # ── 处理 reasoning_content（智谱 OpenAI 格式的深度思考内容） ──
+    # ── 处理 reasoning_content（OpenAI 兼容格式的深度思考内容） ──
     reasoning_content = delta.get("reasoning_content")
     if reasoning_content:
         chunks.extend(state.ensure_started())
@@ -351,7 +351,7 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
                     },
                 }))
             elif tool_info and arguments is None and finish_reason in ("tool_calls", "stop"):
-                # 智谱等供应商有时在 finish 时仍返回 null arguments
+                # OpenAI 兼容供应商有时在 finish 时仍返回 null arguments
                 logger.debug(
                     "Tool call '%s' has null arguments at finish_reason=%s",
                     tool_info.get("name", "?"), finish_reason,

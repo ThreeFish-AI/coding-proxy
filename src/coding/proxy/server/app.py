@@ -132,11 +132,6 @@ def _create_backend_from_tier(
                 base_url=tier_cfg.base_url or "https://open.bigmodel.cn/api/anthropic",
                 api_key=tier_cfg.api_key,
                 timeout_ms=tier_cfg.timeout_ms,
-                tool_compat_mode=tier_cfg.tool_compat_mode,
-                max_tools=tier_cfg.max_tools,
-                max_tools_haiku=tier_cfg.max_tools_haiku,
-                disable_mcp_tools=tier_cfg.disable_mcp_tools,
-                disable_browser_tools=tier_cfg.disable_browser_tools,
             )
             return ZhipuBackend(cfg, mapper)
         case _:
