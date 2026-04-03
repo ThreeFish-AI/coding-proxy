@@ -266,3 +266,74 @@ def test_antigravity_supports_request_with_tools_thinking_and_metadata():
     ))
     assert supported is True
     assert reasons == []
+
+
+# ── 新增测试用例 ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_prepare_request_no_anthropic_beta_header():
+    """_prepare_request 输出不含 anthropic-beta header."""
+    config = AntigravityConfig()
+    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
+    backend._token_manager.get_token = AsyncMock(return_value="tok")
+
+    _, headers = await backend._prepare_request({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{"role": "user", "content": "Hi"}],
+    }, {})
+
+    assert "anthropic-beta" not in headers
+    assert headers["authorization"] == "Bearer tok"
+    assert headers["content-type"] == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_include_adaptations():
+    """get_diagnostics() 包含 request_adaptations."""
+    config = AntigravityConfig()
+    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
+    backend._token_manager.get_token = AsyncMock(return_value="tok")
+
+    await backend._prepare_request({
+        "model": "test",
+        "messages": [{"role": "user", "content": ""}],
+    }, {})
+
+    diag = backend.get_diagnostics()
+    assert "request_adaptations" in diag
+    # 空 message 应触发 empty_contents_padded adaptation
+    assert any("empty_contents_padded" in a for a in diag["request_adaptations"])
+
+
+@pytest.mark.asyncio
+async def test_send_message_uses_cached_resolution():
+    """send_message 不重复调用 map_model，使用 _prepare_request 缓存值."""
+    config = AntigravityConfig()
+    mapper = ModelMapper([
+        ModelMappingRule(
+            pattern="claude-*",
+            target="resolved-model",
+            backends=["antigravity"],
+        ),
+    ])
+    backend = AntigravityBackend(config, FailoverConfig(), mapper)
+    backend._token_manager.get_token = AsyncMock(return_value="tok")
+
+    # 先调用 _prepare_request 设置缓存
+    await backend._prepare_request({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{"role": "user", "content": "Hi"}],
+    }, {})
+
+    # 验证 _last_resolved_model 已被设置
+    assert backend._last_resolved_model == "resolved-model"
+    # 验证 map_model 调用次数为 1（仅在 _prepare_request 中调用过一次）
+    assert backend._last_requested_model == "claude-sonnet-4-20250514"
+
+
+def test_compatibility_profile_json_output_native():
+    """json_output 兼容性状态为 NATIVE（已支持 response_format 映射）."""
+    backend = AntigravityBackend(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
+    profile = backend.get_compatibility_profile()
+    assert profile.json_output.name == "NATIVE"

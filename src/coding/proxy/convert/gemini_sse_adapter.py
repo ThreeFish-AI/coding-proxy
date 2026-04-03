@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any, AsyncIterator
+
+logger = logging.getLogger(__name__)
 
 
 async def adapt_sse_stream(
@@ -35,6 +38,7 @@ async def adapt_sse_stream(
             try:
                 data = json.loads(payload)
             except json.JSONDecodeError:
+                logger.debug("SSE chunk JSON 解析失败，跳过: %s", payload[:200])
                 continue
 
             meta = data.get("usageMetadata", {})
