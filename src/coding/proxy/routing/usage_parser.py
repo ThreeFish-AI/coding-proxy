@@ -107,12 +107,15 @@ def _build_usage_evidence_records(
     return records
 
 
-def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
+def _parse_usage_from_chunk(chunk: bytes, usage: dict, *, vendor_label: str | None = None) -> None:
     """从 SSE chunk 提取 token 用量.
 
     同时支持 Anthropic 原生格式和 OpenAI/Zhipu 兼容格式：
     - Anthropic: data.message.usage.input_tokens / data.usage.output_tokens
     - OpenAI/Zhipu: 顶层 data.usage.prompt_tokens / data.usage.completion_tokens
+
+    :param vendor_label: 上游 Vendor 标签（如 "Anthropic"、"OpenAI"、"Gemini"），
+                          用于日志标注实际来源协议，由调用方根据 tier.name 传入。
     """
     text = chunk.decode("utf-8", errors="ignore")
     for line in text.split("\n"):
@@ -157,10 +160,11 @@ def _parse_usage_from_chunk(chunk: bytes, usage: dict) -> None:
             cache_creation_tokens = u.get("cache_creation_input_tokens", 0)
             cache_read_tokens = u.get("cache_read_input_tokens", 0)
 
+            _label = f" ({vendor_label})" if vendor_label else ""
             if output_tokens > 0:
-                logger.debug("Extracted output tokens from data.usage: %d", output_tokens)
+                logger.debug("Extracted output tokens from data.usage: %d%s", output_tokens, _label)
             if input_tokens > 0:
-                logger.debug("Extracted input tokens from data.usage: %d (Copilot/OpenAI format)", input_tokens)
+                logger.debug("Extracted input tokens from data.usage: %d%s", input_tokens, _label)
 
             _set_if_nonzero(usage, "output_tokens", output_tokens)
             _set_if_nonzero(usage, "input_tokens", input_tokens)

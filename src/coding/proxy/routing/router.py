@@ -41,6 +41,14 @@ from ..logging.db import TokenLogger
 
 logger = logging.getLogger(__name__)
 
+# tier.name → 上游 Vendor 协议标签映射（用于 token 用量日志标注）
+_VENDOR_LABEL_MAP: dict[str, str] = {
+    "anthropic": "Anthropic",
+    "zhipu": "Anthropic",
+    "copilot": "OpenAI",
+    "antigravity": "Gemini",
+}
+
 
 class RequestRouter:
     """路由请求到合适的后端层级，按优先级链式故障转移."""
@@ -152,7 +160,10 @@ class RequestRouter:
 
             try:
                 async for chunk in tier.backend.send_message_stream(body, headers):
-                    _parse_usage_from_chunk(chunk, usage)
+                    _parse_usage_from_chunk(
+                        chunk, usage,
+                        vendor_label=_VENDOR_LABEL_MAP.get(tier.name),
+                    )
                     yield chunk, tier.name
 
                 info = self._build_usage_info(usage)
