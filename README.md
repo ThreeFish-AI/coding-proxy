@@ -59,7 +59,7 @@ export ZHIPU_API_KEY="your-api-key-here"
 
 ### 4. Ignite the Proxy Server
 ```bash
-coding-proxy start
+uv run coding-proxy start
 #  INFO:     Started server process
 #  INFO:     Uvicorn running on http://127.0.0.1:8046 (Press CTRL+C to quit)
 ```
