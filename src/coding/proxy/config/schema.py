@@ -2,10 +2,30 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
+
+logger = logging.getLogger(__name__)
+
+# ── 后端专属字段分组映射 ────────────────────────────────────────
+# 每个 backend 类型对应其专属字段集合，用于 TierConfig 的语义标注与校验
+
+_COPILOT_FIELDS: frozenset[str] = frozenset({
+    "github_token", "account_type", "token_url", "models_cache_ttl_seconds",
+})
+_ANTIGRAVITY_FIELDS: frozenset[str] = frozenset({
+    "client_id", "client_secret", "refresh_token", "model_endpoint",
+})
+_ZHIPU_FIELDS: frozenset[str] = frozenset({"api_key",})
+
+_BACKEND_EXCLUSIVE_FIELDS: dict[str, frozenset[str]] = {
+    "copilot": _COPILOT_FIELDS,
+    "antigravity": _ANTIGRAVITY_FIELDS,
+    "zhipu": _ZHIPU_FIELDS,
+}
 
 
 class ServerConfig(BaseModel):
@@ -119,35 +139,92 @@ class TierConfig(BaseModel):
 
     列表顺序即优先级：index 越小优先级越高。
     无 circuit_breaker 的 Tier 为终端层（不触发故障转移）。
+
+    各后端类型的专属字段已通过 ``Field(description=...)`` 标注适用范围，
+    非当前 backend 类型的专属字段在验证阶段会发出 warning 日志。
     """
 
     backend: BackendType
 
-    # 通用字段
+    # ── 通用字段（所有后端共用） ──────────────────────────────
     enabled: bool = True
-    base_url: str = ""
-    timeout_ms: int = 300000
+    base_url: str = Field(
+        default="",
+        description="后端 API 基础 URL；留空时使用各后端默认值",
+    )
+    timeout_ms: int = Field(
+        default=300000,
+        description="请求超时时间（毫秒），适用于所有后端",
+    )
 
-    # Copilot 专属
-    github_token: str = ""
-    account_type: str = "individual"
-    token_url: str = "https://api.github.com/copilot_internal/v2/token"
-    models_cache_ttl_seconds: int = 300
+    # ── Copilot 专属字段 ─────────────────────────────────────
+    github_token: str = Field(
+        default="",
+        description="[copilot] GitHub Personal Access Token 或 OAuth Token",
+    )
+    account_type: str = Field(
+        default="individual",
+        description="[copilot] Copilot 账户类型：individual / business / enterprise",
+    )
+    token_url: str = Field(
+        default="https://api.github.com/copilot_internal/v2/token",
+        description="[copilot] Copilot Token 交换端点 URL",
+    )
+    models_cache_ttl_seconds: int = Field(
+        default=300,
+        description="[copilot] 模型列表缓存 TTL（秒）",
+    )
 
-    # Antigravity 专属
-    client_id: str = ""
-    client_secret: str = ""
-    refresh_token: str = ""
-    model_endpoint: str = "models/claude-sonnet-4-20250514"
+    # ── Antigravity 专属字段 ──────────────────────────────────
+    client_id: str = Field(
+        default="",
+        description="[antigravity] Google OAuth2 Client ID",
+    )
+    client_secret: str = Field(
+        default="",
+        description="[antigravity] Google OAuth2 Client Secret",
+    )
+    refresh_token: str = Field(
+        default="",
+        description="[antigravity] Google OAuth2 Refresh Token",
+    )
+    model_endpoint: str = Field(
+        default="models/claude-sonnet-4-20250514",
+        description="[antigravity] Antigravity 模型端点路径",
+    )
 
-    # Zhipu 专属
-    api_key: str = ""
+    # ── Zhipu 专属字段 ────────────────────────────────────────
+    api_key: str = Field(
+        default="",
+        description="[zhipu] 智谱 GLM API Key",
+    )
 
-    # 弹性配置（None = 终端层，无熔断器）
-    circuit_breaker: CircuitBreakerConfig | None = None
+    # ── 弹性配置 ──────────────────────────────────────────────
+    circuit_breaker: CircuitBreakerConfig | None = Field(
+        default=None,
+        description="熔断器配置；None 表示终端层（不触发故障转移）",
+    )
     retry: RetryConfig = Field(default_factory=RetryConfig)
     quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
     weekly_quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
+
+    @model_validator(mode="after")
+    def _warn_irrelevant_fields(self) -> "TierConfig":
+        """对非当前 backend 类型的非空专属字段发出 warning."""
+        exclusive = _BACKEND_EXCLUSIVE_FIELDS.get(self.backend)
+        if not exclusive:
+            return self
+        for backend_type, fields in _BACKEND_EXCLUSIVE_FIELDS.items():
+            if backend_type == self.backend:
+                continue
+            for field_name in fields:
+                value = getattr(self, field_name, None)
+                if value and value != getattr(TierConfig.model_fields[field_name], "default", None):
+                    logger.warning(
+                        "TierConfig(backend=%s): 字段 %s 属于 %s 后端，当前值将被忽略",
+                        self.backend, field_name, backend_type,
+                    )
+        return self
 
 
 class DatabaseConfig(BaseModel):
@@ -174,14 +251,49 @@ class AuthConfig(BaseModel):
 
 
 class ProxyConfig(BaseModel):
+    """顶层配置模型.
+
+    .. note::
+        以下字段为 **旧 flat 格式**（已废弃，保留仅用于向后兼容迁移）：
+        ``primary``, ``copilot``, ``antigravity``, ``fallback``,
+        ``circuit_breaker``, ``copilot_circuit_breaker``, ``antigravity_circuit_breaker``,
+        ``quota_guard``, ``copilot_quota_guard``, ``antigravity_quota_guard``
+
+        新配置应使用 ``tiers`` 列表格式（参见 config.example.yaml）。
+        旧格式会在 ``_migrate_legacy_fields`` 中自动转换为 tiers。
+    """
+
     server: ServerConfig = ServerConfig()
-    primary: AnthropicConfig = AnthropicConfig()
-    copilot: CopilotConfig = CopilotConfig()
-    antigravity: AntigravityConfig = AntigravityConfig()
-    fallback: ZhipuConfig = ZhipuConfig()
-    circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()
-    copilot_circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()
-    antigravity_circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()
+
+    # ── Legacy 字段（旧 flat 格式，由 _migrate_legacy_fields 自动迁移至 tiers） ──
+    primary: AnthropicConfig = Field(
+        default=AnthropicConfig(),
+        description="[legacy] Anthropic 主后端配置；新格式请使用 tiers[].backend=anthropic",
+    )
+    copilot: CopilotConfig = Field(
+        default=CopilotConfig(),
+        description="[legacy] Copilot 后端配置；新格式请使用 tiers[].backend=copilot",
+    )
+    antigravity: AntigravityConfig = Field(
+        default=AntigravityConfig(),
+        description="[legacy] Antigravity 后端配置；新格式请使用 tiers[].backend=antigravity",
+    )
+    fallback: ZhipuConfig = Field(
+        default=ZhipuConfig(),
+        description="[legacy] 智谱兜底后端配置；新格式请使用 tiers[].backend=zhipu",
+    )
+    circuit_breaker: CircuitBreakerConfig = Field(
+        default=CircuitBreakerConfig(),
+        description="[legacy] 全局熔断器配置；新格式请使用 tiers[].circuit_breaker",
+    )
+    copilot_circuit_breaker: CircuitBreakerConfig = Field(
+        default=CircuitBreakerConfig(),
+        description="[legacy] Copilot 熔断器配置；新格式请使用 tiers[backend=copilot].circuit_breaker",
+    )
+    antigravity_circuit_breaker: CircuitBreakerConfig = Field(
+        default=CircuitBreakerConfig(),
+        description="[legacy] Antigravity 熔断器配置；新格式请使用 tiers[backend=antigravity].circuit_breaker",
+    )
     failover: FailoverConfig = FailoverConfig()
     model_mapping: list[ModelMappingRule] = Field(
         default=[
@@ -191,9 +303,18 @@ class ProxyConfig(BaseModel):
             ModelMappingRule(pattern="claude-.*", target="glm-5.1", is_regex=True),
         ],
     )
-    quota_guard: QuotaGuardConfig = QuotaGuardConfig()
-    copilot_quota_guard: QuotaGuardConfig = QuotaGuardConfig()
-    antigravity_quota_guard: QuotaGuardConfig = QuotaGuardConfig()
+    quota_guard: QuotaGuardConfig = Field(
+        default=QuotaGuardConfig(),
+        description="[legacy] 全局配额守卫；新格式请使用 tiers[].quota_guard",
+    )
+    copilot_quota_guard: QuotaGuardConfig = Field(
+        default=QuotaGuardConfig(),
+        description="[legacy] Copilot 配额守卫；新格式请使用 tiers[backend=copilot].quota_guard",
+    )
+    antigravity_quota_guard: QuotaGuardConfig = Field(
+        default=QuotaGuardConfig(),
+        description="[legacy] Antigravity 配额守卫；新格式请使用 tiers[backend=antigravity].quota_guard",
+    )
     auth: AuthConfig = AuthConfig()
     database: DatabaseConfig = DatabaseConfig()
     logging: LoggingConfig = LoggingConfig()
@@ -205,9 +326,11 @@ class ProxyConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _migrate_legacy_fields(cls, data: Any) -> Any:
-        """向后兼容：
-        1. 支持 anthropic/zhipu 作为 primary/fallback 的别名
-        2. 若未指定 tiers，则从旧 flat 格式自动迁移生成 tiers 列表
+        """向后兼容迁移（legacy flat 格式 → tiers 列表格式）.
+
+        迁移规则：
+        1. ``anthropic`` / ``zhipu`` 字段名自动映射为 ``primary`` / ``fallback``
+        2. 若配置中未显式指定 ``tiers``，则从旧 flat 格式字段自动生成
         """
         if not isinstance(data, dict):
             return data
@@ -222,8 +345,16 @@ class ProxyConfig(BaseModel):
         if data.get("tiers"):
             return data
 
-        # 3. 从旧 flat 格式自动构建 tiers
+        # 3. 从旧 flat 格式自动构建 tiers（触发时记录废弃日志）
         tiers: list[dict[str, Any]] = []
+        _legacy_keys = {"primary", "copilot", "antigravity", "fallback",
+                        "circuit_breaker", "copilot_circuit_breaker", "antigravity_circuit_breaker",
+                        "quota_guard", "copilot_quota_guard", "antigravity_quota_guard"}
+        if any(k in data for k in _legacy_keys):
+            logger.info(
+                "检测到旧 flat 格式配置字段，已自动迁移至 tiers 列表格式。"
+                "建议迁移至 config.example.yaml 中的 tiers 新格式。",
+            )
 
         primary = data.get("primary") or {}
         if primary.get("enabled", True):

@@ -22,6 +22,12 @@ _DIRECT_EVENTS = {
 
 
 class _OpenAICompatState:
+    """OpenAI → Anthropic 流式转换状态机.
+
+    管理消息生命周期（start/close）和内容块生命周期（text / thinking / tool_use），
+    将块操作封装为独立方法，使 ``_normalize_openai_chunk`` 成为纯粹的事件分发器。
+    """
+
     def __init__(self, model: str) -> None:
         self.model = model
         self.message_id = f"msg_{uuid.uuid4().hex[:24]}"
@@ -34,8 +40,10 @@ class _OpenAICompatState:
         self.block_index = 0
         self.content_block_open = False
         self.tool_calls: dict[int, dict[str, Any]] = {}
-        self.usage_updated = False  # 标记是否已收到 usage 信息
+        self.usage_updated = False
         self.thinking_block_open = False
+
+    # ── 消息生命周期 ────────────────────────────────────────
 
     def ensure_started(self) -> list[bytes]:
         if self.started:
@@ -77,7 +85,6 @@ class _OpenAICompatState:
                 "index": self.block_index,
             }))
             self.content_block_open = False
-        # 确保在最终的 message_delta 中包含完整的 token 信息
         usage_data = {"output_tokens": self.output_tokens}
         if self.usage_updated and self.input_tokens > 0:
             usage_data["input_tokens"] = self.input_tokens
@@ -85,7 +92,6 @@ class _OpenAICompatState:
             usage_data["cache_creation_input_tokens"] = self.cache_creation_tokens
         if self.cache_read_tokens > 0:
             usage_data["cache_read_input_tokens"] = self.cache_read_tokens
-
         chunks.append(_make_event("message_delta", {
             "type": "message_delta",
             "delta": {"stop_reason": reason, "stop_sequence": None},
@@ -93,6 +99,115 @@ class _OpenAICompatState:
         }))
         chunks.append(_make_event("message_stop", {"type": "message_stop"}))
         return chunks
+
+    # ── Token 用量更新 ──────────────────────────────────────
+
+    def update_usage(self, usage: dict[str, Any]) -> None:
+        """从 OpenAI usage 字典更新 token 计数."""
+        if "prompt_tokens" in usage:
+            self.input_tokens = usage.get("prompt_tokens", self.input_tokens)
+            self.usage_updated = True
+        if "completion_tokens" in usage:
+            self.output_tokens = usage.get("completion_tokens", self.output_tokens)
+            self.usage_updated = True
+        crt = _extract_cache_read_tokens(usage)
+        if crt > 0:
+            self.cache_read_tokens = crt
+            self.usage_updated = True
+        cct = _extract_cache_creation_tokens(usage)
+        if cct > 0:
+            self.cache_creation_tokens = cct
+            self.usage_updated = True
+
+    # ── 内容块生命周期 ──────────────────────────────────────
+
+    def close_content_block(self) -> list[bytes]:
+        """关闭当前打开的内容块（如有），递增 block_index."""
+        if not self.content_block_open:
+            return []
+        self.content_block_open = False
+        self.block_index += 1
+        return [_make_event("content_block_stop", {
+            "type": "content_block_stop",
+            "index": self.block_index - 1,
+        })]
+
+    def open_thinking_block(self) -> list[bytes]:
+        """打开 thinking 内容块（如尚未打开）."""
+        if self.thinking_block_open:
+            return []
+        self.thinking_block_open = True
+        self.content_block_open = True
+        return [_make_event("content_block_start", {
+            "type": "content_block_start",
+            "index": self.block_index,
+            "content_block": {"type": "thinking", "thinking": ""},
+        })]
+
+    def ensure_text_block(self) -> list[bytes]:
+        """确保当前为 text 内容块：先关闭 thinking，再处理工具块冲突，最后打开 text 块."""
+        chunks: list[bytes] = []
+        # 如果 thinking 块开着，先关闭它
+        if self.thinking_block_open:
+            chunks.append(_make_event("content_block_stop", {
+                "type": "content_block_stop",
+                "index": self.block_index,
+            }))
+            self.block_index += 1
+            self.thinking_block_open = False
+            self.content_block_open = False
+        # 如果已有工具块占用当前 index，先关闭
+        if self.content_block_open and any(
+            t.get("anthropic_block_index") == self.block_index
+            for t in self.tool_calls.values()
+        ):
+            chunks.extend(self.close_content_block())
+        # 打开 text 块
+        if not self.content_block_open:
+            chunks.append(_make_event("content_block_start", {
+                "type": "content_block_start",
+                "index": self.block_index,
+                "content_block": {"type": "text", "text": ""},
+            }))
+            self.content_block_open = True
+        return chunks
+
+    def open_tool_block(self, tool_index: int, tool_call: dict[str, Any]) -> list[bytes]:
+        """注册并打开 tool_use 内容块."""
+        chunks: list[bytes] = []
+        if self.content_block_open:
+            chunks.extend(self.close_content_block())
+        self.tool_calls[tool_index] = {
+            "id": tool_call["id"],
+            "name": tool_call["function"]["name"],
+            "anthropic_block_index": self.block_index,
+        }
+        chunks.append(_make_event("content_block_start", {
+            "type": "content_block_start",
+            "index": self.block_index,
+            "content_block": {
+                "type": "tool_use",
+                "id": tool_call["id"],
+                "name": tool_call["function"]["name"],
+                "input": {},
+            },
+        }))
+        self.content_block_open = True
+        return chunks
+
+    def feed_tool_arguments(self, tool_index: int, arguments: str) -> list[bytes]:
+        """向已注册的 tool_use 块追加参数 delta."""
+        tool_info = self.tool_calls.get(tool_index)
+        if not tool_info or not arguments:
+            return []
+        return [_make_event("content_block_delta", {
+            "type": "content_block_delta",
+            "index": tool_info["anthropic_block_index"],
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": arguments,
+            },
+        })]
 
 
 def _make_event(event_type: str, data: dict[str, Any]) -> bytes:
@@ -218,27 +333,14 @@ def _extract_cache_creation_tokens(usage: dict[str, Any]) -> int:
 
 
 def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> list[bytes]:
+    """将 OpenAI 格式 chunk 转换为 Anthropic SSE 事件序列.
+
+    重构后为纯粹的事件分发器：token 更新、块生命周期管理均委托给 State 方法。
+    """
     chunks: list[bytes] = []
-    usage = data.get("usage", {})
 
-    # 处理 token 统计更新
-    if "prompt_tokens" in usage:
-        state.input_tokens = usage.get("prompt_tokens", state.input_tokens)
-        state.usage_updated = True
-
-    if "completion_tokens" in usage:
-        state.output_tokens = usage.get("completion_tokens", state.output_tokens)
-        state.usage_updated = True
-
-    cache_read_tokens = _extract_cache_read_tokens(usage)
-    if cache_read_tokens > 0:
-        state.cache_read_tokens = cache_read_tokens
-        state.usage_updated = True
-
-    cache_creation_tokens = _extract_cache_creation_tokens(usage)
-    if cache_creation_tokens > 0:
-        state.cache_creation_tokens = cache_creation_tokens
-        state.usage_updated = True
+    # 1. Token 用量更新（委托给 State）
+    state.update_usage(data.get("usage", {}))
 
     choices = data.get("choices", [])
     if not choices:
@@ -248,56 +350,22 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
     delta = choice.get("delta", {})
     finish_reason = choice.get("finish_reason")
 
-    # ── 处理 reasoning_content（OpenAI 兼容格式的深度思考内容） ──
+    # 2. Reasoning / thinking 内容 → thinking 块
     reasoning_content = delta.get("reasoning_content")
     if reasoning_content:
         chunks.extend(state.ensure_started())
-        if not state.thinking_block_open:
-            chunks.append(_make_event("content_block_start", {
-                "type": "content_block_start",
-                "index": state.block_index,
-                "content_block": {"type": "thinking", "thinking": ""},
-            }))
-            state.thinking_block_open = True
-            state.content_block_open = True
+        chunks.extend(state.open_thinking_block())
         chunks.append(_make_event("content_block_delta", {
             "type": "content_block_delta",
             "index": state.block_index,
             "delta": {"type": "thinking_delta", "thinking": reasoning_content},
         }))
 
+    # 3. Text 内容 → text 块
     text_fragments = _extract_text_fragments(delta.get("content"))
     if text_fragments:
         chunks.extend(state.ensure_started())
-        # 如果 thinking 块开着，先关闭它再打开 text 块
-        if state.thinking_block_open:
-            chunks.append(_make_event("content_block_stop", {
-                "type": "content_block_stop",
-                "index": state.block_index,
-            }))
-            state.block_index += 1
-            state.thinking_block_open = False
-            state.content_block_open = False
-
-        if state.content_block_open and any(
-            tool.get("anthropic_block_index") == state.block_index
-            for tool in state.tool_calls.values()
-        ):
-            chunks.append(_make_event("content_block_stop", {
-                "type": "content_block_stop",
-                "index": state.block_index,
-            }))
-            state.block_index += 1
-            state.content_block_open = False
-
-        if not state.content_block_open:
-            chunks.append(_make_event("content_block_start", {
-                "type": "content_block_start",
-                "index": state.block_index,
-                "content_block": {"type": "text", "text": ""},
-            }))
-            state.content_block_open = True
-
+        chunks.extend(state.ensure_text_block())
         for text in text_fragments:
             chunks.append(_make_event("content_block_delta", {
                 "type": "content_block_delta",
@@ -305,58 +373,30 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
                 "delta": {"type": "text_delta", "text": text},
             }))
 
+    # 4. Tool calls → tool_use 块
     tool_calls = delta.get("tool_calls") or []
     for tool_call in tool_calls:
         if not isinstance(tool_call, dict):
             continue
         tool_index = int(tool_call.get("index", 0))
+        # 注册新工具调用
         if tool_call.get("id") and isinstance(tool_call.get("function"), dict) and tool_call["function"].get("name"):
-            if state.content_block_open:
-                chunks.append(_make_event("content_block_stop", {
-                    "type": "content_block_stop",
-                    "index": state.block_index,
-                }))
-                state.block_index += 1
-                state.content_block_open = False
-
-            state.tool_calls[tool_index] = {
-                "id": tool_call["id"],
-                "name": tool_call["function"]["name"],
-                "anthropic_block_index": state.block_index,
-            }
             chunks.extend(state.ensure_started())
-            chunks.append(_make_event("content_block_start", {
-                "type": "content_block_start",
-                "index": state.block_index,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": tool_call["id"],
-                    "name": tool_call["function"]["name"],
-                    "input": {},
-                },
-            }))
-            state.content_block_open = True
-
+            chunks.extend(state.open_tool_block(tool_index, tool_call))
+        # 追加工具参数
         function = tool_call.get("function")
         if isinstance(function, dict):
-            tool_info = state.tool_calls.get(tool_index)
             arguments = function.get("arguments")
-            if tool_info and arguments:
-                chunks.append(_make_event("content_block_delta", {
-                    "type": "content_block_delta",
-                    "index": tool_info["anthropic_block_index"],
-                    "delta": {
-                        "type": "input_json_delta",
-                        "partial_json": arguments,
-                    },
-                }))
+            tool_info = state.tool_calls.get(tool_index)
+            if arguments:
+                chunks.extend(state.feed_tool_arguments(tool_index, arguments))
             elif tool_info and arguments is None and finish_reason in ("tool_calls", "stop"):
-                # OpenAI 兼容供应商有时在 finish 时仍返回 null arguments
                 logger.debug(
                     "Tool call '%s' has null arguments at finish_reason=%s",
                     tool_info.get("name", "?"), finish_reason,
                 )
 
+    # 5. Finish reason → 关闭消息
     if finish_reason:
         stop_reason = "max_tokens" if finish_reason == "length" else "end_turn"
         if finish_reason == "tool_calls":

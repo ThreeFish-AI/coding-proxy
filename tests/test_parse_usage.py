@@ -1,6 +1,6 @@
 """SSE chunk 用量解析单元测试 — 覆盖 Anthropic / OpenAI(Zhipu) / 混合格式."""
 
-from coding.proxy.routing.router import _parse_usage_from_chunk, _set_if_nonzero
+from coding.proxy.routing.usage_parser import _parse_usage_from_chunk, _set_if_nonzero
 
 
 def _sse(data_str: str) -> bytes:
