@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, AsyncIterator
 
 import httpx
+
+# 从 types.py 正交导入所有类型、常量与工具函数，并 re-export 以保持向后兼容
+from .types import (  # noqa: F401
+    RESPONSE_SANITIZE_SKIP_HEADERS,
+    BackendCapabilities,
+    BackendResponse,
+    CapabilityLossReason,
+    NoCompatibleBackendError,
+    PROXY_SKIP_HEADERS,
+    RequestCapabilities,
+    UsageInfo,
+    _SYNTHETIC_RESPONSE_SKIP_HEADERS,
+    _decode_json_body,
+    _extract_error_message,
+    _sanitize_headers_for_synthetic_response,
+)
 
 from ..compat.canonical import (
     CanonicalRequest,
@@ -22,119 +35,6 @@ from ..compat.session_store import CompatSessionRecord
 from ..config.schema import FailoverConfig
 
 logger = logging.getLogger(__name__)
-
-# 代理转发时应跳过的 hop-by-hop 请求头
-PROXY_SKIP_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
-
-# 构造合成 Response 时需移除的头部（避免 httpx 二次解压已解压内容）
-_SYNTHETIC_RESPONSE_SKIP_HEADERS = {"content-encoding", "content-length", "transfer-encoding"}
-
-
-def _sanitize_headers_for_synthetic_response(headers: httpx.Headers) -> dict[str, str]:
-    """移除 content-encoding 等头部，避免合成 httpx.Response 时触发二次解压."""
-    return {k: v for k, v in headers.items() if k.lower() not in _SYNTHETIC_RESPONSE_SKIP_HEADERS}
-
-
-def _decode_json_body(response: httpx.Response) -> dict[str, Any] | list[Any] | None:
-    """安全解析 JSON 响应.
-
-    若 content-type 未声明 JSON 或内容非法，返回 None，而不是抛 JSONDecodeError。
-    """
-    if not response.content:
-        return None
-
-    content_type = response.headers.get("content-type", "").lower()
-    if "json" not in content_type:
-        try:
-            return json.loads(response.content)
-        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
-            return None
-
-    try:
-        return response.json()
-    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
-        return None
-
-
-def _extract_error_message(response: httpx.Response, resp_body: dict[str, Any] | list[Any] | None) -> str | None:
-    if isinstance(resp_body, dict):
-        error = resp_body.get("error")
-        if isinstance(error, dict):
-            return error.get("message")
-        if isinstance(error, str):
-            return error
-        message = resp_body.get("message")
-        if isinstance(message, str):
-            return message
-
-    if not response.content:
-        return None
-    text = response.text.strip()
-    return text[:500] if text else None
-
-
-@dataclass
-class UsageInfo:
-    """一次调用的 Token 用量."""
-
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_creation_tokens: int = 0
-    cache_read_tokens: int = 0
-    request_id: str = ""
-
-
-class CapabilityLossReason(Enum):
-    """请求语义与后端能力不匹配的原因."""
-
-    TOOLS = "tools"
-    THINKING = "thinking"
-    IMAGES = "images"
-    VENDOR_TOOLS = "vendor_tools"
-    METADATA = "metadata"
-
-
-@dataclass(frozen=True)
-class RequestCapabilities:
-    """一次请求实际使用到的能力画像."""
-
-    has_tools: bool = False
-    has_thinking: bool = False
-    has_images: bool = False
-    has_metadata: bool = False
-
-
-@dataclass(frozen=True)
-class BackendCapabilities:
-    """后端能力声明."""
-
-    supports_tools: bool = True
-    supports_thinking: bool = True
-    supports_images: bool = True
-    emits_vendor_tool_events: bool = False
-    supports_metadata: bool = True
-
-
-@dataclass
-class BackendResponse:
-    """后端响应结果."""
-
-    status_code: int = 200
-    usage: UsageInfo = field(default_factory=UsageInfo)
-    is_streaming: bool = False
-    raw_body: bytes = b"{}"
-    error_type: str | None = None
-    error_message: str | None = None
-    model_served: str | None = None
-    response_headers: dict[str, str] = field(default_factory=dict)
-
-
-class NoCompatibleBackendError(RuntimeError):
-    """当前请求没有可安全承接的后端."""
-
-    def __init__(self, message: str, *, reasons: list[str] | None = None) -> None:
-        super().__init__(message)
-        self.reasons = reasons or []
 
 
 class BaseBackend(ABC):
@@ -284,6 +184,28 @@ class BaseBackend(ABC):
         """返回 API 端点路径（默认 /v1/messages）."""
         return "/v1/messages"
 
+    # ── 响应处理钩子 ──────────────────────────────────────
+
+    def _pre_send_check(self, request_body: dict[str, Any], headers: dict[str, str]) -> None:
+        """发送前检查钩子. 子类可覆写以实现快速失败（如缺少 API key）.
+
+        默认实现为空操作（no-op）.
+        """
+
+    def _normalize_error_response(
+        self,
+        status_code: int,
+        response: httpx.Response,
+        backend_resp: BackendResponse,
+    ) -> BackendResponse:
+        """错误响应归一化钩子. 子类可覆写以定制错误格式.
+
+        默认实现直接返回原始 backend_resp（无修改，透传行为）.
+        """
+        return backend_resp
+
+    # ── 生命周期钩子 ─────────────────────────────────────
+
     def _on_error_status(self, status_code: int) -> None:
         """响应错误状态码时的钩子（如 token 失效标记）."""
 
@@ -329,6 +251,7 @@ class BaseBackend(ABC):
         headers: dict[str, str],
     ) -> AsyncIterator[bytes]:
         """发送消息并返回 SSE 字节流."""
+        self._pre_send_check(request_body, headers)
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
         endpoint = self._get_endpoint()
@@ -365,6 +288,7 @@ class BaseBackend(ABC):
         headers: dict[str, str],
     ) -> BackendResponse:
         """发送非流式消息请求."""
+        self._pre_send_check(request_body, headers)
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
         endpoint = self._get_endpoint()
@@ -380,13 +304,14 @@ class BaseBackend(ABC):
 
         if response.status_code >= 400:
             self._on_error_status(response.status_code)
-            return BackendResponse(
+            backend_resp = BackendResponse(
                 status_code=response.status_code,
                 raw_body=raw_content,
                 error_type=resp_body.get("error", {}).get("type") if isinstance(resp_body, dict) and isinstance(resp_body.get("error"), dict) else None,
                 error_message=_extract_error_message(response, resp_body),
                 response_headers=dict(response.headers),
             )
+            return self._normalize_error_response(response.status_code, response, backend_resp)
 
         usage = resp_body.get("usage", {}) if isinstance(resp_body, dict) else {}
         return BackendResponse(

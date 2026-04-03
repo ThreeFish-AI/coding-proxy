@@ -224,29 +224,42 @@ async def test_zhipu_prepare_request_preserves_claude_code_tool_shapes(tool_name
 
 @pytest.mark.asyncio
 async def test_zhipu_send_message_normalizes_401_auth_error():
+    """ZhipuBackend._normalize_error_response 钩子将 401 错误类型归一化为 authentication_error."""
     backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
 
-    from unittest.mock import AsyncMock, patch
+    raw_body = '{"error":{"type":"401","message":"令牌已过期或验证不正确"}}'.encode()
+    input_resp = BackendResponse(
+        status_code=401,
+        raw_body=raw_body,
+        error_type="401",
+        error_message="令牌已过期或验证不正确",
+        response_headers={"content-type": "application/json"},
+    )
 
-    with patch.object(
-        BaseBackend,
-        "send_message",
-        AsyncMock(
-            return_value=BackendResponse(
-                status_code=401,
-                raw_body='{"error":{"type":"401","message":"令牌已过期或验证不正确"}}'.encode(),
-                error_type="401",
-                error_message="令牌已过期或验证不正确",
-                response_headers={"content-type": "application/json"},
-            )
-        ),
-    ):
-        resp = await backend.send_message({"model": "claude-opus-4-6", "messages": []}, {})
+    # 直接测试 _normalize_error_response 钩子（无需 mock 基类 send_message）
+    result = backend._normalize_error_response(401, httpx.Response(401, content=raw_body), input_resp)
 
-    assert resp.status_code == 401
-    assert resp.error_type == "authentication_error"
-    assert resp.error_message == "令牌已过期或验证不正确"
-    assert b'"authentication_error"' in resp.raw_body
+    assert result.status_code == 401
+    assert result.error_type == "authentication_error"
+    assert result.error_message == "令牌已过期或验证不正确"
+    assert b'"authentication_error"' in result.raw_body
+
+
+def test_zhipu_normalize_error_response_passthrough_non_401():
+    """非 401 状态码应透传原始响应，不做归一化."""
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+
+    input_resp = BackendResponse(
+        status_code=429,
+        raw_body=b'{"error":{"type":"rate_limit_error","message":"Too many requests"}}',
+        error_type="rate_limit_error",
+        error_message="Too many requests",
+    )
+
+    result = backend._normalize_error_response(429, httpx.Response(429, content=input_resp.raw_body), input_resp)
+
+    assert result.error_type == "rate_limit_error"
+    assert result is input_resp  # 透传：返回同一对象
 
 
 @pytest.mark.asyncio

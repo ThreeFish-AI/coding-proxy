@@ -2,7 +2,8 @@
 
 from .antigravity import AntigravityBackend
 from .anthropic import AnthropicBackend
-from .base import BaseBackend, BackendResponse, UsageInfo
+from .base import BaseBackend
+from .types import BackendResponse, UsageInfo
 from .zhipu import ZhipuBackend
 
 __all__ = [
