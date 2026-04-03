@@ -371,6 +371,20 @@ async def test_zhipu_send_message_without_api_key_fails_fast():
     assert "API key 未配置" in (resp.error_message or "")
 
 
+def test_zhipu_normalize_backend_error_accepts_raw_bytes():
+    backend = ZhipuBackend(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
+
+    raw_body, payload = backend._normalize_backend_error(
+        401,
+        '{"error":{"type":"401","message":"令牌已过期或验证不正确"}}'.encode(),
+    )
+
+    assert payload is not None
+    assert payload["error"]["type"] == "authentication_error"
+    assert payload["error"]["message"] == "令牌已过期或验证不正确"
+    assert b'"authentication_error"' in raw_body
+
+
 def test_backend_response_defaults():
     resp = BackendResponse()
     assert resp.status_code == 200
