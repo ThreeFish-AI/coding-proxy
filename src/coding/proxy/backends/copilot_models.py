@@ -332,7 +332,7 @@ class CopilotModelResolver:
         # 优先：配置规则显式映射
         if self._model_mapper is not None:
             mapped = self._model_mapper.map(
-                requested_model, backend="copilot", default=requested_model,
+                requested_model, vendor="copilot", default=requested_model,
             )
             if mapped != requested_model:
                 diagnostics["requested_model"] = requested_model

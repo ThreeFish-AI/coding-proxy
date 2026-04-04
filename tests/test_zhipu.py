@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from coding.proxy.backends.zhipu import ZhipuBackend
+from coding.proxy.vendors.zhipu import ZhipuVendor as ZhipuBackend
 from coding.proxy.compat.canonical import CompatibilityStatus
 from coding.proxy.config.schema import ModelMappingRule, ZhipuConfig
 from coding.proxy.routing.model_mapper import ModelMapper
@@ -21,9 +21,9 @@ from coding.proxy.routing.model_mapper import ModelMapper
 def zhipu_backend():
     """创建使用默认配置的 ZhipuBackend 实例."""
     mapper = ModelMapper([
-        ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True, backends=["zhipu"]),
-        ModelMappingRule(pattern="claude-opus-.*", target="glm-5.1", is_regex=True, backends=["zhipu"]),
-        ModelMappingRule(pattern="claude-haiku-.*", target="glm-4.5-air", is_regex=True, backends=["zhipu"]),
+        ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True, vendors=["zhipu"]),
+        ModelMappingRule(pattern="claude-opus-.*", target="glm-5.1", is_regex=True, vendors=["zhipu"]),
+        ModelMappingRule(pattern="claude-haiku-.*", target="glm-4.5-air", is_regex=True, vendors=["zhipu"]),
     ])
     return ZhipuBackend(ZhipuConfig(api_key="test-zhipu-key"), mapper)
 

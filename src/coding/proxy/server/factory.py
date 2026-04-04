@@ -1,4 +1,4 @@
-"""FastAPI 应用工厂函数 — 后端实例化与凭证解析."""
+"""FastAPI 应用工厂函数 — 供应商实例化与凭证解析."""
 
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ from ..auth.providers.google import (
 )
 from ..auth.runtime import RuntimeReauthCoordinator
 from ..auth.store import TokenStoreManager
-from ..backends.antigravity import AntigravityBackend
-from ..backends.anthropic import AnthropicBackend
-from ..backends.copilot import CopilotBackend
-from ..backends.zhipu import ZhipuBackend
+from ..vendors.antigravity import AntigravityVendor
+from ..vendors.anthropic import AnthropicVendor
+from ..vendors.copilot import CopilotVendor
+from ..vendors.zhipu import ZhipuVendor
 from ..config.schema import (
     AntigravityConfig,
     AnthropicConfig,
@@ -31,24 +31,26 @@ from ..config.schema import (
 from ..routing.circuit_breaker import CircuitBreaker
 from ..routing.model_mapper import ModelMapper
 from ..routing.quota_guard import QuotaGuard
-from ..routing.tier import BackendTier
+from ..routing.tier import VendorTier
+# 向后兼容别名
+BackendTier = VendorTier  # noqa: F401  (deprecated)
 
 logger = logging.getLogger(__name__)
 
 
-def _find_anthropic_backend(router: Any) -> AnthropicBackend | None:
-    """从路由链中查找 Anthropic 后端实例（用于旁路透传）."""
+def _find_anthropic_vendor(router: Any) -> AnthropicVendor | None:
+    """从路由链中查找 Anthropic 供应商实例（用于旁路透传）."""
     for tier in router.tiers:
-        if isinstance(tier.backend, AnthropicBackend):
-            return tier.backend
+        if isinstance(tier.vendor, AnthropicVendor):
+            return tier.vendor
     return None
 
 
-def _find_copilot_backend(router: Any) -> CopilotBackend | None:
-    """从路由链中查找 Copilot 后端实例（用于诊断与模型探测）."""
+def _find_copilot_vendor(router: Any) -> CopilotVendor | None:
+    """从路由链中查找 Copilot 供应商实例（用于诊断与模型探测）."""
     for tier in router.tiers:
-        if isinstance(tier.backend, CopilotBackend):
-            return tier.backend
+        if isinstance(tier.vendor, CopilotVendor):
+            return tier.vendor
     return None
 
 
@@ -73,55 +75,55 @@ def _build_quota_guard(cfg: QuotaGuardConfig) -> QuotaGuard:
     )
 
 
-def _create_backend_from_tier(
-    tier_cfg: TierConfig,
+def _create_vendor_from_config(
+    vendor_cfg: TierConfig,
     failover_cfg: FailoverConfig,
     mapper: ModelMapper,
     token_store: TokenStoreManager,
 ) -> Any:
-    """根据 tier_cfg.backend 创建对应后端实例（Strategy + Factory 模式）."""
-    match tier_cfg.backend:
+    """根据 vendor_cfg.vendor 创建对应供应商实例（Strategy + Factory 模式）."""
+    match vendor_cfg.vendor:
         case "anthropic":
             cfg = AnthropicConfig(
-                enabled=tier_cfg.enabled,
-                base_url=tier_cfg.base_url or "https://api.anthropic.com",
-                timeout_ms=tier_cfg.timeout_ms,
+                enabled=vendor_cfg.enabled,
+                base_url=vendor_cfg.base_url or "https://api.anthropic.com",
+                timeout_ms=vendor_cfg.timeout_ms,
             )
-            return AnthropicBackend(cfg, failover_cfg)
+            return AnthropicVendor(cfg, failover_cfg)
         case "copilot":
             cfg = CopilotConfig(
-                enabled=tier_cfg.enabled,
-                github_token=tier_cfg.github_token,
-                account_type=tier_cfg.account_type,
-                token_url=tier_cfg.token_url,
-                base_url=tier_cfg.base_url,
-                models_cache_ttl_seconds=tier_cfg.models_cache_ttl_seconds,
-                timeout_ms=tier_cfg.timeout_ms,
+                enabled=vendor_cfg.enabled,
+                github_token=vendor_cfg.github_token,
+                account_type=vendor_cfg.account_type,
+                token_url=vendor_cfg.token_url,
+                base_url=vendor_cfg.base_url,
+                models_cache_ttl_seconds=vendor_cfg.models_cache_ttl_seconds,
+                timeout_ms=vendor_cfg.timeout_ms,
             )
             cfg = _resolve_copilot_credentials(cfg, token_store)
-            return CopilotBackend(cfg, failover_cfg, mapper)
+            return CopilotVendor(cfg, failover_cfg, mapper)
         case "antigravity":
             cfg = AntigravityConfig(
-                enabled=tier_cfg.enabled,
-                client_id=tier_cfg.client_id,
-                client_secret=tier_cfg.client_secret,
-                refresh_token=tier_cfg.refresh_token,
-                base_url=tier_cfg.base_url or "https://generativelanguage.googleapis.com/v1beta",
-                model_endpoint=tier_cfg.model_endpoint,
-                timeout_ms=tier_cfg.timeout_ms,
+                enabled=vendor_cfg.enabled,
+                client_id=vendor_cfg.client_id,
+                client_secret=vendor_cfg.client_secret,
+                refresh_token=vendor_cfg.refresh_token,
+                base_url=vendor_cfg.base_url or "https://generativelanguage.googleapis.com/v1beta",
+                model_endpoint=vendor_cfg.model_endpoint,
+                timeout_ms=vendor_cfg.timeout_ms,
             )
             cfg = _resolve_antigravity_credentials(cfg, token_store)
-            return AntigravityBackend(cfg, failover_cfg, mapper)
+            return AntigravityVendor(cfg, failover_cfg, mapper)
         case "zhipu":
             cfg = ZhipuConfig(
-                enabled=tier_cfg.enabled,
-                base_url=tier_cfg.base_url or "https://open.bigmodel.cn/api/anthropic",
-                api_key=tier_cfg.api_key,
-                timeout_ms=tier_cfg.timeout_ms,
+                enabled=vendor_cfg.enabled,
+                base_url=vendor_cfg.base_url or "https://open.bigmodel.cn/api/anthropic",
+                api_key=vendor_cfg.api_key,
+                timeout_ms=vendor_cfg.timeout_ms,
             )
-            return ZhipuBackend(cfg, mapper)
+            return ZhipuVendor(cfg, mapper)
         case _:
-            raise ValueError(f"未知的 backend 类型: {tier_cfg.backend!r}")
+            raise ValueError(f"未知的 vendor 类型: {vendor_cfg.vendor!r}")
 
 
 def _resolve_copilot_credentials(cfg: CopilotConfig, token_store: TokenStoreManager) -> CopilotConfig:
@@ -164,3 +166,10 @@ def _resolve_antigravity_credentials(cfg: AntigravityConfig, token_store: TokenS
             logger.warning("Antigravity: Token Store 中的 Google scope 不完整，缺少: %s", ", ".join(missing))
 
     return cfg
+
+
+# ── 向后兼容别名 (deprecated) ──────────────────────────────
+
+_find_anthropic_backend = _find_anthropic_vendor  # noqa: F401
+_find_copilot_backend = _find_copilot_vendor  # noqa: F401
+_create_backend_from_tier = _create_vendor_from_config  # noqa: F401

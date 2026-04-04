@@ -47,11 +47,11 @@ class TestModelPricing:
 class TestPricingTable:
     """PricingTable 查询与费用计算测试."""
 
-    def _make_entry(self, backend: str = "copilot", model: str = "test", **kwargs):
+    def _make_entry(self, vendor: str = "copilot", model: str = "test", **kwargs):
         from coding.proxy.config.routing import ModelPricingEntry
         # 字段单位为 USD / 1M tokens，直接传入原始值（如 3 表示 $3/M tokens）
         return ModelPricingEntry(
-            backend=backend,
+            vendor=vendor,
             model=model,
             input_cost_per_mtok=kwargs.get("input", 0),
             output_cost_per_mtok=kwargs.get("output", 0),
@@ -98,8 +98,8 @@ class TestPricingTable:
         table = PricingTable([self._make_entry("copilot", "m", input=1, output=2)])
         assert table.compute_cost("copilot", "unknown", 100, 200, 0, 0) is None
 
-    def test_multiple_entries_same_backend(self):
-        """同一 backend 下多模型独立定价."""
+    def test_multiple_entries_same_vendor(self):
+        """同一 vendor 下多模型独立定价."""
         table = PricingTable([
             self._make_entry("copilot", "cheap", input=1, output=1),
             self._make_entry("copilot", "expensive", input=10, output=50),
@@ -115,7 +115,7 @@ class TestPricingTableCurrency:
     def _make_usd_entry(self, **kwargs):
         from coding.proxy.config.routing import ModelPricingEntry
         return ModelPricingEntry(
-            backend="anthropic",
+            vendor="anthropic",
             model="claude-test",
             input_cost_per_mtok=kwargs.get("input", "$3.0"),
             output_cost_per_mtok=kwargs.get("output", "$15.0"),
@@ -126,7 +126,7 @@ class TestPricingTableCurrency:
     def _make_cny_entry(self, **kwargs):
         from coding.proxy.config.routing import ModelPricingEntry
         return ModelPricingEntry(
-            backend="zhipu",
+            vendor="zhipu",
             model="glm-test",
             input_cost_per_mtok=kwargs.get("input", "\u00a51.0"),
             output_cost_per_mtok=kwargs.get("output", "\u00a53.2"),
@@ -184,7 +184,7 @@ class TestPricingTableCurrency:
         """不带前缀的纯数字应默认为 USD（向后兼容）."""
         from coding.proxy.config.routing import ModelPricingEntry
         entry = ModelPricingEntry(
-            backend="copilot", model="legacy",
+            vendor="copilot", model="legacy",
             input_cost_per_mtok=3.0,
             output_cost_per_mtok=15.0,
         )
@@ -206,7 +206,7 @@ class TestPricingTableCurrency:
         from coding.proxy.config.routing import ModelPricingEntry
         with pytest.raises(Exception):   # pydantic.ValidationError
             ModelPricingEntry(
-                backend="test", model="mixed",
+                vendor="test", model="mixed",
                 input_cost_per_mtok="$3.0",
                 output_cost_per_mtok="\u00a35.0",
             )
@@ -216,7 +216,7 @@ class TestPricingTableCurrency:
         from coding.proxy.config.routing import ModelPricingEntry
         with pytest.raises(Exception):   # pydantic.ValidationError
             ModelPricingEntry(
-                backend="test", model="neg",
+                vendor="test", model="neg",
                 input_cost_per_mtok="$-3.0",
                 output_cost_per_mtok="$15.0",
             )
@@ -224,7 +224,7 @@ class TestPricingTableCurrency:
     def test_private_attr_not_in_dump(self):
         """_currency 不应出现在 model_dump 序列化输出中."""
         from coding.proxy.config.routing import ModelPricingEntry
-        entry = ModelPricingEntry(backend="t", model="m", input_cost_per_mtok="$3.0")
+        entry = ModelPricingEntry(vendor="t", model="m", input_cost_per_mtok="$3.0")
         dump = entry.model_dump()
         assert "__currency__" not in dump
         assert "_currency" not in dump
@@ -233,5 +233,5 @@ class TestPricingTableCurrency:
     def test_all_zero_no_currency_error(self):
         """所有价格字段为零时不应触发币种校验错误."""
         from coding.proxy.config.routing import ModelPricingEntry
-        entry = ModelPricingEntry(backend="t", model="m")
+        entry = ModelPricingEntry(vendor="t", model="m")
         assert entry.currency == "USD"   # 默认值

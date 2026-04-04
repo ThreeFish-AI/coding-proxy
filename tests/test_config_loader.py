@@ -169,88 +169,88 @@ def test_antigravity_quota_guard_defaults():
     assert cfg.antigravity_quota_guard.enabled is False
 
 
-def test_model_mapping_backends_from_yaml(tmp_path: Path):
+def test_model_mapping_vendors_from_yaml(tmp_path: Path):
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
         "model_mapping:\n"
         "  - pattern: claude-sonnet-*\n"
         "    target: claude-sonnet-4-6-thinking\n"
-        "    backends: [antigravity]\n"
+        "    vendors: [antigravity]\n"
     )
     cfg = load_config(cfg_file)
-    assert cfg.model_mapping[0].backends == ["antigravity"]
+    assert cfg.model_mapping[0].vendors == ["antigravity"]
 
 
-# --- tiers 新格式 ---
+# --- vendors 新格式 ---
 
 
-def test_tiers_format_basic(tmp_path: Path):
-    """tiers 格式：基本加载，顺序即优先级."""
+def test_vendors_format_basic(tmp_path: Path):
+    """vendors 格式：基本加载，顺序即优先级."""
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "tiers:\n"
-        "  - backend: anthropic\n"
+        "vendors:\n"
+        "  - vendor: anthropic\n"
         "    base_url: https://api.anthropic.com\n"
         "    circuit_breaker:\n"
         "      failure_threshold: 3\n"
-        "  - backend: zhipu\n"
+        "  - vendor: zhipu\n"
         "    api_key: sk-zhipu\n"
     )
     cfg = load_config(cfg_file)
-    assert len(cfg.tiers) == 2
-    assert cfg.tiers[0].backend == "anthropic"
-    assert cfg.tiers[0].circuit_breaker is not None
-    assert cfg.tiers[0].circuit_breaker.failure_threshold == 3
-    assert cfg.tiers[1].backend == "zhipu"
-    assert cfg.tiers[1].api_key == "sk-zhipu"
-    assert cfg.tiers[1].circuit_breaker is None  # 终端层
+    assert len(cfg.vendors) == 2
+    assert cfg.vendors[0].vendor == "anthropic"
+    assert cfg.vendors[0].circuit_breaker is not None
+    assert cfg.vendors[0].circuit_breaker.failure_threshold == 3
+    assert cfg.vendors[1].vendor == "zhipu"
+    assert cfg.vendors[1].api_key == "sk-zhipu"
+    assert cfg.vendors[1].circuit_breaker is None  # 终端层
 
 
-def test_tiers_custom_order(tmp_path: Path, monkeypatch):
-    """tiers 格式：自定义顺序 — zhipu 在 Tier 0，anthropic 在 Tier 1."""
+def test_vendors_custom_order(tmp_path: Path, monkeypatch):
+    """vendors 格式：自定义顺序 — zhipu 在 Vendor 0，anthropic 在 Vendor 1."""
     monkeypatch.setenv("ZHIPU_KEY", "sk-test")
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "tiers:\n"
-        '  - backend: zhipu\n'
+        "vendors:\n"
+        '  - vendor: zhipu\n'
         '    api_key: "${ZHIPU_KEY}"\n'
         '    circuit_breaker:\n'
         '      failure_threshold: 5\n'
-        '  - backend: anthropic\n'
+        '  - vendor: anthropic\n'
         '    base_url: "https://api.anthropic.com"\n'
     )
     cfg = load_config(cfg_file)
-    assert cfg.tiers[0].backend == "zhipu"
-    assert cfg.tiers[0].api_key == "sk-test"
-    assert cfg.tiers[0].circuit_breaker.failure_threshold == 5
-    assert cfg.tiers[1].backend == "anthropic"
-    assert cfg.tiers[1].circuit_breaker is None  # 终端层
+    assert cfg.vendors[0].vendor == "zhipu"
+    assert cfg.vendors[0].api_key == "sk-test"
+    assert cfg.vendors[0].circuit_breaker.failure_threshold == 5
+    assert cfg.vendors[1].vendor == "anthropic"
+    assert cfg.vendors[1].circuit_breaker is None  # 终端层
 
 
-def test_tiers_terminal_tier_no_circuit_breaker(tmp_path: Path):
-    """tiers 格式：无 circuit_breaker 的 tier 为终端层."""
+def test_vendors_terminal_vendor_no_circuit_breaker(tmp_path: Path):
+    """vendors 格式：无 circuit_breaker 的 vendor 为终端层."""
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "tiers:\n"
-        "  - backend: anthropic\n"
+        "vendors:\n"
+        "  - vendor: anthropic\n"
         "    circuit_breaker:\n"
         "      failure_threshold: 2\n"
-        "  - backend: copilot\n"
+        "  - vendor: copilot\n"
         "    github_token: ghp_test\n"
         "    circuit_breaker:\n"
         "      failure_threshold: 3\n"
-        "  - backend: zhipu\n"
+        "  - vendor: zhipu\n"
         "    api_key: sk-zhipu\n"
         "    # 无 circuit_breaker → 终端层\n"
     )
     cfg = load_config(cfg_file)
-    assert cfg.tiers[0].circuit_breaker is not None
-    assert cfg.tiers[1].circuit_breaker is not None
-    assert cfg.tiers[2].circuit_breaker is None
+    assert cfg.vendors[0].circuit_breaker is not None
+    assert cfg.vendors[1].circuit_breaker is not None
+    assert cfg.vendors[2].circuit_breaker is None
 
 
-def test_legacy_flat_format_auto_migrates_to_tiers(tmp_path: Path):
-    """旧 flat 格式自动迁移：primary/fallback 生成对应 tiers 列表."""
+def test_legacy_flat_format_auto_migrates_to_vendors(tmp_path: Path):
+    """旧 flat 格式自动迁移：primary/fallback 生成对应 vendors 列表."""
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
         "primary:\n"
@@ -266,29 +266,29 @@ def test_legacy_flat_format_auto_migrates_to_tiers(tmp_path: Path):
     # 旧字段仍可访问
     assert cfg.primary.base_url == "https://api.anthropic.com"
     assert cfg.fallback.api_key == "sk-zhipu-legacy"
-    # tiers 由迁移器自动生成
-    backends = [t.backend for t in cfg.tiers]
-    assert "anthropic" in backends
-    assert "zhipu" in backends
-    # anthropic tier 应有 circuit_breaker
-    anthropic_tier = next(t for t in cfg.tiers if t.backend == "anthropic")
-    assert anthropic_tier.circuit_breaker is not None
-    assert anthropic_tier.circuit_breaker.failure_threshold == 4
-    # zhipu tier 为终端层（无 circuit_breaker）
-    zhipu_tier = next(t for t in cfg.tiers if t.backend == "zhipu")
-    assert zhipu_tier.circuit_breaker is None
+    # vendors 由迁移器自动生成
+    vendor_names = [v.vendor for v in cfg.vendors]
+    assert "anthropic" in vendor_names
+    assert "zhipu" in vendor_names
+    # anthropic vendor 应有 circuit_breaker
+    anthropic_vendor = next(v for v in cfg.vendors if v.vendor == "anthropic")
+    assert anthropic_vendor.circuit_breaker is not None
+    assert anthropic_vendor.circuit_breaker.failure_threshold == 4
+    # zhipu vendor 为终端层（无 circuit_breaker）
+    zhipu_vendor = next(v for v in cfg.vendors if v.vendor == "zhipu")
+    assert zhipu_vendor.circuit_breaker is None
 
 
-def test_tiers_disabled_tier_excluded(tmp_path: Path):
-    """tiers 格式：enabled=false 的 tier 在 tiers 列表中存在但 enabled 为 False."""
+def test_vendors_disabled_vendor_excluded(tmp_path: Path):
+    """vendors 格式：enabled=false 的 vendor 在 vendors 列表中存在但 enabled 为 False."""
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "tiers:\n"
-        "  - backend: anthropic\n"
+        "vendors:\n"
+        "  - vendor: anthropic\n"
         "    enabled: false\n"
-        "  - backend: zhipu\n"
+        "  - vendor: zhipu\n"
         "    api_key: sk-zhipu\n"
     )
     cfg = load_config(cfg_file)
-    assert cfg.tiers[0].enabled is False
-    assert cfg.tiers[1].enabled is True
+    assert cfg.vendors[0].enabled is False
+    assert cfg.vendors[1].enabled is True

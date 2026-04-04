@@ -12,9 +12,9 @@ from coding.proxy.backends.types import (
     NoCompatibleBackendError,
     RequestCapabilities,
     UsageInfo,
-    _decode_json_body,
-    _extract_error_message,
-    _sanitize_headers_for_synthetic_response,
+    decode_json_body as _decode_json_body,
+    extract_error_message as _extract_error_message,
+    sanitize_headers_for_synthetic_response as _sanitize_headers_for_synthetic_response,
 )
 
 

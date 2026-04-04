@@ -1,4 +1,4 @@
-"""Google Antigravity Claude 后端 — OAuth2 认证 + Gemini 格式转换."""
+"""Google Antigravity Claude 供应商 — OAuth2 认证 + Gemini 格式转换."""
 
 from __future__ import annotations
 
@@ -15,17 +15,16 @@ from ..convert.gemini_to_anthropic import convert_response, extract_usage
 from ..convert.gemini_sse_adapter import adapt_sse_stream
 from ..routing.model_mapper import ModelMapper
 from .base import (
-    BaseBackend,
-    BackendCapabilities,
-    BackendResponse,
+    BaseVendor,
     CapabilityLossReason,
     RequestCapabilities,
     UsageInfo,
+    VendorCapabilities,
     _sanitize_headers_for_synthetic_response,
 )
 # GoogleOAuthTokenManager 已从 antigravity_token_manager.py 合并至本文件末尾
-from .mixins import TokenBackendMixin
-from .token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
+from ..backends.mixins import TokenBackendMixin
+from ..backends.token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ logger = logging.getLogger(__name__)
 class GoogleOAuthTokenManager(BaseTokenManager):
     """Google OAuth2 token 自动刷新管理.
 
-    流程: refresh_token → POST oauth2.googleapis.com/token → access_token (~1 小时有效期)
+    流程: refresh_token -> POST oauth2.googleapis.com/token -> access_token (~1 小时有效期)
 
     .. note::
         与 ``auth.providers.google.GoogleOAuthProvider.refresh()`` 的关系：
@@ -110,8 +109,8 @@ class GoogleOAuthTokenManager(BaseTokenManager):
         self.invalidate()
 
 
-class AntigravityBackend(TokenBackendMixin, BaseBackend):
-    """Google Antigravity Claude API 后端.
+class AntigravityVendor(TokenBackendMixin, BaseVendor):
+    """Google Antigravity Claude API 供应商.
 
     通过 Google OAuth2 认证，将 Anthropic 格式请求转换为 Gemini 格式
     发往 Generative AI 端点，并将响应转回 Anthropic 格式.
@@ -127,7 +126,7 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
             config.client_id, config.client_secret, config.refresh_token,
         )
         TokenBackendMixin.__init__(self, token_manager)
-        BaseBackend.__init__(self, config.base_url, config.timeout_ms, failover_config)
+        BaseVendor.__init__(self, config.base_url, config.timeout_ms, failover_config)
         self._model_endpoint = config.model_endpoint
         self._model_mapper = model_mapper
         self._default_model = config.model_endpoint.removeprefix("models/")
@@ -137,8 +136,8 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
     def get_name(self) -> str:
         return "antigravity"
 
-    def get_capabilities(self) -> BackendCapabilities:
-        return BackendCapabilities(
+    def get_capabilities(self) -> VendorCapabilities:
+        return VendorCapabilities(
             supports_tools=True,
             supports_thinking=True,
             supports_images=True,
@@ -206,7 +205,7 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
             "authorization": f"Bearer {token}",
         }
         logger.debug(
-            "_prepare_request: model=%s → %s, endpoint=/models/%s:generateContent, adaptations=%s",
+            "_prepare_request: model=%s -> %s, endpoint=/models/%s:generateContent, adaptations=%s",
             request_body.get("model", "?"),
             resolved_model,
             resolved_model,
@@ -225,7 +224,7 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
         )
 
     def get_diagnostics(self) -> dict[str, Any]:
-        result: dict[str, Any] = BaseBackend.get_diagnostics(self)
+        result: dict[str, Any] = BaseVendor.get_diagnostics(self)
         result.update(self._get_token_diagnostics())
         if self._last_request_adaptations:
             result["request_adaptations"] = self._last_request_adaptations
@@ -241,7 +240,7 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
         self,
         request_body: dict[str, Any],
         headers: dict[str, str],
-    ) -> BackendResponse:
+    ) -> VendorResponse:
         """覆写: Gemini 端点 + 响应逆转换."""
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
@@ -255,7 +254,7 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
         if response.status_code >= 400:
             self._on_error_status(response.status_code)
             self._mark_scope_error_if_needed(response.text)
-            return BackendResponse(
+            return VendorResponse(
                 status_code=response.status_code,
                 raw_body=response.content,
                 error_type="api_error",
@@ -269,7 +268,7 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
         usage_data = extract_usage(gemini_resp)
         raw_body = json.dumps(anthropic_resp).encode()
 
-        return BackendResponse(
+        return VendorResponse(
             status_code=200,
             raw_body=raw_body,
             usage=UsageInfo(
@@ -284,7 +283,7 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
         request_body: dict[str, Any],
         headers: dict[str, str],
     ) -> AsyncIterator[bytes]:
-        """覆写: Gemini SSE 流 → Anthropic SSE 流适配."""
+        """覆写: Gemini SSE 流 -> Anthropic SSE 流适配."""
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
         resolved_model = self._last_resolved_model
@@ -322,4 +321,8 @@ class AntigravityBackend(TokenBackendMixin, BaseBackend):
 
     async def close(self) -> None:
         await self._token_manager.close()
-        await BaseBackend.close(self)
+        await BaseVendor.close(self)
+
+
+# 向后兼容别名
+AntigravityBackend = AntigravityVendor

@@ -3,16 +3,16 @@
 import httpx
 import pytest
 
-from coding.proxy.backends.antigravity import AntigravityBackend
-from coding.proxy.backends.anthropic import AnthropicBackend
-from coding.proxy.backends.base import (
-    BaseBackend,
-    BackendResponse,
+from coding.proxy.vendors.antigravity import AntigravityVendor as AntigravityBackend
+from coding.proxy.vendors.anthropic import AnthropicVendor as AnthropicBackend
+from coding.proxy.vendors.base import (
+    BaseVendor as BaseBackend,
+    VendorResponse as BackendResponse,
     UsageInfo,
-    _decode_json_body,
-    _sanitize_headers_for_synthetic_response,
+    decode_json_body as _decode_json_body,
+    sanitize_headers_for_synthetic_response as _sanitize_headers_for_synthetic_response,
 )
-from coding.proxy.backends.zhipu import ZhipuBackend
+from coding.proxy.vendors.zhipu import ZhipuVendor as ZhipuBackend
 from coding.proxy.config.schema import (
     AnthropicConfig,
     AntigravityConfig,
@@ -112,7 +112,7 @@ def test_zhipu_never_triggers_failover():
 
 def test_zhipu_supports_tools_and_thinking():
     """ZhipuBackend 应声明全部能力为 NATIVE（原生 Anthropic 兼容端点）."""
-    from coding.proxy.backends.base import RequestCapabilities
+    from coding.proxy.vendors.base import RequestCapabilities
     from coding.proxy.compat.canonical import CompatibilityStatus
 
     mapper = ModelMapper([])

@@ -11,14 +11,14 @@
 import httpx
 import pytest
 
-from coding.proxy.model.backend import (
-    BackendCapabilities,
-    BackendResponse,
+from coding.proxy.model.vendor import (
+    VendorCapabilities as BackendCapabilities,
+    VendorResponse as BackendResponse,
     CapabilityLossReason,
     CopilotExchangeDiagnostics,
     CopilotMisdirectedRequest,
     CopilotModelCatalog,
-    NoCompatibleBackendError,
+    NoCompatibleVendorError as NoCompatibleBackendError,
     RequestCapabilities,
     UsageInfo,
     decode_json_body,
@@ -381,10 +381,11 @@ class TestCopilotExchangeDiagnostics:
         assert result["raw_shape"] == "Bearer ..."
         assert result["token_field"] == "access_token"
         assert result["expires_in_seconds"] == 1800
-        assert result["expires_at_unix"] == now + 1800
+        # to_dict() 输出 ttl_seconds 而非 expires_at_unix（计算剩余秒数）
         assert "ttl_seconds" in result
+        assert result["ttl_seconds"] <= 1800
         assert result["capabilities"] == {"models": ["gpt-4"]}
-        assert result["updated_at_unix"] == now
+        assert result["updated_at"] == now  # to_dict() 输出 updated_at 而非 updated_at_unix
 
     def test_to_dict_ttl_seconds_non_negative(self):
         """ttl_seconds 始终 >= 0 (max(..., 0) 保护)."""

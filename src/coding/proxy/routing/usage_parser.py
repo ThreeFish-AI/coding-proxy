@@ -73,7 +73,7 @@ def _append_usage_evidence(
 def build_usage_evidence_records(
     usage: dict[str, Any],
     *,
-    backend: str,
+    vendor: str,
     model_served: str,
     request_id: str,
 ) -> list[dict[str, Any]]:
@@ -92,7 +92,7 @@ def build_usage_evidence_records(
         if not isinstance(source_field_map, dict):
             source_field_map = {}
         records.append({
-            "backend": backend,
+            "vendor": vendor,
             "request_id": str(entry.get("request_id") or request_id or ""),
             "model_served": str(entry.get("model_served") or model_served or ""),
             "evidence_kind": str(entry.get("evidence_kind") or "stream_usage"),

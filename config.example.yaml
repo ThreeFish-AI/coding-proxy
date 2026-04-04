@@ -6,24 +6,25 @@ server:
   host: "127.0.0.1"
   port: 8046
 
-# === 后端层级（tiers 列表，列表顺序即优先级） ===
+# === 供应商定义（vendors 列表） ===
 #
-# 每个 tier 通过 backend 字段指定后端类型：
+# 每个 vendor 通过 vendor 字段指定供应商类型：
 #   anthropic | copilot | antigravity | zhipu
 #
 # 优先级规则：
-#   - Tier 0（列表第一项）> Tier 1 > Tier N（列表最后一项）
-#   - 无 circuit_breaker 的 Tier 自动成为终端层（不再向下故障转移）
+#   - 若配置了 tiers，以其指定的顺序为准
+#   - 否则 vendors 列表顺序即优先级（index 越小越优先）
+#   - 无 circuit_breaker 的 vendor 自动成为终端层（不再向下故障转移）
 #
-# 示例：将 zhipu 置于 Tier 0，anthropic 置于 Tier 1：
-#   tiers:
-#     - backend: zhipu
+# 示例：将 zhipu 置于 Vendor 0，anthropic 置于 Vendor 1：
+#   vendors:
+#     - vendor: zhipu
 #       api_key: "${ZHIPU_API_KEY}"
-#     - backend: anthropic   # 终端层（无 circuit_breaker）
+#     - vendor: anthropic   # 终端层（无 circuit_breaker）
 
-tiers:
-  # Tier 0: Claude Plans（最高优先级）
-  - backend: anthropic
+vendors:
+  # Vendor 0: Claude Plans（最高优先级）
+  - vendor: anthropic
     base_url: "https://api.anthropic.com"
     timeout_ms: 300000
     circuit_breaker:
@@ -43,8 +44,8 @@ tiers:
       threshold_percent: 99.0
       probe_interval_seconds: 1800 # 每 30 分钟探测一次
 
-  # Tier 1: GitHub Copilot Plans（中间层，默认禁用）
-  - backend: copilot
+  # Vendor 1: GitHub Copilot Plans（中间层，默认禁用）
+  - vendor: copilot
     enabled: false # 启用需 OAuth 登录或手动配置 github_token
     github_token: "${GITHUB_TOKEN}" # GitHub token（可选，运行 coding-proxy auth login 自动获取）
     account_type: "individual" # individual / business / enterprise
@@ -62,8 +63,8 @@ tiers:
       threshold_percent: 95.0
       probe_interval_seconds: 300
 
-  # Tier 2: Google Antigravity Plans（中间层，默认禁用）
-  - backend: antigravity
+  # Vendor 2: Google Antigravity Plans（中间层，默认禁用）
+  - vendor: antigravity
     enabled: false # 启用需配置 OAuth 凭据
     client_id: "${GOOG_CLIENT_ID}" # Google OAuth2 Client ID
     client_secret: "${GOOG_CLIENT_SECRET}" # Google OAuth2 Client Secret
@@ -82,12 +83,31 @@ tiers:
       threshold_percent: 95.0
       probe_interval_seconds: 300
 
-  # Tier 3: 智谱 GLM（终端兜底，无 circuit_breaker）
-  - backend: zhipu
+  # Vendor 3: 智谱 GLM（终端兜底，无 circuit_breaker）
+  - vendor: zhipu
     base_url: "https://open.bigmodel.cn/api/anthropic"
     api_key: "${ZHIPU_API_KEY}"
     timeout_ms: 3000000
     # 不配置 circuit_breaker → 自动成为终端层，不触发向下故障转移
+
+# === 降级链路优先级（可选） ===
+#
+# 显式指定故障转移时的供应商尝试顺序。
+# 未配置时回退到 vendors 列表的原始顺序。
+#
+# 引用的 vendor 名称必须在上方 vendors 中定义且 enabled=true。
+# 可用于在不改变 vendors 定义顺序的情况下灵活调整降级策略。
+#
+# 示例 1：完整四层降级链路（默认行为等效）
+#   tiers: ["anthropic", "copilot", "antigravity", "zhipu"]
+#
+# 示例 2：跳过中间层，仅保留首尾两级
+#   tiers: ["anthropic", "zhipu"]
+#
+# 示例 3：将 zhipu 提升为首选，anthropic 作为后备
+#   tiers: ["zhipu", "anthropic"]
+#
+# tiers: ["anthropic", "copilot", "antigravity", "zhipu"]
 
 # === 故障转移触发条件 ===
 failover:
@@ -103,141 +123,141 @@ failover:
 model_mapping:
   # GitHub Copilot 可用模型（通过 /api/copilot/models 诊断获取）
   - pattern: "claude-sonnet-.*"
-    backends: ["copilot"]
+    vendors: ["copilot"]
     target: "claude-sonnet-4.6"
     is_regex: true
   - pattern: "claude-opus-.*"
-    backends: ["copilot"]
+    vendors: ["copilot"]
     target: "claude-opus-4.6"
     is_regex: true
   - pattern: "claude-haiku-.*"
-    backends: ["copilot"]
+    vendors: ["copilot"]
     target: "claude-haiku-4.5"
     is_regex: true
   # Google Antigravity 模型映射
   - pattern: "claude-sonnet-.*"
-    backends: ["antigravity"]
+    vendors: ["antigravity"]
     target: "claude-sonnet-4-6-thinking"
     is_regex: true
   - pattern: "claude-opus-.*"
-    backends: ["antigravity"]
+    vendors: ["antigravity"]
     target: "claude-opus-4-6-thinking"
     is_regex: true
   # 智谱 GLM 映射（官方原生 Anthropic 兼容端点）
   # glm-5v-turbo 完整承载 Claude Code 满血能力（tool calling / thinking / 多模态）
   - pattern: "claude-sonnet-.*"
-    backends: ["zhipu"]
+    vendors: ["zhipu"]
     target: "glm-5v-turbo"
     is_regex: true
   - pattern: "claude-opus-.*"
-    backends: ["zhipu"]
+    vendors: ["zhipu"]
     target: "glm-5v-turbo"
     is_regex: true
   - pattern: "claude-haiku-.*"
-    backends: ["zhipu"]
+    vendors: ["zhipu"]
     target: "glm-4.5-air"
     is_regex: true
 
 # === 模型定价（USD / 1M tokens） ===
-# backend: 后端名称（对应 `usage` 统计表中的"后端"列）
+# vendor: 供应商名称（对应 `usage` 统计表中的"供应商"列）
 # model:   实际模型名（对应 `usage` 统计表中的"实际模型"列）
 # 未配置定价的模型在统计中 Cost 列显示 "-"
 pricing:
   # ── Anthropic Claude ──
-  - backend: anthropic
+  - vendor: anthropic
     model: claude-opus-4-6
     input_cost_per_mtok: $5.0
     output_cost_per_mtok: $25.0
     cache_write_cost_per_mtok: $6.25
     cache_read_cost_per_mtok: $0.50
-  - backend: anthropic
+  - vendor: anthropic
     model: claude-sonnet-4-6
     input_cost_per_mtok: $3.0
     output_cost_per_mtok: $15.0
     cache_write_cost_per_mtok: $3.75
     cache_read_cost_per_mtok: $0.30
-  - backend: anthropic
+  - vendor: anthropic
     model: claude-haiku-4-5-20251001
     input_cost_per_mtok: $1
     output_cost_per_mtok: $5
     cache_write_cost_per_mtok: $1.25
     cache_read_cost_per_mtok: $0.10
   # ── GitHub Copilot（透传 Claude，参照 Anthropic 定价估算） ──
-  - backend: copilot
+  - vendor: copilot
     model: claude-opus-4.6
     input_cost_per_mtok: $5.0
     output_cost_per_mtok: $25.0
     cache_write_cost_per_mtok: $6.25
     cache_read_cost_per_mtok: $0.50
-  - backend: copilot
+  - vendor: copilot
     model: Claude Sonnet 4.6
     input_cost_per_mtok: $3.0
     output_cost_per_mtok: $15.0
     cache_write_cost_per_mtok: $3.75
     cache_read_cost_per_mtok: $0.30
-  - backend: copilot
+  - vendor: copilot
     model: claude-sonnet-4.6
     input_cost_per_mtok: $3.0
     output_cost_per_mtok: $15.0
     cache_write_cost_per_mtok: $3.75
     cache_read_cost_per_mtok: $0.30
-  - backend: copilot
+  - vendor: copilot
     model: claude-haiku-4.5
     input_cost_per_mtok: $1
     output_cost_per_mtok: $5
     cache_write_cost_per_mtok: $1.25
     cache_read_cost_per_mtok: $0.10
-  - backend: copilot
+  - vendor: copilot
     model: claude-haiku-4-5-20251001
     input_cost_per_mtok: $1
     output_cost_per_mtok: $5
     cache_write_cost_per_mtok: $1.25
     cache_read_cost_per_mtok: $0.10
   # ── Google Antigravity（参照 Anthropic 定价估算） ──
-  - backend: antigravity
+  - vendor: antigravity
     model: claude-opus-4-6-thinking
     input_cost_per_mtok: $5.0
     output_cost_per_mtok: $25.0
     cache_write_cost_per_mtok: $6.25
     cache_read_cost_per_mtok: $0.50
-  - backend: antigravity
+  - vendor: antigravity
     model: claude-sonnet-4-6-thinking
     input_cost_per_mtok: $3.0
     output_cost_per_mtok: $15.0
     cache_write_cost_per_mtok: $3.75
     cache_read_cost_per_mtok: $0.30
-  - backend: antigravity
+  - vendor: antigravity
     model: gemini-3.1-pro
     input_cost_per_mtok: $2.0
     output_cost_per_mtok: $12.0
     cache_read_cost_per_mtok: $0.20
-  - backend: antigravity
+  - vendor: antigravity
     model: gemini-3-flash
     input_cost_per_mtok: $0.50
     output_cost_per_mtok: $3.00
     cache_read_cost_per_mtok: $0.05
   # ── 智谱 GLM ──
-  - backend: zhipu
+  - vendor: zhipu
     model: glm-4.5-air # 待区分长短上下文定价
     input_cost_per_mtok: ¥0.80
     output_cost_per_mtok: ¥6.00
     cache_read_cost_per_mtok: ¥0.16
-  - backend: zhipu
+  - vendor: zhipu
     model: glm-5v-turbo # 待区分长短上下文定价
     input_cost_per_mtok: ¥5.00
     output_cost_per_mtok: ¥22.00
     cache_read_cost_per_mtok: ¥1.20
-  - backend: zhipu
+  - vendor: zhipu
     model: glm-5.1 # 待区分长短上下文定价
     input_cost_per_mtok: ¥4.00
     output_cost_per_mtok: ¥18.00
     cache_read_cost_per_mtok: ¥1.00
-  - backend: zhipu
+  - vendor: zhipu
     model: glm-5-turbo # 待区分长短上下文定价
     input_cost_per_mtok: ¥5.00
     output_cost_per_mtok: ¥22.00
     cache_read_cost_per_mtok: ¥1.20
-  - backend: zhipu
+  - vendor: zhipu
     model: glm-5 # 待区分长短上下文定价
     input_cost_per_mtok: ¥4.00
     output_cost_per_mtok: ¥18.00

@@ -9,21 +9,22 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from coding.proxy.backends.base import BackendCapabilities, BackendResponse, BaseBackend, UsageInfo
-from coding.proxy.backends.copilot import CopilotBackend
+from coding.proxy.vendors.base import BaseVendor, VendorCapabilities as BackendCapabilities, VendorResponse as BackendResponse, UsageInfo
+BaseBackend = BaseVendor  # 向后兼容别名
+from coding.proxy.vendors.copilot import CopilotVendor as CopilotBackend
 from coding.proxy.backends.token_manager import TokenAcquireError
 from coding.proxy.config.schema import CopilotConfig, FailoverConfig
 from coding.proxy.routing.circuit_breaker import CircuitBreaker
 from coding.proxy.routing.quota_guard import QuotaGuard
 from coding.proxy.routing.router import RequestRouter
-from coding.proxy.routing.tier import BackendTier
+from coding.proxy.routing.tier import VendorTier as BackendTier
 
 
-# --- 测试用 Mock 后端 ---
+# --- 测试用 Mock 供应商 ---
 
 
-class FakeBackend(BaseBackend):
-    """可配置行为的假后端."""
+class FakeBackend(BaseVendor):
+    """可配置行为的假供应商."""
 
     def __init__(
         self,
@@ -79,8 +80,8 @@ async def test_route_message_primary_success():
     b0 = FakeBackend("primary", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10, output_tokens=5)))
     b1 = FakeBackend("fallback")
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1),
     ])
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -107,9 +108,9 @@ async def test_route_message_failover_to_tier1():
     b2 = FakeBackend("zhipu")
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b2),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b2),
     ])
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -125,8 +126,8 @@ async def test_route_message_read_error_failover_to_tier1():
     b1 = FakeBackend("copilot", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=20)))
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1),
     ])
 
     resp = await router.route_message(_body(), _headers())
@@ -150,9 +151,9 @@ async def test_route_message_failover_to_terminal():
     b2 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=30)))
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b2),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b2),
     ])
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -168,8 +169,8 @@ async def test_route_message_connection_error_failover():
     b1 = FakeBackend("fallback", BackendResponse(status_code=200))
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1),
     ])
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -184,8 +185,8 @@ async def test_route_message_last_tier_raises():
     b1 = FakeBackend("fallback", raise_on_call=httpx.ConnectError("also refused"))
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1),
     ])
     with pytest.raises(httpx.ConnectError):
         await router.route_message(_body(), _headers())
@@ -201,8 +202,8 @@ async def test_circuit_open_skips_tier():
     cb0.record_failure()  # OPEN
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=cb0),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=cb0),
+        BackendTier(vendor=b1),
     ])
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -220,8 +221,8 @@ async def test_quota_exceeded_skips_tier():
     qg.notify_cap_error()
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker(), quota_guard=qg),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker(), quota_guard=qg),
+        BackendTier(vendor=b1),
     ])
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -243,9 +244,9 @@ async def test_all_non_terminal_skipped_reaches_terminal():
     cb1.record_failure()
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=cb0),
-        BackendTier(backend=b1, circuit_breaker=cb1),
-        BackendTier(backend=b2),
+        BackendTier(vendor=b0, circuit_breaker=cb0),
+        BackendTier(vendor=b1, circuit_breaker=cb1),
+        BackendTier(vendor=b2),
     ])
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -262,8 +263,8 @@ async def test_last_tier_always_tried_even_if_unavailable():
     b1 = FakeBackend("fallback", BackendResponse(status_code=200))
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1),
     ])
     resp = await router.route_message(_body(), _headers())
     assert b1.call_count == 1
@@ -280,8 +281,8 @@ async def test_route_stream_primary_success():
     b1 = FakeBackend("fallback")
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1),
     ])
 
     collected = []
@@ -300,8 +301,8 @@ async def test_route_stream_failover():
     b1 = FakeBackend("fallback", stream_chunks=[b"data: ok\n\n"])
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1),
     ])
 
     collected = []
@@ -319,8 +320,8 @@ async def test_route_stream_read_error_failover():
     b1 = FakeBackend("fallback", stream_chunks=[b"data: ok\n\n"])
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1),
     ])
 
     collected = []
@@ -338,8 +339,8 @@ async def test_route_stream_all_fail_raises():
     b1 = FakeBackend("fallback", raise_on_call=httpx.ConnectError("also refused"))
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1),
     ])
 
     with pytest.raises(httpx.ConnectError):
@@ -351,20 +352,20 @@ async def test_route_stream_all_fail_raises():
 
 
 def test_router_requires_at_least_one_tier():
-    with pytest.raises(ValueError, match="至少需要一个后端层级"):
+    with pytest.raises(ValueError, match="至少需要一个供应商层级"):
         RequestRouter([])
 
 
 @pytest.mark.asyncio
-async def test_router_close_calls_all_backends():
+async def test_router_close_calls_all_vendors():
     b0 = FakeBackend("a")
     b1 = FakeBackend("b")
     b0.close = AsyncMock()
     b1.close = AsyncMock()
 
     router = RequestRouter([
-        BackendTier(backend=b0),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0),
+        BackendTier(vendor=b1),
     ])
     await router.close()
     b0.close.assert_awaited_once()
@@ -372,7 +373,7 @@ async def test_router_close_calls_all_backends():
 
 
 def test_router_tiers_property():
-    tiers = [BackendTier(backend=FakeBackend("a")), BackendTier(backend=FakeBackend("b"))]
+    tiers = [BackendTier(vendor=FakeBackend("a")), BackendTier(vendor=FakeBackend("b"))]
     router = RequestRouter(tiers)
     assert router.tiers is tiers
 
@@ -397,10 +398,10 @@ async def test_four_tier_failover_chain():
     b3 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=50)))
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b3),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b3),
     ])
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -425,10 +426,10 @@ async def test_four_tier_antigravity_succeeds():
     b3 = FakeBackend("zhipu")
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b3),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b3),
     ])
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -451,10 +452,10 @@ async def test_four_tier_all_non_terminal_skipped():
         cb.record_failure()
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=cbs[0]),
-        BackendTier(backend=b1, circuit_breaker=cbs[1]),
-        BackendTier(backend=b2, circuit_breaker=cbs[2]),
-        BackendTier(backend=b3),
+        BackendTier(vendor=b0, circuit_breaker=cbs[0]),
+        BackendTier(vendor=b1, circuit_breaker=cbs[1]),
+        BackendTier(vendor=b2, circuit_breaker=cbs[2]),
+        BackendTier(vendor=b3),
     ])
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -473,10 +474,10 @@ async def test_four_tier_stream_failover():
     b3 = FakeBackend("zhipu", stream_chunks=[b"data: ok\n\n"])
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b3),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b3),
     ])
 
     collected = []
@@ -504,10 +505,10 @@ async def test_four_tier_failover_when_copilot_token_acquire_fails():
     b3 = FakeBackend("zhipu")
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b3),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b3),
     ])
 
     resp = await router.route_message(_body(), _headers())
@@ -527,10 +528,10 @@ async def test_four_tier_stream_failover_when_copilot_token_acquire_fails():
     b3 = FakeBackend("zhipu")
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b2, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b3),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b2, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b3),
     ])
 
     collected = []
@@ -568,8 +569,8 @@ async def test_stream_failover_to_copilot_even_when_request_has_thinking():
     copilot.send_message_stream = _copilot_stream  # type: ignore[method-assign]
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=copilot, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=copilot, circuit_breaker=CircuitBreaker()),
     ])
 
     collected: list[tuple[bytes, str]] = []
@@ -612,8 +613,8 @@ async def test_stream_semantic_rejection_fails_over_without_opening_circuit():
     )
     cb0 = CircuitBreaker(failure_threshold=1)
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=cb0),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=cb0),
+        BackendTier(vendor=b1),
     ])
 
     collected: list[tuple[bytes, str]] = []
@@ -642,8 +643,8 @@ async def test_nonstream_semantic_rejection_fails_over_without_opening_circuit()
     b1 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=8)))
     cb0 = CircuitBreaker(failure_threshold=1)
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=cb0),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=cb0),
+        BackendTier(vendor=b1),
     ])
 
     resp = await router.route_message(_body(), _headers())
@@ -670,9 +671,9 @@ async def test_incompatible_tool_request_skips_non_compatible_tiers():
     )
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b2),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b2),
     ])
 
     resp = await router.route_message({
@@ -689,7 +690,7 @@ async def test_incompatible_tool_request_skips_non_compatible_tiers():
 
 
 class MappingFakeBackend(FakeBackend):
-    """带模型映射的假后端."""
+    """带模型映射的假供应商."""
 
     def __init__(self, name: str = "mapping-fake", mapped_model: str = "glm-5.1",
                  response: BackendResponse | None = None,
@@ -707,7 +708,7 @@ async def test_route_message_model_served_from_response():
     logger_mock = AsyncMock()
     resp = BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10), model_served="glm-5.1")
     backend = FakeBackend("zhipu", response=resp)
-    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+    router = RequestRouter([BackendTier(vendor=backend)], token_logger=logger_mock)
 
     await router.route_message(_body(), _headers())
 
@@ -723,7 +724,7 @@ async def test_route_message_model_served_fallback_when_none():
     logger_mock = AsyncMock()
     resp = BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10))
     backend = FakeBackend("anthropic", response=resp)
-    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+    router = RequestRouter([BackendTier(vendor=backend)], token_logger=logger_mock)
 
     await router.route_message(_body(), _headers())
 
@@ -742,7 +743,7 @@ async def test_route_message_model_served_fallback_to_map_model():
     backend = MappingFakeBackend(
         name="zhipu", mapped_model="glm-4.5-air", response=resp,
     )
-    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+    router = RequestRouter([BackendTier(vendor=backend)], token_logger=logger_mock)
 
     await router.route_message(
         {"model": "claude-haiku-4-5-20251001", "messages": []}, _headers(),
@@ -764,7 +765,7 @@ async def test_route_stream_model_served_from_sse():
         b'data: [DONE]\n\n'
     )
     backend = MappingFakeBackend(mapped_model="glm-5.1", stream_chunks=[sse_chunk])
-    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+    router = RequestRouter([BackendTier(vendor=backend)], token_logger=logger_mock)
 
     collected = []
     async for chunk, name in router.route_stream(_body(), _headers()):
@@ -782,7 +783,7 @@ async def test_route_stream_model_served_fallback_to_map_model():
     logger_mock = AsyncMock()
     chunks = [b"data: {}\n\n", b"data: [DONE]\n\n"]
     backend = MappingFakeBackend(mapped_model="glm-4.5-air", stream_chunks=chunks)
-    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+    router = RequestRouter([BackendTier(vendor=backend)], token_logger=logger_mock)
 
     async for _ in router.route_stream(
         {"model": "claude-haiku-4-5-20251001", "messages": []}, _headers(),
@@ -801,7 +802,7 @@ async def test_route_stream_model_served_identity_backend():
     logger_mock = AsyncMock()
     chunks = [b"data: {}\n\n", b"data: [DONE]\n\n"]
     backend = FakeBackend("anthropic", stream_chunks=chunks)
-    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+    router = RequestRouter([BackendTier(vendor=backend)], token_logger=logger_mock)
 
     async for _ in router.route_stream(_body(), _headers()):
         pass
@@ -824,7 +825,7 @@ async def test_route_stream_copilot_logs_cache_evidence():
         b'data: [DONE]\n\n'
     )
     backend = FakeBackend("copilot", stream_chunks=[chunk])
-    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+    router = RequestRouter([BackendTier(vendor=backend)], token_logger=logger_mock)
 
     async for _ in router.route_stream(_body(), _headers()):
         pass
@@ -832,7 +833,7 @@ async def test_route_stream_copilot_logs_cache_evidence():
     logger_mock.log.assert_awaited_once()
     logger_mock.log_evidence.assert_awaited()
     evidence_kwargs = logger_mock.log_evidence.call_args[1]
-    assert evidence_kwargs["backend"] == "copilot"
+    assert evidence_kwargs["vendor"] == "copilot"
     assert evidence_kwargs["request_id"] == "msg_cache"
     assert evidence_kwargs["parsed_cache_read_tokens"] == 12
     assert evidence_kwargs["cache_signal_present"] is True
@@ -851,7 +852,7 @@ async def test_route_stream_cache_only_input_does_not_warn(caplog):
         b'data: [DONE]\n\n'
     )
     backend = FakeBackend("anthropic", stream_chunks=[chunk])
-    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+    router = RequestRouter([BackendTier(vendor=backend)], token_logger=logger_mock)
 
     caplog.set_level("WARNING")
 
@@ -872,7 +873,7 @@ async def test_route_stream_missing_input_signals_still_warns(caplog):
         b'data: [DONE]\n\n'
     )
     backend = FakeBackend("anthropic", stream_chunks=[chunk])
-    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+    router = RequestRouter([BackendTier(vendor=backend)], token_logger=logger_mock)
 
     caplog.set_level("WARNING")
 
@@ -888,7 +889,7 @@ async def test_route_message_non_copilot_does_not_log_evidence():
     """非 Copilot 后端不应写 usage evidence."""
     logger_mock = AsyncMock()
     backend = FakeBackend("anthropic", response=BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
-    router = RequestRouter([BackendTier(backend=backend)], token_logger=logger_mock)
+    router = RequestRouter([BackendTier(vendor=backend)], token_logger=logger_mock)
 
     await router.route_message(_body(), _headers())
 
@@ -913,8 +914,8 @@ async def test_failover_records_source():
     b1 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1),
     ], token_logger=logger_mock)
 
     resp = await router.route_message(_body(), _headers())
@@ -923,7 +924,7 @@ async def test_failover_records_source():
     # zhipu 的记录应为 failover=True, failover_from="anthropic"
     logger_mock.log.assert_awaited_once()
     call_kwargs = logger_mock.log.call_args[1]
-    assert call_kwargs["backend"] == "zhipu"
+    assert call_kwargs["vendor"] == "zhipu"
     assert call_kwargs["failover"] is True
     assert call_kwargs["failover_from"] == "anthropic"
 
@@ -939,8 +940,8 @@ async def test_circuit_open_not_counted_as_failover():
     cb0.record_failure()  # anthropic CB OPEN
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=cb0),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=cb0),
+        BackendTier(vendor=b1),
     ], token_logger=logger_mock)
 
     resp = await router.route_message(_body(), _headers())
@@ -967,9 +968,9 @@ async def test_multi_tier_failover_tracks_source():
     b2 = FakeBackend("zhipu", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=30)))
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b2),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b2),
     ], token_logger=logger_mock)
 
     resp = await router.route_message(_body(), _headers())
@@ -989,8 +990,8 @@ async def test_stream_failover_records_source():
     b1 = FakeBackend("zhipu", stream_chunks=[b"data: ok\n\n"])
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b1),
     ], token_logger=logger_mock)
 
     async for _ in router.route_stream(_body(), _headers()):
@@ -1013,8 +1014,8 @@ async def test_stream_circuit_open_not_failover():
     cb0.record_failure()
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=cb0),
-        BackendTier(backend=b1),
+        BackendTier(vendor=b0, circuit_breaker=cb0),
+        BackendTier(vendor=b1),
     ], token_logger=logger_mock)
 
     async for _ in router.route_stream(_body(), _headers()):
@@ -1033,7 +1034,7 @@ async def test_primary_success_no_failover():
     b0 = FakeBackend("anthropic", BackendResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
 
     router = RequestRouter([
-        BackendTier(backend=b0, circuit_breaker=CircuitBreaker()),
+        BackendTier(vendor=b0, circuit_breaker=CircuitBreaker()),
     ], token_logger=logger_mock)
 
     await router.route_message(_body(), _headers())
@@ -1058,11 +1059,11 @@ async def test_rate_limit_deadline_prevents_premature_probe():
     cb0 = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=0)
     cb0.record_failure()  # → OPEN → 立即 HALF_OPEN (recovery=0)
 
-    tier0 = BackendTier(backend=b0, circuit_breaker=cb0)
+    tier0 = BackendTier(vendor=b0, circuit_breaker=cb0)
     # 设置一个远未到期的 deadline
     tier0._rate_limit_deadline = time.monotonic() + 300
 
-    router = RequestRouter([tier0, BackendTier(backend=b1)])
+    router = RequestRouter([tier0, BackendTier(vendor=b1)])
     resp = await router.route_message(_body(), _headers())
 
     assert resp.status_code == 200
@@ -1081,11 +1082,11 @@ async def test_rate_limit_deadline_allows_probe_after_expiry():
     cb0 = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=0)
     cb0.record_failure()  # → OPEN → 立即 HALF_OPEN (recovery=0)
 
-    tier0 = BackendTier(backend=b0, circuit_breaker=cb0)
+    tier0 = BackendTier(vendor=b0, circuit_breaker=cb0)
     # 设置已过期的 deadline
     tier0._rate_limit_deadline = time.monotonic() - 1
 
-    router = RequestRouter([tier0, BackendTier(backend=b1)])
+    router = RequestRouter([tier0, BackendTier(vendor=b1)])
     resp = await router.route_message(_body(), _headers())
 
     assert resp.status_code == 200

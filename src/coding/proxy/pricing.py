@@ -1,6 +1,6 @@
 """模型定价表.
 
-基于配置文件中的手动定价条目，按 (backend, model_served) 计算 Cost。
+基于配置文件中的手动定价条目，按 (vendor, model_served) 计算 Cost。
 
 ``ModelPricing`` / ``Currency`` / ``CostValue`` 数据模型已迁移至 :mod:`coding.proxy.model.pricing`。
 本文件保留 ``PricingTable`` 查询与计算逻辑，类型通过 re-export 提供。
@@ -37,7 +37,7 @@ def _normalize(name: str) -> str:
 
 
 class PricingTable:
-    """基于配置文件的本地定价表，支持按 (backend, model_served) 查询单价."""
+    """基于配置文件的本地定价表，支持按 (vendor, model_served) 查询单价."""
 
     def __init__(self, entries: list[ModelPricingEntry]) -> None:
         self._index: dict[tuple[str, str], ModelPricing] = {}
@@ -50,34 +50,34 @@ class PricingTable:
                 cache_read_input_token_cost=entry.cache_read_cost_per_mtok / 1e6,
             )
             # 精确匹配
-            self._index[(entry.backend, entry.model)] = pricing
+            self._index[(entry.vendor, entry.model)] = pricing
             # 规范化匹配（如 "glm-4.5-air" → "glm-4-5-air"）
             norm = _normalize(entry.model)
             if norm != entry.model:
-                self._index.setdefault((entry.backend, norm), pricing)
+                self._index.setdefault((entry.vendor, norm), pricing)
 
         if entries:
             logger.info("定价表加载成功，共 %d 条模型配置", len(entries))
 
     # ── 单价查询 ──────────────────────────────────────────────
 
-    def get_pricing(self, backend: str, model_served: str) -> ModelPricing | None:
-        """获取 (backend, model_served) 对应的 ModelPricing.
+    def get_pricing(self, vendor: str, model_served: str) -> ModelPricing | None:
+        """获取 (vendor, model_served) 对应的 ModelPricing.
 
         查找顺序：
-        1. 精确匹配：(backend, model_served)
-        2. 规范化匹配：(backend, normalized(model_served))
+        1. 精确匹配：(vendor, model_served)
+        2. 规范化匹配：(vendor, normalized(model_served))
         """
-        hit = self._index.get((backend, model_served))
+        hit = self._index.get((vendor, model_served))
         if hit is not None:
             return hit
-        return self._index.get((backend, _normalize(model_served)))
+        return self._index.get((vendor, _normalize(model_served)))
 
     # ── 费用计算 ──────────────────────────────────────────────
 
     def compute_cost(
         self,
-        backend: str,
+        vendor: str,
         model_served: str,
         input_tokens: int,
         output_tokens: int,
@@ -88,7 +88,7 @@ class PricingTable:
 
         返回 :class:`CostValue`（携带币种），若无匹配定价返回 None。
         """
-        pricing = self.get_pricing(backend, model_served)
+        pricing = self.get_pricing(vendor, model_served)
         if pricing is None:
             return None
         amount = (

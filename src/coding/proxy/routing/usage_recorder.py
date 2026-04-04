@@ -48,7 +48,7 @@ class UsageRecorder:
     def log_model_call(
         self,
         *,
-        backend: str,
+        vendor: str,
         model_requested: str,
         model_served: str,
         duration_ms: int,
@@ -58,7 +58,7 @@ class UsageRecorder:
         cost_str = "-"
         if self._pricing_table is not None:
             cost_value = self._pricing_table.compute_cost(
-                backend=backend,
+                vendor=vendor,
                 model_served=model_served,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
@@ -68,9 +68,9 @@ class UsageRecorder:
             if cost_value is not None:
                 cost_str = cost_value.format()
         logger.info(
-            "ModelCall: backend=%s model_requested=%s model_served=%s "
+            "ModelCall: vendor=%s model_requested=%s model_served=%s "
             "duration=%dms tokens=[in:%d out:%d cache_create:%d cache_read:%d] cost=%s",
-            backend, model_requested, model_served, duration_ms,
+            vendor, model_requested, model_served, duration_ms,
             usage.input_tokens, usage.output_tokens,
             usage.cache_creation_tokens, usage.cache_read_tokens, cost_str,
         )
@@ -79,7 +79,7 @@ class UsageRecorder:
 
     async def record(
         self,
-        backend: str,
+        vendor: str,
         model_requested: str,
         model_served: str,
         usage: UsageInfo,
@@ -92,13 +92,13 @@ class UsageRecorder:
         if not self._token_logger:
             return
         await self._token_logger.log(
-            backend=backend, model_requested=model_requested, model_served=model_served,
+            vendor=vendor, model_requested=model_requested, model_served=model_served,
             input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
             cache_creation_tokens=usage.cache_creation_tokens, cache_read_tokens=usage.cache_read_tokens,
             duration_ms=duration_ms, success=success, failover=failover, failover_from=failover_from,
             request_id=usage.request_id,
         )
-        if not evidence_records or backend != "copilot":
+        if not evidence_records or vendor != "copilot":
             return
         if not hasattr(self._token_logger, "log_evidence"):
             return
@@ -108,8 +108,8 @@ class UsageRecorder:
     # ── 证据记录构建 ──────────────────────────────────────
 
     @staticmethod
-    def build_nonstream_evidence_records(*, backend: str, model_served: str, usage: UsageInfo) -> list[dict[str, Any]]:
-        if backend != "copilot":
+    def build_nonstream_evidence_records(*, vendor: str, model_served: str, usage: UsageInfo) -> list[dict[str, Any]]:
+        if vendor != "copilot":
             return []
         raw_usage: dict[str, Any] = {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
         if usage.cache_creation_tokens > 0:
@@ -117,7 +117,7 @@ class UsageRecorder:
         if usage.cache_read_tokens > 0:
             raw_usage["cache_read_input_tokens"] = usage.cache_read_tokens
         return [{
-            "backend": backend, "request_id": usage.request_id, "model_served": model_served,
+            "vendor": vendor, "request_id": usage.request_id, "model_served": model_served,
             "evidence_kind": "nonstream_usage_summary",
             "raw_usage_json": json.dumps(raw_usage, ensure_ascii=False, sort_keys=True),
             "parsed_input_tokens": usage.input_tokens, "parsed_output_tokens": usage.output_tokens,

@@ -1,4 +1,4 @@
-"""路由层配置模型（后端类型、Tier、模型映射、定价）."""
+"""路由层配置模型（供应商类型、Vendor、模型映射、定价）."""
 
 from __future__ import annotations
 
@@ -40,8 +40,8 @@ PriceField = Annotated[float, BeforeValidator(_price_to_float)]
 
 logger = logging.getLogger(__name__)
 
-# ── 后端专属字段分组映射 ──────────────────────────────────────
-# 每个 backend 类型对应其专属字段集合，用于 TierConfig 的语义标注与校验
+# ── 供应商专属字段分组映射 ──────────────────────────────────────
+# 每个 vendor 类型对应其专属字段集合，用于 VendorConfig 的语义标注与校验
 
 _COPILOT_FIELDS: frozenset[str] = frozenset({
     "github_token", "account_type", "token_url", "models_cache_ttl_seconds",
@@ -51,20 +51,20 @@ _ANTIGRAVITY_FIELDS: frozenset[str] = frozenset({
 })
 _ZHIPU_FIELDS: frozenset[str] = frozenset({"api_key",})
 
-_BACKEND_EXCLUSIVE_FIELDS: dict[str, frozenset[str]] = {
+_VENDOR_EXCLUSIVE_FIELDS: dict[str, frozenset[str]] = {
     "copilot": _COPILOT_FIELDS,
     "antigravity": _ANTIGRAVITY_FIELDS,
     "zhipu": _ZHIPU_FIELDS,
 }
 
-BackendType = Literal["anthropic", "copilot", "antigravity", "zhipu"]
+VendorType = Literal["anthropic", "copilot", "antigravity", "zhipu"]
 
 
 class ModelMappingRule(BaseModel):
     pattern: str
     target: str
     is_regex: bool = False
-    backends: list[str] = Field(default_factory=list)
+    vendors: list[str] = Field(default_factory=list)
 
 
 class ModelPricingEntry(BaseModel):
@@ -81,7 +81,7 @@ class ModelPricingEntry(BaseModel):
 
     model_config = {"extra": "allow"}
 
-    backend: str                            # 后端名称（对应 usage 表"后端"列）
+    vendor: str                            # 供应商名称（对应 usage 表"供应商"列）
     model: str                              # 实际模型名（对应 usage 表"实际模型"列）
     input_cost_per_mtok: PriceField = 0.0   # 输入 Token 单价
     output_cost_per_mtok: PriceField = 0.0  # 输出 Token 单价
@@ -115,10 +115,10 @@ class ModelPricingEntry(BaseModel):
                 currencies.add(detected)
 
         if len(currencies) > 1:
-            backend = data.get("backend", "?")
+            vendor = data.get("vendor", "?")
             model = data.get("model", "?")
             raise ValueError(
-                f"PricingEntry(backend={backend!r}, model={model!r}): "
+                f"PricingEntry(vendor={vendor!r}, model={model!r}): "
                 f"检测到混合币种 {sorted(currencies)}，"
                 "同一模型的所有单价必须使用相同币种 ($ 或 ¥)"
             )
@@ -156,7 +156,7 @@ class ModelPricingEntry(BaseModel):
             val = getattr(self, name)
             if val < 0:
                 raise ValueError(
-                    f"PricingEntry(backend={self.backend!r}, model={self.model!r}): "
+                    f"PricingEntry(vendor={self.vendor!r}, model={self.model!r}): "
                     f"{name} 不能为负数（当前值: {val}）"
                 )
         return self
@@ -170,17 +170,20 @@ class ModelPricingEntry(BaseModel):
         return self._currency
 
 
-class TierConfig(BaseModel):
-    """单个 Tier 的统一配置（支持所有后端类型）.
+class VendorConfig(BaseModel):
+    """单个 Vendor 的统一配置（支持所有供应商类型）.
 
-    列表顺序即优先级：index 越小优先级越高。
-    无 circuit_breaker 的 Tier 为终端层（不触发故障转移）。
+    .. note::
+        当 ``tiers`` 未配置时，vendors 列表顺序即为优先级；
+        配置了 ``tiers`` 后，优先级由其显式指定。
 
-    各后端类型的专属字段已通过 ``Field(description=...)`` 标注适用范围，
-    非当前 backend 类型的专属字段在验证阶段会发出 warning 日志。
+    无 circuit_breaker 的 Vendor 为终端层（不触发故障转移）。
+
+    各供应商类型的专属字段已通过 ``Field(description=...)`` 标注适用范围，
+    非当前 vendor 类型的专属字段在验证阶段会发出 warning 日志。
     """
 
-    backend: BackendType
+    vendor: VendorType
 
     # ── 通用字段（所有后端共用） ──────────────────────────────
     enabled: bool = True
@@ -245,25 +248,32 @@ class TierConfig(BaseModel):
     weekly_quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
 
     @model_validator(mode="after")
-    def _warn_irrelevant_fields(self) -> "TierConfig":
-        """对非当前 backend 类型的非空专属字段发出 warning."""
-        exclusive = _BACKEND_EXCLUSIVE_FIELDS.get(self.backend)
+    def _warn_irrelevant_fields(self) -> "VendorConfig":
+        """对非当前 vendor 类型的非空专属字段发出 warning."""
+        exclusive = _VENDOR_EXCLUSIVE_FIELDS.get(self.vendor)
         if not exclusive:
             return self
-        for backend_type, fields in _BACKEND_EXCLUSIVE_FIELDS.items():
-            if backend_type == self.backend:
+        for vendor_type, fields in _VENDOR_EXCLUSIVE_FIELDS.items():
+            if vendor_type == self.vendor:
                 continue
             for field_name in fields:
                 value = getattr(self, field_name, None)
-                if value and value != getattr(TierConfig.model_fields[field_name], "default", None):
+                if value and value != getattr(VendorConfig.model_fields[field_name], "default", None):
                     logger.warning(
-                        "TierConfig(backend=%s): 字段 %s 属于 %s 后端，当前值将被忽略",
-                        self.backend, field_name, backend_type,
+                        "VendorConfig(vendor=%s): 字段 %s 属于 %s 供应商，当前值将被忽略",
+                        self.vendor, field_name, vendor_type,
                     )
         return self
 
+# ── 向后兼容别名（v2 移除）────────────────────────────────────
+
+TierConfig = VendorConfig
+BackendType = VendorType
+_BACKEND_EXCLUSIVE_FIELDS = _VENDOR_EXCLUSIVE_FIELDS
+
 __all__ = [
-    "BackendType", "TierConfig", "ModelMappingRule", "ModelPricingEntry",
+    "VendorType", "VendorConfig", "ModelMappingRule", "ModelPricingEntry",
+    "TierConfig", "BackendType",  # 向后兼容别名
     "_COPILOT_FIELDS", "_ANTIGRAVITY_FIELDS", "_ZHIPU_FIELDS",
-    "_BACKEND_EXCLUSIVE_FIELDS",
+    "_VENDOR_EXCLUSIVE_FIELDS", "_BACKEND_EXCLUSIVE_FIELDS",
 ]

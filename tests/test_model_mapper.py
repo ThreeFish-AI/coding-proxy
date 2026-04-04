@@ -56,36 +56,36 @@ def test_empty_rules_use_default():
     assert mapper.map("any-model") == "glm-5.1"
 
 
-def test_backend_scoped_mapping():
+def test_vendor_scoped_mapping():
     mapper = _make_mapper([
-        ModelMappingRule(pattern="claude-sonnet-*", target="claude-sonnet-4-6-thinking", backends=["antigravity"]),
-        ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1", backends=["fallback"]),
+        ModelMappingRule(pattern="claude-sonnet-*", target="claude-sonnet-4-6-thinking", vendors=["antigravity"]),
+        ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1", vendors=["fallback"]),
     ])
-    assert mapper.map("claude-sonnet-4-20250514", backend="antigravity") == "claude-sonnet-4-6-thinking"
-    assert mapper.map("claude-sonnet-4-20250514", backend="zhipu") == "glm-5.1"
+    assert mapper.map("claude-sonnet-4-20250514", vendor="antigravity") == "claude-sonnet-4-6-thinking"
+    assert mapper.map("claude-sonnet-4-20250514", vendor="zhipu") == "glm-5.1"
 
 
 def test_legacy_rule_only_applies_to_fallback():
     mapper = _make_mapper([
         ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1"),
     ])
-    assert mapper.map("claude-sonnet-4-20250514", backend="fallback") == "glm-5.1"
+    assert mapper.map("claude-sonnet-4-20250514", vendor="fallback") == "glm-5.1"
     assert mapper.map(
         "claude-sonnet-4-20250514",
-        backend="antigravity",
+        vendor="antigravity",
         default="claude-sonnet-4-20250514",
     ) == "claude-sonnet-4-20250514"
 
 
-def test_zhipu_backend_logs_with_original_name(caplog):
-    """zhipu 后端传入时，日志应显示 backend=zhipu 而非 backend=fallback."""
+def test_zhipu_vendor_logs_with_original_name(caplog):
+    """zhipu 供应商传入时，日志应显示 vendor=zhipu 而非 vendor=fallback."""
     caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.model_mapper")
     mapper = _make_mapper([
         ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1"),
     ])
-    result = mapper.map("claude-sonnet-4-20250514", backend="zhipu")
+    result = mapper.map("claude-sonnet-4-20250514", vendor="zhipu")
     assert result == "glm-5.1"
 
-    # 日志中应包含 backend=zhipu 而非 backend=fallback
-    assert any("backend=zhipu" in r.message for r in caplog.records)
-    assert not any("backend=fallback" in r.message for r in caplog.records)
+    # 日志中应包含 vendor=zhipu 而非 vendor=fallback
+    assert any("vendor=zhipu" in r.message for r in caplog.records)
+    assert not any("vendor=fallback" in r.message for r in caplog.records)

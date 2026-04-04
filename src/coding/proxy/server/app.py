@@ -16,18 +16,18 @@ from ..auth.providers.github import GitHubDeviceFlowProvider
 from ..auth.providers.google import GoogleOAuthProvider
 from ..auth.runtime import RuntimeReauthCoordinator
 from ..auth.store import TokenStoreManager
-from ..backends.antigravity import AntigravityBackend
-from ..backends.copilot import CopilotBackend
+from ..vendors.antigravity import AntigravityVendor
+from ..vendors.copilot import CopilotVendor
 from ..config.loader import load_config
 from ..compat.session_store import CompatSessionStore
 from ..config.schema import ProxyConfig
 from ..logging.db import TokenLogger
 from ..routing.router import RequestRouter
-from ..routing.tier import BackendTier
+from ..routing.tier import VendorTier
 from .factory import (  # noqa: F401
     _build_circuit_breaker,
     _build_quota_guard,
-    _create_backend_from_tier,
+    _create_vendor_from_config,
 )
 from .routes import register_all_routes
 
@@ -57,13 +57,13 @@ async def lifespan(app: FastAPI):
         if tier.quota_guard and tier.quota_guard.enabled:
             total = await token_logger.query_window_total(
                 tier.quota_guard.window_hours,
-                backend=tier.name,
+                vendor=tier.name,
             )
             tier.quota_guard.load_baseline(total)
         if tier.weekly_quota_guard and tier.weekly_quota_guard.enabled:
             total = await token_logger.query_window_total(
                 tier.weekly_quota_guard.window_hours,
-                backend=tier.name,
+                vendor=tier.name,
             )
             tier.weekly_quota_guard.load_baseline(total)
 
@@ -95,27 +95,33 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     )
     token_store.load()
 
-    # 按 config.tiers 列表顺序构建后端层级链（列表顺序即优先级）
-    tiers: list[Any] = []
-    for tier_cfg in config.tiers:
-        if not tier_cfg.enabled:
+    # 阶段一：构建 vendor_name → VendorTier 映射表（与顺序无关）
+    _vendor_map: dict[str, Any] = {}
+    for vendor_cfg in config.vendors:
+        if not vendor_cfg.enabled:
             continue
-        backend = _create_backend_from_tier(tier_cfg, config.failover, mapper, token_store)
-        cb = _build_circuit_breaker(tier_cfg.circuit_breaker) if tier_cfg.circuit_breaker else None
-        qg = _build_quota_guard(tier_cfg.quota_guard)
-        wqg = _build_quota_guard(tier_cfg.weekly_quota_guard)
-        tiers.append(BackendTier(backend=backend, circuit_breaker=cb, quota_guard=qg, weekly_quota_guard=wqg))
+        vendor = _create_vendor_from_config(vendor_cfg, config.failover, mapper, token_store)
+        cb = _build_circuit_breaker(vendor_cfg.circuit_breaker) if vendor_cfg.circuit_breaker else None
+        qg = _build_quota_guard(vendor_cfg.quota_guard)
+        wqg = _build_quota_guard(vendor_cfg.weekly_quota_guard)
+        _vendor_map[vendor_cfg.vendor] = VendorTier(vendor=vendor, circuit_breaker=cb, quota_guard=qg, weekly_quota_guard=wqg)
+
+    # 阶段二：按 tiers 指定的顺序组装最终链路（或回退到 vendors 原始顺序）
+    if config.tiers is not None:
+        tiers = [_vendor_map[name] for name in config.tiers if name in _vendor_map]
+    else:
+        tiers = [_vendor_map[v.vendor] for v in config.vendors if v.enabled]
 
     # 构建运行时重认证协调器
     reauth_providers: dict[str, Any] = {}
     token_updaters: dict[str, Any] = {}
     for tier in tiers:
-        if isinstance(tier.backend, CopilotBackend):
+        if isinstance(tier.vendor, CopilotVendor):
             reauth_providers["github"] = GitHubDeviceFlowProvider()
-            token_updaters["github"] = tier.backend._token_manager.update_github_token
-        elif isinstance(tier.backend, AntigravityBackend):
+            token_updaters["github"] = tier.vendor._token_manager.update_github_token
+        elif isinstance(tier.vendor, AntigravityVendor):
             reauth_providers["google"] = GoogleOAuthProvider()
-            token_updaters["google"] = tier.backend._token_manager.update_refresh_token
+            token_updaters["google"] = tier.vendor._token_manager.update_refresh_token
 
     reauth_coordinator: RuntimeReauthCoordinator | None = None
     if reauth_providers:

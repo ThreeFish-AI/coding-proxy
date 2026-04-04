@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from coding.proxy.backends.antigravity import AntigravityBackend, GoogleOAuthTokenManager
-from coding.proxy.backends.base import RequestCapabilities
+from coding.proxy.vendors.antigravity import AntigravityVendor as AntigravityBackend, GoogleOAuthTokenManager
+from coding.proxy.vendors.base import RequestCapabilities
 from coding.proxy.backends.token_manager import TokenAcquireError, TokenErrorKind
 from coding.proxy.config.schema import AntigravityConfig, FailoverConfig, ModelMappingRule
 from coding.proxy.routing.model_mapper import ModelMapper
@@ -191,7 +191,7 @@ async def test_prepare_request_resolves_model_from_mapping():
         ModelMappingRule(
             pattern="claude-sonnet-*",
             target="claude-sonnet-4-6-thinking",
-            backends=["antigravity"],
+            vendors=["antigravity"],
         )
     ])
     backend = AntigravityBackend(AntigravityConfig(), FailoverConfig(), mapper)
@@ -314,7 +314,7 @@ async def test_send_message_uses_cached_resolution():
         ModelMappingRule(
             pattern="claude-*",
             target="resolved-model",
-            backends=["antigravity"],
+            vendors=["antigravity"],
         ),
     ])
     backend = AntigravityBackend(config, FailoverConfig(), mapper)

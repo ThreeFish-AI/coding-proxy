@@ -17,7 +17,10 @@ if TYPE_CHECKING:
 
 from .executor import _RouteExecutor
 from .session_manager import RouteSessionManager
-from .tier import BackendTier
+from .tier import VendorTier
+
+# 向后兼容别名
+BackendTier = VendorTier
 from .usage_recorder import UsageRecorder
 from ..compat.session_store import CompatSessionStore
 from ..logging.db import TokenLogger
@@ -28,13 +31,13 @@ class RequestRouter:
 
     def __init__(
         self,
-        tiers: list[BackendTier],
+        tiers: list[VendorTier],
         token_logger: TokenLogger | None = None,
         reauth_coordinator: Any | None = None,
         compat_session_store: CompatSessionStore | None = None,
     ) -> None:
         if not tiers:
-            raise ValueError("至少需要一个后端层级")
+            raise ValueError("至少需要一个供应商层级")
         self._tiers = tiers
 
         # 正交分解的子组件
@@ -52,7 +55,7 @@ class RequestRouter:
         self._recorder.set_pricing_table(table)
 
     @property
-    def tiers(self) -> list[BackendTier]:
+    def tiers(self) -> list[VendorTier]:
         return self._tiers
 
     # ── 公开路由接口（委托给 _RouteExecutor）───────────────
@@ -63,8 +66,8 @@ class RequestRouter:
         headers: dict[str, str],
     ) -> AsyncIterator[tuple[bytes, str]]:
         """路由流式请求，按优先级尝试各层级."""
-        async for chunk, backend_name in self._executor.execute_stream(body, headers):
-            yield chunk, backend_name
+        async for chunk, vendor_name in self._executor.execute_stream(body, headers):
+            yield chunk, vendor_name
 
     async def route_message(
         self,
@@ -78,4 +81,4 @@ class RequestRouter:
 
     async def close(self) -> None:
         for tier in self._tiers:
-            await tier.backend.close()
+            await tier.vendor.close()

@@ -13,11 +13,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from coding.proxy.backends.base import (
-    BaseBackend,
-    BackendCapabilities,
-    BackendResponse,
-    NoCompatibleBackendError,
+from coding.proxy.vendors.base import (
+    BaseVendor as BaseBackend,
+    VendorCapabilities as BackendCapabilities,
+    VendorResponse as BackendResponse,
+    NoCompatibleVendorError as NoCompatibleBackendError,
     RequestCapabilities,
     UsageInfo,
 )
@@ -29,15 +29,15 @@ from coding.proxy.compat.canonical import (
 )
 from coding.proxy.routing.executor import _RouteExecutor, _VENDOR_PROTOCOL_LABEL_MAP
 from coding.proxy.routing.session_manager import RouteSessionManager
-from coding.proxy.routing.tier import BackendTier
+from coding.proxy.routing.tier import VendorTier as BackendTier
 from coding.proxy.routing.usage_recorder import UsageRecorder
 
 
-# ── Mock 后端工厂 ─────────────────────────────────────────
+# ── Mock 供应商工厂 ─────────────────────────────────────────
 
 
 def _mock_backend(name: str = "test", **caps_kwargs) -> BaseBackend:
-    """创建 mock 后端实例.
+    """创建 mock 供应商实例.
 
     supports_request 会根据 get_capabilities 的返回值自动计算兼容性，
     无需手动配置。
@@ -55,7 +55,7 @@ def _mock_backend(name: str = "test", **caps_kwargs) -> BaseBackend:
 
     # supports_request 基于实际能力动态判断
     def _supports_request(request_caps: RequestCapabilities):
-        from coding.proxy.backends.base import CapabilityLossReason
+        from coding.proxy.vendors.base import CapabilityLossReason
         reasons: list[CapabilityLossReason] = []
         if request_caps.has_tools and not caps.supports_tools:
             reasons.append(CapabilityLossReason.TOOLS)
@@ -87,10 +87,10 @@ async def _async_chunks(chunks: list[bytes]):
 
 
 def _make_tier(backend: BaseBackend | None = None, **tier_kwargs) -> BackendTier:
-    """创建 BackendTier 实例."""
+    """创建 VendorTier 实例."""
     if backend is None:
         backend = _mock_backend()
-    tier = BackendTier(backend=backend, **tier_kwargs)
+    tier = BackendTier(vendor=backend, **tier_kwargs)
     return tier
 
 
@@ -263,7 +263,7 @@ class TestExecuteMessage:
 
     @pytest.mark.asyncio
     async def test_successful_routing(self):
-        """成功路由到第一个可用后端."""
+        """成功路由到第一个可用供应商."""
         backend = _mock_backend("copilot")
         tier = _make_tier(backend)
         exec_inst = _executor([tier])
@@ -296,7 +296,7 @@ class TestExecuteMessage:
 
     @pytest.mark.asyncio
     async def test_raises_no_compatible_backend(self):
-        """所有层均不兼容时抛出 NoCompatibleBackendError."""
+        """所有层均不兼容时抛出 NoCompatibleVendorError."""
         no_tools_backend = _mock_backend(supports_tools=False)
         exec_inst = _executor([_make_tier(no_tools_backend)])
 
@@ -477,7 +477,7 @@ class TestUsageRecorderIntegration:
 
     def test_build_nonstream_evidence_records_for_non_copilot(self):
         records = UsageRecorder.build_nonstream_evidence_records(
-            backend="antigravity",
+            vendor="antigravity",
             model_served="gemini-pro",
             usage=UsageInfo(input_tokens=10, output_tokens=5),
         )
@@ -485,7 +485,7 @@ class TestUsageRecorderIntegration:
 
     def test_build_nonstream_evidence_records_for_copilot(self):
         records = UsageRecorder.build_nonstream_evidence_records(
-            backend="copilot",
+            vendor="copilot",
             model_served="gpt-4o",
             usage=UsageInfo(
                 input_tokens=25, output_tokens=10,
@@ -495,7 +495,7 @@ class TestUsageRecorderIntegration:
         )
         assert len(records) == 1
         rec = records[0]
-        assert rec["backend"] == "copilot"
+        assert rec["vendor"] == "copilot"
         assert rec["model_served"] == "gpt-4o"
         assert rec["evidence_kind"] == "nonstream_usage_summary"
         assert rec["parsed_input_tokens"] == 25
@@ -506,7 +506,7 @@ class TestUsageRecorderIntegration:
         """无 token_logger 时 record 不报错."""
         recorder = UsageRecorder(token_logger=None)
         await recorder.record(
-            backend="test", model_requested="m", model_served="m",
+            vendor="test", model_requested="m", model_served="m",
             usage=UsageInfo(), duration_ms=100, success=True,
             failover=False,
         )

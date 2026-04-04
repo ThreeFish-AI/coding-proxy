@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from coding.proxy.backends.base import CapabilityLossReason, RequestCapabilities
-from coding.proxy.backends.copilot import (
-    CopilotBackend,
+from coding.proxy.vendors.base import CapabilityLossReason, RequestCapabilities
+from coding.proxy.vendors.copilot import (
+    CopilotVendor as CopilotBackend,
     CopilotTokenManager,
     build_copilot_candidate_base_urls,
     normalize_copilot_requested_model,
@@ -803,7 +803,7 @@ def _make_copilot_backend(mapper: ModelMapper | None = None) -> CopilotBackend:
 async def test_resolve_model_uses_config_mapping_when_rule_matches():
     """配置规则命中时直接返回目标模型，不走内部解析（不调用 _get_available_models）."""
     mapper = _make_copilot_mapper([
-        ModelMappingRule(pattern="claude-sonnet-.*", target="claude-sonnet-4.6", is_regex=True, backends=["copilot"]),
+        ModelMappingRule(pattern="claude-sonnet-.*", target="claude-sonnet-4.6", is_regex=True, vendors=["copilot"]),
     ])
     backend = _make_copilot_backend(mapper)
     backend._model_resolver.get_available = AsyncMock(side_effect=AssertionError("不应调用 get_available"))
@@ -822,7 +822,7 @@ async def test_resolve_model_uses_config_mapping_when_rule_matches():
 async def test_resolve_model_falls_back_to_internal_when_no_copilot_rule():
     """配置规则无 copilot 条目时，走内部家族匹配策略."""
     mapper = _make_copilot_mapper([
-        ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True, backends=["fallback"]),
+        ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True, vendors=["fallback"]),
     ])
     backend = _make_copilot_backend(mapper)
     backend._model_resolver.get_available = AsyncMock(return_value=["claude-sonnet-4.6", "claude-opus-4.6"])
@@ -853,9 +853,9 @@ async def test_resolve_model_without_mapper_uses_internal_resolution():
 async def test_resolve_model_config_mapping_all_three_families():
     """三个家族（sonnet / opus / haiku）的 copilot 规则均正确命中."""
     mapper = _make_copilot_mapper([
-        ModelMappingRule(pattern="claude-sonnet-.*", target="claude-sonnet-4.6", is_regex=True, backends=["copilot"]),
-        ModelMappingRule(pattern="claude-opus-.*", target="claude-opus-4.6", is_regex=True, backends=["copilot"]),
-        ModelMappingRule(pattern="claude-haiku-.*", target="claude-haiku-4.5", is_regex=True, backends=["copilot"]),
+        ModelMappingRule(pattern="claude-sonnet-.*", target="claude-sonnet-4.6", is_regex=True, vendors=["copilot"]),
+        ModelMappingRule(pattern="claude-opus-.*", target="claude-opus-4.6", is_regex=True, vendors=["copilot"]),
+        ModelMappingRule(pattern="claude-haiku-.*", target="claude-haiku-4.5", is_regex=True, vendors=["copilot"]),
     ])
 
     cases = [

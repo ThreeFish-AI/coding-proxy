@@ -47,7 +47,7 @@ class RouteSessionManager:
             unsupported_semantics=list(decision.unsupported_semantics),
             session_state_hits=1 if session_record else 0, request_adaptations=[],
         )
-        tier.backend.set_compat_context(trace=compat_trace, session_record=session_record)
+        tier.vendor.set_compat_context(trace=compat_trace, session_record=session_record)
 
     async def persist_session(self, trace: CompatibilityTrace | None, session_record: CompatSessionRecord | None) -> None:
         if self._store is None or trace is None or session_record is None:

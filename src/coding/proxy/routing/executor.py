@@ -23,15 +23,19 @@ from .rate_limit import (
     parse_rate_limit_headers,
 )
 from .session_manager import RouteSessionManager
-from .tier import BackendTier
+from .tier import VendorTier
 from .usage_parser import (
     build_usage_evidence_records,
     has_missing_input_usage_signals,
     parse_usage_from_chunk,
 )
 from .usage_recorder import UsageRecorder
-from ..backends.base import BackendResponse, NoCompatibleBackendError, RequestCapabilities, UsageInfo
+from ..vendors.base import VendorResponse, NoCompatibleVendorError, RequestCapabilities, UsageInfo
 from ..backends.token_manager import TokenAcquireError
+
+# 向后兼容别名
+BackendResponse = VendorResponse
+NoCompatibleBackendError = NoCompatibleVendorError
 from ..compat.canonical import CompatibilityStatus, build_canonical_request
 
 logger = logging.getLogger(__name__)
@@ -57,7 +61,7 @@ class _RouteExecutor:
 
     def __init__(
         self,
-        tiers: list[BackendTier],
+        tiers: list[VendorTier],
         usage_recorder: UsageRecorder,
         session_manager: RouteSessionManager,
         reauth_coordinator: Any | None = None,
@@ -102,7 +106,7 @@ class _RouteExecutor:
             usage: dict[str, Any] = {}
 
             try:
-                async for chunk in tier.backend.send_message_stream(body, headers):
+                async for chunk in tier.vendor.send_message_stream(body, headers):
                     parse_usage_from_chunk(
                         chunk, usage,
                         vendor_label=_VENDOR_PROTOCOL_LABEL_MAP.get(tier.name),
@@ -123,13 +127,13 @@ class _RouteExecutor:
                 tier.record_success(info.input_tokens + info.output_tokens)
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
-                model_served = usage.get("model_served") or tier.backend.map_model(model)
-                self._recorder.log_model_call(backend=tier.name, model_requested=model, model_served=model_served, duration_ms=duration, usage=info)
-                await self._session_mgr.persist_session(tier.backend.get_compat_trace(), session_record)
+                model_served = usage.get("model_served") or tier.vendor.map_model(model)
+                self._recorder.log_model_call(vendor=tier.name, model_requested=model, model_served=model_served, duration_ms=duration, usage=info)
+                await self._session_mgr.persist_session(tier.vendor.get_compat_trace(), session_record)
                 await self._recorder.record(
                     tier.name, model, model_served, info, duration, True,
                     failed_tier_name is not None, failed_tier_name,
-                    evidence_records=build_usage_evidence_records(usage, backend=tier.name, model_served=model_served, request_id=info.request_id),
+                    evidence_records=build_usage_evidence_records(usage, vendor=tier.name, model_served=model_served, request_id=info.request_id),
                 )
                 return
 
@@ -148,13 +152,13 @@ class _RouteExecutor:
 
         if last_exc:
             raise last_exc
-        raise NoCompatibleBackendError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容后端", reasons=incompatible_reasons)
+        raise NoCompatibleVendorError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容后端", reasons=incompatible_reasons)
 
     async def execute_message(
         self,
         body: dict[str, Any],
         headers: dict[str, str],
-    ) -> BackendResponse:
+    ) -> VendorResponse:
         """路由非流式请求，按优先级尝试各层级."""
         last_idx = len(self._tiers) - 1
         start = time.monotonic()
@@ -174,18 +178,18 @@ class _RouteExecutor:
                 continue
 
             try:
-                resp = await tier.backend.send_message(body, headers)
+                resp = await tier.vendor.send_message(body, headers)
 
                 if resp.status_code < 400:
                     duration = int((time.monotonic() - start) * 1000)
                     model = body.get("model", "unknown")
-                    model_served = resp.model_served or tier.backend.map_model(model)
-                    self._recorder.log_model_call(backend=tier.name, model_requested=model, model_served=model_served, duration_ms=duration, usage=resp.usage)
-                    await self._session_mgr.persist_session(tier.backend.get_compat_trace(), session_record)
+                    model_served = resp.model_served or tier.vendor.map_model(model)
+                    self._recorder.log_model_call(vendor=tier.name, model_requested=model, model_served=model_served, duration_ms=duration, usage=resp.usage)
+                    await self._session_mgr.persist_session(tier.vendor.get_compat_trace(), session_record)
                     await self._recorder.record(
                         tier.name, model, model_served, resp.usage, duration, True,
                         failed_tier_name is not None, failed_tier_name,
-                        evidence_records=self._recorder.build_nonstream_evidence_records(backend=tier.name, model_served=model_served, usage=resp.usage),
+                        evidence_records=self._recorder.build_nonstream_evidence_records(vendor=tier.name, model_served=model_served, usage=resp.usage),
                     )
                     return resp
 
@@ -195,7 +199,7 @@ class _RouteExecutor:
                     failed_tier_name = tier.name
                     continue
 
-                if not is_last and tier.backend.should_trigger_failover(resp.status_code, {"error": {"type": resp.error_type, "message": resp.error_message}}):
+                if not is_last and tier.vendor.should_trigger_failover(resp.status_code, {"error": {"type": resp.error_type, "message": resp.error_message}}):
                     logger.warning("Tier %s error %d, failing over", tier.name, resp.status_code)
                     rl_info = parse_rate_limit_headers(resp.response_headers, resp.status_code, resp.error_message)
                     tier.record_failure(
@@ -209,12 +213,12 @@ class _RouteExecutor:
                 # 最后一层或不可 failover 的错误：记录并返回原始响应
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
-                model_served = resp.model_served or tier.backend.map_model(model)
-                self._recorder.log_model_call(backend=tier.name, model_requested=model, model_served=model_served, duration_ms=duration, usage=resp.usage)
+                model_served = resp.model_served or tier.vendor.map_model(model)
+                self._recorder.log_model_call(vendor=tier.name, model_requested=model, model_served=model_served, duration_ms=duration, usage=resp.usage)
                 await self._recorder.record(
                     tier.name, model, model_served, resp.usage, duration, resp.status_code < 400,
                     failed_tier_name is not None, failed_tier_name,
-                    evidence_records=self._recorder.build_nonstream_evidence_records(backend=tier.name, model_served=model_served, usage=resp.usage),
+                    evidence_records=self._recorder.build_nonstream_evidence_records(vendor=tier.name, model_served=model_served, usage=resp.usage),
                 )
                 return resp
 
@@ -233,14 +237,14 @@ class _RouteExecutor:
                 continue
 
         if incompatible_reasons:
-            raise NoCompatibleBackendError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容后端", reasons=incompatible_reasons)
+            raise NoCompatibleVendorError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容后端", reasons=incompatible_reasons)
         raise RuntimeError("无可用后端层级")
 
     # ── 门控与错误处理 ──────────────────────────────────────
 
     async def _try_gate_tier(
         self,
-        tier: BackendTier,
+        tier: VendorTier,
         is_last: bool,
         request_caps: RequestCapabilities,
         canonical_request: Any,
@@ -253,14 +257,14 @@ class _RouteExecutor:
             "eligible" — 通过所有门控，可执行请求
             "skip" — 未通过门控，跳过此 tier
         """
-        supported, reasons = tier.backend.supports_request(request_caps)
+        supported, reasons = tier.vendor.supports_request(request_caps)
         if not supported:
             reason_text = ",".join(sorted({r.value for r in reasons}))
             incompatible_reasons.append(f"{tier.name}:{reason_text}")
             logger.info("Tier %s skipped due to incompatible capabilities: %s", tier.name, reason_text)
             return "skip"
 
-        decision = tier.backend.make_compatibility_decision(canonical_request)
+        decision = tier.vendor.make_compatibility_decision(canonical_request)
         if decision.status is CompatibilityStatus.UNSAFE:
             reason_text = ",".join(sorted(decision.unsupported_semantics))
             incompatible_reasons.append(f"{tier.name}:{reason_text}")
@@ -282,7 +286,7 @@ class _RouteExecutor:
 
     async def _handle_token_error(
         self,
-        tier: BackendTier,
+        tier: VendorTier,
         exc: TokenAcquireError,
         is_last: bool,
         failed_tier_name: str | None,
@@ -298,7 +302,7 @@ class _RouteExecutor:
 
     async def _handle_http_error(
         self,
-        tier: BackendTier,
+        tier: VendorTier,
         exc: Exception,
         is_last: bool,
         failed_tier_name: str | None,
@@ -336,7 +340,7 @@ class _RouteExecutor:
         return False, tier.name, exc
 
     @staticmethod
-    def _is_cap_error(resp: BackendResponse) -> bool:
+    def _is_cap_error(resp: VendorResponse) -> bool:
         """判断是否为订阅用量上限错误."""
         if resp.status_code not in (429, 403):
             return False
