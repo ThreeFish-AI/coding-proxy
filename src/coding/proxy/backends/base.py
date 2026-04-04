@@ -8,21 +8,30 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-# 从 types.py 正交导入所有类型、常量与工具函数，并 re-export 以保持向后兼容
-from .types import (  # noqa: F401
-    RESPONSE_SANITIZE_SKIP_HEADERS,
+# 从 model/ 模块正交导入所有类型、常量与工具函数，并 re-export 以保持向后兼容
+from ..model.backend import (  # noqa: F401
     BackendCapabilities,
     BackendResponse,
     CapabilityLossReason,
+    CopilotExchangeDiagnostics,
+    CopilotMisdirectedRequest,
+    CopilotModelCatalog,
     NoCompatibleBackendError,
-    PROXY_SKIP_HEADERS,
     RequestCapabilities,
     UsageInfo,
-    _SYNTHETIC_RESPONSE_SKIP_HEADERS,
-    _decode_json_body,
-    _extract_error_message,
-    _sanitize_headers_for_synthetic_response,
+    decode_json_body,
+    extract_error_message,
+    sanitize_headers_for_synthetic_response,
 )
+from ..model.constants import (  # noqa: F401
+    PROXY_SKIP_HEADERS,
+    RESPONSE_SANITIZE_SKIP_HEADERS,
+)
+
+# ── 废弃别名（向后兼容旧名称） ──────────────────────────
+_decode_json_body = decode_json_body
+_extract_error_message = extract_error_message
+_sanitize_headers_for_synthetic_response = sanitize_headers_for_synthetic_response
 
 from ..compat.canonical import (
     CanonicalRequest,

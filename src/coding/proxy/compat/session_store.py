@@ -1,14 +1,23 @@
-"""兼容层会话状态持久化."""
+"""兼容层会话状态持久化.
+
+数据类型 ``CompatSessionRecord`` 已迁移至 :mod:`coding.proxy.model.compat`。
+本文件保留 ``CompatSessionStore`` 持久化管理器，类型通过 re-export 提供。
+
+.. deprecated::
+    未来版本将移除类型 re-export，请直接从 :mod:`coding.proxy.model.compat` 导入。
+"""
 
 from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import aiosqlite
+
+# noqa: F401
+from ..model.compat import CompatSessionRecord
 
 
 _CREATE_TABLE = """
@@ -25,18 +34,9 @@ CREATE INDEX IF NOT EXISTS idx_compat_session_updated_at ON compat_session(updat
 """
 
 
-@dataclass
-class CompatSessionRecord:
-    session_key: str
-    trace_id: str = ""
-    tool_call_map: dict[str, str] = field(default_factory=dict)
-    thought_signature_map: dict[str, str] = field(default_factory=dict)
-    provider_state: dict[str, Any] = field(default_factory=dict)
-    state_version: int = 1
-    updated_at_unix: int = 0
-
-
 class CompatSessionStore:
+    """兼容层会话状态 SQLite 持久化存储."""
+
     def __init__(self, db_path: Path, ttl_seconds: int = 86400) -> None:
         self._db_path = db_path
         self._ttl_seconds = ttl_seconds
