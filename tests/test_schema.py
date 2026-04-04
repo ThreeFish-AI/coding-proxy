@@ -5,15 +5,15 @@ import logging
 import pytest
 
 from coding.proxy.config.schema import (
-    TierConfig,
+    VendorConfig,
     _ANTIGRAVITY_FIELDS,
-    _BACKEND_EXCLUSIVE_FIELDS,
+    _VENDOR_EXCLUSIVE_FIELDS,
     _COPILOT_FIELDS,
     _ZHIPU_FIELDS,
 )
 
 
-# ── 后端专属字段分组常量 ────────────────────────────────────
+# ── 供应商专属字段分组常量 ────────────────────────────────────
 
 
 def test_copilot_fields_set():
@@ -37,37 +37,37 @@ def test_zhipu_fields_set():
     assert len(_ZHIPU_FIELDS) == 1
 
 
-def test_backend_exclusive_fields_mapping_complete():
-    assert set(_BACKEND_EXCLUSIVE_FIELDS.keys()) == {"copilot", "antigravity", "zhipu"}
+def test_vendor_exclusive_fields_mapping_complete():
+    assert set(_VENDOR_EXCLUSIVE_FIELDS.keys()) == {"copilot", "antigravity", "zhipu"}
 
 
-# ── TierConfig 字段描述标注 ─────────────────────────────────
+# ── VendorConfig 字段描述标注 ─────────────────────────────────
 
 
-def test_tierconfig_copilot_fields_have_description():
+def test_vendorconfig_copilot_fields_have_description():
     """Copilot 专属字段应包含 [copilot] 前缀的 description."""
     for field_name in _COPILOT_FIELDS:
-        field_info = TierConfig.model_fields[field_name]
+        field_info = VendorConfig.model_fields[field_name]
         assert "[copilot]" in field_info.description, f"{field_name} 缺少 [copilot] 标注"
 
 
-def test_tierconfig_antigravity_fields_have_description():
+def test_vendorconfig_antigravity_fields_have_description():
     """Antigravity 专属字段应包含 [antigravity] 前缀的 description."""
     for field_name in _ANTIGRAVITY_FIELDS:
-        field_info = TierConfig.model_fields[field_name]
+        field_info = VendorConfig.model_fields[field_name]
         assert "[antigravity]" in field_info.description, f"{field_name} 缺少 [antigravity] 标注"
 
 
-def test_tierconfig_zhipu_field_has_description():
+def test_vendorconfig_zhipu_field_has_description():
     """Zhipu 专属字段应包含 [zhipu] 前缀的 description."""
-    field_info = TierConfig.model_fields["api_key"]
+    field_info = VendorConfig.model_fields["api_key"]
     assert "[zhipu]" in field_info.description
 
 
-def test_tierconfig_common_fields_have_description():
+def test_vendorconfig_common_fields_have_description():
     """通用字段应有非空 description."""
     for field_name in ("base_url", "timeout_ms"):
-        field_info = TierConfig.model_fields[field_name]
+        field_info = VendorConfig.model_fields[field_name]
         assert field_info.description, f"{field_name} 缺少 description"
 
 
@@ -75,10 +75,10 @@ def test_tierconfig_common_fields_have_description():
 
 
 def test_warn_irrelevant_fields_copilot_with_antigravity_values(caplog):
-    """Copilot tier 配置了 Antigravity 专属字段时应发出 warning."""
+    """Copilot vendor 配置了 Antigravity 专属字段时应发出 warning."""
     with caplog.at_level(logging.WARNING, logger="coding.proxy.config.schema"):
-        TierConfig(
-            backend="copilot",
+        VendorConfig(
+            vendor="copilot",
             github_token="ghp_test",
             client_id="should_be_ignored",  # Antigravity 专属
             refresh_token="also_ignored",   # Antigravity 专属
@@ -88,10 +88,10 @@ def test_warn_irrelevant_fields_copilot_with_antigravity_values(caplog):
 
 
 def test_warn_irrelevant_fields_antigravity_with_copilot_values(caplog):
-    """Antigravity tier 配置了 Copilot 专属字段时应发出 warning."""
+    """Antigravity vendor 配置了 Copilot 专属字段时应发出 warning."""
     with caplog.at_level(logging.WARNING, logger="coding.proxy.config.schema"):
-        TierConfig(
-            backend="antigravity",
+        VendorConfig(
+            vendor="antigravity",
             client_id="cid_test",
             github_token="ghp_misplaced",  # Copilot 专属
             account_type="business",       # Copilot 专属
@@ -103,23 +103,23 @@ def test_warn_irrelevant_fields_antigravity_with_copilot_values(caplog):
 def test_no_warning_for_correct_fields(caplog):
     """正确配置的字段不应触发 warning."""
     with caplog.at_level(logging.WARNING, logger="coding.proxy.config.schema"):
-        TierConfig(backend="copilot", github_token="ghp_ok")
+        VendorConfig(vendor="copilot", github_token="ghp_ok")
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING and "将被忽略" in r.message]
     assert len(warnings) == 0
 
 
 def test_no_warning_for_default_values(caplog):
-    """使用默认值的非当前后端字段不应触发 warning（空字符串等于默认值）."""
+    """使用默认值的非当前 vendor 字段不应触发 warning（空字符串等于默认值）."""
     with caplog.at_level(logging.WARNING, logger="coding.proxy.config.schema"):
-        TierConfig(backend="anthropic", base_url="https://api.anthropic.com")
+        VendorConfig(vendor="anthropic", base_url="https://api.anthropic.com")
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING and "将被忽略" in r.message]
     assert len(warnings) == 0
 
 
 def test_anthropic_backend_skips_validation(caplog):
-    """Anthropic 后端无专属字段，不应触发任何 warning."""
+    """Anthropic vendor 无专属字段，不应触发任何 warning."""
     with caplog.at_level(logging.WARNING, logger="coding.proxy.config.schema"):
-        TierConfig(backend="anthropic")
+        VendorConfig(vendor="anthropic")
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert len(warnings) == 0
 

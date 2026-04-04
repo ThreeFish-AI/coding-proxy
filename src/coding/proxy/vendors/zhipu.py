@@ -1,8 +1,8 @@
-"""智谱 GLM 后端 — 原生 Anthropic 兼容端点薄透传代理.
+"""智谱 GLM 供应商 — 原生 Anthropic 兼容端点薄透传代理.
 
 官方端点 (https://open.bigmodel.cn/api/anthropic) 已完整支持
 Anthropic Messages API 协议，本模块仅做两项最小适配：
-  1. 模型名映射（Claude → GLM）
+  1. 模型名映射（Claude -> GLM）
   2. 认证头替换（x-api-key）
 """
 
@@ -17,14 +17,14 @@ import httpx
 
 from ..config.schema import ZhipuConfig
 from ..routing.model_mapper import ModelMapper
-from .base import PROXY_SKIP_HEADERS, BackendCapabilities, BackendResponse, BaseBackend
-from .types import _sanitize_headers_for_synthetic_response
+from .base import PROXY_SKIP_HEADERS, BaseVendor, VendorCapabilities, VendorResponse
+from ..backends.types import _sanitize_headers_for_synthetic_response
 
 logger = logging.getLogger(__name__)
 
 
-class ZhipuBackend(BaseBackend):
-    """智谱 GLM 原生 Anthropic 兼容端点后端（薄透传）.
+class ZhipuVendor(BaseVendor):
+    """智谱 GLM 原生 Anthropic 兼容端点供应商（薄透传）.
 
     通过官方 /api/anthropic 端点转发请求，
     仅替换模型名和认证头，其余原样透传。
@@ -45,8 +45,8 @@ class ZhipuBackend(BaseBackend):
     def get_name(self) -> str:
         return "zhipu"
 
-    def get_capabilities(self) -> BackendCapabilities:
-        return BackendCapabilities(
+    def get_capabilities(self) -> VendorCapabilities:
+        return VendorCapabilities(
             supports_tools=True,
             supports_thinking=True,
             supports_images=True,
@@ -108,11 +108,11 @@ class ZhipuBackend(BaseBackend):
         self,
         request_body: dict[str, Any],
         headers: dict[str, str],
-    ) -> BackendResponse:
+    ) -> VendorResponse:
         """最小化覆写：API key 缺失时快速返回 401 响应，其余委托基类（含 _normalize_error_response 钩子）."""
         if not self._api_key:
             raw = json.dumps(self._missing_api_key_payload(), ensure_ascii=False).encode()
-            return BackendResponse(
+            return VendorResponse(
                 status_code=401,
                 raw_body=raw,
                 error_type="authentication_error",
@@ -125,8 +125,8 @@ class ZhipuBackend(BaseBackend):
         self,
         status_code: int,
         response: httpx.Response,
-        backend_resp: BackendResponse,
-    ) -> BackendResponse:
+        backend_resp: VendorResponse,
+    ) -> VendorResponse:
         """仅对 401 错误执行归一化，其余状态码透传."""
         if status_code != 401:
             return backend_resp
@@ -135,7 +135,7 @@ class ZhipuBackend(BaseBackend):
             response.content if response else backend_resp.raw_body,
         )
         error = payload.get("error", {}) if isinstance(payload, dict) else {}
-        return BackendResponse(
+        return VendorResponse(
             status_code=status_code,
             raw_body=raw_body,
             error_type=error.get("type") if isinstance(error, dict) else "authentication_error",
@@ -237,3 +237,7 @@ class ZhipuBackend(BaseBackend):
         payload = self._normalize_auth_error_payload(payload)
         body = copy.deepcopy(payload)
         return json.dumps(body, ensure_ascii=False).encode(), body
+
+
+# 向后兼容别名
+ZhipuBackend = ZhipuVendor

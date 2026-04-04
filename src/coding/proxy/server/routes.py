@@ -10,7 +10,9 @@ import httpx
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
 
-from ..backends.base import NoCompatibleBackendError
+from ..vendors.base import NoCompatibleVendorError
+# 向后兼容别名
+NoCompatibleBackendError = NoCompatibleVendorError  # noqa: F401  (deprecated)
 from ..backends.token_manager import TokenAcquireError
 from .responses import (
     extract_stream_http_error,
@@ -24,9 +26,9 @@ logger = logging.getLogger(__name__)
 async def _stream_proxy(router: Any, body: dict, headers: dict) -> Any:
     """流式代理生成器."""
     try:
-        async for chunk, backend_name in router.route_stream(body, headers):
+        async for chunk, vendor_name in router.route_stream(body, headers):
             yield chunk
-    except NoCompatibleBackendError as exc:
+    except NoCompatibleVendorError as exc:
         yield (
             "event: error\n"
             f"data: {json.dumps({'type': 'error', 'error': {'type': 'invalid_request_error', 'message': str(exc), 'details': exc.reasons}}, ensure_ascii=False)}\n\n"
@@ -68,7 +70,7 @@ def register_core_routes(app: Any, router: Any) -> None:
 
         try:
             resp = await router.route_message(body, headers)
-        except NoCompatibleBackendError as exc:
+        except NoCompatibleVendorError as exc:
             return json_error_response(400, error_type="invalid_request_error", message=str(exc), details=exc.reasons)
         except TokenAcquireError as exc:
             return json_error_response(503, error_type="authentication_error", message=str(exc))
@@ -80,23 +82,23 @@ def register_core_routes(app: Any, router: Any) -> None:
     async def count_tokens(request: Request) -> Response:
         """Token 计数 API 透传 — 旁路直通 Anthropic，不经过路由链.
 
-        仅当 Anthropic 主后端启用时可用；其他后端不支持此协议。
+        仅当 Anthropic 主供应商启用时可用；其他供应商不支持此协议。
         """
-        from .factory import _find_anthropic_backend
+        from .factory import _find_anthropic_vendor
 
-        anthropic_backend = _find_anthropic_backend(router)
-        if anthropic_backend is None:
+        anthropic_vendor = _find_anthropic_vendor(router)
+        if anthropic_vendor is None:
             return Response(
-                content=b'{"error":{"type":"not_found","message":"count_tokens requires anthropic backend"}}',
+                content=b'{"error":{"type":"not_found","message":"count_tokens requires anthropic vendor"}}',
                 status_code=404,
                 media_type="application/json",
             )
 
         body = await request.json()
         headers = dict(request.headers)
-        prepared_body, prepared_headers = await anthropic_backend._prepare_request(body, headers)
+        prepared_body, prepared_headers = await anthropic_vendor._prepare_request(body, headers)
 
-        client = anthropic_backend._get_client()
+        client = anthropic_vendor._get_client()
         url = "/v1/messages/count_tokens"
         if request.query_params:
             url = f"{url}?{request.query_params}"
@@ -142,7 +144,7 @@ def register_status_route(app: Any, router: Any) -> None:
             if tier.weekly_quota_guard and tier.weekly_quota_guard.enabled:
                 info["weekly_quota_guard"] = tier.weekly_quota_guard.get_info()
             info["rate_limit"] = tier.get_rate_limit_info()
-            diagnostics = tier.backend.get_diagnostics()
+            diagnostics = tier.vendor.get_diagnostics()
             if diagnostics:
                 info["diagnostics"] = diagnostics
             result["tiers"].append(info)
@@ -151,16 +153,16 @@ def register_status_route(app: Any, router: Any) -> None:
 
 def register_copilot_routes(app: Any, router: Any) -> None:
     """注册 Copilot 诊断与模型探测路由."""
-    from .factory import _find_copilot_backend
+    from .factory import _find_copilot_vendor
 
     @app.get("/api/copilot/diagnostics")
     async def copilot_diagnostics() -> Response:
         """返回 Copilot 认证与交换链路的脱敏诊断信息."""
-        backend = _find_copilot_backend(router)
-        if backend is None:
-            return json_error_response(404, error_type="not_found", message="copilot backend not enabled")
+        vendor = _find_copilot_vendor(router)
+        if vendor is None:
+            return json_error_response(404, error_type="not_found", message="copilot vendor not enabled")
         return Response(
-            content=json.dumps(backend.get_diagnostics(), ensure_ascii=False).encode(),
+            content=json.dumps(vendor.get_diagnostics(), ensure_ascii=False).encode(),
             status_code=200,
             media_type="application/json",
         )
@@ -168,11 +170,11 @@ def register_copilot_routes(app: Any, router: Any) -> None:
     @app.get("/api/copilot/models")
     async def copilot_models() -> Response:
         """按需探测当前 Copilot 会话可见模型列表."""
-        backend = _find_copilot_backend(router)
-        if backend is None:
-            return json_error_response(404, error_type="not_found", message="copilot backend not enabled")
+        vendor = _find_copilot_vendor(router)
+        if vendor is None:
+            return json_error_response(404, error_type="not_found", message="copilot vendor not enabled")
         try:
-            probe = await backend.probe_models()
+            probe = await vendor.probe_models()
         except TokenAcquireError as exc:
             return json_error_response(503, error_type="authentication_error", message=str(exc))
         except (httpx.TimeoutException, httpx.ConnectError) as exc:

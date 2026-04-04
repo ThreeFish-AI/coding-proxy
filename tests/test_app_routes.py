@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from coding.proxy.backends.token_manager import TokenAcquireError
-from coding.proxy.backends.base import BackendResponse, UsageInfo
+from coding.proxy.vendors.base import VendorResponse as BackendResponse, UsageInfo
 from coding.proxy.config.schema import ProxyConfig
 from coding.proxy.server.app import create_app
 
@@ -46,7 +46,7 @@ def test_get_root_returns_200():
 
 
 def test_count_tokens_no_anthropic_returns_404():
-    """Anthropic 后端未启用时 count_tokens 返回 404."""
+    """Anthropic 供应商未启用时 count_tokens 返回 404"""
     with _make_app(primary_enabled=False) as client:
         resp = client.post(
             "/v1/messages/count_tokens",
@@ -58,7 +58,7 @@ def test_count_tokens_no_anthropic_returns_404():
 
 
 def test_count_tokens_proxies_to_anthropic():
-    """count_tokens 正确透传到 Anthropic 后端."""
+    """count_tokens 正确透传到 Anthropic 供应商."""
     mock_response = MagicMock()
     mock_response.content = b'{"input_tokens": 42}'
     mock_response.status_code = 200
@@ -109,7 +109,7 @@ def test_count_tokens_upstream_error_passthrough():
 
 
 def test_status_exposes_backend_diagnostics():
-    """状态接口暴露后端诊断信息，便于排查凭证交换异常."""
+    """状态接口暴露供应商诊断信息，便于排查凭证交换异常."""
     config = ProxyConfig(
         copilot={"enabled": True, "github_token": "ghu_test"},
         fallback={"enabled": True},
@@ -119,7 +119,7 @@ def test_status_exposes_backend_diagnostics():
 
     for tier in app.state.router.tiers:
         if tier.name == "copilot":
-            tier.backend._token_manager._record_error(  # type: ignore[attr-defined]
+            tier.vendor._token_manager._record_error(  # type: ignore[attr-defined]
                 TokenAcquireError("Copilot token 交换返回非预期响应")
             )
             break
@@ -133,7 +133,7 @@ def test_status_exposes_backend_diagnostics():
         assert "非预期响应" in copilot["diagnostics"]["token_manager"]["last_error"]
 
 
-def test_copilot_diagnostics_endpoint_returns_backend_info():
+def test_copilot_diagnostics_endpoint_returns_vendor_info():
     config = ProxyConfig(
         copilot={"enabled": True, "github_token": "ghu_test"},
         fallback={"enabled": True},
@@ -164,7 +164,7 @@ def test_copilot_models_endpoint_returns_probe_data():
 
     for tier in app.state.router.tiers:
         if tier.name == "copilot":
-            tier.backend.probe_models = AsyncMock(return_value={  # type: ignore[method-assign]
+            tier.vendor.probe_models = AsyncMock(return_value={  # type: ignore[method-assign]
                 "probe_status": "ok",
                 "available_models": ["claude-opus-4.6"],
                 "has_claude_opus_4_6": True,
@@ -178,11 +178,11 @@ def test_copilot_models_endpoint_returns_probe_data():
 
 
 def test_incompatible_request_returns_400():
-    """当所有可用后端都无法保持请求语义时，返回明确错误而不是误降级.
+    """当所有可用供应商都无法保持请求语义时，返回明确错误而不是误降级.
 
-    通过 patch 后端能力声明模拟不兼容场景，验证 NoCompatibleBackendError → 400。
+    通过 patch 供应商能力声明模拟不兼容场景，验证 NoCompatibleVendorError → 400。
     """
-    from coding.proxy.backends.base import BackendCapabilities
+    from coding.proxy.vendors.base import VendorCapabilities as BackendCapabilities
 
     config = ProxyConfig(
         primary={"enabled": False},
@@ -191,7 +191,7 @@ def test_incompatible_request_returns_400():
     )
     app = create_app(config)
 
-    # Patch 唯一可用后端的能力声明，使其拒绝 thinking 请求
+    # Patch 唯一可用供应商的能力声明，使其拒绝 thinking 请求
     restrictive_caps = BackendCapabilities(
         supports_tools=True,
         supports_thinking=False,
@@ -199,7 +199,7 @@ def test_incompatible_request_returns_400():
         supports_metadata=True,
     )
     with patch.object(
-        type(app.state.router.tiers[0].backend),
+        type(app.state.router.tiers[0].vendor),
         "get_capabilities",
         return_value=restrictive_caps,
     ):
@@ -375,8 +375,8 @@ def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
     """reset 只清状态，不改 tier 顺序；下一次请求仍先尝试首层."""
     config = ProxyConfig(
         tiers=[
-            {"backend": "anthropic", "enabled": True, "circuit_breaker": {"failure_threshold": 3}},
-            {"backend": "zhipu", "enabled": True, "api_key": "sk-test"},
+            {"vendor": "anthropic", "enabled": True, "circuit_breaker": {"failure_threshold": 3}},
+            {"vendor": "zhipu", "enabled": True, "api_key": "sk-test"},
         ],
         database={"path": "/tmp/test-coding-proxy-routes.db"},
     )
@@ -391,8 +391,8 @@ def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
         call_order.append("zhipu")
         return BackendResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
 
-    app.state.router.tiers[0].backend.send_message = primary_route_message
-    app.state.router.tiers[1].backend.send_message = fallback_route_message
+    app.state.router.tiers[0].vendor.send_message = primary_route_message
+    app.state.router.tiers[1].vendor.send_message = fallback_route_message
 
     with TestClient(app) as client:
         reset_resp = client.post("/api/reset")
