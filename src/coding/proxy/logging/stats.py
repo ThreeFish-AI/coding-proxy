@@ -58,7 +58,7 @@ async def show_usage(
 ) -> None:
     """展示 Token 使用统计."""
     console = Console()
-    rows = await logger.query_daily(days=days, backend=backend, model=model)
+    rows = await logger.query_daily(days=days, vendor=backend, model=model)
 
     if not rows:
         console.print("[yellow]暂无使用记录[/yellow]")
@@ -85,7 +85,7 @@ async def show_usage(
         total_cache_read = row.get("total_cache_read", 0) or 0
         total_tokens = total_input + total_output + total_cache_creation + total_cache_read
 
-        backend_name = str(row.get("backend", ""))
+        backend_name = str(row.get("vendor", ""))
         model_served = str(row.get("model_served", ""))
         if pricing_table is not None:
             cost_value = pricing_table.compute_cost(
@@ -123,7 +123,7 @@ async def show_usage(
         ft_table.add_column("次数", justify="right", style="red")
         for stat in failover_stats:
             source = stat.get("failover_from") or "unknown"
-            target = stat.get("backend", "")
+            target = stat.get("vendor", "")
             count = stat.get("count", 0)
             ft_table.add_row(source, target, str(count))
         console.print(ft_table)
