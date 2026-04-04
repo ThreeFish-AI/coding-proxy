@@ -154,7 +154,8 @@ class ProxyConfig(BaseModel):
 
         # 2. 若已有 vendors 配置则直接使用，跳过自动迁移
         #    同时支持旧的 tiers 字段名（向后兼容 YAML）
-        if data.get("vendors") or data.get("tiers"):
+        #    使用 key 存在性检测（而非真值检测），以正确处理 vendors: [] 等显式空配置
+        if "vendors" in data or "tiers" in data:
             # 如果用户使用了旧的 tiers 字段名但实际是 vendor 定义列表，重映射
             if "tiers" in data and "vendors" not in data and isinstance(data["tiers"], list):
                 # 检测是否为新格式的 vendor 定义列表（每项有 vendor/backend 字段）
