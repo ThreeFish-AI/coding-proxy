@@ -61,7 +61,7 @@ def _local_date_udf(ts_str: str) -> str:
         return ""
 
 
-_CREATE_TABLE = """
+_CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS usage_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -78,8 +78,6 @@ CREATE TABLE IF NOT EXISTS usage_log (
     failover_from TEXT DEFAULT NULL,
     request_id TEXT DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_log(ts);
-CREATE INDEX IF NOT EXISTS idx_usage_vendor ON usage_log(vendor);
 CREATE TABLE IF NOT EXISTS usage_evidence (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -95,6 +93,11 @@ CREATE TABLE IF NOT EXISTS usage_evidence (
     cache_signal_present BOOLEAN NOT NULL DEFAULT 0,
     source_field_map_json TEXT NOT NULL DEFAULT '{}'
 );
+"""
+
+_CREATE_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_log(ts);
+CREATE INDEX IF NOT EXISTS idx_usage_vendor ON usage_log(vendor);
 CREATE INDEX IF NOT EXISTS idx_usage_evidence_request_id ON usage_evidence(request_id);
 CREATE INDEX IF NOT EXISTS idx_usage_evidence_vendor ON usage_evidence(vendor);
 """
@@ -110,11 +113,13 @@ class TokenLogger:
         self._db = await aiosqlite.connect(str(self._db_path))
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
-        await self._db.executescript(_CREATE_TABLE)
+        await self._db.executescript(_CREATE_TABLES)
+        # 迁移必须在建索引之前执行，确保 vendor 列已存在
+        await self._migrate_rename_backend_to_vendor()
+        await self._migrate_add_failover_from()
+        await self._db.executescript(_CREATE_INDEXES)
         # 注册时区感知的日期函数：将 UTC 时间戳转为本地日期
         await self._db.create_function("local_date", 1, _local_date_udf)
-        await self._migrate_add_failover_from()
-        await self._migrate_rename_backend_to_vendor()
         await self._db.commit()
 
     async def _migrate_add_failover_from(self) -> None:
