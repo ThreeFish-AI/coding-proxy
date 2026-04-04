@@ -55,6 +55,11 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
       - name: Install build dependencies
         run: uv pip install --system build twine
 
