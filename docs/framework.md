@@ -4,6 +4,8 @@
 >
 > **版本**：v2 — 反映当前代码库实际架构（vendors 主架构 + 正交分解路由系统）。
 
+[TOC]
+
 ---
 
 ## 1. 项目概述
@@ -158,6 +160,29 @@ graph TD
 
 ## 3. 设计模式详解
 
+本章涵盖 coding-proxy 中运用的 **13 种设计模式与工程模式**，按职责域正交分为三类：**创建型**（对象构建策略）、**结构型**（组件组织方式）、**行为型与并发**（运行时行为控制）。
+
+```mermaid
+mindmap
+  root((设计模式))
+    创建型
+      Strategy + Factory
+      Template Method
+    结构型
+      Proxy :: 整体架构
+      Adapter :: Vendor层
+      Composite :: VendorTier
+      Facade :: RequestRouter
+    行为型/并发
+      Circuit Breaker
+      Priority Chain
+      State Machine :: QuotaGuard
+      Double-Check Locking
+      Capability Routing
+      Retry Full Jitter
+      Rate Limit Deadline
+```
+
 ### 3.1 Template Method（模板方法模式）
 
 > **经典出处**：GoF《Design Patterns: Elements of Reusable Object-Oriented Software》<sup>[[1]](#ref1)</sup> — 定义算法骨架，将某些步骤延迟到子类实现。
@@ -168,26 +193,59 @@ graph TD
 
 `BaseVendor` 定义了请求处理的算法骨架，将差异化的逻辑延迟到子类：
 
-```
-BaseVendor（模板）
-├── send_message()          ← 固定流程：pre_check → prepare → post → parse response
-├── send_message_stream()   ← 固定流程：pre_check → prepare → stream → yield chunks
-│
-├── get_name()              ← 【抽象】子类返回供应商标识
-├── _prepare_request()      ← 【抽象·异步】子类实现请求转换（支持 token 刷新等异步操作）
-│
-├── map_model()             ← 【钩子】模型名称映射（默认恒等映射）
-├── _get_endpoint()         ← 【钩子】API 端点路径（默认 /v1/messages）
-├── _pre_send_check()       ← 【钩子】发送前快速失败检查
-├── _normalize_error_response() ← 【钩子】错误响应归一化
-├── _on_error_status()      ← 【钩子】错误状态码处理（如 token 失效标记）
-│
-├── get_capabilities()      ← 能力声明（默认全支持）
-├── supports_request()       ← 能力匹配判断
-├── make_compatibility_decision() ← 兼容性决策（三态：NATIVE/SIMULATED/UNSAFE）
-├── check_health()          ← 【钩子】健康探测（默认返回 True）
-├── should_trigger_failover() ← 基于 FailoverConfig 判断故障转移
-└── close()                 ← 公共逻辑：关闭 HTTP 客户端
+```mermaid
+classDiagram
+    direction TB
+
+    class BaseVendor {
+        <<abstract>>
+        +send_message() VendorResponse
+        +send_message_stream() AsyncIterator
+        +get_name()* str
+        +_prepare_request()* tuple
+        +map_model() str
+        +_get_endpoint() str
+        +_pre_send_check()
+        +_normalize_error_response()
+        +_on_error_status()
+        +get_capabilities() VendorCapabilities
+        +supports_request() tuple
+        +make_compatibility_decision() CompatibilityDecision
+        +check_health() bool
+        +should_trigger_failover() bool
+        +close()
+    }
+
+    class AnthropicVendor {
+        _prepare_request() 过滤 hop-by-hop 头
+    }
+
+    class CopilotVendor {
+        _prepare_request() 过滤头+异步token注入
+        _on_error_status() 401/403 token失效
+    }
+
+    class AntigravityVendor {
+        _prepare_request() Gemini格式转换+OAuth
+        check_health() OAuth有效性检查
+        _on_error_status() 401/403 token失效
+    }
+
+    class ZhipuVendor {
+        _prepare_request() 模型映射+API Key
+        map_model() claude-* → glm-*
+    }
+
+    BaseVendor <|-- AnthropicVendor
+    BaseVendor <|-- CopilotVendor
+    BaseVendor <|-- AntigravityVendor
+    BaseVendor <|-- ZhipuVendor
+
+    style BaseVendor fill:#1a5276,color:#fff
+    style AnthropicVendor fill:#2874a6,color:#fff
+    style CopilotVendor fill:#2874a6,color:#fff
+    style AntigravityVendor fill:#2874a6,color:#fff
+    style ZhipuVendor fill:#7b241c,color:#fff
 ```
 
 四个具体 Vendor 子类的差异化实现：
@@ -209,19 +267,21 @@ BaseVendor（模板）
 
 **状态机**：
 
-```
-                  连续 N 次失败
- ┌────────┐ ──────────────────→ ┌────────┐
- │ CLOSED │                     │  OPEN  │ ◄──┐
- │ (正常)  │                     │ (熔断)  │    │
- └────────┘                     └───┬────┘    │
-      ▲                             │          │
-      │ 连续 M 次成功      超时恢复  │          │ 失败（退避×2）
-      │                             ▼          │
-      │                       ┌──────────┐     │
-      └───────────────────────│HALF_OPEN │─────┘
-                              │ (试探)    │
-                              └──────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> CLOSED
+
+    CLOSED --> OPEN : 连续 N 次失败\n(failure_threshold)
+    note right of OPEN : 熔断状态 — 快速失败
+
+    OPEN --> HALF_OPEN : 超时恢复\n(recovery_timeout_seconds)
+
+    HALF_OPEN --> CLOSED : 连续 M 次成功\n(success_threshold)
+    note right of HALF_OPEN : 试探状态
+
+    HALF_OPEN --> OPEN : 任意一次失败\n(退避 × 2)
+
+    CLOSED --> [*]
 ```
 
 **状态转换条件**：
@@ -245,23 +305,24 @@ BaseVendor（模板）
 
 ModelMapper 采用三级优先级匹配链，按精确度递减依次尝试：
 
-```
-输入模型名称
-    │
-    ▼
- 1. 精确匹配（Exact Match）
-    │ pattern == model（无通配符、非正则）
-    ├─ 命中 → 返回 target
-    │
-    ▼
- 2. 模式匹配（Regex / Glob Match）
-    │ is_regex=true → re.fullmatch()
-    │ 含 * → fnmatch.fnmatch()
-    ├─ 命中 → 返回 target
-    │
-    ▼
- 3. 默认值（Default Fallback）
-    └─ 返回 "glm-5.1"
+```mermaid
+flowchart TD
+    A["输入模型名称"] --> B{"① 精确匹配<br/>pattern == model"}
+
+    B -- "命中" --> C["返回 target"]
+    B -- "未命中" --> D{"② 模式匹配<br/>Regex / Glob"}
+
+    D -- "is_regex=true" --> E["re.fullmatch()"]
+    D -- "含 *" --> F["fnmatch.fnmatch()"]
+    E --> G{"命中?"}
+    F --> G
+
+    G -- "是" --> C
+    G -- "否" --> H["③ 默认回退<br/>返回 glm-5.1"]
+
+    style A fill:#1a5276,color:#fff
+    style C fill:#196f3d,color:#fff
+    style H fill:#7b241c,color:#fff
 ```
 
 **默认映射规则**：
@@ -283,38 +344,44 @@ ModelMapper 采用三级优先级匹配链，按精确度递减依次尝试：
 
 **组装顺序**（两阶段构建）：
 
-```
-create_app(config)
-    │
-    ├─ 阶段一：构建 vendor_name → VendorTier 映射表（与顺序无关）
-    │   for vendor_cfg in config.vendors:
-    │     vendor = _create_vendor_from_config(vendor_cfg, ...)
-    │     │   match vendor_cfg.vendor:
-    │     │     "anthropic" → AnthropicVendor(cfg, failover_cfg)
-    │     │     "copilot"   → CopilotVendor(cfg, failover_cfg, mapper)
-    │     │               + _resolve_copilot_credentials(cfg, token_store)
-    │     │     "antigravity"→ AntigravityVendor(cfg, failover_cfg, mapper)
-    │     │               + _resolve_antigravity_credentials(cfg, token_store)
-    │     │     "zhipu"     → ZhipuVendor(cfg, mapper)
-    │     cb = _build_circuit_breaker(vendor_cfg.circuit_breaker)
-    │     qg = _build_quota_guard(vendor_cfg.quota_guard)
-    │     wqg = _build_quota_guard(vendor_cfg.weekly_quota_guard)
-    │     _vendor_map[name] = VendorTier(vendor, cb, qg, wqg)
-    │
-    ├─ 阶段二：按 tiers 显式排序（或回退 vendors 原始顺序）
-    │   if config.tiers:
-    │     tiers = [_vendor_map[name] for name in config.tiers]
-    │   else:
-    │     tiers = [_vendor_map[v.vendor] for v in config.vendors if v.enabled]
-    │
-    ├─ 构建 RuntimeReauthCoordinator（若有 OAuth provider）
-    │
-    └─ RequestRouter(tiers, token_logger, reauth_coordinator, compat_session_store)
+```mermaid
+flowchart TD
+    Start["create_app(config)"] --> Phase1
+
+    subgraph Phase1 ["阶段一：构建 vendor → VendorTier 映射表"]
+        direction TB
+        P1_Loop["for vendor_cfg in config.vendors"] --> Match["match vendor_cfg.vendor"]
+        Match --> A["anthropic → AnthropicVendor"]
+        Match --> B["copilot → CopilotVendor<br/>+ 凭证解析"]
+        Match --> C["antigravity → AntigravityVendor<br/>+ 凭证解析"]
+        Match --> D["zhipu → ZhipuVendor"]
+        A & B & C & D --> BuildCB["_build_circuit_breaker()"]
+        BuildCB --> BuildQG["_build_quota_guard()"]
+        BuildQG --> Map["_vendor_map[name] =<br/>VendorTier(vendor, cb, qg, wqg)"]
+        Map --> P1_Loop
+    end
+
+    Phase1 --> Phase2
+
+    subgraph Phase2 ["阶段二：按 tiers 显式排序"]
+        direction TB
+        HasTiers{"config.tiers<br/>存在?"}
+        HasTiers -- "是" --> Explicit["tiers = [_vendor_map[name]<br/>for name in config.tiers]"]
+        HasTiers -- "否" --> Implicit["tiers = vendors 原始顺序"]
+    end
+
+    Phase2 --> Phase3["构建 RuntimeReauthCoordinator<br/>（若有 OAuth provider）"]
+    Phase3 --> Final["RequestRouter(tiers, ...)"]
+
+    style Start fill:#1a5276,color:#fff
+    style Final fill:#196f3d,color:#fff
+    style Phase1 fill:#2e4053,color:#fff
+    style Phase2 fill:#2e4053,color:#fff
 ```
 
 **凭证合并优先级**：Token Store（持久化） > config.yaml（显式配置）。确保用户通过 CLI 认证命令获取的凭证优先于配置文件中的硬编码值。
 
-### 3.5 Proxy（代理模式）
+### 3.5 Proxy（代理模式）— 整体架构
 
 > **经典出处**：GoF《Design Patterns》<sup>[[1]](#ref1)</sup> — 为其他对象提供一种代理以控制对这个对象的访问。
 
@@ -338,17 +405,29 @@ coding-proxy 本身即是一个代理服务：
 
 VendorTier 将多个正交关注点聚合为路由器的最小调度单元：
 
-```
-┌─────────────────────┐
-│     VendorTier      │ ← 路由器的最小调度单元
-├─────────────────────┤
-│ vendor              │ ← BaseVendor 实例（实际请求执行）
-│ circuit_breaker     │ ← CircuitBreaker | None（弹性熔断）
-│ quota_guard         │ ← QuotaGuard | None（日度配额管控）
-│ weekly_quota_guard  │ ← QuotaGuard | None（周度配额管控）
-│ retry_config        │ ← RetryConfig（重试策略参数）
-│ _rate_limit_deadline │ ← float（Rate Limit 精确截止时间戳）
-└─────────────────────┘
+```mermaid
+classDiagram
+    class VendorTier {
+        <<dataclass>>
+        -vendor : BaseVendor
+        -circuit_breaker : CircuitBreaker | None
+        -quota_guard : QuotaGuard | None
+        -weekly_quota_guard : QuotaGuard | None
+        -retry_config : RetryConfig | None
+        -_rate_limit_deadline : float
+        --
+        +name : str
+        +is_terminal : bool
+        +can_execute() bool
+        +can_execute_with_health_check() bool
+        +record_success(usage_tokens)
+        +record_failure(...)
+        +is_rate_limited : bool
+    }
+
+    note for VendorTier "路由器的最小调度单元\n聚合 vendor + CB + QG + WQG + Retry + RL"
+
+    style VendorTier fill:#1a5276,color:#fff
 ```
 
 **关键方法**：
@@ -371,15 +450,17 @@ VendorTier 将多个正交关注点聚合为路由器的最小调度单元：
 
 基于滑动窗口的双态状态机，通过 Token 预算追踪主动避免触发上游配额限制：
 
-```
-                 窗口用量 >= budget x threshold%
-                 或检测到 cap error
- +-----------------------+  -------------------------->
- | WITHIN_QUOTA           |                        | QUOTA_EXCEEDED   |
- | （正常）                |                        | （超限）          |
- +-----------------------+  <-------------------------+
-                 窗口用量自然滑出 < threshold%
-                 或探测请求成功
+```mermaid
+stateDiagram-v2
+    [*] --> WITHIN_QUOTA
+
+    WITHIN_QUOTA --> QUOTA_EXCEEDED : 窗口用量 >= budget × threshold%\n或检测到 cap error
+    note right of QUOTA_EXCEEDED : 超限状态 — 仅允许探测请求
+
+    QUOTA_EXCEEDED --> WITHIN_QUOTA : 窗口自然滑出 < threshold%\n或探测请求成功
+
+    WITHIN_QUOTA --> [*]
+    QUOTA_EXCEEDED --> [*]
 ```
 
 **核心机制**：
@@ -459,7 +540,7 @@ graph LR
 
 这种正交 decomposition 使得每个子组件可以独立演进和测试，同时 `RequestRouter` 保持对外接口稳定。
 
-### 3.10 Adapter（适配器模式）
+### 3.10 Adapter（适配器模式）— Vendor 层
 
 > **经典出处**：GoF《Design Patterns》<sup>[[1]](#ref1)</sup> — 将一个类的接口转换成客户期望的另一个接口。
 
@@ -497,19 +578,14 @@ graph LR
 
 基于请求能力画像与供应商能力声明的正交匹配矩阵，在路由阶段即排除无法无损承接请求的层级：
 
-```
-                    VendorCapabilities（供应商声明）
-                    +------+-------+------+---------+----------+
-                    |tools |think |images|metadata |vend_tools|
-        +----------+------+------+------+---------+----------+
-Request  | tools     |  OK   |      |      |         |  X(skip) |
-Caps    | thinking |      |  OK   |      |         |          |
-        | images    |      |      |  OK   |         |          |
-        | metadata  |      |      |      |  OK     |          |
-        +----------+------+------+------+---------+----------+
+| 维度 \ 能力 | `tools` | `thinking` | `images` | `metadata` | `vend_tools` |
+|:-----------|:-------:|:----------:|:--------:|:----------:|:------------:|
+| **tools** | ✅ OK | — | — | — | ❌ skip |
+| **thinking** | — | ✅ OK | — | — | — |
+| **images** | — | — | ✅ OK | — | — |
+| **metadata** | — | — | — | ✅ OK | — |
 
-OK = 可承接   X = CapabilityLossReason（跳过此 tier）
-```
+> ✅ = 可承接；❌ = `CapabilityLossReason`（跳过此 tier）
 
 **匹配流程**：
 
@@ -552,16 +628,13 @@ OK = 可承接   X = CapabilityLossReason（跳过此 tier）
 
 **Full Jitter 计算**：
 
-```
-delay = random(0, min(initial_delay x backoff^attempt, max_delay))
+$$
+\text{delay} = \text{random}\left(0,\; \min\left(\text{initial\_delay} \times \text{backoff}^{\text{attempt}},\; \text{max\_delay}\right)\right)
+$$
 
-默认配置：
-  max_retries = 2
-  initial_delay_ms = 500
-  max_delay_ms = 5000
-  backoff_multiplier = 2.0
-  jitter = True
-```
+| 参数 | `max_retries` | `initial_delay_ms` | `max_delay_ms` | `backoff_multiplier` | `jitter` |
+|------|:---:|:---:|:---:|:---:|:---:|
+| 默认值 | 2 | 500 | 5000 | 2.0 | ✅ true |
 
 **可重试异常判定**（`is_retryable_error()`）：
 
@@ -601,23 +674,27 @@ delay = random(0, min(initial_delay x backoff^attempt, max_delay))
 
 `can_execute_with_health_check()` 方法实现了三层渐进式恢复机制：
 
-```
-can_execute_with_health_check()
-    |
-    +- 第一层：Rate Limit Deadline 门控（最快路径）
-    |   +- _rate_limit_deadline > now? -> 直接拒绝（~0 开销）
-    |
-    +- 第二层：CB + QG + WQG 综合判断
-    |   +- 全部拒绝？ -> 直接跳过
-    |
-    +- 探测场景检测（CB=HALF_OPEN 或 QG=QUOTA_EXCEEDED 但允许探测）
-    |
-    +- 第三层：Health Check（慢路径，仅探测场景）
-    |   +- vendor.check_health()?
-    |       +- False -> record_failure() -> 拒绝
-    |       +- True  -> 放行（Cautious Probe）
-    |
-    +- 非探测场景 -> 直接返回 CB && QG && WQG 综合结果
+```mermaid
+flowchart TD
+    Entry["can_execute_with_health_check()"] --> L1{"第一层<br/>Rate Limit Deadline"}
+    L1 -- "_deadline > now?<br/>YES" --> Reject["直接拒绝<br/>(~0 开销)"]
+    L1 -- "NO" --> L2{"第二层<br/>CB + QG + WQG<br/>综合判断"}
+
+    L2 -- "全部拒绝" --> Skip["直接跳过"]
+    L2 -- "至少一个允许" --> ProbeCheck{"探测场景?<br/>CB=HALF_OPEN 或<br/>QG=QUOTA_EXCEEDED"}
+
+    ProbeCheck -- "否" --> Result["返回综合结果"]
+    ProbeCheck -- "是" --> L3{"第三层<br/>Health Check<br/>(慢路径)"}
+
+    L3 -- "check_health()<br/>= False" --> FailRec["record_failure()<br/>→ 拒绝"]
+    L3 -- "= True" --> Pass["放行<br/>(Cautious Probe)"]
+
+    style Entry fill:#1a5276,color:#fff
+    style Reject fill:#7b241c,color:#fff
+    style Pass fill:#196f3d,color:#fff
+    style FailRec fill:#7b241c,color:#fff
+    style Skip fill:#7b241c,color:#fff
+    style Result fill:#2874a6,color:#fff
 ```
 
 ---
@@ -626,75 +703,79 @@ can_execute_with_health_check()
 
 ### 4.1 完整请求流程
 
-```
-Client POST /v1/messages
-        |
-        v
- server.routes.messages()
-        |
-        +- body = await request.json()
-        +- normalization = normalize_anthropic_request(body)  <-- [NEW] 请求标准化
-        |   +- 清洗供应商私有块（server_tool_use 等）
-        |   +- 重写非标准 tool_use_id
-        |
-        +- stream=true  ---> route_stream()
-        +- streamfalse ---> route_message()
-                |
-                v
-     build_canonical_request(body, headers)                  <-- [NEW] 规范化请求
-     build_request_capabilities(body)                        <-- [NEW] 能力画像
-                |
-                v
-     +-- for tier in tiers -------------------------------------+
-     |                                                        |
-     | (1) supports_request(request_caps)?                   <-- [NEW] 能力匹配
-     |   = VendorCapabilities intersection RequestCapabilities
-     |    |                                                   |
-     |   +- FAIL -> skip, collect incompatible_reasons     |
-     |    |                                                   |
-     | (2) make_compatibility_decision(canonical)?           <-- [NEW] 兼容性决策
-     |    |                                                   |
-     |   +- UNSAFE -> skip                                    |
-     |   +- SIMULATED -> 记录 simulation_actions           |
-     |   +- NATIVE -> 继续                                     |
-     |    |                                                   |
-     | (3) apply_compat_context()                            <-- [NEW] 应用兼容上下文
-     |    |                                                   |
-     | (4) can_execute_with_health_check()?                 <-- [UPDATED] 三层门控
-     |    = RL_deadline? -> skip                              |
-     |      CB ^ QG ^ WQG?                                   |
-     |      探测场景? -> health_check -> cautious_probe       |
-     |    |                                                   |
-     |   +----+----+                                          |
-     |   |eligible | skipped                                   |
-     |   v          |                                           |
-     | tier.vendor                                              |
-     | .send_xxx()                                              |
-     |   |                                                     |
-     | +--+--+                                                |
-     | |成功 | 失败                                             |
-     | |    |                                                  |
-     | | +- TokenAcquireError                                 |
-     | | |  -> handle_token_error() + reauth_coordinator        |
-     | | |                                                    |
-     | | +- HTTP Error                                         |
-     | | |  +- semantic rejection (400) -> skip (no fail)       |
-     | | |  +- should_trigger_failover?                         |
-     | | | |  -> record_failure(+rl_deadline) -> next            |
-     | | |  +- else -> return error                              |
-     | | |                                                    |
-     | | +- Connection Error -> record_failure() -> next       |
-     | |                                                     |
-     | | SUCCESS PATH:                                        |
-     | | -> UsageRecorder.log_model_call() [+pricing]            |
-     | | -> RouteSessionManager.persist_session()               |
-     | | -> UsageRecorder.record() -> TokenLogger                |
-     | | -> return                                             |
-     +--+----------------------------------------+-----------+
-       |    |
-       v    v
-  NoCompatibleVendorError    Response --> Client
-  (含 incompatible_reasons)
+```mermaid
+flowchart TD
+    Client["Client POST /v1/messages"] --> Server["server.routes.messages()"]
+
+    subgraph Normalize ["请求标准化"]
+        Body["body = await request.json()"]
+        Norm["normalize_anthropic_request(body)<br/>清洗私有块 + 重写 tool_use_id"]
+        Body --> Norm
+    end
+
+    Server --> Normalize
+    Norm --> RouteType{"stream?"}
+
+    RouteType -- "true" --> StreamRoute["route_stream()"]
+    RouteType -- "false" --> MsgRoute["route_message()"]
+
+    StreamRoute & MsgRoute --> BuildReq["build_canonical_request()<br/>+ build_request_capabilities()"]
+
+    subgraph TierLoop ["Tier 迭代循环"]
+        BuildReq --> LoopStart["for tier in tiers"]
+
+        LoopStart --> Step1{"① supports_request()<br/>能力匹配"}
+        Step1 -- FAIL --> CollectSkip["collect incompatible_reasons"]
+        CollectSkip --> NextTier1["→ next tier"]
+
+        Step1 -- PASS --> Step2{"② compatibility_decision()<br/>兼容性决策"}
+        Step2 -- UNSAFE --> NextTier2["→ skip"]
+        Step2 -- SIMULATED --> RecordSim["记录 simulation_actions"]
+        Step2 -- NATIVE --> ContinuePath
+        RecordSim --> ContinuePath
+
+        ContinuePath --> Step3["③ apply_compat_context()"]
+        Step3 --> Step4{"④ can_execute_with_health_check()<br/>三层门控"}
+
+        Step4 -- RL_deadline --> SkipRL["skip"]
+        Step4 -- CB_QG_WQG_reject --> SkipGate["skip"]
+        Step4 -- eligible --> Execute["tier.vendor.send_xxx()"]
+        SkipRL & SkipGate --> NextTier3["→ next tier"]
+    end
+
+    Execute --> ResultCheck{"执行结果?"}
+
+    subgraph ErrHandle ["错误处理分支"]
+        ResultCheck -- TokenAcquireError --> HandleToken["handle_token_error()<br/>+ reauth_coordinator"]
+        HandleToken --> NextTier4["→ next tier"]
+
+        ResultCheck -- HTTP_Error --> SemReject{"语义拒绝?<br/>400 + invalid_request"}
+        SemReject -- YES --> SkipNoFail["skip (no fail)"]
+        SemReject -- NO --> ShouldFailover{"should_trigger_failover()?"}
+        ShouldFailover -- YES --> RecFail["record_failure(+rl_deadline)<br/>→ next tier"]
+        ShouldFailover -- NO --> ReturnErr["return error"]
+
+        ResultCheck -- ConnError --> RecFail2["record_failure()<br/>→ next tier"]
+    end
+
+    subgraph SuccessPath ["成功路径"]
+        ResultCheck -- SUCCESS --> LogPricing["UsageRecorder.log_model_call()<br/>(+pricing)"]
+        LogPricing --> PersistSession["RouteSessionManager.<br/>persist_session()"]
+        PersistSession --> RecordUsage["UsageRecorder.record()<br/>→ TokenLogger"]
+        RecordUsage --> ReturnResp["Response → Client"]
+    end
+
+    LoopStart -.-> NoCompat["NoCompatibleVendorError<br/>(含 incompatible_reasons)"]
+    NoCompat --> ReturnErr2["Error Response → Client"]
+
+    style Client fill:#1a5276,color:#fff
+    style Server fill:#1a5276,color:#fff
+    style ReturnResp fill:#196f3d,color:#fff
+    style ReturnErr2 fill:#7b241c,color:#fff
+    style TierLoop fill:#2e4053,color:#fff
+    style ErrHandle fill:#4a235a,color:#fff
+    style SuccessPath fill:#196f3d,color:#fff
+    style Normalize fill:#2874a6,color:#fff
 ```
 
 ### 4.2 流式请求处理
@@ -879,12 +960,15 @@ class VendorCapabilities:
 | **AntigravityVendor** | [`vendors/antigravity.py`](../src/coding/proxy/vendors/antigravity.py) | Gemini GenerateContent | Google OAuth2 refresh_token | 不支持 tools/thinking/metadata；覆写 health check |
 | **ZhipuVendor** | [`vendors/zhipu.py`](../src/coding/proxy/vendors/zhipu.py) | Anthropic-compatible API | x-api-key | 不支持 thinking/images/metadata；覆写 map_model |
 
-**向后兼容别名**（保留在 `vendors/base.py` 末尾，标注 deprecated）：
+**向后兼容别名汇总**（均标记 `deprecated`，保障迁移期兼容性）：
 
-```python
-BaseBackend = BaseVendor              # deprecated
-NoCompatibleBackendError = NoCompatibleVendorError  # deprecated
-```
+| 旧名称 | 新名称 | 定义位置 |
+|--------|--------|----------|
+| `BaseBackend` | `BaseVendor` | `vendors/base.py` |
+| `NoCompatibleBackendError` | `NoCompatibleVendorError` | `vendors/base.py` |
+| `BackendTier` | `VendorTier` | `routing/tier.py` |
+| `BackendCapabilities` | `VendorCapabilities` | `model/vendor.py` |
+| `BackendResponse` | `VendorResponse` | `model/vendor.py` |
 
 ### 5.2 routing/ -- 路由模块
 
@@ -901,7 +985,7 @@ class VendorTier:
     _rate_limit_deadline: float = 0.0               # Rate Limit 截止 monotonic 时间戳
 ```
 
-**向后兼容别名**：`BackendTier = VendorTier`（deprecated）
+**向后兼容别名**：`BackendTier = VendorTier`（deprecated，详见 [§5.1 别名汇总表](#51-vendors--供应商模块主架构)）
 
 #### 5.2.2 _RouteExecutor（[`routing/executor.py`](../src/coding/proxy/routing/executor.py)）
 
@@ -1073,12 +1157,11 @@ class CompatibilityDecision:
 
 | 子模块 | 文件 | 核心类型 |
 |--------|------|----------|
-| **vendor** | [`model/vendor.py`](../src/coding/proxy/model/vendor.py) | `UsageInfo`, `VendorResponse`, `NoCompatibleVendorError`, `RequestCapabilities`, `VendorCapabilities`, `CapabilityLossReason`, Copilot 诊断类, 工具函数 |
+| **vendor** | [`model/vendor.py`](../src/coding/proxy/model/vendor.py) | `UsageInfo`, `VendorResponse`, `NoCompatibleVendorError`, `RequestCapabilities`, `VendorCapabilities`, `CapabilityLossReason`, 兼容别名（`Backend*`），Copilot 诊断类, 工具函数 |
 | **compat** | [`model/compat.py`](../src/coding/proxy/model/compat.py) | `CanonicalRequest`, `CanonicalMessagePart`, `CanonicalThinking`, `CanonicalToolCall`, `CompatibilityDecision`, `CompatibilityProfile`, `CompatibilityStatus`, `CompatibilityTrace` |
 | **constants** | [`model/constants.py`](../src/coding/proxy/model/constants.py) | `PROXY_SKIP_HEADERS`, `RESPONSE_SANITIZE_SKIP_HEADERS` 等常量 |
 | **pricing** | [`model/pricing.py`](../src/coding/proxy/model/pricing.py) | `ModelPricing`, `CostValue`, `Currency` |
 | **token** | [`model/token.py`](../src/coding/proxy/model/token.py) | Token 相关模型 |
-| **vendor** | [`model/vendor.py`](../src/coding/proxy/model/vendor.py) | 核心数据模型 + 向后兼容别名（`BackendCapabilities`, `BackendResponse`） |
 
 ### 5.5 auth/ -- 认证模块
 
@@ -1180,14 +1263,14 @@ tiers: [anthropic, copilot, zhipu]  # 显式优先级（可选）
 
 #### 5.6.4 配置搜索优先级（[`config/loader.py`](../src/coding/proxy/config/loader.py)）
 
-```
-CLI --config 参数（显式指定）
-    v 未指定时
-./config.yaml（项目根目录）
-    v 不存在时
-~/.coding-proxy/config.yaml（用户目录）
-    v 不存在时
-Pydantic 默认值
+```mermaid
+flowchart TD
+    A["CLI --config 参数<br/>（显式指定）"] -->|"未指定"| B["./config.yaml<br/>（项目根目录）"]
+    B -->|"不存在"| C["~/.coding-proxy/config.yaml<br/>（用户目录）"]
+    C -->|"不存在"| D["Pydantic 默认值"]
+
+    style A fill:#1a5276,color:#fff
+    style D fill:#7b241c,color:#fff
 ```
 
 **环境变量展开**：语法 `${VARIABLE_NAME}`，递归处理 dict/list/str，未定义变量保留原文。
@@ -1319,42 +1402,16 @@ Pydantic 默认值
 |------|------|--------|------|
 | `api_key` | str | `""` | 智谱 API Key（支持 `${ENV_VAR}`） |
 
-**CircuitBreakerConfig 字段**
+> **弹性参数速查**：以下 4 类参数的详细语义参见对应设计模式章节——[§3.2 CircuitBreaker](#32-circuit-breaker熔断器模式)、[§3.7 QuotaGuard](#37-state-machine状态机模式--quotaguard)、[§3.12 Retry](#312-retry-with-full-jitter带完全抖动的重试模式)、[§4.4 故障转移判定](#44-故障转移判定逻辑)。
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `failure_threshold` | int | `3` | 触发熔断的连续失败次数 |
-| `recovery_timeout_seconds` | int | `300` | 熔断后恢复等待时间（秒） |
-| `success_threshold` | int | `2` | 半开状态恢复所需连续成功次数 |
-| `max_recovery_seconds` | int | `3600` | 指数退避最大恢复时间（秒） |
+**CircuitBreakerConfig / QuotaGuardConfig / RetryConfig / FailoverConfig — 弹性参数一览**
 
-**QuotaGuardConfig 字段**
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enabled` | bool | `false` | 是否启用配额守卫 |
-| `token_budget` | int | `0` | 滑动窗口内的 Token 预算上限 |
-| `window_hours` | float | `5.0` | 滑动窗口大小（小时） |
-| `threshold_percent` | float | `99.0` | 触发 QUOTA_EXCEEDED 的用量百分比阈值 |
-| `probe_interval_seconds` | int | `300` | QUOTA_EXCEEDED 状态下探测间隔（秒） |
-
-**RetryConfig 字段**
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `max_retries` | int | `2` | 最大重试次数（0 = 禁用） |
-| `initial_delay_ms` | int | `500` | 初始退避延迟（毫秒） |
-| `max_delay_ms` | int | `5000` | 最大退避延迟（毫秒） |
-| `backoff_multiplier` | float | `2.0` | 退避倍数 |
-| `jitter` | bool | `true` | 是否添加随机抖动 |
-
-**FailoverConfig 字段**
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `status_codes` | list[int] | `[429, 403, 503, 500]` | 触发转移的 HTTP 状态码 |
-| `error_types` | list[str] | `["rate_limit_error", "overloaded_error", "api_error"]` | 触发转移的错误类型 |
-| `error_message_patterns` | list[str] | `["quota", "limit exceeded", "usage cap", "capacity"]` | 触发转移的消息关键词 |
+| 配置类 | 字段 | 类型 | 默认值 |
+|--------|------|------|--------|
+| **CB** | `failure_threshold` / `recovery_timeout_seconds` / `success_threshold` / `max_recovery_seconds` | int / int / int / int | `3` / `300` / `2` / `3600` |
+| **QG** | `enabled` / `token_budget` / `window_hours` / `threshold_percent` / `probe_interval_seconds` | bool / int / float / float / int | `false` / `0` / `5.0` / `99.0` / `300` |
+| **Retry** | `max_retries` / `initial_delay_ms` / `max_delay_ms` / `backoff_multiplier` / `jitter` | int / int / int / float / bool | `2` / `500` / `5000` / `2.0` / `true` |
+| **Failover** | `status_codes` / `error_types` / `error_message_patterns` | list[int] / list[str] / list[str] | `[429,403,503,500]` / 见 §4.4 / 见 §4.4 |
 
 **ModelMappingRule 字段**
 
@@ -1502,21 +1559,17 @@ vendors:
 
 将 Gemini SSE 流重构为 Anthropic 消息生命周期事件序列：
 
-```
-Gemini SSE chunks
-    |
-    v
-message_start           <- 首次收到内容时发出
-    |
-content_block_start     <- 内容块开始
-    |
-content_block_delta*    <- 增量文本（每个 text part 一个）
-    |
-content_block_stop      <- 内容块结束
-    |
-message_delta           <- stop_reason + output_tokens
-    |
-message_stop            <- 消息结束
+```mermaid
+flowchart LR
+    Input["Gemini SSE chunks"] --> MS["message_start<br/>← 首次收到内容时发出"]
+    MS --> CBS["content_block_start<br/>← 内容块开始"]
+    CBS --> CBD["content_block_delta*<br/>← 增量文本"]
+    CBD --> CBS2["content_block_stop<br/>← 内容块结束"]
+    CBS2 --> MD["message_delta<br/>← stop_reason + output_tokens"]
+    MD --> MSP["message_stop<br/>← 消息结束"]
+
+    style Input fill:#1a5276,color:#fff
+    style MSP fill:#196f3d,color:#fff
 ```
 
 **边界情况处理**：
