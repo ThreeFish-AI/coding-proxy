@@ -4,7 +4,7 @@
 
 # ⚡ coding-proxy
 
-**面向 Claude Code 的多后端高可用透明智能代理**
+**面向 Claude Code 的多供应商高可用透明智能代理**
 
 [![Python Version](https://img.shields.io/badge/python-3.13%2B-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](#)
@@ -23,14 +23,14 @@
 - 💸 **配额耗尽 (Usage Cap)**：激烈的代码生成导致单日/当月额度耗尽，直接返回 `403` 错误。
 - 🌋 **服务过载 (Overloaded)**：Anthropic 官方服务器高峰期宕机，甩回无情的 `503 overloaded_error`。
 
-**coding-proxy** 便是为终结这些痛点而生。它作为一个**纯透明**的中间代理层，能让你的 Claude Code 具备毫秒级的“N-tier 链式降级容灾”能力。当主后端不可用时，它能在**无需人工干预**、**无感知**的情况下，瞬间将请求平滑切换至下一个可用的智能后备方案（如 GitHub Copilot、Google Antigravity 乃至智谱 GLM）。
+**coding-proxy** 便是为终结这些痛点而生。它作为一个**纯透明**的中间代理层，能让你的 Claude Code 具备毫秒级的”N-tier 链式降级容灾”能力。当主供应商不可用时，它能在**无需人工干预**、**无感知**的情况下，瞬间将请求平滑切换至下一个可用的智能后备方案（如 GitHub Copilot、Google Antigravity 乃至智谱 GLM）。
 
 ---
 
 ## 🌟 核心特性 (Core Features)
 
 - **⛓️ N-tier 链式故障转移 (Failover)**：自动从 Claude 官方 Plans 依次降级至 GitHub Copilot、Google Antigravity，最后由智谱 GLM 兜底。
-- **🛡️ 智能弹性与容灾守卫**：每个后端节点独立配备 **熔断器 (Circuit Breaker)** 与 **配额守卫 (Quota Guard)**，防雪崩、主动避险。
+- **🛡️ 智能弹性与容灾守卫**：每个供应商节点独立配备 **熔断器 (Circuit Breaker)** 与 **配额守卫 (Quota Guard)**，防雪崩、主动避险。
 - **👻 透明无感代理机制**：对客户端 **100% 透明**！无需修改任何代码，仅需一行配置覆盖 `ANTHROPIC_BASE_URL` 即可接入。
 - **🔄 跨模型与全格式转换**：原生支持 Anthropic ←→ Gemini 的请求与流式响应（SSE）双向转换，并支持自动/自助映射模型名称（如 `claude-*` 至 `glm-*`）。
 - **📊 极致可观测性 (Observability)**：内置基于 `SQLite WAL` 的本地监控追踪，CLI 提供一键输出详细的 Token 用量统计面板（`coding-proxy usage`）。
@@ -81,8 +81,8 @@ claude
 | :------- | :------------------------------------------------------------------------------ | :-------------------------------------------- |
 | `start`  | **启动代理服务器**。支持自定义端口与配置路径。                                  | `coding-proxy start -p 8080 -c ~/config.yaml` |
 | `status` | **查看代理健康状态**。展示各层级熔断器（OPEN/CLOSED）与配额状态。               | `coding-proxy status`                         |
-| `usage`  | **Token 统计看板**。按天/后端/模型维度追踪每一次的 Token 消耗、故障转移及耗时。 | `coding-proxy usage -d 7 -b anthropic`        |
-| `reset`  | **强制一键重置**。人工确认主后端恢复可用后，立刻初始化所有熔断器和配额状态。    | `coding-proxy reset`                          |
+| `usage`  | **Token 统计看板**。按天/供应商/模型维度追踪每一次的 Token 消耗、故障转移及耗时。 | `coding-proxy usage -d 7 -b anthropic`        |
+| `reset`  | **强制一键重置**。人工确认主供应商恢复可用后，立刻初始化所有熔断器和配额状态。    | `coding-proxy reset`                          |
 
 ---
 
@@ -106,33 +106,33 @@ graph TD
 
     subgraph T0["Tier 0: Claude Plans"]
         direction LR
-        A_BE["AnthropicBackend"]
+        A_VE["AnthropicVendor"]
         A_CB["CB (熔断器)"]
         A_QG["QG (配额守卫)"]
     end
 
     subgraph T1["Tier 1: GitHub Copilot"]
         direction LR
-        C_BE["CopilotBackend"]
+        C_VE["CopilotVendor"]
         C_CB["CB (熔断器)"]
         C_QG["QG (配额守卫)"]
     end
 
     subgraph T2["Tier 2: Google Antigravity"]
         direction LR
-        G_BE["AntigravityBackend"]
+        G_VE["AntigravityVendor"]
         G_CB["CB (熔断器)"]
         G_QG["QG (配额守卫)"]
     end
 
     subgraph TN["Tier N: Zhipu（兜底）"]
-        Z_BE["ZhipuBackend"]
+        Z_VE["ZhipuVendor"]
     end
 
-    A_BE --> API_A["Anthropic API"]
-    C_BE --> API_C["GitHub Copilot API"]
-    G_BE --> API_G["Google Gemini API"]
-    Z_BE --> API_Z["智谱 GLM API"]
+    A_VE --> API_A["Anthropic API"]
+    C_VE --> API_C["GitHub Copilot API"]
+    G_VE --> API_G["Google Gemini API"]
+    Z_VE --> API_Z["智谱 GLM API"]
 
     style T0 fill:#1a5276,color:#fff
     style T1 fill:#1a5276,color:#fff
@@ -149,7 +149,7 @@ graph TD
 为了保障长期的项目可维护性，我们提供了循证工程级别 (Evidence-Based) 的详尽文档：
 
 - 📖 **[用户操作指引 (User Guide)](../user-guide.md)** — 从安装、最小配置要求，到每一项配置文件（`config.yaml`）的具体语义和常见排障指南。
-- 🏗️ **[架构设计与工程方案 (Architecture Framework)](../framework.md)** — 详细解码底层设计模式（Template Method、Circuit Breaker、State Machine 等），适用于希望深入了解源码或贡献新后端的开发者。
+- 🏗️ **[架构设计与工程方案 (Architecture Framework)](../framework.md)** — 详细解码底层设计模式（Template Method、Circuit Breaker、State Machine 等），适用于希望深入了解源码或贡献新供应商的开发者。
 - 🤝 **[工程准则 (AGENTS.md)](../../AGENTS.md)** — 系统的上下文心法和 AI Agent 协作协议，强调**重构、复用与正交抽象**，是本仓库一切开发的指导方针。
 
 ---

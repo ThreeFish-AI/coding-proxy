@@ -138,6 +138,7 @@ class _OpenAICompatState:
             return []
         self.thinking_block_open = True
         self.content_block_open = True
+        logger.debug("copilot-stream: opening thinking block at index=%d", self.block_index)
         return [_make_event("content_block_start", {
             "type": "content_block_start",
             "index": self.block_index,
@@ -149,6 +150,10 @@ class _OpenAICompatState:
         chunks: list[bytes] = []
         # 如果 thinking 块开着，先关闭它
         if self.thinking_block_open:
+            logger.debug(
+                "copilot-stream: closing thinking block at index=%d before opening text block",
+                self.block_index,
+            )
             chunks.append(_make_event("content_block_stop", {
                 "type": "content_block_stop",
                 "index": self.block_index,

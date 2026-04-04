@@ -1,6 +1,6 @@
 """copilot_urls.py URL 管理纯函数单元测试."""
 
-from coding.proxy.backends.copilot_urls import (
+from coding.proxy.vendors.copilot_urls import (
     _normalize_base_url,
     build_copilot_candidate_base_urls,
     resolve_copilot_base_url,

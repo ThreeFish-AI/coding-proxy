@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Any
 
-from ..backends.base import UsageInfo
+from ..vendors.base import UsageInfo
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +70,10 @@ def _append_usage_evidence(
     })
 
 
-def _build_usage_evidence_records(
+def build_usage_evidence_records(
     usage: dict[str, Any],
     *,
-    backend: str,
+    vendor: str,
     model_served: str,
     request_id: str,
 ) -> list[dict[str, Any]]:
@@ -92,7 +92,7 @@ def _build_usage_evidence_records(
         if not isinstance(source_field_map, dict):
             source_field_map = {}
         records.append({
-            "backend": backend,
+            "vendor": vendor,
             "request_id": str(entry.get("request_id") or request_id or ""),
             "model_served": str(entry.get("model_served") or model_served or ""),
             "evidence_kind": str(entry.get("evidence_kind") or "stream_usage"),
@@ -107,7 +107,7 @@ def _build_usage_evidence_records(
     return records
 
 
-def _parse_usage_from_chunk(chunk: bytes, usage: dict, *, vendor_label: str | None = None) -> None:
+def parse_usage_from_chunk(chunk: bytes, usage: dict, *, vendor_label: str | None = None) -> None:
     """从 SSE chunk 提取 token 用量.
 
     同时支持 Anthropic 原生格式和 OpenAI/Zhipu 兼容格式：
@@ -184,7 +184,7 @@ def _parse_usage_from_chunk(chunk: bytes, usage: dict, *, vendor_label: str | No
             usage["request_id"] = data["id"]
 
 
-def _has_missing_input_usage_signals(info: UsageInfo) -> bool:
+def has_missing_input_usage_signals(info: UsageInfo) -> bool:
     """判断流式请求是否缺失可解释的输入 usage 信号."""
     if info.output_tokens <= 0:
         return False

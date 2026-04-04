@@ -1,4 +1,4 @@
-"""后端抽象基类 — 模板方法模式."""
+"""供应商抽象基类 — 模板方法模式."""
 
 from __future__ import annotations
 
@@ -8,21 +8,30 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-# 从 types.py 正交导入所有类型、常量与工具函数，并 re-export 以保持向后兼容
-from .types import (  # noqa: F401
-    RESPONSE_SANITIZE_SKIP_HEADERS,
-    BackendCapabilities,
-    BackendResponse,
+# 从 model/ 模块正交导入所有类型、常量与工具函数，并 re-export 以保持向后兼容
+from ..model.vendor import (  # noqa: F401
+    VendorCapabilities,
+    VendorResponse,
     CapabilityLossReason,
-    NoCompatibleBackendError,
-    PROXY_SKIP_HEADERS,
+    CopilotExchangeDiagnostics,
+    CopilotMisdirectedRequest,
+    CopilotModelCatalog,
+    NoCompatibleVendorError,
     RequestCapabilities,
     UsageInfo,
-    _SYNTHETIC_RESPONSE_SKIP_HEADERS,
-    _decode_json_body,
-    _extract_error_message,
-    _sanitize_headers_for_synthetic_response,
+    decode_json_body,
+    extract_error_message,
+    sanitize_headers_for_synthetic_response,
 )
+from ..model.constants import (  # noqa: F401
+    PROXY_SKIP_HEADERS,
+    RESPONSE_SANITIZE_SKIP_HEADERS,
+)
+
+# ── 废弃别名（向后兼容旧名称） ──────────────────────────
+_decode_json_body = decode_json_body
+_extract_error_message = extract_error_message
+_sanitize_headers_for_synthetic_response = sanitize_headers_for_synthetic_response
 
 from ..compat.canonical import (
     CanonicalRequest,
@@ -37,8 +46,8 @@ from ..config.schema import FailoverConfig
 logger = logging.getLogger(__name__)
 
 
-class BaseBackend(ABC):
-    """后端抽象基类，提供 HTTP 客户端管理和请求模板."""
+class BaseVendor(ABC):
+    """供应商抽象基类，提供 HTTP 客户端管理和请求模板."""
 
     def __init__(
         self,
@@ -63,36 +72,40 @@ class BaseBackend(ABC):
 
     @abstractmethod
     def get_name(self) -> str:
-        """返回后端名称（用于日志）."""
+        """返回供应商名称（用于日志）."""
 
     def map_model(self, model: str) -> str:
-        """将请求模型名映射为后端实际使用的模型名.
+        """将请求模型名映射为供应商实际使用的模型名.
 
         默认实现为恒等映射（无转换）.
-        有模型映射需求的后端（如 Zhipu）应覆写此方法.
+        有模型映射需求的供应商（如 Zhipu）应覆写此方法.
         """
         return model
 
-    def get_capabilities(self) -> BackendCapabilities:
-        """返回后端能力声明.
+    def get_capabilities(self) -> VendorCapabilities:
+        """返回供应商能力声明.
 
-        默认视为 Anthropic 兼容后端。
+        默认视为 Anthropic 兼容供应商。
         """
-        return BackendCapabilities()
+        return VendorCapabilities()
 
     def get_compatibility_profile(self) -> CompatibilityProfile:
         caps = self.get_capabilities()
-        native_or_unsafe = lambda supported: CompatibilityStatus.NATIVE if supported else CompatibilityStatus.UNSAFE
         return CompatibilityProfile(
-            thinking=native_or_unsafe(caps.supports_thinking),
-            tool_calling=native_or_unsafe(caps.supports_tools),
+            thinking=self._compat_status_from_bool(caps.supports_thinking),
+            tool_calling=self._compat_status_from_bool(caps.supports_tools),
             tool_streaming=CompatibilityStatus.SIMULATED if caps.supports_tools else CompatibilityStatus.UNSAFE,
             mcp_tools=CompatibilityStatus.UNKNOWN,
-            images=native_or_unsafe(caps.supports_images),
-            metadata=native_or_unsafe(caps.supports_metadata),
+            images=self._compat_status_from_bool(caps.supports_images),
+            metadata=self._compat_status_from_bool(caps.supports_metadata),
             json_output=CompatibilityStatus.UNKNOWN,
             usage_tokens=CompatibilityStatus.SIMULATED,
         )
+
+    @staticmethod
+    def _compat_status_from_bool(supported: bool) -> CompatibilityStatus:
+        """将布尔能力映射为兼容性状态."""
+        return CompatibilityStatus.NATIVE if supported else CompatibilityStatus.UNSAFE
 
     def make_compatibility_decision(self, request: CanonicalRequest) -> CompatibilityDecision:
         profile = self.get_compatibility_profile()
@@ -155,19 +168,19 @@ class BaseBackend(ABC):
     def supports_request(
         self, request_caps: RequestCapabilities,
     ) -> tuple[bool, list[CapabilityLossReason]]:
-        """判断后端是否能无损承接该请求."""
-        backend_caps = self.get_capabilities()
+        """判断供应商是否能无损承接该请求."""
+        vendor_caps = self.get_capabilities()
         reasons: list[CapabilityLossReason] = []
 
-        if request_caps.has_tools and not backend_caps.supports_tools:
+        if request_caps.has_tools and not vendor_caps.supports_tools:
             reasons.append(CapabilityLossReason.TOOLS)
-        if request_caps.has_thinking and not backend_caps.supports_thinking:
+        if request_caps.has_thinking and not vendor_caps.supports_thinking:
             reasons.append(CapabilityLossReason.THINKING)
-        if request_caps.has_images and not backend_caps.supports_images:
+        if request_caps.has_images and not vendor_caps.supports_images:
             reasons.append(CapabilityLossReason.IMAGES)
-        if request_caps.has_metadata and not backend_caps.supports_metadata:
+        if request_caps.has_metadata and not vendor_caps.supports_metadata:
             reasons.append(CapabilityLossReason.METADATA)
-        if request_caps.has_tools and backend_caps.emits_vendor_tool_events:
+        if request_caps.has_tools and vendor_caps.emits_vendor_tool_events:
             reasons.append(CapabilityLossReason.VENDOR_TOOLS)
 
         return len(reasons) == 0, reasons
@@ -196,13 +209,13 @@ class BaseBackend(ABC):
         self,
         status_code: int,
         response: httpx.Response,
-        backend_resp: BackendResponse,
-    ) -> BackendResponse:
+        vendor_resp: VendorResponse,
+    ) -> VendorResponse:
         """错误响应归一化钩子. 子类可覆写以定制错误格式.
 
-        默认实现直接返回原始 backend_resp（无修改，透传行为）.
+        默认实现直接返回原始 vendor_resp（无修改，透传行为）.
         """
-        return backend_resp
+        return vendor_resp
 
     # ── 生命周期钩子 ─────────────────────────────────────
 
@@ -210,7 +223,7 @@ class BaseBackend(ABC):
         """响应错误状态码时的钩子（如 token 失效标记）."""
 
     def get_diagnostics(self) -> dict[str, Any]:
-        """返回后端运行时诊断信息."""
+        """返回供应商运行时诊断信息."""
         diagnostics: dict[str, Any] = {}
         if self._compat_trace is not None:
             diagnostics["compat"] = self._compat_trace.to_dict()
@@ -219,7 +232,7 @@ class BaseBackend(ABC):
     def should_trigger_failover(self, status_code: int, body: dict[str, Any] | None) -> bool:
         """基于 FailoverConfig 的通用故障转移判断.
 
-        无 failover_config 时返回 False（终端后端默认行为）.
+        无 failover_config 时返回 False（终端供应商默认行为）.
         """
         if self._failover_config is None:
             return False
@@ -238,7 +251,7 @@ class BaseBackend(ABC):
         return status_code in (429, 503)
 
     async def check_health(self) -> bool:
-        """检查后端健康状态（轻量级探测）.
+        """检查供应商健康状态（轻量级探测）.
 
         默认实现返回 True（假定健康）。
         子类可覆写以实现低成本的认证层检查。
@@ -286,7 +299,7 @@ class BaseBackend(ABC):
         self,
         request_body: dict[str, Any],
         headers: dict[str, str],
-    ) -> BackendResponse:
+    ) -> VendorResponse:
         """发送非流式消息请求."""
         self._pre_send_check(request_body, headers)
         body, prepared_headers = await self._prepare_request(request_body, headers)
@@ -304,17 +317,17 @@ class BaseBackend(ABC):
 
         if response.status_code >= 400:
             self._on_error_status(response.status_code)
-            backend_resp = BackendResponse(
+            vendor_resp = VendorResponse(
                 status_code=response.status_code,
                 raw_body=raw_content,
                 error_type=resp_body.get("error", {}).get("type") if isinstance(resp_body, dict) and isinstance(resp_body.get("error"), dict) else None,
                 error_message=_extract_error_message(response, resp_body),
                 response_headers=dict(response.headers),
             )
-            return self._normalize_error_response(response.status_code, response, backend_resp)
+            return self._normalize_error_response(response.status_code, response, vendor_resp)
 
         usage = resp_body.get("usage", {}) if isinstance(resp_body, dict) else {}
-        return BackendResponse(
+        return VendorResponse(
             status_code=response.status_code,
             raw_body=raw_content,
             usage=UsageInfo(
@@ -330,3 +343,11 @@ class BaseBackend(ABC):
     async def close(self) -> None:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 向后兼容别名（v2 移除）
+# ═══════════════════════════════════════════════════════════════
+
+BaseBackend = BaseVendor
+NoCompatibleBackendError = NoCompatibleVendorError

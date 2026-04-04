@@ -7,10 +7,10 @@ from typing import Any
 
 import httpx
 
-from ..backends.base import RequestCapabilities
+from ..vendors.base import RequestCapabilities
 
 
-def _extract_error_payload_from_http_status(exc: httpx.HTTPStatusError) -> dict[str, Any] | None:
+def extract_error_payload_from_http_status(exc: httpx.HTTPStatusError) -> dict[str, Any] | None:
     response = exc.response
     if response is None or not response.content:
         return None
@@ -21,7 +21,7 @@ def _extract_error_payload_from_http_status(exc: httpx.HTTPStatusError) -> dict[
     return payload if isinstance(payload, dict) else None
 
 
-def _is_semantic_rejection(
+def is_semantic_rejection(
     *,
     status_code: int,
     error_type: str | None = None,
@@ -45,7 +45,7 @@ def _is_semantic_rejection(
     )
 
 
-def _build_request_capabilities(body: dict[str, Any]) -> RequestCapabilities:
+def build_request_capabilities(body: dict[str, Any]) -> RequestCapabilities:
     """从请求体提取能力画像."""
     has_images = False
     for msg in body.get("messages", []):

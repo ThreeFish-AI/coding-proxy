@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from coding.proxy.config.loader import load_config
+from coding.proxy.config.loader import _deep_merge, _get_example_config_path, load_config
 
 
 def test_load_from_explicit_path(tmp_path: Path):
@@ -169,88 +169,88 @@ def test_antigravity_quota_guard_defaults():
     assert cfg.antigravity_quota_guard.enabled is False
 
 
-def test_model_mapping_backends_from_yaml(tmp_path: Path):
+def test_model_mapping_vendors_from_yaml(tmp_path: Path):
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
         "model_mapping:\n"
         "  - pattern: claude-sonnet-*\n"
         "    target: claude-sonnet-4-6-thinking\n"
-        "    backends: [antigravity]\n"
+        "    vendors: [antigravity]\n"
     )
     cfg = load_config(cfg_file)
-    assert cfg.model_mapping[0].backends == ["antigravity"]
+    assert cfg.model_mapping[0].vendors == ["antigravity"]
 
 
-# --- tiers 新格式 ---
+# --- vendors 新格式 ---
 
 
-def test_tiers_format_basic(tmp_path: Path):
-    """tiers 格式：基本加载，顺序即优先级."""
+def test_vendors_format_basic(tmp_path: Path):
+    """vendors 格式：基本加载，顺序即优先级."""
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "tiers:\n"
-        "  - backend: anthropic\n"
+        "vendors:\n"
+        "  - vendor: anthropic\n"
         "    base_url: https://api.anthropic.com\n"
         "    circuit_breaker:\n"
         "      failure_threshold: 3\n"
-        "  - backend: zhipu\n"
+        "  - vendor: zhipu\n"
         "    api_key: sk-zhipu\n"
     )
     cfg = load_config(cfg_file)
-    assert len(cfg.tiers) == 2
-    assert cfg.tiers[0].backend == "anthropic"
-    assert cfg.tiers[0].circuit_breaker is not None
-    assert cfg.tiers[0].circuit_breaker.failure_threshold == 3
-    assert cfg.tiers[1].backend == "zhipu"
-    assert cfg.tiers[1].api_key == "sk-zhipu"
-    assert cfg.tiers[1].circuit_breaker is None  # 终端层
+    assert len(cfg.vendors) == 2
+    assert cfg.vendors[0].vendor == "anthropic"
+    assert cfg.vendors[0].circuit_breaker is not None
+    assert cfg.vendors[0].circuit_breaker.failure_threshold == 3
+    assert cfg.vendors[1].vendor == "zhipu"
+    assert cfg.vendors[1].api_key == "sk-zhipu"
+    assert cfg.vendors[1].circuit_breaker is None  # 终端层
 
 
-def test_tiers_custom_order(tmp_path: Path, monkeypatch):
-    """tiers 格式：自定义顺序 — zhipu 在 Tier 0，anthropic 在 Tier 1."""
+def test_vendors_custom_order(tmp_path: Path, monkeypatch):
+    """vendors 格式：自定义顺序 — zhipu 在 Vendor 0，anthropic 在 Vendor 1."""
     monkeypatch.setenv("ZHIPU_KEY", "sk-test")
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "tiers:\n"
-        '  - backend: zhipu\n'
+        "vendors:\n"
+        '  - vendor: zhipu\n'
         '    api_key: "${ZHIPU_KEY}"\n'
         '    circuit_breaker:\n'
         '      failure_threshold: 5\n'
-        '  - backend: anthropic\n'
+        '  - vendor: anthropic\n'
         '    base_url: "https://api.anthropic.com"\n'
     )
     cfg = load_config(cfg_file)
-    assert cfg.tiers[0].backend == "zhipu"
-    assert cfg.tiers[0].api_key == "sk-test"
-    assert cfg.tiers[0].circuit_breaker.failure_threshold == 5
-    assert cfg.tiers[1].backend == "anthropic"
-    assert cfg.tiers[1].circuit_breaker is None  # 终端层
+    assert cfg.vendors[0].vendor == "zhipu"
+    assert cfg.vendors[0].api_key == "sk-test"
+    assert cfg.vendors[0].circuit_breaker.failure_threshold == 5
+    assert cfg.vendors[1].vendor == "anthropic"
+    assert cfg.vendors[1].circuit_breaker is None  # 终端层
 
 
-def test_tiers_terminal_tier_no_circuit_breaker(tmp_path: Path):
-    """tiers 格式：无 circuit_breaker 的 tier 为终端层."""
+def test_vendors_terminal_vendor_no_circuit_breaker(tmp_path: Path):
+    """vendors 格式：无 circuit_breaker 的 vendor 为终端层."""
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "tiers:\n"
-        "  - backend: anthropic\n"
+        "vendors:\n"
+        "  - vendor: anthropic\n"
         "    circuit_breaker:\n"
         "      failure_threshold: 2\n"
-        "  - backend: copilot\n"
+        "  - vendor: copilot\n"
         "    github_token: ghp_test\n"
         "    circuit_breaker:\n"
         "      failure_threshold: 3\n"
-        "  - backend: zhipu\n"
+        "  - vendor: zhipu\n"
         "    api_key: sk-zhipu\n"
         "    # 无 circuit_breaker → 终端层\n"
     )
     cfg = load_config(cfg_file)
-    assert cfg.tiers[0].circuit_breaker is not None
-    assert cfg.tiers[1].circuit_breaker is not None
-    assert cfg.tiers[2].circuit_breaker is None
+    assert cfg.vendors[0].circuit_breaker is not None
+    assert cfg.vendors[1].circuit_breaker is not None
+    assert cfg.vendors[2].circuit_breaker is None
 
 
-def test_legacy_flat_format_auto_migrates_to_tiers(tmp_path: Path):
-    """旧 flat 格式自动迁移：primary/fallback 生成对应 tiers 列表."""
+def test_legacy_flat_format_auto_migrates_to_vendors(tmp_path: Path):
+    """旧 flat 格式自动迁移：primary/fallback 生成对应 vendors 列表."""
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
         "primary:\n"
@@ -266,29 +266,247 @@ def test_legacy_flat_format_auto_migrates_to_tiers(tmp_path: Path):
     # 旧字段仍可访问
     assert cfg.primary.base_url == "https://api.anthropic.com"
     assert cfg.fallback.api_key == "sk-zhipu-legacy"
-    # tiers 由迁移器自动生成
-    backends = [t.backend for t in cfg.tiers]
-    assert "anthropic" in backends
-    assert "zhipu" in backends
-    # anthropic tier 应有 circuit_breaker
-    anthropic_tier = next(t for t in cfg.tiers if t.backend == "anthropic")
-    assert anthropic_tier.circuit_breaker is not None
-    assert anthropic_tier.circuit_breaker.failure_threshold == 4
-    # zhipu tier 为终端层（无 circuit_breaker）
-    zhipu_tier = next(t for t in cfg.tiers if t.backend == "zhipu")
-    assert zhipu_tier.circuit_breaker is None
+    # vendors 由迁移器自动生成
+    vendor_names = [v.vendor for v in cfg.vendors]
+    assert "anthropic" in vendor_names
+    assert "zhipu" in vendor_names
+    # anthropic vendor 应有 circuit_breaker
+    anthropic_vendor = next(v for v in cfg.vendors if v.vendor == "anthropic")
+    assert anthropic_vendor.circuit_breaker is not None
+    assert anthropic_vendor.circuit_breaker.failure_threshold == 4
+    # zhipu vendor 为终端层（无 circuit_breaker）
+    zhipu_vendor = next(v for v in cfg.vendors if v.vendor == "zhipu")
+    assert zhipu_vendor.circuit_breaker is None
 
 
-def test_tiers_disabled_tier_excluded(tmp_path: Path):
-    """tiers 格式：enabled=false 的 tier 在 tiers 列表中存在但 enabled 为 False."""
+def test_vendors_disabled_vendor_excluded(tmp_path: Path):
+    """vendors 格式：enabled=false 的 vendor 在 vendors 列表中存在但 enabled 为 False."""
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "tiers:\n"
-        "  - backend: anthropic\n"
+        "vendors:\n"
+        "  - vendor: anthropic\n"
         "    enabled: false\n"
-        "  - backend: zhipu\n"
+        "  - vendor: zhipu\n"
         "    api_key: sk-zhipu\n"
     )
     cfg = load_config(cfg_file)
-    assert cfg.tiers[0].enabled is False
-    assert cfg.tiers[1].enabled is True
+    assert cfg.vendors[0].enabled is False
+    assert cfg.vendors[1].enabled is True
+
+
+# ====================================================================
+# A 组：_deep_merge 单元测试
+# ====================================================================
+
+
+def test_deep_merge_empty_override_preserves_defaults():
+    """空覆盖保留全部默认值."""
+    defaults = {"a": 1, "b": {"c": 2, "d": 3}, "e": [1, 2]}
+    assert _deep_merge(defaults, {}) == defaults
+
+
+def test_deep_merge_scalar_override():
+    """标量值直接替换."""
+    defaults = {"port": 8046, "host": "127.0.0.1"}
+    result = _deep_merge(defaults, {"port": 9000})
+    assert result == {"port": 9000, "host": "127.0.0.1"}
+
+
+def test_deep_merge_nested_dict():
+    """嵌套 dict 递归合并 — 仅覆盖存在的子键."""
+    defaults = {"server": {"host": "127.0.0.1", "port": 8046}, "log": "INFO"}
+    override = {"server": {"port": 9000}}
+    result = _deep_merge(defaults, override)
+    assert result == {"server": {"host": "127.0.0.1", "port": 9000}, "log": "INFO"}
+
+
+def test_deep_merge_list_replacement():
+    """列表整体替换（有序集合，不支持逐元素合并）."""
+    defaults = {"items": ["a", "b", "c"]}
+    override = {"items": ["x", "y"]}
+    result = _deep_merge(defaults, override)
+    assert result["items"] == ["x", "y"]
+
+
+def test_deep_merge_new_keys_added():
+    """override 中新增的 key 直接添加到结果中."""
+    defaults = {"a": 1}
+    override = {"b": 2, "c": {"d": 3}}
+    result = _deep_merge(defaults, override)
+    assert result == {"a": 1, "b": 2, "c": {"d": 3}}
+
+
+def test_deep_merge_three_level_nesting():
+    """三级嵌套 dict 的精确深度合并."""
+    defaults = {"l1": {"l2": {"l3_a": 1, "l3_b": 2}}}
+    override = {"l1": {"l2": {"l3_b": 99}}}
+    result = _deep_merge(defaults, override)
+    assert result == {"l1": {"l2": {"l3_a": 1, "l3_b": 99}}}
+
+
+def test_deep_merge_dict_replaces_scalar():
+    """override 的 dict 替换 default 的标量值."""
+    defaults = {"key": "string_value"}
+    override = {"key": {"nested": True}}
+    result = _deep_merge(defaults, override)
+    assert result == {"key": {"nested": True}}
+
+
+def test_deep_merge_scalar_replaces_dict():
+    """override 的标量替换 default 的 dict 值."""
+    defaults = {"key": {"nested": True}}
+    override = {"key": "flat_value"}
+    result = _deep_merge(defaults, override)
+    assert result == {"key": "flat_value"}
+
+
+# ====================================================================
+# B 组：_get_example_config_path 单元测试
+# ====================================================================
+
+
+def test_get_example_config_path_returns_path():
+    """正常定位 config.example.yaml — 返回有效 Path 对象."""
+    path = _get_example_config_path()
+    assert path is not None
+    assert path.is_file()
+    assert path.name == "config.example.yaml"
+
+
+def test_get_example_config_path_missing_returns_none(monkeypatch):
+    """_get_example_config_path 被mock为返回None时正确降级."""
+    import coding.proxy.config.loader as loader_module
+    monkeypatch.setattr(loader_module, "_get_example_config_path", lambda: None)
+    assert loader_module._get_example_config_path() is None
+
+
+# ====================================================================
+# C 组：load_config 集成测试 — example-based 深度合并
+# ====================================================================
+
+
+def test_load_config_no_user_file_uses_example_defaults(tmp_path: Path, monkeypatch):
+    """无任何用户配置时，返回基于 config.example.yaml 的完整配置.
+
+    验证 example 默认值被正确加载：vendors 非空、pricing 非空、
+    model_mapping 使用 example 中的新格式规则.
+    """
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    monkeypatch.chdir(empty_dir)
+    monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
+
+    cfg = load_config()
+
+    # 来自 example.yaml 的完整默认值
+    assert cfg.server.port == 8046
+    assert cfg.server.host == "127.0.0.1"
+    # example 中定义了完整的 vendors 列表
+    assert len(cfg.vendors) >= 1
+    vendor_names = [v.vendor for v in cfg.vendors]
+    assert "anthropic" in vendor_names
+    # example 中定义了 pricing
+    assert len(cfg.pricing) >= 1
+    # example 中定义了 failover 配置
+    assert cfg.failover is not None
+    assert 429 in cfg.failover.status_codes
+
+
+def test_load_config_partial_override_port_only(tmp_path: Path, monkeypatch):
+    """用户仅指定 server.port 时，其余字段来自 example 默认值."""
+    cwd_cfg = tmp_path / "config.yaml"
+    cwd_cfg.write_text("server:\n  port: 9999\n")
+    monkeypatch.chdir(tmp_path)
+
+    cfg = load_config()
+
+    # 用户覆盖的值
+    assert cfg.server.port == 9999
+    # 来自 example 默认值的字段
+    assert cfg.server.host == "127.0.0.1"
+    # vendors 来自 example（用户未指定）
+    assert len(cfg.vendors) >= 1
+
+
+def test_load_config_full_user_override(tmp_path: Path):
+    """用户提供完整配置时，example 默认被完全覆盖."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "server:\n"
+        "  host: '0.0.0.0'\n"
+        "  port: 8000\n"
+        "vendors: []\n"
+        "pricing: []\n"
+    )
+    cfg = load_config(cfg_file)
+    assert cfg.server.host == "0.0.0.0"
+    assert cfg.server.port == 8000
+    assert cfg.vendors == []
+    assert cfg.pricing == []
+
+
+def test_load_config_user_clears_vendors_list(tmp_path: Path):
+    """用户显式设置 vendors: [] 时覆盖 example 的 vendors 列表."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("vendors: []\n")
+    cfg = load_config(cfg_file)
+    assert cfg.vendors == []
+    # 其他字段仍来自 example
+    assert cfg.server.host == "127.0.0.1"
+
+
+def test_env_var_expansion_after_merge(tmp_path: Path, monkeypatch):
+    """${VAR} 环境变量展开发生在深度合并之后."""
+    monkeypatch.setenv("MY_PORT", "7777")
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text('server:\n  port: "${MY_PORT}"\n')
+    cfg = load_config(cfg_file)
+    assert cfg.server.port == 7777
+    # server.host 应来自 example 默认值（未被用户覆盖）
+    assert cfg.server.host == "127.0.0.1"
+
+
+def test_load_config_fallback_when_example_missing(monkeypatch):
+    """config.example.yaml 不存在时降级为 ProxyConfig() 默认值.
+
+    通过 mock _get_example_config_path 返回 None 来模拟 example 缺失场景.
+    """
+    monkeypatch.setattr(
+        "coding.proxy.config.loader._get_example_config_path",
+        lambda: None,
+    )
+    cfg = load_config(Path("/nonexistent/path"))
+    # 降级为 Pydantic 默认值
+    assert cfg.server.port == 8046
+    assert cfg.copilot.enabled is False
+
+
+def test_legacy_flat_format_still_migrates_with_example_base(tmp_path: Path):
+    """旧 flat 格式配置在 example base 上仍然触发 legacy 迁移器.
+
+    当用户配置包含 legacy 字段时，example 的 vendors 被移除，
+    _migrate_legacy_fields 迁移器从 legacy 字段重建 vendors.
+    """
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "primary:\n"
+        "  enabled: true\n"
+        "  base_url: https://custom.anthropic.com\n"
+        "fallback:\n"
+        "  enabled: true\n"
+        "  api_key: sk-legacy-test\n"
+    )
+    cfg = load_config(cfg_file)
+
+    # legacy 字段仍可访问
+    assert cfg.primary.base_url == "https://custom.anthropic.com"
+    assert cfg.fallback.api_key == "sk-legacy-test"
+
+    # vendors 由迁移器从 legacy 字段生成（非来自 example）
+    vendor_names = [v.vendor for v in cfg.vendors]
+    assert "anthropic" in vendor_names
+    assert "zhipu" in vendor_names
+
+    # anthropic vendor 应使用 legacy 中的 base_url
+    anthropic_vendor = next(v for v in cfg.vendors if v.vendor == "anthropic")
+    assert anthropic_vendor.base_url == "https://custom.anthropic.com"

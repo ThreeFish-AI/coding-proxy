@@ -18,6 +18,8 @@ from .base import OAuthProvider
 logger = logging.getLogger(__name__)
 
 # Antigravity Enterprise 公开 OAuth 凭据
+# SOT（权威源）: coding.proxy.config.schema.AuthConfig
+# 此处默认值仅作 fallback，生产环境应通过 config.yaml 的 auth 段覆盖
 _DEFAULT_CLIENT_ID = (
     "1071006060591-tmhssin2h21lcre235vtolojh4g403ep"
     ".apps.googleusercontent.com"

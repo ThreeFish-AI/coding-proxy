@@ -1,4 +1,4 @@
-"""后端层级 — 将后端实例与弹性设施（熔断器 + 配额守卫）聚合为路由单元."""
+"""供应商层级 — 将供应商实例与弹性设施（熔断器 + 配额守卫）聚合为路由单元."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import time
 
 from dataclasses import dataclass, field
 
-from ..backends.base import BaseBackend
+from ..vendors.base import BaseVendor
 from .circuit_breaker import CircuitBreaker, CircuitState
 from .quota_guard import QuotaGuard, QuotaState
 from .retry import RetryConfig
@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class BackendTier:
-    """一个路由层级：后端实例 + 关联的熔断器和配额守卫."""
+class VendorTier:
+    """一个路由层级：供应商实例 + 关联的熔断器和配额守卫."""
 
-    backend: BaseBackend
+    vendor: BaseVendor
     circuit_breaker: CircuitBreaker | None = field(default=None)
     quota_guard: QuotaGuard | None = field(default=None)
     weekly_quota_guard: QuotaGuard | None = field(default=None)
@@ -30,7 +30,7 @@ class BackendTier:
 
     @property
     def name(self) -> str:
-        return self.backend.get_name()
+        return self.vendor.get_name()
 
     @property
     def is_terminal(self) -> bool:
@@ -105,7 +105,7 @@ class BackendTier:
 
         三层恢复门控:
         1. Rate Limit Deadline — 截止时间未到，直接拒绝
-        2. Health Check — 轻量级后端健康探测
+        2. Health Check — 轻量级供应商健康探测
         3. Cautious Probe — 通过前两层后，允许真实请求作为探针
         """
         # ── 第一层: Rate Limit Deadline 门控 ──
@@ -143,7 +143,7 @@ class BackendTier:
 
         # ── 第二层: Health Check 门控 ──
         logger.info("Tier %s: probe scenario, running health check", self.name)
-        healthy = await self.backend.check_health()
+        healthy = await self.vendor.check_health()
         if not healthy:
             logger.warning("Tier %s: health check failed, staying degraded", self.name)
             self.record_failure()
@@ -165,3 +165,7 @@ class BackendTier:
             "is_rate_limited": self._rate_limit_deadline > now,
             "remaining_seconds": round(remaining, 1),
         }
+
+
+# 向后兼容别名
+BackendTier = VendorTier

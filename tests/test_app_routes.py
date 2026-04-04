@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from coding.proxy.backends.token_manager import TokenAcquireError
-from coding.proxy.backends.base import BackendResponse, UsageInfo
+from coding.proxy.vendors.token_manager import TokenAcquireError
+from coding.proxy.vendors.base import VendorResponse, UsageInfo
 from coding.proxy.config.schema import ProxyConfig
 from coding.proxy.server.app import create_app
 
@@ -46,7 +47,7 @@ def test_get_root_returns_200():
 
 
 def test_count_tokens_no_anthropic_returns_404():
-    """Anthropic 后端未启用时 count_tokens 返回 404."""
+    """Anthropic 供应商未启用时 count_tokens 返回 404"""
     with _make_app(primary_enabled=False) as client:
         resp = client.post(
             "/v1/messages/count_tokens",
@@ -58,7 +59,7 @@ def test_count_tokens_no_anthropic_returns_404():
 
 
 def test_count_tokens_proxies_to_anthropic():
-    """count_tokens 正确透传到 Anthropic 后端."""
+    """count_tokens 正确透传到 Anthropic 供应商."""
     mock_response = MagicMock()
     mock_response.content = b'{"input_tokens": 42}'
     mock_response.status_code = 200
@@ -108,8 +109,8 @@ def test_count_tokens_upstream_error_passthrough():
             assert resp.json()["error"]["type"] == "rate_limit_error"
 
 
-def test_status_exposes_backend_diagnostics():
-    """状态接口暴露后端诊断信息，便于排查凭证交换异常."""
+def test_status_exposes_vendor_diagnostics():
+    """状态接口暴露供应商诊断信息，便于排查凭证交换异常."""
     config = ProxyConfig(
         copilot={"enabled": True, "github_token": "ghu_test"},
         fallback={"enabled": True},
@@ -119,7 +120,7 @@ def test_status_exposes_backend_diagnostics():
 
     for tier in app.state.router.tiers:
         if tier.name == "copilot":
-            tier.backend._token_manager._record_error(  # type: ignore[attr-defined]
+            tier.vendor._token_manager._record_error(  # type: ignore[attr-defined]
                 TokenAcquireError("Copilot token 交换返回非预期响应")
             )
             break
@@ -133,7 +134,7 @@ def test_status_exposes_backend_diagnostics():
         assert "非预期响应" in copilot["diagnostics"]["token_manager"]["last_error"]
 
 
-def test_copilot_diagnostics_endpoint_returns_backend_info():
+def test_copilot_diagnostics_endpoint_returns_vendor_info():
     config = ProxyConfig(
         copilot={"enabled": True, "github_token": "ghu_test"},
         fallback={"enabled": True},
@@ -164,7 +165,7 @@ def test_copilot_models_endpoint_returns_probe_data():
 
     for tier in app.state.router.tiers:
         if tier.name == "copilot":
-            tier.backend.probe_models = AsyncMock(return_value={  # type: ignore[method-assign]
+            tier.vendor.probe_models = AsyncMock(return_value={  # type: ignore[method-assign]
                 "probe_status": "ok",
                 "available_models": ["claude-opus-4.6"],
                 "has_claude_opus_4_6": True,
@@ -178,11 +179,11 @@ def test_copilot_models_endpoint_returns_probe_data():
 
 
 def test_incompatible_request_returns_400():
-    """当所有可用后端都无法保持请求语义时，返回明确错误而不是误降级.
+    """当所有可用供应商都无法保持请求语义时，返回明确错误而不是误降级.
 
-    通过 patch 后端能力声明模拟不兼容场景，验证 NoCompatibleBackendError → 400。
+    通过 patch 供应商能力声明模拟不兼容场景，验证 NoCompatibleVendorError → 400。
     """
-    from coding.proxy.backends.base import BackendCapabilities
+    from coding.proxy.vendors.base import VendorCapabilities
 
     config = ProxyConfig(
         primary={"enabled": False},
@@ -191,15 +192,15 @@ def test_incompatible_request_returns_400():
     )
     app = create_app(config)
 
-    # Patch 唯一可用后端的能力声明，使其拒绝 thinking 请求
-    restrictive_caps = BackendCapabilities(
+    # Patch 唯一可用供应商的能力声明，使其拒绝 thinking 请求
+    restrictive_caps = VendorCapabilities(
         supports_tools=True,
         supports_thinking=False,
         supports_images=True,
         supports_metadata=True,
     )
     with patch.object(
-        type(app.state.router.tiers[0].backend),
+        type(app.state.router.tiers[0].vendor),
         "get_capabilities",
         return_value=restrictive_caps,
     ):
@@ -328,7 +329,7 @@ def test_messages_normalizes_vendor_tool_blocks_before_routing():
 
     async def fake_route_message(body, headers):
         captured_body["body"] = body
-        return BackendResponse(status_code=200, raw_body=b"{}", usage=UsageInfo())
+        return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo())
 
     app.state.router.route_message = fake_route_message
 
@@ -375,8 +376,8 @@ def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
     """reset 只清状态，不改 tier 顺序；下一次请求仍先尝试首层."""
     config = ProxyConfig(
         tiers=[
-            {"backend": "anthropic", "enabled": True, "circuit_breaker": {"failure_threshold": 3}},
-            {"backend": "zhipu", "enabled": True, "api_key": "sk-test"},
+            {"vendor": "anthropic", "enabled": True, "circuit_breaker": {"failure_threshold": 3}},
+            {"vendor": "zhipu", "enabled": True, "api_key": "sk-test"},
         ],
         database={"path": "/tmp/test-coding-proxy-routes.db"},
     )
@@ -385,14 +386,14 @@ def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
 
     async def primary_route_message(body, headers):
         call_order.append("anthropic")
-        return BackendResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
+        return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
 
     async def fallback_route_message(body, headers):
         call_order.append("zhipu")
-        return BackendResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
+        return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
 
-    app.state.router.tiers[0].backend.send_message = primary_route_message
-    app.state.router.tiers[1].backend.send_message = fallback_route_message
+    app.state.router.tiers[0].vendor.send_message = primary_route_message
+    app.state.router.tiers[1].vendor.send_message = fallback_route_message
 
     with TestClient(app) as client:
         reset_resp = client.post("/api/reset")
@@ -404,3 +405,63 @@ def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
 
     assert resp.status_code == 200
     assert call_order == ["anthropic"]
+
+
+def test_normalization_adaptations_logged_at_debug_level(caplog):
+    """常规规范化适配（如 tool_use ID 重写）应记录在 DEBUG 级别而非 INFO，避免日志噪音.
+
+    验证：非标准 tool_use_id 触发的 invalid_tool_use_id_rewritten_for_anthropic
+    和 tool_result_tool_use_id_rewritten 适配不会出现在 INFO 级别日志中，
+    但规范化功能本身仍正确工作（ID 被重写且配对一致）。
+    """
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-normalization-log.db"},
+    ))
+
+    captured_body = {}
+
+    async def fake_route_message(body, headers):
+        captured_body["body"] = body
+        return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo())
+
+    app.state.router.route_message = fake_route_message
+
+    with caplog.at_level(logging.INFO, logger="coding.proxy.server.routes"):
+        with TestClient(app) as client:
+            client.post(
+                "/v1/messages",
+                json={
+                    "model": "claude-opus-4-6",
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "content": [{
+                                "type": "tool_use",
+                                "id": "zhipu_nonstandard_id_123",
+                                "name": "bash",
+                                "input": {"cmd": "pwd"},
+                            }],
+                        },
+                        {
+                            "role": "user",
+                            "content": [{
+                                "type": "tool_result",
+                                "tool_use_id": "zhipu_nonstandard_id_123",
+                                "content": "ok",
+                            }],
+                        },
+                    ],
+                },
+            )
+
+    # INFO 级别不应出现 normalization 日志（修复的核心目标）
+    info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert not any("normalized before routing" in m for m in info_messages)
+
+    # 规范化功能仍正确工作：ID 被重写为标准格式
+    assistant_block = captured_body["body"]["messages"][0]["content"][0]
+    user_block = captured_body["body"]["messages"][1]["content"][0]
+    assert assistant_block["id"].startswith("toolu_normalized_")
+    assert user_block["tool_use_id"] == assistant_block["id"]

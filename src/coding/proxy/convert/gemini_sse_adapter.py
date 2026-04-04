@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any, AsyncIterator
+
+from .gemini_to_anthropic import GEMINI_FINISH_REASON_MAP
+
+logger = logging.getLogger(__name__)
 
 
 async def adapt_sse_stream(
@@ -35,6 +40,7 @@ async def adapt_sse_stream(
             try:
                 data = json.loads(payload)
             except json.JSONDecodeError:
+                logger.debug("SSE chunk JSON 解析失败，跳过: %s", payload[:200])
                 continue
 
             meta = data.get("usageMetadata", {})
@@ -160,11 +166,4 @@ def _make_event(event_type: str, data: dict[str, Any]) -> bytes:
 
 
 def _map_finish_reason(reason: str) -> str:
-    mapping = {
-        "STOP": "end_turn",
-        "MAX_TOKENS": "max_tokens",
-        "SAFETY": "end_turn",
-        "RECITATION": "end_turn",
-        "OTHER": "end_turn",
-    }
-    return mapping.get(reason, "end_turn")
+    return GEMINI_FINISH_REASON_MAP.get(reason, "end_turn")

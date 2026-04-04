@@ -4,7 +4,7 @@
 
 # ⚡ coding-proxy
 
-**A High-Availability, Transparent, and Smart Multi-Backend Proxy for Claude Code**
+**A High-Availability, Transparent, and Smart Multi-Vendor Proxy for Claude Code**
 
 [![Python Version](https://img.shields.io/badge/python-3.13%2B-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](#)
@@ -23,14 +23,14 @@ When you're deeply immersed in your coding "zone" with **Claude Code** (or any A
 - 💸 **Usage Cap**: Aggressive code generation drains your daily/monthly quota, slamming you with a cold, heartless `403` error.
 - 🌋 **Overloaded Servers**: Anthropic's official servers melt down during peak hours, tossing back a merciless `503 overloaded_error`.
 
-**coding-proxy** was forged in the developer fires to terminate these exact pain points. Serving as a **purely transparent** intermediate layer, it blesses your Claude Code with millisecond-level "N-tier chained fallback disaster recovery." When your primary backend goes belly up, it seamlessly and instantly switches your requests to the next smartest available fallback (like GitHub Copilot, Google Antigravity, or even Zhipu GLM)—**with zero manual intervention, and zero perceived interruption.**
+**coding-proxy** was forged in the developer fires to terminate these exact pain points. Serving as a **purely transparent** intermediate layer, it blesses your Claude Code with millisecond-level "N-tier chained fallback disaster recovery." When your primary vendor goes belly up, it seamlessly and instantly switches your requests to the next smartest available fallback (like GitHub Copilot, Google Antigravity, or even Zhipu GLM)—**with zero manual intervention, and zero perceived interruption.**
 
 ---
 
 ## 🌟 Core Features
 
 - **⛓️ N-tier Chained Failover**: Automatically downgrades from official Claude Plans, gracefully falling back to GitHub Copilot, then Google Antigravity, with Zhipu GLM acting as the ultimate safety net.
-- **🛡️ Smart Resilience & Quota Guardians**: Every single backend node comes fully armed with an independent **Circuit Breaker** and **Quota Guard** to proactively dodge avalanches without breaking a sweat.
+- **🛡️ Smart Resilience & Quota Guardians**: Every single vendor node comes fully armed with an independent **Circuit Breaker** and **Quota Guard** to proactively dodge avalanches without breaking a sweat.
 - **👻 Phantom-like Transparency**: **100% transparent** to the client! No code tweaks required. Overwrite `ANTHROPIC_BASE_URL` with a single line, and you're good to go.
 - **🔄 Universal Alchemy (Formats & Models)**: Native support for two-way request/streaming (SSE) translations between Anthropic ←→ Gemini. Plus, auto/DIY model name mapping (e.g., effortlessly morphing `claude-*` into `glm-*`).
 - **📊 Extreme Observability**: Built-in, zero-BS local monitoring powered by a `SQLite WAL`. The CLI provides a one-click detailed Token usage dashboard (`coding-proxy usage`).
@@ -81,8 +81,8 @@ claude
 | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------- |
 | `start`  | **Fire up the proxy server.** Supports custom ports and configuration paths.                                                                        | `coding-proxy start -p 8080 -c ~/config.yaml` |
 | `status` | **Check proxy health.** Shows circuit breaker states (OPEN/CLOSED) and quota status across all tiers.                                               | `coding-proxy status`                         |
-| `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/backend/model dimensions.                | `coding-proxy usage -d 7 -b anthropic`        |
-| `reset`  | **The emergency flush button.** Force-reset all circuit breakers and quotas instantly when you've confirmed the main backend is back from the dead. | `coding-proxy reset`                          |
+| `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/vendor/model dimensions.                | `coding-proxy usage -d 7 -b anthropic`        |
+| `reset`  | **The emergency flush button.** Force-reset all circuit breakers and quotas instantly when you've confirmed the main vendor is back from the dead. | `coding-proxy reset`                          |
 
 ---
 
@@ -106,33 +106,33 @@ graph TD
 
     subgraph T0["Tier 0: Claude Plans"]
         direction LR
-        A_BE["AnthropicBackend"]
+        A_VE["AnthropicVendor"]
         A_CB["CB (Circuit Breaker)"]
         A_QG["QG (Quota Guard)"]
     end
 
     subgraph T1["Tier 1: GitHub Copilot"]
         direction LR
-        C_BE["CopilotBackend"]
+        C_VE["CopilotVendor"]
         C_CB["CB (Circuit Breaker)"]
         C_QG["QG (Quota Guard)"]
     end
 
     subgraph T2["Tier 2: Google Antigravity"]
         direction LR
-        G_BE["AntigravityBackend"]
+        G_VE["AntigravityVendor"]
         G_CB["CB (Circuit Breaker)"]
         G_QG["QG (Quota Guard)"]
     end
 
     subgraph TN["Tier N: Zhipu (Safety Net)"]
-        Z_BE["ZhipuBackend"]
+        Z_VE["ZhipuVendor"]
     end
 
-    A_BE --> API_A["Anthropic API"]
-    C_BE --> API_C["GitHub Copilot API"]
-    G_BE --> API_G["Google Gemini API"]
-    Z_BE --> API_Z["Zhipu GLM API"]
+    A_VE --> API_A["Anthropic API"]
+    C_VE --> API_C["GitHub Copilot API"]
+    G_VE --> API_G["Google Gemini API"]
+    Z_VE --> API_Z["Zhipu GLM API"]
 
     style T0 fill:#1a5276,color:#fff
     style T1 fill:#1a5276,color:#fff
@@ -149,7 +149,7 @@ graph TD
 To ensure this project outlives us all (long-term maintainability), we offer exhaustive, Evidence-Based documentation:
 
 - 📖 **[User Guide](./docs/user-guide.md)** — From installation and bare-minimum configs to the semantic breakdown of every `config.yaml` field and common troubleshooting manuals. (Currently in Chinese)
-- 🏗️ **[Architecture Framework](./docs/framework.md)** — A meticulous decoding of underlying design patterns (Template Method, Circuit Breaker, State Machine, etc.), targeted at devs who want to peek into the matrix or contribute new backends. (Currently in Chinese)
+- 🏗️ **[Architecture Framework](./docs/framework.md)** — A meticulous decoding of underlying design patterns (Template Method, Circuit Breaker, State Machine, etc.), targeted at devs who want to peek into the matrix or contribute new vendors. (Currently in Chinese)
 - 🤝 **[Engineering Guidelines (AGENTS.md)](./AGENTS.md)** — The systemic context mindset and AI Agent collaboration protocol. It preaches **refactoring, reuse, and orthogonal abstractions** and serves as the ultimate guiding light for all development in this repository.
 
 ---

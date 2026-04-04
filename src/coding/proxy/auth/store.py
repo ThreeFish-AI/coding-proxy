@@ -1,4 +1,11 @@
-"""Token 持久化存储 — ~/.coding-proxy/tokens.json."""
+"""Token 持久化存储 — ~/.coding-proxy/tokens.json.
+
+``ProviderTokens`` 数据模型已迁移至 :mod:`coding.proxy.model.auth`。
+本文件保留 ``TokenStoreManager`` 持久化管理器，类型通过 re-export 提供。
+
+.. deprecated::
+    未来版本将移除类型 re-export，请直接从 :mod:`coding.proxy.model.auth` 导入。
+"""
 
 from __future__ import annotations
 
@@ -8,32 +15,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+# noqa: F401
+from ..model.auth import ProviderTokens
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_STORE_PATH = Path("~/.coding-proxy/tokens.json")
-
-
-class ProviderTokens(BaseModel):
-    """单个 Provider 的 Token 凭证."""
-
-    access_token: str = ""
-    refresh_token: str = ""
-    expires_at: float = 0.0  # Unix timestamp
-    scope: str = ""
-    token_type: str = "bearer"
-    extra: dict[str, Any] = {}
-
-    @property
-    def is_expired(self) -> bool:
-        """检查 access_token 是否已过期（含 60 秒余量）."""
-        return self.expires_at > 0 and time.time() > self.expires_at - 60
-
-    @property
-    def has_credentials(self) -> bool:
-        """是否有可用凭证（access_token 或 refresh_token）."""
-        return bool(self.access_token or self.refresh_token)
 
 
 class TokenStoreManager:

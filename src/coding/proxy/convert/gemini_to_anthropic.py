@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
-_FINISH_REASON_MAP = {
+logger = logging.getLogger(__name__)
+
+# Gemini finishReason → Anthropic stop_reason 映射（SOT）
+# 本映射为 Gemini→Anthropic 协议转换层中 finish reason 的唯一定义源，
+# gemini_sse_adapter 通过导入本常量实现去重。
+GEMINI_FINISH_REASON_MAP: dict[str, str] = {
     "STOP": "end_turn",
     "MAX_TOKENS": "max_tokens",
     "SAFETY": "end_turn",
@@ -29,13 +35,13 @@ def convert_response(
 
     finish_reason = candidate.get("finishReason", "STOP")
     stop_reason = "tool_use" if any(block.get("type") == "tool_use" for block in content_blocks) else (
-        _FINISH_REASON_MAP.get(finish_reason, "end_turn")
+        GEMINI_FINISH_REASON_MAP.get(finish_reason, "end_turn")
     )
 
     usage = extract_usage(gemini_resp)
     msg_id = request_id or gemini_resp.get("responseId") or f"msg_{uuid.uuid4().hex[:24]}"
 
-    return {
+    result = {
         "id": msg_id,
         "type": "message",
         "role": "assistant",
@@ -45,6 +51,12 @@ def convert_response(
         "stop_sequence": None,
         "usage": usage,
     }
+    logger.debug(
+        "convert_response: %d content blocks, stop_reason=%s",
+        len(content_blocks),
+        stop_reason,
+    )
+    return result
 
 
 def extract_usage(gemini_resp: dict[str, Any]) -> dict[str, int]:

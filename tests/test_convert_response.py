@@ -190,3 +190,100 @@ def test_extract_usage_partial():
     usage = extract_usage(gemini)
     assert usage["input_tokens"] == 42
     assert usage["output_tokens"] == 0
+
+
+# ── 新增测试用例 ──────────────────────────────────────
+
+
+def test_thinking_response_with_signature():
+    """thoughtSignature 正确映射为 signature 字段."""
+    gemini = {
+        "candidates": [{
+            "content": {
+                "parts": [{"text": "Let me think", "thought": True, "thoughtSignature": "sig_abc"}],
+                "role": "model",
+            },
+            "finishReason": "STOP",
+        }],
+        "usageMetadata": {},
+    }
+    result = convert_response(gemini)
+    block = result["content"][0]
+    assert block["type"] == "thinking"
+    assert block["signature"] == "sig_abc"
+
+
+def test_function_call_with_id_preserved():
+    """functionCall.id 被保留到 tool_use.id."""
+    gemini = {
+        "candidates": [{
+            "content": {
+                "parts": [{
+                    "functionCall": {
+                        "id": "fc_custom_1",
+                        "name": "search",
+                        "args": {"q": "test"},
+                    }
+                }],
+                "role": "model",
+            },
+            "finishReason": "STOP",
+        }],
+        "usageMetadata": {},
+    }
+    result = convert_response(gemini)
+    assert result["content"][0]["id"] == "fc_custom_1"
+
+
+def test_text_part_with_signature_only():
+    """text 为空但有 signature 时生成 thinking 块."""
+    gemini = {
+        "candidates": [{
+            "content": {
+                "parts": [{"text": "", "thoughtSignature": "sig_only"}],
+                "role": "model",
+            },
+            "finishReason": "STOP",
+        }],
+        "usageMetadata": {},
+    }
+    result = convert_response(gemini)
+    block = result["content"][0]
+    assert block["type"] == "thinking"
+    assert block["signature"] == "sig_only"
+
+
+def test_mixed_text_and_function_call():
+    """文本 + functionCall 混合响应生成两个 content blocks."""
+    gemini = {
+        "candidates": [{
+            "content": {
+                "parts": [
+                    {"text": "I'll search for you."},
+                    {"functionCall": {"name": "search", "args": {"q": "gemini"}}},
+                ],
+                "role": "model",
+            },
+            "finishReason": "STOP",
+        }],
+        "usageMetadata": {},
+    }
+    result = convert_response(gemini)
+    assert len(result["content"]) == 2
+    assert result["content"][0]["type"] == "text"
+    assert result["content"][1]["type"] == "tool_use"
+    # stop_reason 应为 tool_use（因为有 tool_use block）
+    assert result["stop_reason"] == "tool_use"
+
+
+def test_usage_cache_tokens_zero():
+    """Gemini 不报告 cache tokens，保持为 0."""
+    gemini = {
+        "usageMetadata": {
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 50,
+        },
+    }
+    usage = extract_usage(gemini)
+    assert usage["cache_creation_input_tokens"] == 0
+    assert usage["cache_read_input_tokens"] == 0

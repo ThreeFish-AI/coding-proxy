@@ -3,18 +3,18 @@
 import httpx
 import pytest
 
-from coding.proxy.backends.types import (
+from coding.proxy.vendors.base import (
     PROXY_SKIP_HEADERS,
     RESPONSE_SANITIZE_SKIP_HEADERS,
-    BackendCapabilities,
-    BackendResponse,
+    VendorCapabilities,
+    VendorResponse,
     CapabilityLossReason,
-    NoCompatibleBackendError,
+    NoCompatibleVendorError,
     RequestCapabilities,
     UsageInfo,
-    _decode_json_body,
-    _extract_error_message,
-    _sanitize_headers_for_synthetic_response,
+    decode_json_body as _decode_json_body,
+    extract_error_message as _extract_error_message,
+    sanitize_headers_for_synthetic_response as _sanitize_headers_for_synthetic_response,
 )
 
 
@@ -66,11 +66,11 @@ def test_request_capabilities_immutable():
         caps.has_tools = False  # type: ignore[misc]
 
 
-# ── BackendCapabilities (frozen) ─────────────────────────
+# ── VendorCapabilities (frozen) ─────────────────────────
 
 
-def test_backend_capabilities_defaults():
-    caps = BackendCapabilities()
+def test_vendor_capabilities_defaults():
+    caps = VendorCapabilities()
     assert caps.supports_tools is True
     assert caps.supports_thinking is True
     assert caps.supports_images is True
@@ -78,11 +78,11 @@ def test_backend_capabilities_defaults():
     assert caps.supports_metadata is True
 
 
-# ── BackendResponse ──────────────────────────────────────
+# ── VendorResponse ──────────────────────────────────────
 
 
-def test_backend_response_defaults():
-    resp = BackendResponse()
+def test_vendor_response_defaults():
+    resp = VendorResponse()
     assert resp.status_code == 200
     assert resp.usage.input_tokens == 0
     assert resp.raw_body == b"{}"
@@ -91,12 +91,12 @@ def test_backend_response_defaults():
     assert resp.model_served is None
 
 
-# ── NoCompatibleBackendError ──────────────────────────────
+# ── NoCompatibleVendorError ──────────────────────────────
 
 
-def test_no_compatible_backend_error():
-    err = NoCompatibleBackendError("no backend", reasons=["tools", "thinking"])
-    assert str(err) == "no backend"
+def test_no_compatible_vendor_error():
+    err = NoCompatibleVendorError("no vendor", reasons=["tools", "thinking"])
+    assert str(err) == "no vendor"
     assert err.reasons == ["tools", "thinking"]
 
 
