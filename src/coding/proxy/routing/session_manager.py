@@ -9,7 +9,7 @@ from ..compat.canonical import (
     CompatibilityTrace,
 )
 from ..compat.session_store import CompatSessionRecord, CompatSessionStore
-from .tier import BackendTier
+from .tier import VendorTier
 
 
 class RouteSessionManager:
@@ -29,7 +29,7 @@ class RouteSessionManager:
     def apply_compat_context(
         self,
         *,
-        tier: BackendTier,
+        tier: VendorTier,
         canonical_request: Any,
         decision: Any,
         session_record: CompatSessionRecord | None,
@@ -41,7 +41,7 @@ class RouteSessionManager:
             "anthropic": "anthropic_messages",
         }.get(tier.name, "unknown")
         compat_trace = CompatibilityTrace(
-            trace_id=canonical_request.trace_id, backend=tier.name,
+            trace_id=canonical_request.trace_id, vendor=tier.name,
             session_key=canonical_request.session_key, provider_protocol=provider_protocol,
             compat_mode=decision.status.value, simulation_actions=list(decision.simulation_actions),
             unsupported_semantics=list(decision.unsupported_semantics),
@@ -53,7 +53,7 @@ class RouteSessionManager:
         if self._store is None or trace is None or session_record is None:
             return
         provider_states = dict(session_record.provider_state)
-        provider_states[trace.backend] = {
+        provider_states[trace.vendor] = {
             "compat_mode": trace.compat_mode, "simulation_actions": trace.simulation_actions,
             "unsupported_semantics": trace.unsupported_semantics, "trace_id": trace.trace_id,
         }

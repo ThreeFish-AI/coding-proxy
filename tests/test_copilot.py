@@ -1,4 +1,4 @@
-"""CopilotTokenManager 和 CopilotBackend 单元测试."""
+"""CopilotTokenManager 和 CopilotVendor 单元测试."""
 
 from __future__ import annotations
 
@@ -11,14 +11,14 @@ import pytest
 
 from coding.proxy.vendors.base import CapabilityLossReason, RequestCapabilities
 from coding.proxy.vendors.copilot import (
-    CopilotVendor as CopilotBackend,
+    CopilotVendor,
     CopilotTokenManager,
     build_copilot_candidate_base_urls,
     normalize_copilot_requested_model,
     resolve_copilot_base_url,
     _select_copilot_model,
 )
-from coding.proxy.backends.token_manager import TokenAcquireError, TokenErrorKind
+from coding.proxy.vendors.token_manager import TokenAcquireError, TokenErrorKind
 from coding.proxy.config.schema import CopilotConfig, FailoverConfig, ModelMappingRule
 from coding.proxy.routing.model_mapper import ModelMapper
 
@@ -273,13 +273,13 @@ async def test_token_manager_token_and_capabilities_still_succeeds():
     assert diagnostics["capabilities"]["chat_enabled"] is True
 
 
-# --- CopilotBackend ---
+# --- CopilotVendor ---
 
 
 def test_copilot_get_name():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
-    assert backend.get_name() == "copilot"
+    vendor = CopilotVendor(config, FailoverConfig())
+    assert vendor.get_name() == "copilot"
 
 
 def test_resolve_copilot_base_url():
@@ -332,11 +332,11 @@ def test_select_copilot_model_does_not_cross_family():
 async def test_copilot_prepare_request_filters_and_injects_token():
     """_prepare_request 过滤 hop-by-hop 头并注入 Copilot token."""
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
+    vendor = CopilotVendor(config, FailoverConfig())
 
     # Mock token manager
-    backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
-    backend._model_resolver.fetch_available = AsyncMock(return_value=["claude-sonnet-4.6"])  # type: ignore[method-assign]
+    vendor._token_manager.get_token = AsyncMock(return_value="cop_injected")
+    vendor._model_resolver.fetch_available = AsyncMock(return_value=["claude-sonnet-4.6"])  # type: ignore[method-assign]
 
     body = {"model": "claude-sonnet-4-20250514", "messages": []}
     headers = {
@@ -345,7 +345,7 @@ async def test_copilot_prepare_request_filters_and_injects_token():
         "content-length": "100",
         "anthropic-version": "2023-06-01",
     }
-    prepared_body, prepared_headers = await backend._prepare_request(body, headers)
+    prepared_body, prepared_headers = await vendor._prepare_request(body, headers)
     assert prepared_body["model"] == "claude-sonnet-4.6"
     assert prepared_body["messages"] == []
     assert "host" not in prepared_headers
@@ -361,19 +361,19 @@ def test_copilot_inherits_failover():
     """Copilot 继承基类 failover 判断."""
     failover = FailoverConfig(status_codes=[429, 503], error_types=["rate_limit_error"])
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, failover)
+    vendor = CopilotVendor(config, failover)
 
-    assert backend.should_trigger_failover(429, None)
-    assert not backend.should_trigger_failover(200, None)
-    assert backend.should_trigger_failover(429, {
+    assert vendor.should_trigger_failover(429, None)
+    assert not vendor.should_trigger_failover(200, None)
+    assert vendor.should_trigger_failover(429, {
         "error": {"type": "rate_limit_error", "message": "limited"}
     })
 
 
 def test_copilot_capabilities_enable_thinking():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
-    caps = backend.get_capabilities()
+    vendor = CopilotVendor(config, FailoverConfig())
+    caps = vendor.get_capabilities()
     assert caps.supports_tools is True
     assert caps.supports_images is True
     assert caps.supports_thinking is True
@@ -381,9 +381,9 @@ def test_copilot_capabilities_enable_thinking():
 
 def test_copilot_supports_request_with_thinking_via_adapter():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
+    vendor = CopilotVendor(config, FailoverConfig())
 
-    supported, reasons = backend.supports_request(RequestCapabilities(has_thinking=True))
+    supported, reasons = vendor.supports_request(RequestCapabilities(has_thinking=True))
 
     assert supported is True
     assert CapabilityLossReason.THINKING not in reasons
@@ -392,9 +392,9 @@ def test_copilot_supports_request_with_thinking_via_adapter():
 @pytest.mark.asyncio
 async def test_copilot_prepare_request_records_thinking_adaptations():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
-    backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
-    backend._model_resolver.fetch_available = AsyncMock(return_value=["claude-sonnet-4.6"])  # type: ignore[method-assign]
+    vendor = CopilotVendor(config, FailoverConfig())
+    vendor._token_manager.get_token = AsyncMock(return_value="cop_injected")
+    vendor._model_resolver.fetch_available = AsyncMock(return_value=["claude-sonnet-4.6"])  # type: ignore[method-assign]
 
     body = {
         "model": "claude-sonnet-4-20250514",
@@ -405,14 +405,14 @@ async def test_copilot_prepare_request_records_thinking_adaptations():
         "thinking": {"budget_tokens": 1024},
     }
 
-    prepared_body, _ = await backend._prepare_request(body, {"anthropic-version": "2023-06-01"})
+    prepared_body, _ = await vendor._prepare_request(body, {"anthropic-version": "2023-06-01"})
 
     # thinking/extended_thinking 已被映射为 reasoning_effort，不应保留原始字段
     assert "thinking" not in prepared_body
     assert "extended_thinking" not in prepared_body
     # reasoning_effort 应存在（从 thinking dict 映射而来）
     assert prepared_body.get("reasoning_effort") == "medium"
-    diagnostics = backend.get_diagnostics()
+    diagnostics = vendor.get_diagnostics()
     # 适配标签应反映新的映射策略（thinking dict 触发）
     assert any("thinking_mapped_to_reasoning_effort" in a for a in diagnostics["request_adaptations"])
     assert any("thinking_block_used_as_content_fallback" in a for a in diagnostics["request_adaptations"])
@@ -422,13 +422,13 @@ async def test_copilot_prepare_request_records_thinking_adaptations():
 @pytest.mark.asyncio
 async def test_copilot_prepare_request_uses_cached_models_without_refetch():
     config = CopilotConfig(github_token="ghp_test", models_cache_ttl_seconds=300)
-    backend = CopilotBackend(config, FailoverConfig())
-    backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
-    backend._model_resolver.catalog.available_models = ["claude-sonnet-4.6"]
-    backend._model_resolver.catalog.fetched_at_unix = int(time.time())
-    backend._model_resolver.fetch_available = AsyncMock(side_effect=AssertionError("should not refetch"))  # type: ignore[method-assign]
+    vendor = CopilotVendor(config, FailoverConfig())
+    vendor._token_manager.get_token = AsyncMock(return_value="cop_injected")
+    vendor._model_resolver.catalog.available_models = ["claude-sonnet-4.6"]
+    vendor._model_resolver.catalog.fetched_at_unix = int(time.time())
+    vendor._model_resolver.fetch_available = AsyncMock(side_effect=AssertionError("should not refetch"))  # type: ignore[method-assign]
 
-    prepared_body, _ = await backend._prepare_request(
+    prepared_body, _ = await vendor._prepare_request(
         {"model": "claude-sonnet-4-20250514", "messages": []},
         {"anthropic-version": "2023-06-01"},
     )
@@ -439,10 +439,10 @@ async def test_copilot_prepare_request_uses_cached_models_without_refetch():
 @pytest.mark.asyncio
 async def test_copilot_request_with_421_retries_fresh_connection():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
+    vendor = CopilotVendor(config, FailoverConfig())
 
     initial_request = httpx.Request("POST", "https://api.individual.githubcopilot.com/chat/completions")
-    backend._client = _AsyncRequestClientStub(httpx.Response(  # type: ignore[assignment]
+    vendor._client = _AsyncRequestClientStub(httpx.Response(  # type: ignore[assignment]
         421,
         content=b"Misdirected Request\n",
         request=initial_request,
@@ -454,9 +454,9 @@ async def test_copilot_request_with_421_retries_fresh_connection():
         headers={"content-type": "application/json"},
         request=initial_request,
     ))
-    backend._create_fresh_client = lambda base_url: retry_client  # type: ignore[method-assign]
+    vendor._create_fresh_client = lambda base_url: retry_client  # type: ignore[method-assign]
 
-    response = await backend._request_with_421_retry(
+    response = await vendor._request_with_421_retry(
         "POST",
         "/chat/completions",
         headers={"authorization": "Bearer cop"},
@@ -464,7 +464,7 @@ async def test_copilot_request_with_421_retries_fresh_connection():
     )
 
     assert response.status_code == 200
-    diagnostics = backend.get_diagnostics()
+    diagnostics = vendor.get_diagnostics()
     assert diagnostics["last_request_base_url"] == "https://api.individual.githubcopilot.com"
     assert diagnostics["last_421_base_url"] == "https://api.individual.githubcopilot.com"
     assert diagnostics["last_retry_base_url"] == "https://api.individual.githubcopilot.com"
@@ -473,10 +473,10 @@ async def test_copilot_request_with_421_retries_fresh_connection():
 @pytest.mark.asyncio
 async def test_copilot_request_with_421_falls_back_to_public_domain():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
+    vendor = CopilotVendor(config, FailoverConfig())
 
     initial_request = httpx.Request("POST", "https://api.individual.githubcopilot.com/chat/completions")
-    backend._client = _AsyncRequestClientStub(httpx.Response(  # type: ignore[assignment]
+    vendor._client = _AsyncRequestClientStub(httpx.Response(  # type: ignore[assignment]
         421,
         content=b"Misdirected Request\n",
         request=initial_request,
@@ -501,9 +501,9 @@ async def test_copilot_request_with_421_falls_back_to_public_domain():
         retry_urls.append(base_url)
         return retry_clients.pop(0)
 
-    backend._create_fresh_client = _fake_create_fresh_client  # type: ignore[method-assign]
+    vendor._create_fresh_client = _fake_create_fresh_client  # type: ignore[method-assign]
 
-    response = await backend._request_with_421_retry(
+    response = await vendor._request_with_421_retry(
         "POST",
         "/chat/completions",
         headers={"authorization": "Bearer cop"},
@@ -515,7 +515,7 @@ async def test_copilot_request_with_421_falls_back_to_public_domain():
         "https://api.individual.githubcopilot.com",
         "https://api.githubcopilot.com",
     ]
-    diagnostics = backend.get_diagnostics()
+    diagnostics = vendor.get_diagnostics()
     assert diagnostics["resolved_base_url"] == "https://api.githubcopilot.com"
     assert diagnostics["last_retry_base_url"] == "https://api.githubcopilot.com"
 
@@ -523,8 +523,8 @@ async def test_copilot_request_with_421_falls_back_to_public_domain():
 @pytest.mark.asyncio
 async def test_copilot_stream_421_retries_alternate_base_url():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
-    backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
+    vendor = CopilotVendor(config, FailoverConfig())
+    vendor._token_manager.get_token = AsyncMock(return_value="cop_injected")
 
     current_base_url = "https://api.individual.githubcopilot.com"
     fallback_base_url = "https://api.githubcopilot.com"
@@ -541,13 +541,13 @@ async def test_copilot_stream_421_retries_alternate_base_url():
             )
         yield b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 
-    backend._stream_from_client = _fake_stream_from_client  # type: ignore[method-assign]
-    backend._create_fresh_client = lambda base_url: _AsyncRequestClientStub(  # type: ignore[method-assign]
+    vendor._stream_from_client = _fake_stream_from_client  # type: ignore[method-assign]
+    vendor._create_fresh_client = lambda base_url: _AsyncRequestClientStub(  # type: ignore[method-assign]
         httpx.Response(200, request=httpx.Request("POST", f"{base_url}/chat/completions"))
     )
 
     chunks = []
-    async for chunk in backend.send_message_stream(
+    async for chunk in vendor.send_message_stream(
         {"model": "claude-sonnet-4-20250514", "messages": []},
         {"anthropic-version": "2023-06-01"},
     ):
@@ -559,14 +559,14 @@ async def test_copilot_stream_421_retries_alternate_base_url():
         current_base_url,
         fallback_base_url,
     ]
-    assert backend.get_diagnostics()["resolved_base_url"] == fallback_base_url
+    assert vendor.get_diagnostics()["resolved_base_url"] == fallback_base_url
 
 
 @pytest.mark.asyncio
 async def test_copilot_stream_retries_after_model_not_supported():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
-    backend._token_manager.get_token = AsyncMock(return_value="cop_injected")
+    vendor = CopilotVendor(config, FailoverConfig())
+    vendor._token_manager.get_token = AsyncMock(return_value="cop_injected")
 
     refreshed = False
 
@@ -575,7 +575,7 @@ async def test_copilot_stream_retries_after_model_not_supported():
         refreshed = refreshed or refresh_reason == "model_not_supported_retry"
         return ["claude-sonnet-4.5"] if not refreshed else ["claude-sonnet-4.6"]
 
-    backend._model_resolver.fetch_available = _fake_fetch_available_models  # type: ignore[method-assign]
+    vendor._model_resolver.fetch_available = _fake_fetch_available_models  # type: ignore[method-assign]
 
     stream_models: list[str] = []
 
@@ -596,10 +596,10 @@ async def test_copilot_stream_retries_after_model_not_supported():
         yield b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-sonnet-4.6\",\"usage\":{\"input_tokens\":10}}}\n\n"
         yield b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 
-    backend._stream_from_client = _fake_stream_from_client  # type: ignore[method-assign]
+    vendor._stream_from_client = _fake_stream_from_client  # type: ignore[method-assign]
 
     chunks = []
-    async for chunk in backend.send_message_stream(
+    async for chunk in vendor.send_message_stream(
         {"model": "claude-sonnet-4-20250514", "messages": []},
         {"anthropic-version": "2023-06-01"},
     ):
@@ -607,14 +607,14 @@ async def test_copilot_stream_retries_after_model_not_supported():
 
     assert chunks
     assert stream_models == ["claude-sonnet-4.5", "claude-sonnet-4.6"]
-    assert backend.get_diagnostics()["resolved_model"] == "claude-sonnet-4.6"
+    assert vendor.get_diagnostics()["resolved_model"] == "claude-sonnet-4.6"
 
 
 @pytest.mark.asyncio
 async def test_probe_models_reports_opus_46():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
-    backend._token_manager.get_token = AsyncMock(return_value="cop_token")
+    vendor = CopilotVendor(config, FailoverConfig())
+    vendor._token_manager.get_token = AsyncMock(return_value="cop_token")
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -626,21 +626,21 @@ async def test_probe_models_reports_opus_46():
     mock_client = AsyncMock()
     mock_client.request.return_value = mock_response
     mock_client.is_closed = False
-    backend._client = mock_client
+    vendor._client = mock_client
 
-    probe = await backend.probe_models()
+    probe = await vendor.probe_models()
     assert probe["probe_status"] == "ok"
     assert probe["has_claude_opus_4_6"] is True
     assert "claude-opus-4.6" in probe["available_models"]
-    assert backend.get_diagnostics()["available_models_cache"] == ["claude-opus-4.6", "claude-sonnet-4"]
+    assert vendor.get_diagnostics()["available_models_cache"] == ["claude-opus-4.6", "claude-sonnet-4"]
 
 
 @pytest.mark.asyncio
 async def test_copilot_send_message_translates_openai_response_to_anthropic():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
-    backend._token_manager.get_token = AsyncMock(return_value="cop_token")
-    backend._model_resolver.fetch_available = AsyncMock(return_value=["claude-opus-4.6"])  # type: ignore[method-assign]
+    vendor = CopilotVendor(config, FailoverConfig())
+    vendor._token_manager.get_token = AsyncMock(return_value="cop_token")
+    vendor._model_resolver.fetch_available = AsyncMock(return_value=["claude-opus-4.6"])  # type: ignore[method-assign]
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -661,9 +661,9 @@ async def test_copilot_send_message_translates_openai_response_to_anthropic():
     mock_client = AsyncMock()
     mock_client.request.return_value = mock_response
     mock_client.is_closed = False
-    backend._client = mock_client
+    vendor._client = mock_client
 
-    resp = await backend.send_message(
+    resp = await vendor.send_message(
         {"model": "claude-opus-4-20250514", "messages": [{"role": "user", "content": "hi"}]},
         {"anthropic-version": "2023-06-01"},
     )
@@ -678,8 +678,8 @@ async def test_copilot_send_message_translates_openai_response_to_anthropic():
 @pytest.mark.asyncio
 async def test_copilot_send_message_retries_after_model_not_supported():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
-    backend._token_manager.get_token = AsyncMock(return_value="cop_token")
+    vendor = CopilotVendor(config, FailoverConfig())
+    vendor._token_manager.get_token = AsyncMock(return_value="cop_token")
 
     refreshed = False
 
@@ -688,7 +688,7 @@ async def test_copilot_send_message_retries_after_model_not_supported():
         refreshed = refreshed or refresh_reason == "model_not_supported_retry"
         return ["claude-sonnet-4.5"] if not refreshed else ["claude-sonnet-4.6"]
 
-    backend._model_resolver.fetch_available = _fake_fetch_available_models  # type: ignore[method-assign]
+    vendor._model_resolver.fetch_available = _fake_fetch_available_models  # type: ignore[method-assign]
 
     first_request = httpx.Request("POST", "https://api.individual.githubcopilot.com/chat/completions")
     success_payload = {
@@ -720,24 +720,24 @@ async def test_copilot_send_message_retries_after_model_not_supported():
     mock_client = AsyncMock()
     mock_client.request.side_effect = responses
     mock_client.is_closed = False
-    backend._client = mock_client
+    vendor._client = mock_client
 
-    resp = await backend.send_message(
+    resp = await vendor.send_message(
         {"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "hi"}]},
         {"anthropic-version": "2023-06-01"},
     )
 
     assert resp.status_code == 200
-    assert backend.get_diagnostics()["resolved_model"] == "claude-sonnet-4.6"
-    assert backend.get_diagnostics()["last_model_refresh_reason"] == "model_not_supported_retry"
+    assert vendor.get_diagnostics()["resolved_model"] == "claude-sonnet-4.6"
+    assert vendor.get_diagnostics()["last_model_refresh_reason"] == "model_not_supported_retry"
 
 
 @pytest.mark.asyncio
 async def test_copilot_send_message_returns_enriched_model_error_when_family_missing():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
-    backend._token_manager.get_token = AsyncMock(return_value="cop_token")
-    backend._model_resolver.fetch_available = AsyncMock(return_value=["claude-opus-4.6"])  # type: ignore[method-assign]
+    vendor = CopilotVendor(config, FailoverConfig())
+    vendor._token_manager.get_token = AsyncMock(return_value="cop_token")
+    vendor._model_resolver.fetch_available = AsyncMock(return_value=["claude-opus-4.6"])  # type: ignore[method-assign]
 
     request = httpx.Request("POST", "https://api.individual.githubcopilot.com/chat/completions")
     model_error = httpx.Response(
@@ -749,9 +749,9 @@ async def test_copilot_send_message_returns_enriched_model_error_when_family_mis
     mock_client = AsyncMock()
     mock_client.request.side_effect = [model_error, model_error]
     mock_client.is_closed = False
-    backend._client = mock_client
+    vendor._client = mock_client
 
-    resp = await backend.send_message(
+    resp = await vendor.send_message(
         {"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "hi"}]},
         {"anthropic-version": "2023-06-01"},
     )
@@ -766,8 +766,8 @@ async def test_copilot_send_message_returns_enriched_model_error_when_family_mis
 @pytest.mark.asyncio
 async def test_copilot_send_message_handles_non_json_success_without_crash():
     config = CopilotConfig(github_token="ghp_test")
-    backend = CopilotBackend(config, FailoverConfig())
-    backend._token_manager.get_token = AsyncMock(return_value="cop_token")
+    vendor = CopilotVendor(config, FailoverConfig())
+    vendor._token_manager.get_token = AsyncMock(return_value="cop_token")
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -779,9 +779,9 @@ async def test_copilot_send_message_handles_non_json_success_without_crash():
     mock_client = AsyncMock()
     mock_client.request.return_value = mock_response
     mock_client.is_closed = False
-    backend._client = mock_client
+    vendor._client = mock_client
 
-    resp = await backend.send_message(
+    resp = await vendor.send_message(
         {"model": "claude-opus-4-20250514", "messages": [{"role": "user", "content": "hi"}]},
         {"anthropic-version": "2023-06-01"},
     )
@@ -795,8 +795,8 @@ def _make_copilot_mapper(rules: list[ModelMappingRule]) -> ModelMapper:
     return ModelMapper(rules)
 
 
-def _make_copilot_backend(mapper: ModelMapper | None = None) -> CopilotBackend:
-    return CopilotBackend(CopilotConfig(github_token="ghp_test"), FailoverConfig(), model_mapper=mapper)
+def _make_copilot_vendor(mapper: ModelMapper | None = None) -> CopilotVendor:
+    return CopilotVendor(CopilotConfig(github_token="ghp_test"), FailoverConfig(), model_mapper=mapper)
 
 
 @pytest.mark.asyncio
@@ -805,17 +805,17 @@ async def test_resolve_model_uses_config_mapping_when_rule_matches():
     mapper = _make_copilot_mapper([
         ModelMappingRule(pattern="claude-sonnet-.*", target="claude-sonnet-4.6", is_regex=True, vendors=["copilot"]),
     ])
-    backend = _make_copilot_backend(mapper)
-    backend._model_resolver.get_available = AsyncMock(side_effect=AssertionError("不应调用 get_available"))
+    vendor = _make_copilot_vendor(mapper)
+    vendor._model_resolver.get_available = AsyncMock(side_effect=AssertionError("不应调用 get_available"))
 
-    resolved = await backend._resolve_request_model(
+    resolved = await vendor._resolve_request_model(
         "claude-sonnet-4-20250514", force_refresh=False, refresh_reason="test"
     )
 
     assert resolved == "claude-sonnet-4.6"
-    assert backend._last_resolved_model == "claude-sonnet-4.6"
-    assert backend._last_model_resolution_reason == "config_model_mapping"
-    assert backend._last_requested_model == "claude-sonnet-4-20250514"
+    assert vendor._last_resolved_model == "claude-sonnet-4.6"
+    assert vendor._last_model_resolution_reason == "config_model_mapping"
+    assert vendor._last_requested_model == "claude-sonnet-4-20250514"
 
 
 @pytest.mark.asyncio
@@ -824,29 +824,29 @@ async def test_resolve_model_falls_back_to_internal_when_no_copilot_rule():
     mapper = _make_copilot_mapper([
         ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True, vendors=["fallback"]),
     ])
-    backend = _make_copilot_backend(mapper)
-    backend._model_resolver.get_available = AsyncMock(return_value=["claude-sonnet-4.6", "claude-opus-4.6"])
+    vendor = _make_copilot_vendor(mapper)
+    vendor._model_resolver.get_available = AsyncMock(return_value=["claude-sonnet-4.6", "claude-opus-4.6"])
 
-    resolved = await backend._resolve_request_model(
+    resolved = await vendor._resolve_request_model(
         "claude-sonnet-4-20250514", force_refresh=False, refresh_reason="test"
     )
 
     assert resolved == "claude-sonnet-4.6"
-    assert backend._last_model_resolution_reason == "same_family_highest_version"
+    assert vendor._last_model_resolution_reason == "same_family_highest_version"
 
 
 @pytest.mark.asyncio
 async def test_resolve_model_without_mapper_uses_internal_resolution():
     """model_mapper=None 时向后兼容，走内部家族匹配策略."""
-    backend = _make_copilot_backend(mapper=None)
-    backend._model_resolver.get_available = AsyncMock(return_value=["claude-haiku-4.5", "claude-sonnet-4.6"])
+    vendor = _make_copilot_vendor(mapper=None)
+    vendor._model_resolver.get_available = AsyncMock(return_value=["claude-haiku-4.5", "claude-sonnet-4.6"])
 
-    resolved = await backend._resolve_request_model(
+    resolved = await vendor._resolve_request_model(
         "claude-haiku-4-20250514", force_refresh=False, refresh_reason="test"
     )
 
     assert resolved == "claude-haiku-4.5"
-    assert backend._last_model_resolution_reason == "same_family_highest_version"
+    assert vendor._last_model_resolution_reason == "same_family_highest_version"
 
 
 @pytest.mark.asyncio
@@ -864,8 +864,8 @@ async def test_resolve_model_config_mapping_all_three_families():
         ("claude-haiku-4-20250514", "claude-haiku-4.5"),
     ]
     for requested, expected in cases:
-        backend = _make_copilot_backend(mapper)
-        backend._model_resolver.get_available = AsyncMock(side_effect=AssertionError("不应调用"))
-        resolved = await backend._resolve_request_model(requested, force_refresh=False, refresh_reason="test")
+        vendor = _make_copilot_vendor(mapper)
+        vendor._model_resolver.get_available = AsyncMock(side_effect=AssertionError("不应调用"))
+        resolved = await vendor._resolve_request_model(requested, force_refresh=False, refresh_reason="test")
         assert resolved == expected, f"{requested} 期望 {expected}，实际 {resolved}"
-        assert backend._last_model_resolution_reason == "config_model_mapping"
+        assert vendor._last_model_resolution_reason == "config_model_mapping"

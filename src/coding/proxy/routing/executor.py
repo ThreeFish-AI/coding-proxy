@@ -31,7 +31,7 @@ from .usage_parser import (
 )
 from .usage_recorder import UsageRecorder
 from ..vendors.base import VendorResponse, NoCompatibleVendorError, RequestCapabilities, UsageInfo
-from ..backends.token_manager import TokenAcquireError
+from ..vendors.token_manager import TokenAcquireError
 
 # 向后兼容别名
 BackendResponse = VendorResponse
@@ -152,7 +152,7 @@ class _RouteExecutor:
 
         if last_exc:
             raise last_exc
-        raise NoCompatibleVendorError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容后端", reasons=incompatible_reasons)
+        raise NoCompatibleVendorError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商", reasons=incompatible_reasons)
 
     async def execute_message(
         self,
@@ -237,8 +237,8 @@ class _RouteExecutor:
                 continue
 
         if incompatible_reasons:
-            raise NoCompatibleVendorError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容后端", reasons=incompatible_reasons)
-        raise RuntimeError("无可用后端层级")
+            raise NoCompatibleVendorError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商", reasons=incompatible_reasons)
+        raise RuntimeError("无可用供应商层级")
 
     # ── 门控与错误处理 ──────────────────────────────────────
 

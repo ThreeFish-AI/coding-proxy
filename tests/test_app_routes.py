@@ -8,8 +8,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from coding.proxy.backends.token_manager import TokenAcquireError
-from coding.proxy.vendors.base import VendorResponse as BackendResponse, UsageInfo
+from coding.proxy.vendors.token_manager import TokenAcquireError
+from coding.proxy.vendors.base import VendorResponse, UsageInfo
 from coding.proxy.config.schema import ProxyConfig
 from coding.proxy.server.app import create_app
 
@@ -108,7 +108,7 @@ def test_count_tokens_upstream_error_passthrough():
             assert resp.json()["error"]["type"] == "rate_limit_error"
 
 
-def test_status_exposes_backend_diagnostics():
+def test_status_exposes_vendor_diagnostics():
     """状态接口暴露供应商诊断信息，便于排查凭证交换异常."""
     config = ProxyConfig(
         copilot={"enabled": True, "github_token": "ghu_test"},
@@ -182,7 +182,7 @@ def test_incompatible_request_returns_400():
 
     通过 patch 供应商能力声明模拟不兼容场景，验证 NoCompatibleVendorError → 400。
     """
-    from coding.proxy.vendors.base import VendorCapabilities as BackendCapabilities
+    from coding.proxy.vendors.base import VendorCapabilities
 
     config = ProxyConfig(
         primary={"enabled": False},
@@ -192,7 +192,7 @@ def test_incompatible_request_returns_400():
     app = create_app(config)
 
     # Patch 唯一可用供应商的能力声明，使其拒绝 thinking 请求
-    restrictive_caps = BackendCapabilities(
+    restrictive_caps = VendorCapabilities(
         supports_tools=True,
         supports_thinking=False,
         supports_images=True,
@@ -328,7 +328,7 @@ def test_messages_normalizes_vendor_tool_blocks_before_routing():
 
     async def fake_route_message(body, headers):
         captured_body["body"] = body
-        return BackendResponse(status_code=200, raw_body=b"{}", usage=UsageInfo())
+        return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo())
 
     app.state.router.route_message = fake_route_message
 
@@ -385,11 +385,11 @@ def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
 
     async def primary_route_message(body, headers):
         call_order.append("anthropic")
-        return BackendResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
+        return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
 
     async def fallback_route_message(body, headers):
         call_order.append("zhipu")
-        return BackendResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
+        return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
 
     app.state.router.tiers[0].vendor.send_message = primary_route_message
     app.state.router.tiers[1].vendor.send_message = fallback_route_message

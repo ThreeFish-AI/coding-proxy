@@ -27,7 +27,7 @@ from ..logging.db import TokenLogger
 
 
 class RequestRouter:
-    """路由请求到合适的后端层级，按优先级链式故障转移."""
+    """路由请求到合适的供应商层级，按优先级链式故障转移."""
 
     def __init__(
         self,

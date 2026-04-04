@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from ..backends.base import RequestCapabilities
+from ..vendors.base import RequestCapabilities
 
 
 def extract_error_payload_from_http_status(exc: httpx.HTTPStatusError) -> dict[str, Any] | None:

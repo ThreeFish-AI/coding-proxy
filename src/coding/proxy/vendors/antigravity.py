@@ -23,8 +23,8 @@ from .base import (
     _sanitize_headers_for_synthetic_response,
 )
 # GoogleOAuthTokenManager 已从 antigravity_token_manager.py 合并至本文件末尾
-from ..backends.mixins import TokenBackendMixin
-from ..backends.token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
+from .mixins import TokenBackendMixin
+from .token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
 
 logger = logging.getLogger(__name__)
 

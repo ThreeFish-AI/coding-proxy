@@ -1,4 +1,4 @@
-"""后端专属配置模型."""
+"""供应商专属配置模型."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ class AnthropicConfig(BaseModel):
 
 
 class CopilotConfig(BaseModel):
-    """GitHub Copilot 后端配置."""
+    """GitHub Copilot 供应商配置."""
 
     enabled: bool = False
     github_token: str = ""
@@ -24,7 +24,7 @@ class CopilotConfig(BaseModel):
 
 
 class AntigravityConfig(BaseModel):
-    """Google Antigravity Claude 后端配置."""
+    """Google Antigravity Claude 供应商配置."""
 
     enabled: bool = False
     client_id: str = ""
@@ -37,7 +37,7 @@ class AntigravityConfig(BaseModel):
 
 
 class ZhipuConfig(BaseModel):
-    """智谱 GLM 后端配置（原生 Anthropic 兼容端点）.
+    """智谱 GLM 供应商配置（原生 Anthropic 兼容端点）.
 
     官方端点已完整支持 Anthropic Messages API 协议，
     无需工具截断、thinking 剥离等适配逻辑.

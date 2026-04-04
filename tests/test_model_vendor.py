@@ -1,8 +1,8 @@
-"""coding.proxy.model.backend 数据类型、常量与工具函数单元测试.
+"""coding.proxy.model.vendor 数据类型、常量与工具函数单元测试.
 
 覆盖范围:
-- UsageInfo / CapabilityLossReason / RequestCapabilities / BackendCapabilities
-- BackendResponse / NoCompatibleBackendError
+- UsageInfo / CapabilityLossReason / RequestCapabilities / VendorCapabilities
+- VendorResponse / NoCompatibleVendorError
 - CopilotMisdirectedRequest / CopilotExchangeDiagnostics / CopilotModelCatalog
 - sanitize_headers_for_synthetic_response / decode_json_body / extract_error_message
 - PROXY_SKIP_HEADERS / RESPONSE_SANITIZE_SKIP_HEADERS 常量
@@ -12,13 +12,13 @@ import httpx
 import pytest
 
 from coding.proxy.model.vendor import (
-    VendorCapabilities as BackendCapabilities,
-    VendorResponse as BackendResponse,
+    VendorCapabilities,
+    VendorResponse,
     CapabilityLossReason,
     CopilotExchangeDiagnostics,
     CopilotMisdirectedRequest,
     CopilotModelCatalog,
-    NoCompatibleVendorError as NoCompatibleBackendError,
+    NoCompatibleVendorError,
     RequestCapabilities,
     UsageInfo,
     decode_json_body,
@@ -177,25 +177,25 @@ class TestRequestCapabilities:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 4. BackendCapabilities (frozen dataclass)
+# 4. VendorCapabilities (frozen dataclass)
 # ═══════════════════════════════════════════════════════════════
 
 
-class TestBackendCapabilities:
-    """BackendCapabilities frozen dataclass 测试."""
+class TestVendorCapabilities:
+    """VendorCapabilities frozen dataclass 测试."""
 
     def test_defaults_mostly_true(self):
         """默认构造: 大部分支持标志为 True, emits_vendor_tool_events 为 False."""
-        caps = BackendCapabilities()
+        caps = VendorCapabilities()
         assert caps.supports_tools is True
         assert caps.supports_thinking is True
         assert caps.supports_images is True
         assert caps.emits_vendor_tool_events is False
         assert caps.supports_metadata is True
 
-    def test_custom_minimal_backend(self):
-        """最小化后端: 仅保留基础能力."""
-        caps = BackendCapabilities(
+    def test_custom_minimal_vendor(self):
+        """最小化供应商: 仅保留基础能力."""
+        caps = VendorCapabilities(
             supports_tools=False,
             supports_thinking=False,
             supports_images=False,
@@ -209,27 +209,27 @@ class TestBackendCapabilities:
 
     def test_frozen_immutable(self):
         """frozen: 赋值抛 AttributeError."""
-        caps = BackendCapabilities()
+        caps = VendorCapabilities()
         with pytest.raises(AttributeError):
             caps.supports_tools = False  # type: ignore[misc]
 
     def test_emits_vendor_tool_events_true(self):
         """emits_vendor_tool_events 可设为 True."""
-        caps = BackendCapabilities(emits_vendor_tool_events=True)
+        caps = VendorCapabilities(emits_vendor_tool_events=True)
         assert caps.emits_vendor_tool_events is True
 
 
 # ═══════════════════════════════════════════════════════════════
-# 5. BackendResponse
+# 5. VendorResponse
 # ═══════════════════════════════════════════════════════════════
 
 
-class TestBackendResponse:
-    """BackendResponse dataclass 测试."""
+class TestVendorResponse:
+    """VendorResponse dataclass 测试."""
 
     def test_defaults(self):
         """默认构造: status_code=200, 空错误, 默认 usage, 空 headers."""
-        resp = BackendResponse()
+        resp = VendorResponse()
         assert resp.status_code == 200
         assert isinstance(resp.usage, UsageInfo)
         assert resp.is_streaming is False
@@ -241,7 +241,7 @@ class TestBackendResponse:
 
     def test_error_response(self):
         """错误响应构造: 含 error_type / error_message / 非 200 status_code."""
-        resp = BackendResponse(
+        resp = VendorResponse(
             status_code=429,
             error_type="rate_limit",
             error_message="Too many requests",
@@ -255,7 +255,7 @@ class TestBackendResponse:
     def test_with_usage_and_headers(self):
         """含自定义 usage 和 response_headers 的完整构造."""
         usage = UsageInfo(input_tokens=10, output_tokens=5, request_id="r1")
-        resp = BackendResponse(
+        resp = VendorResponse(
             status_code=201,
             usage=usage,
             raw_body=b'{"ok":true}',
@@ -269,13 +269,13 @@ class TestBackendResponse:
 
     def test_streaming_response(self):
         """流式响应标记."""
-        resp = BackendResponse(is_streaming=True, raw_body=b"")
+        resp = VendorResponse(is_streaming=True, raw_body=b"")
         assert resp.is_streaming is True
         assert resp.raw_body == b""
 
     def test_mutable_fields(self):
         """非 frozen: 可修改字段."""
-        resp = BackendResponse()
+        resp = VendorResponse()
         resp.status_code = 500
         resp.error_type = "internal"
         assert resp.status_code == 500
@@ -283,34 +283,34 @@ class TestBackendResponse:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 6. NoCompatibleBackendError
+# 6. NoCompatibleVendorError
 # ═══════════════════════════════════════════════════════════════
 
 
-class TestNoCompatibleBackendError:
-    """NoCompatibleBackendError 异常类测试."""
+class TestNoCompatibleVendorError:
+    """NoCompatibleVendorError 异常类测试."""
 
     def test_with_reasons(self):
         """带 reasons 列表构造: message 与 reasons 均可访问."""
-        err = NoCompatibleBackendError("no backend available", reasons=["tools", "thinking"])
-        assert str(err) == "no backend available"
+        err = NoCompatibleVendorError("no vendor available", reasons=["tools", "thinking"])
+        assert str(err) == "no vendor available"
         assert err.reasons == ["tools", "thinking"]
 
     def test_without_reasons_defaults_to_empty_list(self):
         """不传 reasons: 默认为空列表而非 None."""
-        err = NoCompatibleBackendError("no backend")
+        err = NoCompatibleVendorError("no vendor")
         assert err.reasons == []
         assert isinstance(err.reasons, list)
 
     def test_is_runtime_error_subclass(self):
         """继承自 RuntimeError, 可用 except RuntimeError 捕获."""
-        err = NoCompatibleBackendError("test")
+        err = NoCompatibleVendorError("test")
         assert isinstance(err, RuntimeError)
         assert isinstance(err, Exception)
 
     def test_empty_reasons_explicit_none(self):
         """显式传 reasons=None: 同样归一化为空列表."""
-        err = NoCompatibleBackendError("msg", reasons=None)
+        err = NoCompatibleVendorError("msg", reasons=None)
         assert err.reasons == []
 
 

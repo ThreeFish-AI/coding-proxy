@@ -333,11 +333,11 @@ logging:
 | 字段       | 类型   | 说明                             |
 | ---------- | ------ | -------------------------------- |
 | `pattern`  | string | 匹配模式                         |
-| `backends` | list[str] | 规则作用的后端范围，支持 `antigravity`、`copilot`、`fallback`/`zhipu`；留空时为兼容旧配置，仅作用于 `fallback` |
+| `backends` | list[str] | 规则作用的供应商范围，支持 `antigravity`、`copilot`、`fallback`/`zhipu`；留空时为兼容旧配置，仅作用于 `fallback` |
 | `target`   | string | 目标模型名称                     |
 | `is_regex` | bool   | 是否为正则表达式（默认 `false`） |
 
-**匹配优先级**：同一后端内精确匹配 > 正则匹配（按规则顺序） > 后端默认值
+**匹配优先级**：同一供应商内精确匹配 > 正则匹配（按规则顺序） > 供应商默认值
 
 > **兼容规则**：未设置 `backends` 的历史规则默认只作用于 `fallback`/`zhipu`，避免旧的 `glm-*` 映射误套到 Antigravity 或 Copilot。
 
@@ -463,7 +463,7 @@ coding-proxy usage [OPTIONS]
 | 参数        | 缩写 | 说明                                                            |
 | ----------- | ---- | --------------------------------------------------------------- |
 | `--days`    | `-d` | 统计天数（默认 7）                                              |
-| `--backend` | `-b` | 过滤指定后端（`anthropic`、`copilot`、`antigravity`、`zhipu`）  |
+| `--backend` | `-b` | 过滤指定供应商（`anthropic`、`copilot`、`antigravity`、`zhipu`）  |
 | `--model`   | `-m` | 过滤请求模型（如 `claude-sonnet-4-20250514`）                   |
 | `--db`      | —    | 数据库文件路径                                                  |
 

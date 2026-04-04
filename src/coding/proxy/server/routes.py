@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from ..vendors.base import NoCompatibleVendorError
 # 向后兼容别名
 NoCompatibleBackendError = NoCompatibleVendorError  # noqa: F401  (deprecated)
-from ..backends.token_manager import TokenAcquireError
+from ..vendors.token_manager import TokenAcquireError
 from .responses import (
     extract_stream_http_error,
     json_error_response,

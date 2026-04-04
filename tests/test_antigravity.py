@@ -1,4 +1,4 @@
-"""AntigravityBackend 和 GoogleOAuthTokenManager 单元测试."""
+"""AntigravityVendor 和 GoogleOAuthTokenManager 单元测试."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from coding.proxy.vendors.antigravity import AntigravityVendor as AntigravityBackend, GoogleOAuthTokenManager
+from coding.proxy.vendors.antigravity import AntigravityVendor, GoogleOAuthTokenManager
 from coding.proxy.vendors.base import RequestCapabilities
-from coding.proxy.backends.token_manager import TokenAcquireError, TokenErrorKind
+from coding.proxy.vendors.token_manager import TokenAcquireError, TokenErrorKind
 from coding.proxy.config.schema import AntigravityConfig, FailoverConfig, ModelMappingRule
 from coding.proxy.routing.model_mapper import ModelMapper
 
@@ -151,21 +151,21 @@ async def test_token_manager_insufficient_scope_requires_reauth():
     assert exc_info.value.kind == TokenErrorKind.INSUFFICIENT_SCOPE
 
 
-# --- AntigravityBackend ---
+# --- AntigravityVendor ---
 
 
 def test_get_name():
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
-    assert backend.get_name() == "antigravity"
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    assert vendor.get_name() == "antigravity"
 
 
 @pytest.mark.asyncio
 async def test_prepare_request_converts_and_injects_token():
     """_prepare_request 转换为 Gemini 格式并注入 OAuth token."""
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
-    backend._token_manager.get_token = AsyncMock(return_value="goog_token")
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    vendor._token_manager.get_token = AsyncMock(return_value="goog_token")
 
     body = {
         "model": "claude-sonnet-4-20250514",
@@ -173,7 +173,7 @@ async def test_prepare_request_converts_and_injects_token():
         "max_tokens": 100,
     }
     headers = {"authorization": "Bearer original"}
-    prepared_body, prepared_headers = await backend._prepare_request(body, headers)
+    prepared_body, prepared_headers = await vendor._prepare_request(body, headers)
 
     # 验证格式转换
     assert "contents" in prepared_body
@@ -194,50 +194,50 @@ async def test_prepare_request_resolves_model_from_mapping():
             vendors=["antigravity"],
         )
     ])
-    backend = AntigravityBackend(AntigravityConfig(), FailoverConfig(), mapper)
-    backend._token_manager.get_token = AsyncMock(return_value="goog_token")
+    vendor = AntigravityVendor(AntigravityConfig(), FailoverConfig(), mapper)
+    vendor._token_manager.get_token = AsyncMock(return_value="goog_token")
 
-    prepared_body, _ = await backend._prepare_request({
+    prepared_body, _ = await vendor._prepare_request({
         "model": "claude-sonnet-4-20250514",
         "messages": [{"role": "user", "content": "Hello"}],
     }, {})
 
     assert prepared_body["contents"][0]["parts"] == [{"text": "Hello"}]
-    diagnostics = backend.get_diagnostics()
+    diagnostics = vendor.get_diagnostics()
     assert diagnostics["resolved_model"] == "claude-sonnet-4-6-thinking"
 
 
 def test_on_error_status_invalidates_token():
     """401/403 触发 token 失效."""
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
 
     # 设置一个有效的 expires_at
-    backend._token_manager._expires_at = 999999999.0
+    vendor._token_manager._expires_at = 999999999.0
 
-    backend._on_error_status(401)
-    assert backend._token_manager._expires_at == 0.0
+    vendor._on_error_status(401)
+    assert vendor._token_manager._expires_at == 0.0
 
 
 def test_on_error_status_ignores_other_codes():
     """非 401/403 不触发 token 失效."""
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
-    backend._token_manager._expires_at = 999999999.0
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    vendor._token_manager._expires_at = 999999999.0
 
-    backend._on_error_status(429)
-    assert backend._token_manager._expires_at == 999999999.0
+    vendor._on_error_status(429)
+    assert vendor._token_manager._expires_at == 999999999.0
 
 
 def test_inherits_failover():
     """继承基类 failover 判断."""
     failover = FailoverConfig(status_codes=[429, 503], error_types=["rate_limit_error"])
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, failover, ModelMapper([]))
+    vendor = AntigravityVendor(config, failover, ModelMapper([]))
 
-    assert backend.should_trigger_failover(429, None)
-    assert not backend.should_trigger_failover(200, None)
-    assert backend.should_trigger_failover(429, {
+    assert vendor.should_trigger_failover(429, None)
+    assert not vendor.should_trigger_failover(200, None)
+    assert vendor.should_trigger_failover(429, {
         "error": {"type": "rate_limit_error", "message": "limited"}
     })
 
@@ -245,21 +245,21 @@ def test_inherits_failover():
 def test_model_endpoint_in_config():
     """model_endpoint 可配置."""
     config = AntigravityConfig(model_endpoint="models/claude-opus-4-20250514")
-    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
-    assert backend._model_endpoint == "models/claude-opus-4-20250514"
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    assert vendor._model_endpoint == "models/claude-opus-4-20250514"
 
 
 def test_mark_scope_error_if_needed():
     """识别 ACCESS_TOKEN_SCOPE_INSUFFICIENT 并写入诊断."""
-    backend = AntigravityBackend(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
-    backend._mark_scope_error_if_needed("ACCESS_TOKEN_SCOPE_INSUFFICIENT")
-    diagnostics = backend.get_diagnostics()
+    vendor = AntigravityVendor(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
+    vendor._mark_scope_error_if_needed("ACCESS_TOKEN_SCOPE_INSUFFICIENT")
+    diagnostics = vendor.get_diagnostics()
     assert diagnostics["token_manager"]["error_kind"] == "insufficient_scope"
 
 
 def test_antigravity_supports_request_with_tools_thinking_and_metadata():
-    backend = AntigravityBackend(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
-    supported, reasons = backend.supports_request(RequestCapabilities(
+    vendor = AntigravityVendor(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
+    supported, reasons = vendor.supports_request(RequestCapabilities(
         has_tools=True,
         has_thinking=True,
         has_metadata=True,
@@ -275,10 +275,10 @@ def test_antigravity_supports_request_with_tools_thinking_and_metadata():
 async def test_prepare_request_no_anthropic_beta_header():
     """_prepare_request 输出不含 anthropic-beta header."""
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
-    backend._token_manager.get_token = AsyncMock(return_value="tok")
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    vendor._token_manager.get_token = AsyncMock(return_value="tok")
 
-    _, headers = await backend._prepare_request({
+    _, headers = await vendor._prepare_request({
         "model": "claude-sonnet-4-20250514",
         "messages": [{"role": "user", "content": "Hi"}],
     }, {})
@@ -292,15 +292,15 @@ async def test_prepare_request_no_anthropic_beta_header():
 async def test_diagnostics_include_adaptations():
     """get_diagnostics() 包含 request_adaptations."""
     config = AntigravityConfig()
-    backend = AntigravityBackend(config, FailoverConfig(), ModelMapper([]))
-    backend._token_manager.get_token = AsyncMock(return_value="tok")
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    vendor._token_manager.get_token = AsyncMock(return_value="tok")
 
-    await backend._prepare_request({
+    await vendor._prepare_request({
         "model": "test",
         "messages": [{"role": "user", "content": ""}],
     }, {})
 
-    diag = backend.get_diagnostics()
+    diag = vendor.get_diagnostics()
     assert "request_adaptations" in diag
     # 空 message 应触发 empty_contents_padded adaptation
     assert any("empty_contents_padded" in a for a in diag["request_adaptations"])
@@ -317,23 +317,23 @@ async def test_send_message_uses_cached_resolution():
             vendors=["antigravity"],
         ),
     ])
-    backend = AntigravityBackend(config, FailoverConfig(), mapper)
-    backend._token_manager.get_token = AsyncMock(return_value="tok")
+    vendor = AntigravityVendor(config, FailoverConfig(), mapper)
+    vendor._token_manager.get_token = AsyncMock(return_value="tok")
 
     # 先调用 _prepare_request 设置缓存
-    await backend._prepare_request({
+    await vendor._prepare_request({
         "model": "claude-sonnet-4-20250514",
         "messages": [{"role": "user", "content": "Hi"}],
     }, {})
 
     # 验证 _last_resolved_model 已被设置
-    assert backend._last_resolved_model == "resolved-model"
+    assert vendor._last_resolved_model == "resolved-model"
     # 验证 map_model 调用次数为 1（仅在 _prepare_request 中调用过一次）
-    assert backend._last_requested_model == "claude-sonnet-4-20250514"
+    assert vendor._last_requested_model == "claude-sonnet-4-20250514"
 
 
 def test_compatibility_profile_json_output_native():
     """json_output 兼容性状态为 NATIVE（已支持 response_format 映射）."""
-    backend = AntigravityBackend(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
-    profile = backend.get_compatibility_profile()
+    vendor = AntigravityVendor(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
+    profile = vendor.get_compatibility_profile()
     assert profile.json_output.name == "NATIVE"

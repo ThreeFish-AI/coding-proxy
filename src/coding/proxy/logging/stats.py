@@ -52,7 +52,7 @@ def _detect_model_variants(failover_stats: list[dict]) -> bool:
 async def show_usage(
     logger: TokenLogger,
     days: int = 7,
-    backend: str | None = None,
+    vendor: str | None = None,
     model: str | None = None,
     pricing_table: "PricingTable | None" = None,
 ) -> None:
@@ -66,7 +66,7 @@ async def show_usage(
 
     table = Table(title=f"Token 使用统计（最近 {days} 天）")
     table.add_column("日期", style="cyan")
-    table.add_column("后端", style="green")
+    table.add_column("供应商", style="green")
     table.add_column("请求模型", style="magenta")
     table.add_column("实际模型", style="yellow")
     table.add_column("请求数", justify="right")
@@ -85,11 +85,11 @@ async def show_usage(
         total_cache_read = row.get("total_cache_read", 0) or 0
         total_tokens = total_input + total_output + total_cache_creation + total_cache_read
 
-        backend_name = str(row.get("vendor", ""))
+        vendor_name = str(row.get("vendor", ""))
         model_served = str(row.get("model_served", ""))
         if pricing_table is not None:
             cost_value = pricing_table.compute_cost(
-                backend_name, model_served,
+                vendor_name, model_served,
                 total_input, total_output, total_cache_creation, total_cache_read,
             )
             cost_str = cost_value.format() if cost_value is not None else "-"
@@ -98,7 +98,7 @@ async def show_usage(
 
         table.add_row(
             str(row.get("date", "")),
-            backend_name,
+            vendor_name,
             str(row.get("model_requested", "")),
             model_served,
             str(row.get("total_requests", 0)),

@@ -23,8 +23,8 @@ class AnthropicVendor(BaseVendor):
     async def check_health(self) -> bool:
         """Anthropic 健康检查 — 透明代理被动策略.
 
-        Anthropic 后端作为透明代理，不管理凭证（auth 来自客户端请求头），
-        无法独立发起 API 探测。健康状态通过 BackendTier 的 Rate Limit
+        Anthropic 供应商作为透明代理，不管理凭证（auth 来自客户端请求头），
+        无法独立发起 API 探测。健康状态通过 VendorTier 的 Rate Limit
         Deadline 门控判定：仅在服务端声明的 rate limit 重置时间到期后，
         才允许使用下一个真实客户端请求作为探针。
         """

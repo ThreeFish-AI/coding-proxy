@@ -3,7 +3,7 @@
 本文件为向后兼容的聚合入口点，所有配置模型已正交拆分至以下子模块：
 
 - :mod:`.server`        – ServerConfig / DatabaseConfig / LoggingConfig
-- :mod:`.backends`       – AnthropicConfig / CopilotConfig / AntigravityConfig / ZhipuConfig
+- :mod:`.vendors`       – AnthropicConfig / CopilotConfig / AntigravityConfig / ZhipuConfig
 - :mod:`.resiliency`     – CircuitBreakerConfig / RetryConfig / FailoverConfig / QuotaGuardConfig
 - :mod:`.routing`        – VendorType / VendorConfig / ModelMappingRule / ModelPricingEntry
 - :mod:`.auth_schema`    – AuthConfig
@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, model_validator
 # ── 子模块 re-export ────────────────────────────────────────────
 
 from .server import ServerConfig, DatabaseConfig, LoggingConfig  # noqa: F401
-from .backends import (                                 # noqa: F401
+from .vendors import (                                 # noqa: F401
     AnthropicConfig,
     CopilotConfig,
     AntigravityConfig,
@@ -158,7 +158,7 @@ class ProxyConfig(BaseModel):
         if "vendors" in data or "tiers" in data:
             # 如果用户使用了旧的 tiers 字段名但实际是 vendor 定义列表，重映射
             if "tiers" in data and "vendors" not in data and isinstance(data["tiers"], list):
-                # 检测是否为新格式的 vendor 定义列表（每项有 vendor/backend 字段）
+                # 检测是否为新格式的 vendor 定义列表（每项有 vendor 字段，兼容旧 backend 字段）
                 first_item = data["tiers"][0] if data["tiers"] else {}
                 if isinstance(first_item, dict) and ("vendor" in first_item or "backend" in first_item):
                     data["vendors"] = data.pop("tiers")
@@ -265,7 +265,7 @@ __all__ = [
     "ProxyConfig",
     # server
     "ServerConfig", "DatabaseConfig", "LoggingConfig",
-    # backends
+    # vendors
     "AnthropicConfig", "CopilotConfig", "AntigravityConfig", "ZhipuConfig",
     # resiliency
     "CircuitBreakerConfig", "RetryConfig", "FailoverConfig", "QuotaGuardConfig",
