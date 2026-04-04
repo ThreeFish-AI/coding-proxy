@@ -66,7 +66,7 @@ def start(
         cfg.server.host = host
 
     # 自动登录检查
-    asyncio.run(auto_login_if_needed(cfg_path))
+    asyncio.run(_auto_login_if_needed(cfg_path))
 
     from ..logging import build_log_config
 
