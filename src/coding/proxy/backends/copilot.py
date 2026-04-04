@@ -491,51 +491,9 @@ class CopilotBackend(TokenBackendMixin, BaseBackend):
         body, prepared_headers = await self._prepare_request(request_body, headers)
         request_model = request_body.get("model", "unknown")
 
-        # 首次尝试（含 421 重试）— 流式路径使用内联闭包以正确追踪 base_url
-        async def _stream_with_421_retry(stream_body: dict[str, Any]) -> AsyncIterator[bytes]:
-            current_base_url = self._resolved_base_url
-            self._begin_request(current_base_url)
-            last_exc: httpx.HTTPStatusError | None = None
-
-            try:
-                async for chunk in self._stream_from_client(
-                    self._get_client(),
-                    base_url=current_base_url,
-                    body=stream_body,
-                    prepared_headers=prepared_headers,
-                    request_model=stream_body.get("model", request_model),
-                ):
-                    yield chunk
-                return
-            except httpx.HTTPStatusError as exc:
-                if exc.response is None or exc.response.status_code != 421:
-                    raise
-                last_exc = exc
-
-            for retry_base_url in self._retry_base_urls(current_base_url):
-                self._last_retry_base_url = retry_base_url
-                async with self._create_fresh_client(retry_base_url) as retry_client:
-                    try:
-                        async for chunk in self._stream_from_client(
-                            retry_client,
-                            base_url=retry_base_url,
-                            body=stream_body,
-                            prepared_headers=prepared_headers,
-                            request_model=stream_body.get("model", request_model),
-                        ):
-                            yield chunk
-                        await self._activate_base_url(retry_base_url)
-                        return
-                    except httpx.HTTPStatusError as retry_exc:
-                        last_exc = retry_exc
-                        if retry_exc.response is None or retry_exc.response.status_code != 421:
-                            raise
-
-            if last_exc:
-                raise last_exc
-
+        # 首次尝试（含 421 重试）
         try:
-            async for chunk in _stream_with_421_retry(body):
+            async for chunk in self._stream_with_421_retry(body, prepared_headers, request_model):
                 yield chunk
             return
         except httpx.HTTPStatusError as exc:
@@ -543,11 +501,69 @@ class CopilotBackend(TokenBackendMixin, BaseBackend):
                 raise
 
         # 模型不支持时强制刷新模型列表后重试
+        async for chunk in self._retry_stream_with_fresh_model(request_body, headers, request_model):
+            yield chunk
+
+    async def _stream_with_421_retry(
+        self,
+        stream_body: dict[str, Any],
+        prepared_headers: dict[str, str],
+        request_model: str,
+    ) -> AsyncIterator[bytes]:
+        """带 421 Misdirected 重试的流式请求."""
+        current_base_url = self._resolved_base_url
+        self._begin_request(current_base_url)
+        last_exc: httpx.HTTPStatusError | None = None
+
+        try:
+            async for chunk in self._stream_from_client(
+                self._get_client(),
+                base_url=current_base_url,
+                body=stream_body,
+                prepared_headers=prepared_headers,
+                request_model=stream_body.get("model", request_model),
+            ):
+                yield chunk
+            return
+        except httpx.HTTPStatusError as exc:
+            if exc.response is None or exc.response.status_code != 421:
+                raise
+            last_exc = exc
+
+        for retry_base_url in self._retry_base_urls(current_base_url):
+            self._last_retry_base_url = retry_base_url
+            async with self._create_fresh_client(retry_base_url) as retry_client:
+                try:
+                    async for chunk in self._stream_from_client(
+                        retry_client,
+                        base_url=retry_base_url,
+                        body=stream_body,
+                        prepared_headers=prepared_headers,
+                        request_model=stream_body.get("model", request_model),
+                    ):
+                        yield chunk
+                    await self._activate_base_url(retry_base_url)
+                    return
+                except httpx.HTTPStatusError as retry_exc:
+                    last_exc = retry_exc
+                    if retry_exc.response is None or retry_exc.response.status_code != 421:
+                        raise
+
+        if last_exc:
+            raise last_exc
+
+    async def _retry_stream_with_fresh_model(
+        self,
+        request_body: dict[str, Any],
+        headers: dict[str, str],
+        request_model: str,
+    ) -> AsyncIterator[bytes]:
+        """模型不支持时强制刷新模型列表后重试流式请求."""
         retried_body, retried_headers = await self._prepare_request(
             request_body, headers, force_model_refresh=True, model_refresh_reason="model_not_supported_retry",
         )
         try:
-            async for chunk in _stream_with_421_retry(retried_body):
+            async for chunk in self._stream_with_421_retry(retried_body, retried_headers, request_model):
                 yield chunk
             return
         except httpx.HTTPStatusError as exc:
