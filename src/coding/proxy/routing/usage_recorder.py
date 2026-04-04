@@ -57,7 +57,7 @@ class UsageRecorder:
         """打印模型调用级别的详细 Access Log."""
         cost_str = "-"
         if self._pricing_table is not None:
-            cost = self._pricing_table.compute_cost(
+            cost_value = self._pricing_table.compute_cost(
                 backend=backend,
                 model_served=model_served,
                 input_tokens=usage.input_tokens,
@@ -65,8 +65,8 @@ class UsageRecorder:
                 cache_creation_tokens=usage.cache_creation_tokens,
                 cache_read_tokens=usage.cache_read_tokens,
             )
-            if cost is not None:
-                cost_str = f"${cost:.4f}"
+            if cost_value is not None:
+                cost_str = cost_value.format()
         logger.info(
             "ModelCall: backend=%s model_requested=%s model_served=%s "
             "duration=%dms tokens=[in:%d out:%d cache_create:%d cache_read:%d] cost=%s",
