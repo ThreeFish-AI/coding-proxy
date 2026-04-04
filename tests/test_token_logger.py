@@ -288,3 +288,155 @@ async def test_query_failover_stats(logger):
     assert anthropic_to_zhipu["count"] == 2
     copilot_to_zhipu = next(s for s in stats if s["failover_from"] == "copilot")
     assert copilot_to_zhipu["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 天数边界与时区修正测试
+# ---------------------------------------------------------------------------
+
+import aiosqlite
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
+
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
+
+
+@pytest.mark.asyncio
+async def test_query_daily_days_one_shows_one_day(logger):
+    """-d 1 应仅返回今天（本地日期）的数据，不含昨天."""
+    now_local = datetime.now(_SHANGHAI)
+    today_start_utc = datetime(
+        now_local.year, now_local.month, now_local.day,
+        tzinfo=_SHANGHAI,
+    ).astimezone(timezone.utc)
+    yesterday_start_utc = today_start_utc - timedelta(days=1)
+
+    # 插入一条"今天"的记录
+    await logger._db.execute(
+        """INSERT INTO usage_log (ts, backend, model_requested, model_served,
+                                  input_tokens, output_tokens)
+           VALUES (?, 'anthropic', 'claude-sonnet-4', 'claude-sonnet-4', 100, 50)""",
+        (today_start_utc.strftime("%Y-%m-%dT%H:%M:%fZ"),),
+    )
+    # 插入一条"昨天"的记录
+    await logger._db.execute(
+        """INSERT INTO usage_log (ts, backend, model_requested, model_served,
+                                  input_tokens, output_tokens)
+           VALUES (?, 'anthropic', 'claude-opus-4', 'claude-opus-4', 200, 80)""",
+        (yesterday_start_utc.strftime("%Y-%m-%dT%H:%M:%fZ"),),
+    )
+    await logger._db.commit()
+
+    with patch("coding.proxy.logging.db._local_tz", return_value=_SHANGHAI):
+        rows = await logger.query_daily(days=1)
+
+    # days=1 只应返回今天的数据
+    assert len(rows) == 1
+    assert rows[0]["model_requested"] == "claude-sonnet-4"
+
+
+@pytest.mark.asyncio
+async def test_query_daily_days_boundary_exact(logger):
+    """-d N 的范围应精确包含 N 个自然日."""
+    now_local = datetime.now(_SHANGHAI)
+    today_start = datetime(now_local.year, now_local.month, now_local.day, tzinfo=_SHANGHAI)
+
+    # 插入今天、昨天、前天共 3 条数据
+    for day_offset in range(3):
+        dt = (today_start - timedelta(days=day_offset)).astimezone(timezone.utc)
+        await logger._db.execute(
+            """INSERT INTO usage_log (ts, backend, model_requested, model_served,
+                                      input_tokens, output_tokens)
+               VALUES (?, 'anthropic', 'm', 'm', 100, 50)""",
+            (dt.strftime("%Y-%m-%dT%H:%M:%fZ"),),
+        )
+    await logger._db.commit()
+
+    with patch("coding.proxy.logging.db._local_tz", return_value=_SHANGHAI):
+        rows_2 = await logger.query_daily(days=2)
+        rows_3 = await logger.query_daily(days=3)
+
+    assert len(rows_2) == 2  # 今天 + 昨天
+    assert len(rows_3) == 3  # 今天 + 昨天 + 前天
+
+
+@pytest.mark.asyncio
+async def test_query_daily_groups_by_local_date(logger):
+    """UTC 时间 16:30 (= UTC+8 次日 00:30) 应归入本地次日."""
+    # 模拟：北京时间 2026-04-04 00:30 → UTC 2026-04-03 16:30
+    utc_ts = "2026-04-03T16:30:00.000Z"
+    await logger._db.execute(
+        """INSERT INTO usage_log (ts, backend, model_requested, model_served,
+                                  input_tokens, output_tokens)
+           VALUES (?, 'anthropic', 'claude-sonnet-4', 'claude-sonnet-4', 100, 50)""",
+        (utc_ts,),
+    )
+    await logger._db.commit()
+
+    with patch("coding.proxy.logging.db._local_tz", return_value=_SHANGHAI):
+        rows = await logger.query_daily(days=7)
+
+    assert len(rows) == 1
+    # 在 UTC+8 下，UTC 16:30 是次日 00:30，应显示为 2026-04-04
+    assert rows[0]["date"] == "2026-04-04"
+
+
+@pytest.mark.asyncio
+async def test_query_window_total_uses_utc_baseline(logger):
+    """滚动窗口应基于 UTC 时间计算，避免本地时区偏移."""
+    # 插入一条 2 小时前的记录
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    await logger._db.execute(
+        """INSERT INTO usage_log (ts, backend, model_requested, model_served,
+                                  input_tokens, output_tokens, success)
+           VALUES (?, 'anthropic', 'claude-sonnet-4', 'claude-sonnet-4', 100, 50, 1)""",
+        (cutoff.strftime("%Y-%m-%dT%H:%M:%fZ"),),
+    )
+    await logger._db.commit()
+
+    total = await logger.query_window_total(window_hours=3.0, backend="anthropic")
+    assert total == 150  # 100 + 50
+
+    # 1 小时窗口应不包含这条记录
+    total_narrow = await logger.query_window_total(window_hours=1.0, backend="anthropic")
+    assert total_narrow == 0
+
+
+@pytest.mark.asyncio
+async def test_query_failover_stats_day_boundary(logger):
+    """故障转移统计应遵循与 query_daily 相同的天数边界."""
+    now_local = datetime.now(_SHANGHAI)
+    today_start = datetime(now_local.year, now_local.month, now_local.day, tzinfo=_SHANGHAI)
+    yesterday_start_utc = (today_start - timedelta(days=1)).astimezone(timezone.utc)
+
+    # 昨天的 failover 记录
+    await logger._db.execute(
+        """INSERT INTO usage_log (ts, backend, model_requested, model_served,
+                                  failover, failover_from)
+           VALUES (?, 'zhipu', 's', 'g', 1, 'anthropic')""",
+        (yesterday_start_utc.strftime("%Y-%m-%dT%H:%M:%fZ"),),
+    )
+    await logger._db.commit()
+
+    with patch("coding.proxy.logging.db._local_tz", return_value=_SHANGHAI):
+        # days=1 不应包含昨天的 failover
+        stats_1 = await logger.query_failover_stats(days=1)
+        assert len(stats_1) == 0
+
+        # days=2 应包含昨天的 failover
+        stats_2 = await logger.query_failover_stats(days=2)
+        assert len(stats_2) == 1
+        assert stats_2[0]["failover_from"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_query_daily_clamps_zero_days(logger):
+    """days=0 应被提升为 1（等价于查今天）."""
+    await logger.log(
+        backend="anthropic", model_requested="claude-sonnet-4",
+        model_served="claude-sonnet-4", input_tokens=100, output_tokens=50,
+    )
+    # days=0 不应报错，行为等同 days=1
+    rows = await logger.query_daily(days=0)
+    assert len(rows) >= 1
