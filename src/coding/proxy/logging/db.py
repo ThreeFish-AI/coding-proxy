@@ -3,11 +3,63 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+
+def _local_tz() -> ZoneInfo:
+    """获取系统本地时区，失败降级 UTC."""
+    try:
+        return datetime.now().astimezone().tzinfo  # type: ignore[return-value]
+    except Exception:
+        logger.warning("无法获取系统本地时区，降级使用 UTC")
+        return timezone.utc
+
+
+def _days_start_utc_iso(days: int) -> str:
+    """
+    计算本地时区下「往前推 days-1 天的那天 00:00:00」对应的 UTC ISO 字符串.
+
+    语义: days=1 → 今天 00:00 local → 转 UTC
+          days=7 → 6 天前 00:00 local → 转 UTC
+    """
+    tz = _local_tz()
+    start_date = datetime.now(tz).date() - timedelta(days=max(1, days) - 1)
+    start_dt = datetime(start_date.year, start_date.month, start_date.day, tzinfo=tz)
+    return start_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%f+00:00")
+
+
+def _hours_ago_utc_iso(hours: float) -> str:
+    """计算 hours 小时前的 UTC ISO 字符串（用于滚动窗口）."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    return cutoff.strftime("%Y-%m-%dT%H:%M:%f+00:00")
+
+
+def _local_date_udf(ts_str: str) -> str:
+    """
+    SQLite UDF：将 UTC ISO 时间戳转为本地日期字符串.
+
+    设计要点：
+    - 动态调用 _local_tz()（非闭包捕获），使 unittest.mock.patch 可注入测试时区
+    - 容错处理非 ISO 格式（如旧迁移数据 ts='now'），降级为字符串截取前 10 位
+    - 永不抛异常（SQLite UDF 异常会导致整个查询失败）
+    """
+    try:
+        tz = _local_tz()
+        return datetime.fromisoformat(
+            ts_str.replace("Z", "+00:00")
+        ).astimezone(tz).strftime("%Y-%m-%d")
+    except (ValueError, TypeError, AttributeError):
+        # 非 ISO 格式（如旧数据 'now'）降级为字符串截取前 10 位
+        if isinstance(ts_str, str) and len(ts_str) >= 10:
+            return ts_str[:10]
+        return ""
+
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS usage_log (
@@ -59,6 +111,8 @@ class TokenLogger:
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(_CREATE_TABLE)
+        # 注册时区感知的日期函数：将 UTC 时间戳转为本地日期
+        await self._db.create_function("local_date", 1, _local_date_udf)
         await self._migrate_add_failover_from()
         await self._db.commit()
 
@@ -155,7 +209,9 @@ class TokenLogger:
                           model: str | None = None) -> list[dict]:
         if not self._db:
             return []
-        sql = """SELECT date(ts) AS date, backend, model_requested, model_served,
+        days = max(1, days)
+        start_iso = _days_start_utc_iso(days)
+        sql = """SELECT local_date(ts) AS date, backend, model_requested, model_served,
                    COUNT(*) AS total_requests,
                    SUM(input_tokens) AS total_input,
                    SUM(output_tokens) AS total_output,
@@ -163,16 +219,16 @@ class TokenLogger:
                    SUM(cache_read_tokens) AS total_cache_read,
                    SUM(CASE WHEN failover THEN 1 ELSE 0 END) AS total_failovers,
                    AVG(duration_ms) AS avg_duration_ms
-               FROM usage_log WHERE ts >= datetime('now', ? || ' days')"""
-        params: list = [f"-{days}"]
+               FROM usage_log WHERE ts >= ?"""
+        params: list = [start_iso]
         if backend:
             sql += " AND backend = ?"
             params.append(backend)
         if model:
             sql += " AND model_requested = ?"
             params.append(model)
-        sql += (" GROUP BY date(ts), backend, model_requested, model_served"
-                " ORDER BY date(ts) DESC, backend, model_requested, model_served")
+        sql += (" GROUP BY local_date(ts), backend, model_requested, model_served"
+                " ORDER BY local_date(ts) DESC, backend, model_requested, model_served")
         cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
@@ -189,12 +245,14 @@ class TokenLogger:
         """
         if not self._db:
             return []
+        days = max(1, days)
+        start_iso = _days_start_utc_iso(days)
 
         if include_model_info:
             sql = """SELECT failover_from, backend, model_requested, model_served,
                        COUNT(*) AS count
                    FROM usage_log
-                   WHERE failover = 1 AND ts >= datetime('now', ? || ' days')
+                   WHERE failover = 1 AND ts >= ?
                    GROUP BY failover_from, backend, model_requested, model_served
                    ORDER BY count DESC"""
         else:
@@ -202,11 +260,11 @@ class TokenLogger:
             sql = """SELECT failover_from, backend,
                        COUNT(*) AS count
                    FROM usage_log
-                   WHERE failover = 1 AND ts >= datetime('now', ? || ' days')
+                   WHERE failover = 1 AND ts >= ?
                    GROUP BY failover_from, backend
                    ORDER BY count DESC"""
 
-        cursor = await self._db.execute(sql, [f"-{days}"])
+        cursor = await self._db.execute(sql, [start_iso])
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
@@ -216,12 +274,13 @@ class TokenLogger:
         """查询滚动时间窗口内指定后端的 token 总用量."""
         if not self._db:
             return 0
+        cutoff_iso = _hours_ago_utc_iso(window_hours)
         cursor = await self._db.execute(
             """SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS total
                FROM usage_log
                WHERE backend = ? AND success = 1
-                 AND ts >= datetime('now', ? || ' hours')""",
-            (backend, f"-{window_hours}"),
+                 AND ts >= ?""",
+            (backend, cutoff_iso),
         )
         row = await cursor.fetchone()
         return row["total"] if row else 0
