@@ -1,0 +1,533 @@
+"""路由执行器单元测试.
+
+覆盖 :mod:`coding.proxy.routing.executor` 的核心逻辑：
+- _RouteExecutor 门控判断（能力检查 / 兼容性检查 / 健康检查）
+- 错误处理（TokenAcquireError / HTTP 错误 / 语义拒绝）
+- _is_cap_error 订阅用量上限判定
+- _VENDOR_PROTOCOL_LABEL_MAP 映射完整性
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from coding.proxy.backends.base import (
+    BaseBackend,
+    BackendCapabilities,
+    BackendResponse,
+    NoCompatibleBackendError,
+    RequestCapabilities,
+    UsageInfo,
+)
+from coding.proxy.backends.token_manager import TokenAcquireError
+from coding.proxy.compat.canonical import (
+    CompatibilityDecision,
+    CompatibilityStatus,
+    build_canonical_request,
+)
+from coding.proxy.routing.executor import _RouteExecutor, _VENDOR_PROTOCOL_LABEL_MAP
+from coding.proxy.routing.session_manager import RouteSessionManager
+from coding.proxy.routing.tier import BackendTier
+from coding.proxy.routing.usage_recorder import UsageRecorder
+
+
+# ── Mock 后端工厂 ─────────────────────────────────────────
+
+
+def _mock_backend(name: str = "test", **caps_kwargs) -> BaseBackend:
+    """创建 mock 后端实例.
+
+    supports_request 会根据 get_capabilities 的返回值自动计算兼容性，
+    无需手动配置。
+    """
+    backend = MagicMock(spec=BaseBackend)
+    backend.get_name.return_value = name
+    backend.map_model.return_value = name + "-model"
+    caps = BackendCapabilities(**caps_kwargs)
+    backend.get_capabilities.return_value = caps
+    backend.get_compatibility_profile.return_value = MagicMock()
+    backend.make_compatibility_decision.return_value = CompatibilityDecision(
+        status=CompatibilityStatus.NATIVE,
+    )
+    backend.get_compat_trace.return_value = None
+
+    # supports_request 基于实际能力动态判断
+    def _supports_request(request_caps: RequestCapabilities):
+        from coding.proxy.backends.base import CapabilityLossReason
+        reasons: list[CapabilityLossReason] = []
+        if request_caps.has_tools and not caps.supports_tools:
+            reasons.append(CapabilityLossReason.TOOLS)
+        if request_caps.has_thinking and not caps.supports_thinking:
+            reasons.append(CapabilityLossReason.THINKING)
+        if request_caps.has_images and not caps.supports_images:
+            reasons.append(CapabilityLossReason.IMAGES)
+        if request_caps.has_metadata and not caps.supports_metadata:
+            reasons.append(CapabilityLossReason.METADATA)
+        return len(reasons) == 0, reasons
+
+    backend.supports_request.side_effect = _supports_request
+    backend.send_message = AsyncMock(return_value=BackendResponse(
+        status_code=200,
+        raw_body=b'{}',
+        usage=UsageInfo(input_tokens=10, output_tokens=5),
+    ))
+    backend.send_message_stream = AsyncMock()
+    backend.check_health = AsyncMock(return_value=True)
+    backend.close = AsyncMock()
+    backend.set_compat_context = MagicMock()
+    return backend
+
+
+async def _async_chunks(chunks: list[bytes]):
+    """辅助：将字节列表包装为异步迭代器."""
+    for c in chunks:
+        yield c
+
+
+def _make_tier(backend: BaseBackend | None = None, **tier_kwargs) -> BackendTier:
+    """创建 BackendTier 实例."""
+    if backend is None:
+        backend = _mock_backend()
+    tier = BackendTier(backend=backend, **tier_kwargs)
+    return tier
+
+
+def _executor(tiers: list[BackendTier] | None = None, **kwargs) -> _RouteExecutor:
+    """创建 _RouteExecutor 实例."""
+    if tiers is None:
+        tiers = [_make_tier()]
+    recorder = kwargs.pop("recorder", UsageRecorder())
+    session_mgr = kwargs.pop("session_mgr", RouteSessionManager())
+    return _RouteExecutor(
+        tiers=tiers,
+        usage_recorder=recorder,
+        session_manager=session_mgr,
+        **kwargs,
+    )
+
+
+# ── _VENDOR_PROTOCOL_LABEL_MAP ───────────────────────────
+
+
+class TestVendorProtocolLabelMap:
+    """供应商协议标签映射测试."""
+
+    def test_all_expected_keys_present(self):
+        expected = {"anthropic", "zhipu", "copilot", "antigravity"}
+        assert set(_VENDOR_PROTOCOL_LABEL_MAP.keys()) == expected
+
+    def test_anthropics_map_to_anthropic_label(self):
+        assert _VENDOR_PROTOCOL_LABEL_MAP["anthropic"] == "Anthropic"
+        assert _VENDOR_PROTOCOL_LABEL_MAP["zhipu"] == "Anthropic"
+
+    def test_copilot_maps_to_openai(self):
+        assert _VENDOR_PROTOCOL_LABEL_MAP["copilot"] == "OpenAI"
+
+    def test_antigravity_maps_to_gemini(self):
+        assert _VENDOR_PROTOCOL_LABEL_MAP["antigravity"] == "Gemini"
+
+
+# ── _is_cap_error ────────────────────────────────────────
+
+
+class TestIsCapError:
+    """订阅用量上限错误判定测试."""
+
+    def test_429_with_quota_keyword(self):
+        resp = BackendResponse(
+            status_code=429,
+            raw_body=b"",
+            error_message="quota exceeded for this subscription",
+        )
+        assert _RouteExecutor._is_cap_error(resp) is True
+
+    def test_429_with_usage_cap_keyword(self):
+        resp = BackendResponse(
+            status_code=429,
+            raw_body=b"",
+            error_message="Usage cap reached",
+        )
+        assert _RouteExecutor._is_cap_error(resp) is True
+
+    def test_403_with_limit_exceeded(self):
+        resp = BackendResponse(
+            status_code=403,
+            raw_body=b"",
+            error_message="Rate limit exceeded",
+        )
+        assert _RouteExecutor._is_cap_error(resp) is True
+
+    def test_429_generic_no_cap_keyword(self):
+        resp = BackendResponse(
+            status_code=429,
+            raw_body=b"",
+            error_message="Too many requests",
+        )
+        assert _RouteExecutor._is_cap_error(resp) is False
+
+    def test_500_not_cap_error(self):
+        resp = BackendResponse(
+            status_code=500,
+            raw_body=b"",
+            error_message="Internal server error",
+        )
+        assert _RouteExecutor._is_cap_error(resp) is False
+
+    def test_200_not_cap_error(self):
+        resp = BackendResponse(
+            status_code=200,
+            raw_body=b'{"content":"ok"}',
+        )
+        assert _RouteExecutor._is_cap_error(resp) is False
+
+    def test_none_error_message(self):
+        resp = BackendResponse(status_code=429, raw_body=b"", error_message=None)
+        assert _RouteExecutor._is_cap_error(resp) is False
+
+
+# ── 门控测试 ─────────────────────────────────────────────
+
+
+class TestTryGateTier:
+    """门控判断测试."""
+
+    @pytest.mark.asyncio
+    async def test_eligible_when_all_checks_pass(self):
+        tier = _make_tier()
+        exec_inst = _executor([tier])
+        body = {"model": "test"}
+        headers = {}
+        caps = RequestCapabilities()
+        req = build_canonical_request(body, headers)
+        session_record = await exec_inst._session_mgr.get_or_create_record(req.session_key, req.trace_id)
+        reasons: list[str] = []
+
+        result = await exec_inst._try_gate_tier(
+            tier, is_last=True, request_caps=caps,
+            canonical_request=req, session_record=session_record,
+            incompatible_reasons=reasons,
+        )
+        assert result == "eligible"
+
+    @pytest.mark.asyncio
+    async def test_skip_when_capability_unsupported(self):
+        backend = _mock_backend(supports_tools=False)
+        tier = _make_tier(backend)
+        exec_inst = _executor([tier])
+        caps = RequestCapabilities(has_tools=True)
+        body = {"model": "test"}
+        headers = {}
+        req = build_canonical_request(body, headers)
+        session_record = await exec_inst._session_mgr.get_or_create_record(req.session_key, req.trace_id)
+        reasons: list[str] = []
+
+        result = await exec_inst._try_gate_tier(
+            tier, is_last=False, request_caps=caps,
+            canonical_request=req, session_record=session_record,
+            incompatible_reasons=reasons,
+        )
+        assert result == "skip"
+        assert len(reasons) > 0
+
+    @pytest.mark.asyncio
+    async def test_skip_when_unsafe_compatibility(self):
+        backend = _mock_backend()
+        backend.make_compatibility_decision.return_value = CompatibilityDecision(
+            status=CompatibilityStatus.UNSAFE,
+            unsupported_semantics=["thinking"],
+        )
+        tier = _make_tier(backend)
+        exec_inst = _executor([tier])
+        caps = RequestCapabilities()
+        body = {"model": "test", "thinking": {"type": "enabled"}}
+        headers = {}
+        req = build_canonical_request(body, headers)
+        session_record = await exec_inst._session_mgr.get_or_create_record(req.session_key, req.trace_id)
+        reasons: list[str] = []
+
+        result = await exec_inst._try_gate_tier(
+            tier, is_last=False, request_caps=caps,
+            canonical_request=req, session_record=session_record,
+            incompatible_reasons=reasons,
+        )
+        assert result == "skip"
+
+
+# ── execute_message 测试 ─────────────────────────────────
+
+
+class TestExecuteMessage:
+    """非流式消息执行测试."""
+
+    @pytest.mark.asyncio
+    async def test_successful_routing(self):
+        """成功路由到第一个可用后端."""
+        backend = _mock_backend("copilot")
+        tier = _make_tier(backend)
+        exec_inst = _executor([tier])
+
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+        assert resp.status_code == 200
+        backend.send_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_failover_on_token_error(self):
+        """TokenAcquireError 触发故障转移到下一层."""
+        bad_backend = _mock_backend("bad")
+        bad_backend.send_message.side_effect = TokenAcquireError("token expired")
+
+        good_backend = _mock_backend("good")
+        good_resp = BackendResponse(
+            status_code=200, raw_body=b'{}',
+            usage=UsageInfo(input_tokens=5, output_tokens=2),
+        )
+        good_backend.send_message = AsyncMock(return_value=good_resp)
+
+        exec_inst = _executor([
+            _make_tier(bad_backend),
+            _make_tier(good_backend),
+        ])
+
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+        assert resp.status_code == 200
+        assert good_backend.send_message.called
+
+    @pytest.mark.asyncio
+    async def test_raises_no_compatible_backend(self):
+        """所有层均不兼容时抛出 NoCompatibleBackendError."""
+        no_tools_backend = _mock_backend(supports_tools=False)
+        exec_inst = _executor([_make_tier(no_tools_backend)])
+
+        with pytest.raises(NoCompatibleBackendError):
+            await exec_inst.execute_message(
+                {"model": "test", "tools": [{}]}, {},
+            )
+
+    @pytest.mark.asyncio
+    async def test_last_tier_propagates_http_error(self):
+        """最后一层的 HTTP 错误直接抛出."""
+        import httpx
+
+        backend = _mock_backend()
+        backend.send_message.side_effect = httpx.ConnectError("unreachable")
+        exec_inst = _executor([_make_tier(backend)])
+
+        with pytest.raises(httpx.ConnectError):
+            await exec_inst.execute_message({"model": "test"}, {})
+
+    @pytest.mark.asyncio
+    async def test_last_tier_propagates_token_error(self):
+        """最后一层的 TokenAcquireError 直接抛出."""
+        backend = _mock_backend()
+        backend.send_message.side_effect = TokenAcquireError("no token")
+        exec_inst = _executor([_make_tier(backend)])
+
+        with pytest.raises(TokenAcquireError):
+            await exec_inst.execute_message({"model": "test"}, {})
+
+    @pytest.mark.asyncio
+    async def test_non_last_tier_continues_on_connect_error(self):
+        """非最后一层连接失败时继续尝试下一层."""
+        import httpx
+
+        bad = _mock_backend("bad")
+        bad.send_message.side_effect = httpx.ConnectError("down")
+
+        good = _mock_backend("good")
+        good_resp = BackendResponse(
+            status_code=200, raw_body=b'{}',
+            usage=UsageInfo(input_tokens=1, output_tokens=1),
+        )
+        good.send_message = AsyncMock(return_value=good_resp)
+
+        exec_inst = _executor([_make_tier(bad), _make_tier(good)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+        assert resp.status_code == 200
+
+
+# ── execute_stream 测试 ──────────────────────────────────
+
+
+class TestExecuteStream:
+    """流式消息执行测试."""
+
+    @pytest.mark.asyncio
+    async def test_successful_stream_yields_chunks(self):
+        """成功流式请求产出字节块."""
+        backend = _mock_backend("copilot")
+        chunk_bytes = b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n'
+
+        async def _stream(*a, **kw):
+            yield chunk_bytes
+
+        backend.send_message_stream = _stream
+        tier = _make_tier(backend)
+        exec_inst = _executor([tier])
+
+        collected = []
+        async for chunk, name in exec_inst.execute_stream({"model": "test"}, {}):
+            collected.append((chunk, name))
+        assert len(collected) > 0
+        assert name == "copilot"
+
+    @pytest.mark.asyncio
+    async def test_stream_token_error_raises_on_last_tier(self):
+        """最后一层流式 Token 错误直接抛出."""
+        backend = _mock_backend()
+
+        async def _raise_token(*a, **kw):
+            raise TokenAcquireError("expired")
+            yield  # noqa: PYS101 — 使其成为异步生成器
+            return  # type: ignore[unreachable]
+
+        backend.send_message_stream = _raise_token
+        exec_inst = _executor([_make_tier(backend)])
+
+        with pytest.raises(TokenAcquireError):
+            async for _ in exec_inst.execute_stream({"model": "test"}, {}):
+                pass  # noqa: PLC0107 (empty body — consume generator to trigger error)
+
+    @pytest.mark.asyncio
+    async def test_stream_http_error_raises_on_last_tier(self):
+        """最后一层流式 HTTP 错误直接抛出."""
+        import httpx
+
+        backend = _mock_backend()
+
+        async def _raise_http(*a, **kw):
+            raise httpx.HTTPStatusError(
+                "error", request=MagicMock(), response=MagicMock(status_code=500),
+            )
+            yield  # noqa: PYS101
+            return  # type: ignore[unreachable]
+
+        backend.send_message_stream = _raise_http
+        exec_inst = _executor([_make_tier(backend)])
+
+        with pytest.raises(httpx.HTTPStatusError):
+            async for _ in exec_inst.execute_stream({"model": "test"}, {}):
+                pass
+
+
+# ── 错误处理测试 ─────────────────────────────────────────
+
+
+class TestHandleTokenError:
+    """TokenAcquireError 处理测试."""
+
+    @pytest.mark.asyncio
+    async def test_records_failure_and_returns_exc(self):
+        tier = _make_tier()
+        exec_inst = _executor([tier])
+        exc = TokenAcquireError("expired")
+
+        failed_name, last_exc = await exec_inst._handle_token_error(
+            tier, exc, is_last=True, failed_tier_name=None,
+        )
+        assert failed_name == "test"
+        assert last_exc is exc
+        # record_failure 是真实方法（非 mock），不抛异常即通过
+
+    @pytest.mark.asyncio
+    async def test_triggers_reauth_for_copilot(self):
+        """Copilot 层的 token 失败应触发 GitHub reauth."""
+        copilot_backend = _mock_backend("copilot")
+        tier = _make_tier(copilot_backend)
+        reauth_mock = MagicMock()
+        reauth_mock.request_reauth = AsyncMock()
+        exec_inst = _executor([tier], reauth_coordinator=reauth_mock)
+
+        exc = TokenAcquireError("expired", needs_reauth=True)
+        await exec_inst._handle_token_error(
+            tier, exc, is_last=False, failed_tier_name=None,
+        )
+
+        reauth_mock.request_reauth.assert_called_once_with("github")
+
+
+# ── UsageRecorder 集成测试 ───────────────────────────────
+
+
+class TestUsageRecorderIntegration:
+    """UsageRecorder 与 Executor 协作测试."""
+
+    def test_build_usage_info_from_dict(self):
+        info = UsageRecorder.build_usage_info({
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_creation_tokens": 10,
+            "cache_read_tokens": 5,
+            "request_id": "req_123",
+        })
+        assert info.input_tokens == 100
+        assert info.output_tokens == 50
+        assert info.cache_creation_tokens == 10
+        assert info.cache_read_tokens == 5
+        assert info.request_id == "req_123"
+
+    def test_build_usage_info_defaults(self):
+        info = UsageRecorder.build_usage_info({})
+        assert info.input_tokens == 0
+        assert info.output_tokens == 0
+        assert info.cache_creation_tokens == 0
+        assert info.cache_read_tokens == 0
+        assert info.request_id == ""
+
+    def test_build_nonstream_evidence_records_for_non_copilot(self):
+        records = UsageRecorder.build_nonstream_evidence_records(
+            backend="antigravity",
+            model_served="gemini-pro",
+            usage=UsageInfo(input_tokens=10, output_tokens=5),
+        )
+        assert records == []
+
+    def test_build_nonstream_evidence_records_for_copilot(self):
+        records = UsageRecorder.build_nonstream_evidence_records(
+            backend="copilot",
+            model_served="gpt-4o",
+            usage=UsageInfo(
+                input_tokens=25, output_tokens=10,
+                cache_creation_tokens=3, cache_read_tokens=7,
+                request_id="msg_abc",
+            ),
+        )
+        assert len(records) == 1
+        rec = records[0]
+        assert rec["backend"] == "copilot"
+        assert rec["model_served"] == "gpt-4o"
+        assert rec["evidence_kind"] == "nonstream_usage_summary"
+        assert rec["parsed_input_tokens"] == 25
+        assert rec["parsed_output_tokens"] == 10
+
+    @pytest.mark.asyncio
+    async def test_record_without_logger_is_noop(self):
+        """无 token_logger 时 record 不报错."""
+        recorder = UsageRecorder(token_logger=None)
+        await recorder.record(
+            backend="test", model_requested="m", model_served="m",
+            usage=UsageInfo(), duration_ms=100, success=True,
+            failover=False,
+        )
+        # 不抛异常即通过
+
+
+# ── RouteSessionManager 集成测试 ─────────────────────────
+
+
+class TestRouteSessionManagerIntegration:
+    """会话管理器与 Executor 协作测试."""
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_without_store(self):
+        mgr = RouteSessionManager(compat_session_store=None)
+        record = await mgr.get_or_create_record("sk_test", "trace_1")
+        # 无 store 时返回 None（由 executor 层面处理空 record 场景）
+        assert record is None
+
+    @pytest.mark.asyncio
+    async def test_persist_session_without_store_is_noop(self):
+        mgr = RouteSessionManager(compat_session_store=None)
+        # 不抛异常即通过
+        await mgr.persist_session(None, None)

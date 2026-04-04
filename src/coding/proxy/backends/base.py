@@ -82,17 +82,21 @@ class BaseBackend(ABC):
 
     def get_compatibility_profile(self) -> CompatibilityProfile:
         caps = self.get_capabilities()
-        native_or_unsafe = lambda supported: CompatibilityStatus.NATIVE if supported else CompatibilityStatus.UNSAFE
         return CompatibilityProfile(
-            thinking=native_or_unsafe(caps.supports_thinking),
-            tool_calling=native_or_unsafe(caps.supports_tools),
+            thinking=self._compat_status_from_bool(caps.supports_thinking),
+            tool_calling=self._compat_status_from_bool(caps.supports_tools),
             tool_streaming=CompatibilityStatus.SIMULATED if caps.supports_tools else CompatibilityStatus.UNSAFE,
             mcp_tools=CompatibilityStatus.UNKNOWN,
-            images=native_or_unsafe(caps.supports_images),
-            metadata=native_or_unsafe(caps.supports_metadata),
+            images=self._compat_status_from_bool(caps.supports_images),
+            metadata=self._compat_status_from_bool(caps.supports_metadata),
             json_output=CompatibilityStatus.UNKNOWN,
             usage_tokens=CompatibilityStatus.SIMULATED,
         )
+
+    @staticmethod
+    def _compat_status_from_bool(supported: bool) -> CompatibilityStatus:
+        """将布尔能力映射为兼容性状态."""
+        return CompatibilityStatus.NATIVE if supported else CompatibilityStatus.UNSAFE
 
     def make_compatibility_decision(self, request: CanonicalRequest) -> CompatibilityDecision:
         profile = self.get_compatibility_profile()
