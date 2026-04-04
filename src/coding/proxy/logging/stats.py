@@ -58,7 +58,7 @@ async def show_usage(
 ) -> None:
     """展示 Token 使用统计."""
     console = Console()
-    rows = await logger.query_daily(days=days, vendor=backend, model=model)
+    rows = await logger.query_daily(days=days, vendor=vendor, model=model)
 
     if not rows:
         console.print("[yellow]暂无使用记录[/yellow]")
