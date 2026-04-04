@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -404,3 +405,63 @@ def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
 
     assert resp.status_code == 200
     assert call_order == ["anthropic"]
+
+
+def test_normalization_adaptations_logged_at_debug_level(caplog):
+    """常规规范化适配（如 tool_use ID 重写）应记录在 DEBUG 级别而非 INFO，避免日志噪音.
+
+    验证：非标准 tool_use_id 触发的 invalid_tool_use_id_rewritten_for_anthropic
+    和 tool_result_tool_use_id_rewritten 适配不会出现在 INFO 级别日志中，
+    但规范化功能本身仍正确工作（ID 被重写且配对一致）。
+    """
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-normalization-log.db"},
+    ))
+
+    captured_body = {}
+
+    async def fake_route_message(body, headers):
+        captured_body["body"] = body
+        return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo())
+
+    app.state.router.route_message = fake_route_message
+
+    with caplog.at_level(logging.INFO, logger="coding.proxy.server.routes"):
+        with TestClient(app) as client:
+            client.post(
+                "/v1/messages",
+                json={
+                    "model": "claude-opus-4-6",
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "content": [{
+                                "type": "tool_use",
+                                "id": "zhipu_nonstandard_id_123",
+                                "name": "bash",
+                                "input": {"cmd": "pwd"},
+                            }],
+                        },
+                        {
+                            "role": "user",
+                            "content": [{
+                                "type": "tool_result",
+                                "tool_use_id": "zhipu_nonstandard_id_123",
+                                "content": "ok",
+                            }],
+                        },
+                    ],
+                },
+            )
+
+    # INFO 级别不应出现 normalization 日志（修复的核心目标）
+    info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert not any("normalized before routing" in m for m in info_messages)
+
+    # 规范化功能仍正确工作：ID 被重写为标准格式
+    assistant_block = captured_body["body"]["messages"][0]["content"][0]
+    user_block = captured_body["body"]["messages"][1]["content"][0]
+    assert assistant_block["id"].startswith("toolu_normalized_")
+    assert user_block["tool_use_id"] == assistant_block["id"]

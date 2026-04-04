@@ -59,7 +59,7 @@ def register_core_routes(app: Any, router: Any) -> None:
         is_streaming = body.get("stream", False)
 
         if normalization.adaptations:
-            logger.info("Request normalized before routing: %s", ", ".join(normalization.adaptations))
+            logger.debug("Request normalized before routing: %s", ", ".join(normalization.adaptations))
 
         if is_streaming:
             return StreamingResponse(
