@@ -8,7 +8,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_FINISH_REASON_MAP = {
+# Gemini finishReason → Anthropic stop_reason 映射（SOT）
+# 本映射为 Gemini→Anthropic 协议转换层中 finish reason 的唯一定义源，
+# gemini_sse_adapter 通过导入本常量实现去重。
+GEMINI_FINISH_REASON_MAP: dict[str, str] = {
     "STOP": "end_turn",
     "MAX_TOKENS": "max_tokens",
     "SAFETY": "end_turn",
@@ -32,7 +35,7 @@ def convert_response(
 
     finish_reason = candidate.get("finishReason", "STOP")
     stop_reason = "tool_use" if any(block.get("type") == "tool_use" for block in content_blocks) else (
-        _FINISH_REASON_MAP.get(finish_reason, "end_turn")
+        GEMINI_FINISH_REASON_MAP.get(finish_reason, "end_turn")
     )
 
     usage = extract_usage(gemini_resp)

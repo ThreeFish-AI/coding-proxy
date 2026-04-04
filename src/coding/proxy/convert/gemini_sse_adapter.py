@@ -7,6 +7,8 @@ import logging
 import uuid
 from typing import Any, AsyncIterator
 
+from .gemini_to_anthropic import GEMINI_FINISH_REASON_MAP
+
 logger = logging.getLogger(__name__)
 
 
@@ -164,11 +166,4 @@ def _make_event(event_type: str, data: dict[str, Any]) -> bytes:
 
 
 def _map_finish_reason(reason: str) -> str:
-    mapping = {
-        "STOP": "end_turn",
-        "MAX_TOKENS": "max_tokens",
-        "SAFETY": "end_turn",
-        "RECITATION": "end_turn",
-        "OTHER": "end_turn",
-    }
-    return mapping.get(reason, "end_turn")
+    return GEMINI_FINISH_REASON_MAP.get(reason, "end_turn")

@@ -13,9 +13,9 @@ if TYPE_CHECKING:
     from ..pricing import PricingTable
 
 from .error_classifier import (
-    _build_request_capabilities,
-    _extract_error_payload_from_http_status,
-    _is_semantic_rejection,
+    build_request_capabilities,
+    extract_error_payload_from_http_status,
+    is_semantic_rejection,
 )
 from .rate_limit import (
     compute_effective_retry_seconds,
@@ -24,9 +24,9 @@ from .rate_limit import (
 )
 from .tier import BackendTier
 from .usage_parser import (
-    _build_usage_evidence_records,
-    _has_missing_input_usage_signals,
-    _parse_usage_from_chunk,
+    build_usage_evidence_records,
+    has_missing_input_usage_signals,
+    parse_usage_from_chunk,
 )
 
 from ..backends.base import BackendResponse, NoCompatibleBackendError, RequestCapabilities, UsageInfo
@@ -141,7 +141,7 @@ class RequestRouter:
         last_idx = len(self._tiers) - 1
         last_exc: Exception | None = None
         failed_tier_name: str | None = None
-        request_caps = _build_request_capabilities(body)
+        request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
         session_record = await self._get_or_create_session_record(canonical_request.session_key, canonical_request.trace_id)
         incompatible_reasons: list[str] = []
@@ -160,14 +160,14 @@ class RequestRouter:
 
             try:
                 async for chunk in tier.backend.send_message_stream(body, headers):
-                    _parse_usage_from_chunk(
+                    parse_usage_from_chunk(
                         chunk, usage,
                         vendor_label=_VENDOR_LABEL_MAP.get(tier.name),
                     )
                     yield chunk, tier.name
 
                 info = self._build_usage_info(usage)
-                if _has_missing_input_usage_signals(info):
+                if has_missing_input_usage_signals(info):
                     logger.warning(
                         "Stream completed with missing input usage signals: output_tokens=%d, "
                         "cache_creation_tokens=%d, cache_read_tokens=%d, tier=%s, usage_data=%r",
@@ -186,7 +186,7 @@ class RequestRouter:
                 await self._record_usage(
                     tier.name, model, model_served, info, duration, True,
                     failed_tier_name is not None, failed_tier_name,
-                    evidence_records=_build_usage_evidence_records(usage, backend=tier.name, model_served=model_served, request_id=info.request_id),
+                    evidence_records=build_usage_evidence_records(usage, backend=tier.name, model_served=model_served, request_id=info.request_id),
                 )
                 return
 
@@ -216,7 +216,7 @@ class RequestRouter:
         last_idx = len(self._tiers) - 1
         start = time.monotonic()
         failed_tier_name: str | None = None
-        request_caps = _build_request_capabilities(body)
+        request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
         session_record = await self._get_or_create_session_record(canonical_request.session_key, canonical_request.trace_id)
         incompatible_reasons: list[str] = []
@@ -245,7 +245,7 @@ class RequestRouter:
                     return resp
 
                 # 非流式的 semantic rejection 和 failover 判断（从响应对象而非异常中提取）
-                if not is_last and _is_semantic_rejection(status_code=resp.status_code, error_type=resp.error_type, error_message=resp.error_message):
+                if not is_last and is_semantic_rejection(status_code=resp.status_code, error_type=resp.error_type, error_message=resp.error_message):
                     logger.warning("Tier %s semantic rejection (%s), trying next tier without recording failure", tier.name, resp.error_type or resp.status_code)
                     failed_tier_name = tier.name
                     continue
@@ -366,9 +366,9 @@ class RequestRouter:
         """
         semantic_rejection = False
         if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
-            payload = _extract_error_payload_from_http_status(exc)
+            payload = extract_error_payload_from_http_status(exc)
             error = payload.get("error", {}) if isinstance(payload, dict) else {}
-            semantic_rejection = _is_semantic_rejection(
+            semantic_rejection = is_semantic_rejection(
                 status_code=exc.response.status_code,
                 error_type=error.get("type") if isinstance(error, dict) else None,
                 error_message=error.get("message") if isinstance(error, dict) else None,

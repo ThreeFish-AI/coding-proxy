@@ -1,0 +1,53 @@
+"""后端专属配置模型."""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+
+class AnthropicConfig(BaseModel):
+    enabled: bool = True
+    base_url: str = "https://api.anthropic.com"
+    timeout_ms: int = 300000
+
+
+class CopilotConfig(BaseModel):
+    """GitHub Copilot 后端配置."""
+
+    enabled: bool = False
+    github_token: str = ""
+    account_type: str = "individual"
+    token_url: str = "https://api.github.com/copilot_internal/v2/token"
+    base_url: str = ""
+    models_cache_ttl_seconds: int = 300
+    timeout_ms: int = 300000
+
+
+class AntigravityConfig(BaseModel):
+    """Google Antigravity Claude 后端配置."""
+
+    enabled: bool = False
+    client_id: str = ""
+    client_secret: str = ""
+    refresh_token: str = ""
+    base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    model_endpoint: str = "models/claude-sonnet-4-20250514"
+    timeout_ms: int = 300000
+    safety_settings: dict[str, str] | None = None
+
+
+class ZhipuConfig(BaseModel):
+    """智谱 GLM 后端配置（原生 Anthropic 兼容端点）.
+
+    官方端点已完整支持 Anthropic Messages API 协议，
+    无需工具截断、thinking 剥离等适配逻辑.
+    """
+
+    enabled: bool = True
+    base_url: str = "https://open.bigmodel.cn/api/anthropic"
+    api_key: str = ""
+    timeout_ms: int = 3000000
+
+__all__ = [
+    "AnthropicConfig", "CopilotConfig", "AntigravityConfig", "ZhipuConfig",
+]

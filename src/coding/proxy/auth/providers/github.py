@@ -17,6 +17,8 @@ from .base import OAuthProvider
 logger = logging.getLogger(__name__)
 
 # GitHub Copilot VS Code 扩展的公开 client_id
+# SOT（权威源）: coding.proxy.config.schema.AuthConfig.github_client_id
+# 此处默认值仅作 fallback，生产环境应通过 config.yaml 的 auth 段覆盖
 _COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
 
 _DEVICE_CODE_URL = "https://github.com/login/device/code"
