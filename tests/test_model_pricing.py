@@ -2,7 +2,7 @@
 
 from dataclasses import fields
 
-from coding.proxy.model.pricing import ModelPricing
+from coding.proxy.model.pricing import Currency, ModelPricing
 
 
 class TestModelPricing:
@@ -33,9 +33,10 @@ def test_custom_pricing_values():
 
 
 def test_field_completeness():
-    """数据类应恰好包含声明的四个字段."""
+    """数据类应恰好包含声明的五个字段（含 currency）."""
     field_names = {f.name for f in fields(ModelPricing)}
     assert field_names == {
+        "currency",
         "input_cost_per_token",
         "output_cost_per_token",
         "cache_creation_input_token_cost",
@@ -43,10 +44,17 @@ def test_field_completeness():
     }
 
 
-def test_field_types_are_float():
-    """所有字段的类型注解应为 float（字符串形式，因 from __future__ import annotations）."""
+def test_price_field_types_are_float():
+    """价格字段的类型注解应为 float（字符串形式，因 from __future__ import annotations）."""
+    price_fields = {
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_creation_input_token_cost",
+        "cache_read_input_token_cost",
+    }
     for f in fields(ModelPricing):
-        assert f.type == "float", f"字段 {f.name} 的类型注解应为 'float'，实际为 {f.type!r}"
+        if f.name in price_fields:
+            assert f.type == "float", f"字段 {f.name} 的类型注解应为 'float'，实际为 {f.type!r}"
 
 
 def test_equality():
@@ -57,3 +65,15 @@ def test_equality():
 
     assert a == b
     assert a != c
+
+
+def test_default_currency_is_usd():
+    """默认构造时 currency 应为 USD."""
+    pricing = ModelPricing()
+    assert pricing.currency == Currency.USD
+
+
+def test_explicit_cny_currency():
+    """显式指定 CNY 币种应正确赋值."""
+    pricing = ModelPricing(currency=Currency.CNY, input_cost_per_token=1e-6)
+    assert pricing.currency == Currency.CNY

@@ -2,7 +2,7 @@
 
 基于配置文件中的手动定价条目，按 (backend, model_served) 计算 Cost。
 
-``ModelPricing`` 数据模型已迁移至 :mod:`coding.proxy.model.pricing`。
+``ModelPricing`` / ``Currency`` / ``CostValue`` 数据模型已迁移至 :mod:`coding.proxy.model.pricing`。
 本文件保留 ``PricingTable`` 查询与计算逻辑，类型通过 re-export 提供。
 
 .. deprecated::
@@ -16,7 +16,7 @@ import re
 from typing import TYPE_CHECKING
 
 # noqa: F401
-from .model.pricing import ModelPricing
+from .model.pricing import CostValue, Currency, ModelPricing
 
 if TYPE_CHECKING:
     from .config.schema import ModelPricingEntry
@@ -43,6 +43,7 @@ class PricingTable:
         self._index: dict[tuple[str, str], ModelPricing] = {}
         for entry in entries:
             pricing = ModelPricing(
+                currency=Currency(entry.currency),
                 input_cost_per_token=entry.input_cost_per_mtok / 1e6,
                 output_cost_per_token=entry.output_cost_per_mtok / 1e6,
                 cache_creation_input_token_cost=entry.cache_write_cost_per_mtok / 1e6,
@@ -82,17 +83,18 @@ class PricingTable:
         output_tokens: int,
         cache_creation_tokens: int,
         cache_read_tokens: int,
-    ) -> float | None:
-        """按单价计算总费用（USD）.
+    ) -> CostValue | None:
+        """按单价计算总费用（含币种信息）.
 
-        若无匹配定价返回 None。
+        返回 :class:`CostValue`（携带币种），若无匹配定价返回 None。
         """
         pricing = self.get_pricing(backend, model_served)
         if pricing is None:
             return None
-        return (
+        amount = (
             input_tokens * pricing.input_cost_per_token
             + output_tokens * pricing.output_cost_per_token
             + cache_creation_tokens * pricing.cache_creation_input_token_cost
             + cache_read_tokens * pricing.cache_read_input_token_cost
         )
+        return CostValue(amount=amount, currency=pricing.currency)

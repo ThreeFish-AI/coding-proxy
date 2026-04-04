@@ -55,7 +55,7 @@ from .token import (  # noqa: F401
 )
 
 # ── 定价模型 ────────────────────────────────────────────────
-from .pricing import ModelPricing  # noqa: F401
+from .pricing import CostValue, Currency, ModelPricing  # noqa: F401
 
 # ── 共享常量 ────────────────────────────────────────────────
 from .constants import (  # noqa: F401
@@ -78,7 +78,7 @@ __all__ = [
     # token
     "TokenAcquireError", "TokenErrorKind", "TokenManagerDiagnostics",
     # pricing
-    "ModelPricing",
+    "CostValue", "Currency", "ModelPricing",
     # constants
     "PROXY_SKIP_HEADERS", "RESPONSE_SANITIZE_SKIP_HEADERS",
 ]

@@ -75,7 +75,7 @@ async def show_usage(
     table.add_column("缓存创建 Token", justify="right", style="dim blue")
     table.add_column("缓存读取 Token", justify="right", style="dim cyan")
     table.add_column("总 Token", justify="right", style="bold white")
-    table.add_column("Cost (USD)", justify="right", style="bold green")
+    table.add_column("Cost", justify="right", style="bold green")
     table.add_column("平均耗时(ms)", justify="right")
 
     for row in rows:
@@ -88,11 +88,11 @@ async def show_usage(
         backend_name = str(row.get("backend", ""))
         model_served = str(row.get("model_served", ""))
         if pricing_table is not None:
-            cost = pricing_table.compute_cost(
+            cost_value = pricing_table.compute_cost(
                 backend_name, model_served,
                 total_input, total_output, total_cache_creation, total_cache_read,
             )
-            cost_str = f"${cost:.4f}" if cost is not None else "-"
+            cost_str = cost_value.format() if cost_value is not None else "-"
         else:
             cost_str = "-"
 
