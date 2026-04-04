@@ -1,0 +1,127 @@
+# =============================================================================
+# coding-proxy: PyPI Publishing Workflow
+# =============================================================================
+# Trigger: GitHub Release publication event
+# Architecture: Build-Publish Separation (PyPA security best practice)
+#   - Job 1 (build): Low privileges, produces sdist+wheel artifacts
+#   - Job 2 (publish-testpypi): OIDC Trusted Publishing -> TestPyPI (prereleases)
+#   - Job 3 (publish-pypi): OIDC Trusted Publishing -> PyPI (production releases)
+#
+# Routing Logic:
+#   - prerelease == true  --> TestPyPI (with skip-existing tolerance)
+#   - prerelease == false --> PyPI production (fail loudly on duplicates)
+#
+# Pre-requisites:
+#   1. Create GitHub Environments: "pypi" and "testpypi"
+#   2. Configure Trusted Publishers on PyPI/TestPyPI admin panels
+#   3. (Recommended) Set "Required reviewers" on "pypi" environment
+#
+# References:
+#   [1] https://packaging.python.org/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/
+#   [2] https://github.com/pypa/gh-action-pypi-publish
+#   [3] https://docs.pypi.org/trusted-publishers/using-a-publisher/
+# =============================================================================
+
+name: Release / Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ===========================================================================
+  # Job 1: BUILD -- Produce distribution artifacts (low privilege isolation)
+  # ===========================================================================
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build dependencies
+        run: uv pip install --system build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Check package metadata
+        run: twine check dist/*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 5
+
+  # ===========================================================================
+  # Job 2: PUBLISH TO TESTPYPI -- Prerelease / staging releases only
+  # ===========================================================================
+  publish-testpypi:
+    name: Publish to TestPyPI
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event.release.prerelease == true
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/coding-proxy
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  # ===========================================================================
+  # Job 3: PUBLISH TO PYPI -- Production releases only
+  # ===========================================================================
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event.release.prerelease == false
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/coding-proxy
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
