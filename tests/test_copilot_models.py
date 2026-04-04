@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from coding.proxy.backends.copilot_models import (
+from coding.proxy.vendors.copilot_models import (
     CopilotExchangeDiagnostics,
     CopilotModelCatalog,
     _select_copilot_model as select_copilot_model,

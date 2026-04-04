@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from coding.proxy.backends.token_manager import BaseTokenManager, TokenAcquireError
+from coding.proxy.vendors.token_manager import BaseTokenManager, TokenAcquireError
 
 
 class _StubTokenManager(BaseTokenManager):

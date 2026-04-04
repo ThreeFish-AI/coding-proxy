@@ -116,7 +116,7 @@ def test_no_warning_for_default_values(caplog):
     assert len(warnings) == 0
 
 
-def test_anthropic_backend_skips_validation(caplog):
+def test_anthropic_vendor_skips_validation(caplog):
     """Anthropic vendor 无专属字段，不应触发任何 warning."""
     with caplog.at_level(logging.WARNING, logger="coding.proxy.config.schema"):
         VendorConfig(vendor="anthropic")

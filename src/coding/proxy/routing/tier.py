@@ -105,7 +105,7 @@ class VendorTier:
 
         三层恢复门控:
         1. Rate Limit Deadline — 截止时间未到，直接拒绝
-        2. Health Check — 轻量级后端健康探测
+        2. Health Check — 轻量级供应商健康探测
         3. Cautious Probe — 通过前两层后，允许真实请求作为探针
         """
         # ── 第一层: Rate Limit Deadline 门控 ──

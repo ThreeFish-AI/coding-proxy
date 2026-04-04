@@ -14,14 +14,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from coding.proxy.vendors.base import (
-    BaseVendor as BaseBackend,
-    VendorCapabilities as BackendCapabilities,
-    VendorResponse as BackendResponse,
-    NoCompatibleVendorError as NoCompatibleBackendError,
+    BaseVendor,
+    VendorCapabilities,
+    VendorResponse,
+    NoCompatibleVendorError,
     RequestCapabilities,
     UsageInfo,
 )
-from coding.proxy.backends.token_manager import TokenAcquireError
+from coding.proxy.vendors.token_manager import TokenAcquireError
 from coding.proxy.compat.canonical import (
     CompatibilityDecision,
     CompatibilityStatus,
@@ -29,29 +29,29 @@ from coding.proxy.compat.canonical import (
 )
 from coding.proxy.routing.executor import _RouteExecutor, _VENDOR_PROTOCOL_LABEL_MAP
 from coding.proxy.routing.session_manager import RouteSessionManager
-from coding.proxy.routing.tier import VendorTier as BackendTier
+from coding.proxy.routing.tier import VendorTier
 from coding.proxy.routing.usage_recorder import UsageRecorder
 
 
 # ── Mock 供应商工厂 ─────────────────────────────────────────
 
 
-def _mock_backend(name: str = "test", **caps_kwargs) -> BaseBackend:
+def _mock_vendor(name: str = "test", **caps_kwargs) -> BaseVendor:
     """创建 mock 供应商实例.
 
     supports_request 会根据 get_capabilities 的返回值自动计算兼容性，
     无需手动配置。
     """
-    backend = MagicMock(spec=BaseBackend)
-    backend.get_name.return_value = name
-    backend.map_model.return_value = name + "-model"
-    caps = BackendCapabilities(**caps_kwargs)
-    backend.get_capabilities.return_value = caps
-    backend.get_compatibility_profile.return_value = MagicMock()
-    backend.make_compatibility_decision.return_value = CompatibilityDecision(
+    vendor = MagicMock(spec=BaseVendor)
+    vendor.get_name.return_value = name
+    vendor.map_model.return_value = name + "-model"
+    caps = VendorCapabilities(**caps_kwargs)
+    vendor.get_capabilities.return_value = caps
+    vendor.get_compatibility_profile.return_value = MagicMock()
+    vendor.make_compatibility_decision.return_value = CompatibilityDecision(
         status=CompatibilityStatus.NATIVE,
     )
-    backend.get_compat_trace.return_value = None
+    vendor.get_compat_trace.return_value = None
 
     # supports_request 基于实际能力动态判断
     def _supports_request(request_caps: RequestCapabilities):
@@ -67,17 +67,17 @@ def _mock_backend(name: str = "test", **caps_kwargs) -> BaseBackend:
             reasons.append(CapabilityLossReason.METADATA)
         return len(reasons) == 0, reasons
 
-    backend.supports_request.side_effect = _supports_request
-    backend.send_message = AsyncMock(return_value=BackendResponse(
+    vendor.supports_request.side_effect = _supports_request
+    vendor.send_message = AsyncMock(return_value=VendorResponse(
         status_code=200,
         raw_body=b'{}',
         usage=UsageInfo(input_tokens=10, output_tokens=5),
     ))
-    backend.send_message_stream = AsyncMock()
-    backend.check_health = AsyncMock(return_value=True)
-    backend.close = AsyncMock()
-    backend.set_compat_context = MagicMock()
-    return backend
+    vendor.send_message_stream = AsyncMock()
+    vendor.check_health = AsyncMock(return_value=True)
+    vendor.close = AsyncMock()
+    vendor.set_compat_context = MagicMock()
+    return vendor
 
 
 async def _async_chunks(chunks: list[bytes]):
@@ -86,15 +86,15 @@ async def _async_chunks(chunks: list[bytes]):
         yield c
 
 
-def _make_tier(backend: BaseBackend | None = None, **tier_kwargs) -> BackendTier:
+def _make_tier(vendor: BaseVendor | None = None, **tier_kwargs) -> VendorTier:
     """创建 VendorTier 实例."""
-    if backend is None:
-        backend = _mock_backend()
-    tier = BackendTier(vendor=backend, **tier_kwargs)
+    if vendor is None:
+        vendor = _mock_vendor()
+    tier = VendorTier(vendor=vendor, **tier_kwargs)
     return tier
 
 
-def _executor(tiers: list[BackendTier] | None = None, **kwargs) -> _RouteExecutor:
+def _executor(tiers: list[VendorTier] | None = None, **kwargs) -> _RouteExecutor:
     """创建 _RouteExecutor 实例."""
     if tiers is None:
         tiers = [_make_tier()]
@@ -136,7 +136,7 @@ class TestIsCapError:
     """订阅用量上限错误判定测试."""
 
     def test_429_with_quota_keyword(self):
-        resp = BackendResponse(
+        resp = VendorResponse(
             status_code=429,
             raw_body=b"",
             error_message="quota exceeded for this subscription",
@@ -144,7 +144,7 @@ class TestIsCapError:
         assert _RouteExecutor._is_cap_error(resp) is True
 
     def test_429_with_usage_cap_keyword(self):
-        resp = BackendResponse(
+        resp = VendorResponse(
             status_code=429,
             raw_body=b"",
             error_message="Usage cap reached",
@@ -152,7 +152,7 @@ class TestIsCapError:
         assert _RouteExecutor._is_cap_error(resp) is True
 
     def test_403_with_limit_exceeded(self):
-        resp = BackendResponse(
+        resp = VendorResponse(
             status_code=403,
             raw_body=b"",
             error_message="Rate limit exceeded",
@@ -160,7 +160,7 @@ class TestIsCapError:
         assert _RouteExecutor._is_cap_error(resp) is True
 
     def test_429_generic_no_cap_keyword(self):
-        resp = BackendResponse(
+        resp = VendorResponse(
             status_code=429,
             raw_body=b"",
             error_message="Too many requests",
@@ -168,7 +168,7 @@ class TestIsCapError:
         assert _RouteExecutor._is_cap_error(resp) is False
 
     def test_500_not_cap_error(self):
-        resp = BackendResponse(
+        resp = VendorResponse(
             status_code=500,
             raw_body=b"",
             error_message="Internal server error",
@@ -176,14 +176,14 @@ class TestIsCapError:
         assert _RouteExecutor._is_cap_error(resp) is False
 
     def test_200_not_cap_error(self):
-        resp = BackendResponse(
+        resp = VendorResponse(
             status_code=200,
             raw_body=b'{"content":"ok"}',
         )
         assert _RouteExecutor._is_cap_error(resp) is False
 
     def test_none_error_message(self):
-        resp = BackendResponse(status_code=429, raw_body=b"", error_message=None)
+        resp = VendorResponse(status_code=429, raw_body=b"", error_message=None)
         assert _RouteExecutor._is_cap_error(resp) is False
 
 
@@ -213,8 +213,8 @@ class TestTryGateTier:
 
     @pytest.mark.asyncio
     async def test_skip_when_capability_unsupported(self):
-        backend = _mock_backend(supports_tools=False)
-        tier = _make_tier(backend)
+        vendor = _mock_vendor(supports_tools=False)
+        tier = _make_tier(vendor)
         exec_inst = _executor([tier])
         caps = RequestCapabilities(has_tools=True)
         body = {"model": "test"}
@@ -233,12 +233,12 @@ class TestTryGateTier:
 
     @pytest.mark.asyncio
     async def test_skip_when_unsafe_compatibility(self):
-        backend = _mock_backend()
-        backend.make_compatibility_decision.return_value = CompatibilityDecision(
+        vendor = _mock_vendor()
+        vendor.make_compatibility_decision.return_value = CompatibilityDecision(
             status=CompatibilityStatus.UNSAFE,
             unsupported_semantics=["thinking"],
         )
-        tier = _make_tier(backend)
+        tier = _make_tier(vendor)
         exec_inst = _executor([tier])
         caps = RequestCapabilities()
         body = {"model": "test", "thinking": {"type": "enabled"}}
@@ -264,43 +264,43 @@ class TestExecuteMessage:
     @pytest.mark.asyncio
     async def test_successful_routing(self):
         """成功路由到第一个可用供应商."""
-        backend = _mock_backend("copilot")
-        tier = _make_tier(backend)
+        vendor = _mock_vendor("copilot")
+        tier = _make_tier(vendor)
         exec_inst = _executor([tier])
 
         resp = await exec_inst.execute_message({"model": "test"}, {})
         assert resp.status_code == 200
-        backend.send_message.assert_called_once()
+        vendor.send_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_failover_on_token_error(self):
         """TokenAcquireError 触发故障转移到下一层."""
-        bad_backend = _mock_backend("bad")
-        bad_backend.send_message.side_effect = TokenAcquireError("token expired")
+        bad_vendor = _mock_vendor("bad")
+        bad_vendor.send_message.side_effect = TokenAcquireError("token expired")
 
-        good_backend = _mock_backend("good")
-        good_resp = BackendResponse(
+        good_vendor = _mock_vendor("good")
+        good_resp = VendorResponse(
             status_code=200, raw_body=b'{}',
             usage=UsageInfo(input_tokens=5, output_tokens=2),
         )
-        good_backend.send_message = AsyncMock(return_value=good_resp)
+        good_vendor.send_message = AsyncMock(return_value=good_resp)
 
         exec_inst = _executor([
-            _make_tier(bad_backend),
-            _make_tier(good_backend),
+            _make_tier(bad_vendor),
+            _make_tier(good_vendor),
         ])
 
         resp = await exec_inst.execute_message({"model": "test"}, {})
         assert resp.status_code == 200
-        assert good_backend.send_message.called
+        assert good_vendor.send_message.called
 
     @pytest.mark.asyncio
-    async def test_raises_no_compatible_backend(self):
+    async def test_raises_no_compatible_vendor(self):
         """所有层均不兼容时抛出 NoCompatibleVendorError."""
-        no_tools_backend = _mock_backend(supports_tools=False)
-        exec_inst = _executor([_make_tier(no_tools_backend)])
+        no_tools_vendor = _mock_vendor(supports_tools=False)
+        exec_inst = _executor([_make_tier(no_tools_vendor)])
 
-        with pytest.raises(NoCompatibleBackendError):
+        with pytest.raises(NoCompatibleVendorError):
             await exec_inst.execute_message(
                 {"model": "test", "tools": [{}]}, {},
             )
@@ -310,9 +310,9 @@ class TestExecuteMessage:
         """最后一层的 HTTP 错误直接抛出."""
         import httpx
 
-        backend = _mock_backend()
-        backend.send_message.side_effect = httpx.ConnectError("unreachable")
-        exec_inst = _executor([_make_tier(backend)])
+        vendor = _mock_vendor()
+        vendor.send_message.side_effect = httpx.ConnectError("unreachable")
+        exec_inst = _executor([_make_tier(vendor)])
 
         with pytest.raises(httpx.ConnectError):
             await exec_inst.execute_message({"model": "test"}, {})
@@ -320,9 +320,9 @@ class TestExecuteMessage:
     @pytest.mark.asyncio
     async def test_last_tier_propagates_token_error(self):
         """最后一层的 TokenAcquireError 直接抛出."""
-        backend = _mock_backend()
-        backend.send_message.side_effect = TokenAcquireError("no token")
-        exec_inst = _executor([_make_tier(backend)])
+        vendor = _mock_vendor()
+        vendor.send_message.side_effect = TokenAcquireError("no token")
+        exec_inst = _executor([_make_tier(vendor)])
 
         with pytest.raises(TokenAcquireError):
             await exec_inst.execute_message({"model": "test"}, {})
@@ -332,11 +332,11 @@ class TestExecuteMessage:
         """非最后一层连接失败时继续尝试下一层."""
         import httpx
 
-        bad = _mock_backend("bad")
+        bad = _mock_vendor("bad")
         bad.send_message.side_effect = httpx.ConnectError("down")
 
-        good = _mock_backend("good")
-        good_resp = BackendResponse(
+        good = _mock_vendor("good")
+        good_resp = VendorResponse(
             status_code=200, raw_body=b'{}',
             usage=UsageInfo(input_tokens=1, output_tokens=1),
         )
@@ -356,14 +356,14 @@ class TestExecuteStream:
     @pytest.mark.asyncio
     async def test_successful_stream_yields_chunks(self):
         """成功流式请求产出字节块."""
-        backend = _mock_backend("copilot")
+        vendor = _mock_vendor("copilot")
         chunk_bytes = b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n'
 
         async def _stream(*a, **kw):
             yield chunk_bytes
 
-        backend.send_message_stream = _stream
-        tier = _make_tier(backend)
+        vendor.send_message_stream = _stream
+        tier = _make_tier(vendor)
         exec_inst = _executor([tier])
 
         collected = []
@@ -375,15 +375,15 @@ class TestExecuteStream:
     @pytest.mark.asyncio
     async def test_stream_token_error_raises_on_last_tier(self):
         """最后一层流式 Token 错误直接抛出."""
-        backend = _mock_backend()
+        vendor = _mock_vendor()
 
         async def _raise_token(*a, **kw):
             raise TokenAcquireError("expired")
             yield  # noqa: PYS101 — 使其成为异步生成器
             return  # type: ignore[unreachable]
 
-        backend.send_message_stream = _raise_token
-        exec_inst = _executor([_make_tier(backend)])
+        vendor.send_message_stream = _raise_token
+        exec_inst = _executor([_make_tier(vendor)])
 
         with pytest.raises(TokenAcquireError):
             async for _ in exec_inst.execute_stream({"model": "test"}, {}):
@@ -394,7 +394,7 @@ class TestExecuteStream:
         """最后一层流式 HTTP 错误直接抛出."""
         import httpx
 
-        backend = _mock_backend()
+        vendor = _mock_vendor()
 
         async def _raise_http(*a, **kw):
             raise httpx.HTTPStatusError(
@@ -403,8 +403,8 @@ class TestExecuteStream:
             yield  # noqa: PYS101
             return  # type: ignore[unreachable]
 
-        backend.send_message_stream = _raise_http
-        exec_inst = _executor([_make_tier(backend)])
+        vendor.send_message_stream = _raise_http
+        exec_inst = _executor([_make_tier(vendor)])
 
         with pytest.raises(httpx.HTTPStatusError):
             async for _ in exec_inst.execute_stream({"model": "test"}, {}):
@@ -433,8 +433,8 @@ class TestHandleTokenError:
     @pytest.mark.asyncio
     async def test_triggers_reauth_for_copilot(self):
         """Copilot 层的 token 失败应触发 GitHub reauth."""
-        copilot_backend = _mock_backend("copilot")
-        tier = _make_tier(copilot_backend)
+        copilot_vendor = _mock_vendor("copilot")
+        tier = _make_tier(copilot_vendor)
         reauth_mock = MagicMock()
         reauth_mock.request_reauth = AsyncMock()
         exec_inst = _executor([tier], reauth_coordinator=reauth_mock)

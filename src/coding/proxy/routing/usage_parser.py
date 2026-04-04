@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Any
 
-from ..backends.base import UsageInfo
+from ..vendors.base import UsageInfo
 
 logger = logging.getLogger(__name__)
 

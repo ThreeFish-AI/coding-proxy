@@ -22,7 +22,7 @@ from ..logging.db import TokenLogger
 from ..logging.stats import show_usage
 from .auth_commands import app as auth_app, auto_login_if_needed as _auto_login_if_needed
 
-app = typer.Typer(name="coding-proxy", help="Claude Code 多后端智能代理服务")
+app = typer.Typer(name="coding-proxy", help="Claude Code 多供应商智能代理服务")
 console = Console()
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ def start(
 def status(
     port: int = typer.Option(8046, "--port", "-p", help="代理服务端口"),
 ) -> None:
-    """查看代理状态和当前活跃后端."""
+    """查看代理状态和当前活跃供应商."""
     import httpx
 
     try:
@@ -105,7 +105,7 @@ def status(
 @app.command()
 def usage(
     days: int = typer.Option(7, "--days", "-d", help="统计天数"),
-    backend: Optional[str] = typer.Option(None, "--backend", "-b", help="过滤后端"),
+    backend: Optional[str] = typer.Option(None, "--backend", "-b", help="过滤供应商"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="过滤请求模型"),
     db_path: Optional[str] = typer.Option(None, "--db", help="数据库路径"),
 ) -> None:
@@ -128,7 +128,7 @@ async def _run_usage(token_logger: TokenLogger, days: int, backend: str | None,
 def reset(
     port: int = typer.Option(8046, "--port", "-p", help="代理服务端口"),
 ) -> None:
-    """重置所有层级的熔断器和配额守卫（恢复使用最高优先级后端）."""
+    """重置所有层级的熔断器和配额守卫（恢复使用最高优先级供应商）."""
     import httpx
 
     try:

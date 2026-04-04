@@ -185,15 +185,15 @@ class VendorConfig(BaseModel):
 
     vendor: VendorType
 
-    # ── 通用字段（所有后端共用） ──────────────────────────────
+    # ── 通用字段（所有供应商共用） ──────────────────────────────
     enabled: bool = True
     base_url: str = Field(
         default="",
-        description="后端 API 基础 URL；留空时使用各后端默认值",
+        description="供应商 API 基础 URL；留空时使用各供应商默认值",
     )
     timeout_ms: int = Field(
         default=300000,
-        description="请求超时时间（毫秒），适用于所有后端",
+        description="请求超时时间（毫秒），适用于所有供应商",
     )
 
     # ── Copilot 专属字段 ─────────────────────────────────────────────

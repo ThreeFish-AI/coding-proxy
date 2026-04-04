@@ -83,7 +83,7 @@ class CanonicalRequest:
 
 
 class CompatibilityStatus(str, Enum):
-    """后端对某语义特性的兼容状态."""
+    """供应商对某语义特性的兼容状态."""
 
     NATIVE = "native"
     SIMULATED = "simulated"
@@ -93,7 +93,7 @@ class CompatibilityStatus(str, Enum):
 
 @dataclass(frozen=True)
 class CompatibilityProfile:
-    """后端各维度的兼容性画像."""
+    """供应商各维度的兼容性画像."""
 
     thinking: CompatibilityStatus = CompatibilityStatus.UNKNOWN
     tool_calling: CompatibilityStatus = CompatibilityStatus.UNKNOWN
@@ -119,7 +119,7 @@ class CompatibilityTrace:
     """兼容性处理链路追踪记录."""
 
     trace_id: str
-    backend: str
+    vendor: str
     session_key: str
     provider_protocol: str
     compat_mode: str

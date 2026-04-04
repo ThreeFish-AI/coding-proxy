@@ -1,6 +1,6 @@
 """Token 管理相关类型 — 枚举、异常与诊断数据类.
 
-从 :mod:`coding.proxy.backends.token_manager` 正交提取纯声明式类型定义。
+从 :mod:`coding.proxy.vendors.token_manager` 正交提取纯声明式类型定义。
 ``BaseTokenManager`` 抽象基类保留在原模块。
 """
 

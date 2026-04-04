@@ -18,7 +18,7 @@ import httpx
 from ..config.schema import ZhipuConfig
 from ..routing.model_mapper import ModelMapper
 from .base import PROXY_SKIP_HEADERS, BaseVendor, VendorCapabilities, VendorResponse
-from ..backends.types import _sanitize_headers_for_synthetic_response
+from .base import _sanitize_headers_for_synthetic_response
 
 logger = logging.getLogger(__name__)
 

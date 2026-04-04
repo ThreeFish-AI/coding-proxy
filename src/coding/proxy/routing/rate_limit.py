@@ -96,7 +96,7 @@ def compute_rate_limit_deadline(info: RateLimitInfo) -> float | None:
 
     与 compute_effective_retry_seconds() 互补:
     - 后者返回相对秒数（给 CircuitBreaker 用于退避计算）
-    - 本函数返回绝对 monotonic 时间戳（给 BackendTier 用于精确门控）
+    - 本函数返回绝对 monotonic 时间戳（给 VendorTier 用于精确门控）
 
     取所有可用时间信号中的最大值，并加 10% 安全余量。
     """

@@ -25,7 +25,7 @@ from .base import (
     _decode_json_body,
     _extract_error_message,
 )
-from ..backends.copilot_models import (  # noqa: F401
+from .copilot_models import (  # noqa: F401
     CopilotMisdirectedRequest,
     CopilotModelResolver,
     _copilot_model_family,
@@ -34,8 +34,8 @@ from ..backends.copilot_models import (  # noqa: F401
     _select_copilot_model,
     normalize_copilot_requested_model,
 )
-from ..backends.copilot_token_manager import CopilotTokenManager
-from ..backends.copilot_urls import (  # noqa: F401
+from .copilot_token_manager import CopilotTokenManager
+from .copilot_urls import (  # noqa: F401
     _EDITOR_PLUGIN_VERSION,
     _EDITOR_VERSION,
     _GITHUB_API_VERSION,
@@ -45,7 +45,7 @@ from ..backends.copilot_urls import (  # noqa: F401
     resolve_copilot_base_url,
 )
 # Copilot421RetryHandler 已从 copilot_retry.py 合并至本文件末尾
-from ..backends.mixins import TokenBackendMixin
+from .mixins import TokenBackendMixin
 
 logger = logging.getLogger(__name__)
 

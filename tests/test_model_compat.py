@@ -272,7 +272,7 @@ class TestCompatibilityTraceToDict:
     def test_to_dict_contains_all_fields(self) -> None:
         trace = CompatibilityTrace(
             trace_id="tr_1",
-            backend="copilot",
+            vendor="copilot",
             session_key="sk_1",
             provider_protocol="openai",
             compat_mode="simulate",
@@ -287,7 +287,7 @@ class TestCompatibilityTraceToDict:
         # 验证顶层 key 集合完备
         expected_keys = {
             "trace_id",
-            "backend",
+            "vendor",
             "session_key",
             "provider_protocol",
             "compat_mode",
@@ -302,14 +302,14 @@ class TestCompatibilityTraceToDict:
     def test_to_dict_values_match(self) -> None:
         trace = CompatibilityTrace(
             trace_id="tr_2",
-            backend="zhipu",
+            vendor="zhipu",
             session_key="sk_2",
             provider_protocol="glm",
             compat_mode="native",
         )
         d = trace.to_dict()
         assert d["trace_id"] == "tr_2"
-        assert d["backend"] == "zhipu"
+        assert d["vendor"] == "zhipu"
         assert d["simulation_actions"] == []
         assert d["session_state_hits"] == 0
         assert isinstance(d["generated_at_unix"], int)
@@ -317,7 +317,7 @@ class TestCompatibilityTraceToDict:
     def test_to_dict_returns_independent_copy(self) -> None:
         """to_dict() 返回的 dict 不应与内部状态共享可变引用."""
         trace = CompatibilityTrace(
-            trace_id="tr_3", backend="x", session_key="y",
+            trace_id="tr_3", vendor="x", session_key="y",
             provider_protocol="z", compat_mode="m",
             simulation_actions=["a"],
         )
@@ -431,7 +431,7 @@ class TestEdgeCases:
 
     def test_compatibility_trace_default_lists_are_empty(self) -> None:
         trace = CompatibilityTrace(
-            trace_id="t", backend="b", session_key="s",
+            trace_id="t", vendor="b", session_key="s",
             provider_protocol="p", compat_mode="c",
         )
         assert trace.simulation_actions == []
