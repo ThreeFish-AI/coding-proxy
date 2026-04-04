@@ -15,12 +15,6 @@ server:
 #   - 若配置了 tiers，以其指定的顺序为准
 #   - 否则 vendors 列表顺序即优先级（index 越小越优先）
 #   - 无 circuit_breaker 的 vendor 自动成为终端层（不再向下故障转移）
-#
-# 示例：将 zhipu 置于 Vendor 0，anthropic 置于 Vendor 1：
-#   vendors:
-#     - vendor: zhipu
-#       api_key: "${ZHIPU_API_KEY}"
-#     - vendor: anthropic   # 终端层（无 circuit_breaker）
 
 vendors:
   # Vendor 0: Claude Plans（最高优先级）
@@ -160,7 +154,7 @@ model_mapping:
 
 # === 模型定价（USD / 1M tokens） ===
 # vendor: 供应商名称（对应 `usage` 统计表中的"供应商"列）
-# model:   实际模型名（对应 `usage` 统计表中的"实际模型"列）
+# model:  实际模型名（对应 `usage` 统计表中的"实际模型"列）
 # 未配置定价的模型在统计中 Cost 列显示 "-"
 pricing:
   # ── Anthropic Claude ──
