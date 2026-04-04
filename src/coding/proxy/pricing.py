@@ -1,14 +1,22 @@
 """模型定价表.
 
 基于配置文件中的手动定价条目，按 (backend, model_served) 计算 Cost。
+
+``ModelPricing`` 数据模型已迁移至 :mod:`coding.proxy.model.pricing`。
+本文件保留 ``PricingTable`` 查询与计算逻辑，类型通过 re-export 提供。
+
+.. deprecated::
+    未来版本将移除类型 re-export，请直接从 :mod:`coding.proxy.model.pricing` 导入。
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+# noqa: F401
+from .model.pricing import ModelPricing
 
 if TYPE_CHECKING:
     from .config.schema import ModelPricingEntry
@@ -26,16 +34,6 @@ def _normalize(name: str) -> str:
     """
     name = re.sub(r"@[\w.]+$", "", name)
     return name.replace(".", "-").lower()
-
-
-@dataclass
-class ModelPricing:
-    """单个模型的 Token 单价（USD/token）."""
-
-    input_cost_per_token: float = 0.0
-    output_cost_per_token: float = 0.0
-    cache_creation_input_token_cost: float = 0.0
-    cache_read_input_token_cost: float = 0.0
 
 
 class PricingTable:
