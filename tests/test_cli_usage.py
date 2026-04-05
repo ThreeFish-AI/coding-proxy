@@ -1,5 +1,6 @@
 """CLI usage 命令参数测试 — 验证 -v/--vendor 参数行为."""
 
+import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -37,8 +38,9 @@ class TestUsageHelpOutput:
     def test_help_shows_vendor_flag(self):
         result = runner.invoke(app, ["usage", "--help"])
         assert result.exit_code == 0
-        assert "--vendor" in result.output
-        assert "-v" in result.output
+        clean = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--vendor" in clean
+        assert "-v" in clean
 
     def test_help_no_backend_flag(self):
         result = runner.invoke(app, ["usage", "--help"])

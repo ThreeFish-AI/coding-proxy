@@ -16,7 +16,6 @@ from typing import Any, Protocol
 import httpx
 
 # ── Copilot URL / 版本常量（SSOT: model/constants.py）──────
-
 from ..model.constants import (  # noqa: F401
     _COPILOT_VERSION,
     _EDITOR_PLUGIN_VERSION,

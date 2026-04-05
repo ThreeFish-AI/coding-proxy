@@ -14,8 +14,7 @@ import json
 import uuid
 from typing import Any
 
-# noqa: F401
-from ..model.compat import (
+from ..model.compat import (  # noqa: F401
     CanonicalMessagePart,
     CanonicalPartType,
     CanonicalRequest,
