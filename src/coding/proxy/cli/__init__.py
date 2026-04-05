@@ -105,22 +105,22 @@ def status(
 @app.command()
 def usage(
     days: int = typer.Option(7, "--days", "-d", help="统计天数"),
-    backend: Optional[str] = typer.Option(None, "--backend", "-b", help="过滤供应商"),
+    vendor: Optional[str] = typer.Option(None, "--vendor", "-v", help="过滤供应商"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="过滤请求模型"),
     db_path: Optional[str] = typer.Option(None, "--db", help="数据库路径"),
 ) -> None:
     """查看 Token 使用统计."""
     cfg = load_config(Path(db_path) if db_path else None)
     token_logger = TokenLogger(cfg.db_path)
-    asyncio.run(_run_usage(token_logger, days, backend, model, cfg))
+    asyncio.run(_run_usage(token_logger, days, vendor, model, cfg))
 
 
-async def _run_usage(token_logger: TokenLogger, days: int, backend: str | None,
+async def _run_usage(token_logger: TokenLogger, days: int, vendor: str | None,
                      model: str | None, cfg: "ProxyConfig") -> None:
     from ..pricing import PricingTable
     await token_logger.init()
     pricing_table = PricingTable(cfg.pricing)
-    await show_usage(token_logger, days, backend, model, pricing_table)
+    await show_usage(token_logger, days, vendor, model, pricing_table)
     await token_logger.close()
 
 
