@@ -30,6 +30,7 @@ from .factory import (  # noqa: F401
     _create_vendor_from_config,
 )
 from .routes import register_all_routes
+from .. import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     router = RequestRouter(tiers, token_logger, reauth_coordinator, compat_session_store)
 
-    app = FastAPI(title="coding-proxy", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="coding-proxy", version=__version__, lifespan=lifespan)
     app.state.router = router
     app.state.token_logger = token_logger
     app.state.compat_session_store = compat_session_store
