@@ -81,7 +81,7 @@ claude
 | :------- | :------------------------------------------------------------------------------ | :-------------------------------------------- |
 | `start`  | **启动代理服务器**。支持自定义端口与配置路径。                                  | `coding-proxy start -p 8080 -c ~/config.yaml` |
 | `status` | **查看代理健康状态**。展示各层级熔断器（OPEN/CLOSED）与配额状态。               | `coding-proxy status`                         |
-| `usage`  | **Token 统计看板**。按天/供应商/模型维度追踪每一次的 Token 消耗、故障转移及耗时。 | `coding-proxy usage -d 7 -b anthropic`        |
+| `usage`  | **Token 统计看板**。按天/供应商/模型维度追踪每一次的 Token 消耗、故障转移及耗时。 | `coding-proxy usage -d 7 -v anthropic`        |
 | `reset`  | **强制一键重置**。人工确认主供应商恢复可用后，立刻初始化所有熔断器和配额状态。    | `coding-proxy reset`                          |
 
 ---

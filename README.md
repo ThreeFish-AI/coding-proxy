@@ -81,7 +81,7 @@ claude
 | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------- |
 | `start`  | **Fire up the proxy server.** Supports custom ports and configuration paths.                                                                        | `coding-proxy start -p 8080 -c ~/config.yaml` |
 | `status` | **Check proxy health.** Shows circuit breaker states (OPEN/CLOSED) and quota status across all tiers.                                               | `coding-proxy status`                         |
-| `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/vendor/model dimensions.                | `coding-proxy usage -d 7 -b anthropic`        |
+| `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/vendor/model dimensions.                | `coding-proxy usage -d 7 -v anthropic`        |
 | `reset`  | **The emergency flush button.** Force-reset all circuit breakers and quotas instantly when you've confirmed the main vendor is back from the dead. | `coding-proxy reset`                          |
 
 ---
