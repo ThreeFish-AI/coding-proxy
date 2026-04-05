@@ -28,8 +28,8 @@ dependencies = [
 
 [project.urls]
 "Source Code" = "https://github.com/ThreeFish-AI/coding-proxy"
-docs = "https://github.com/ThreeFish-AI/coding-proxy/blob/master/docs/user-guide.md"
-bug-tracker = "https://github.com/ThreeFish-AI/coding-proxy/issues"
+"User Guide" = "https://github.com/ThreeFish-AI/coding-proxy/blob/master/docs/user-guide.md"
+"Bug Tracker" = "https://github.com/ThreeFish-AI/coding-proxy/issues"
 
 [project.scripts]
 coding-proxy = "coding.proxy.cli:app"
