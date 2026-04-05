@@ -2,10 +2,7 @@
 
 from pathlib import Path
 
-import pytest
-
 from coding.proxy.config.loader import _ensure_user_config, load_config
-
 
 # ── A 组：_ensure_user_config 核心逻辑 ───────────────────────────
 
@@ -100,7 +97,6 @@ class TestEnsureUserConfig:
 
         import coding.proxy.config.loader as loader_module
 
-        original = loader_module._get_default_config_path
         monkeypatch.setattr(loader_module, "_get_default_config_path", lambda: None)
 
         result = _ensure_user_config()
@@ -144,9 +140,7 @@ class TestAutoInitIntegration:
         assert cfg.server.port == 9999
         assert not (home_dir / ".coding-proxy").exists()
 
-    def test_load_config_cwd_priority_over_auto_init(
-        self, tmp_path: Path, monkeypatch
-    ):
+    def test_load_config_cwd_priority_over_auto_init(self, tmp_path: Path, monkeypatch):
         """CWD 有 config.yaml 时优先使用，不触发 home 初始化."""
         cwd_cfg = tmp_path / "config.yaml"
         cwd_cfg.write_text("server:\n  port: 7777\n")
