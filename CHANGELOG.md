@@ -6,7 +6,7 @@
 
 ## [v0.1.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.1.0) — 2026-04-05
 
-> [!NOTE]
+> [!IMPORTANT]
 > 
 > **🎉 coding-proxy MVP 惊艳登场！** 
 > 
