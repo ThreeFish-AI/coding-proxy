@@ -93,6 +93,21 @@ def register_core_routes(app: Any, router: Any) -> None:
                 exc_info=True,
             )
             return json_error_response(500, error_type="api_error", message=f"内部错误: {type(exc).__name__}")
+
+        # 对上游返回的非标准错误格式输出诊断日志（如 Zhipu 使用 code 而非 type）
+        if resp.status_code >= 500 and resp.raw_body:
+            try:
+                payload = json.loads(resp.raw_body)
+                if isinstance(payload, dict) and "error" in payload:
+                    err = payload["error"]
+                    if isinstance(err, dict) and "type" not in err and "code" in err:
+                        logger.debug(
+                            "检测到非标准上游错误格式（含 code 非 type）: vendor_error=%s",
+                            json.dumps(err, ensure_ascii=False)[:200],
+                        )
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+
         return Response(content=resp.raw_body or b"{}", status_code=resp.status_code, media_type="application/json")
 
     @app.post("/v1/messages/count_tokens")

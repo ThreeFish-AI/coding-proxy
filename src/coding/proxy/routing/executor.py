@@ -69,6 +69,59 @@ def _log_http_error_detail(tier_name: str, exc: Exception, *, is_stream: bool = 
         detail_parts.append(f"  message={str(exc)[:300]}")
     logger.warning("\n".join(detail_parts))
 
+
+def _has_tool_results(body: dict[str, Any]) -> bool:
+    """检测请求体是否包含 tool_result 内容块.
+
+    用于诊断日志中标记「当前请求是否处于工具执行循环」，
+    帮助快速定位 vendor 对 tool_result 处理不兼容的问题（如 Zhipu 500）.
+    """
+    for msg in body.get("messages", []):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            return True
+    return False
+
+
+def _log_vendor_response_error(
+    tier_name: str,
+    resp: VendorResponse,
+    body: dict[str, Any],
+    *,
+    is_stream: bool = False,
+) -> None:
+    """记录供应商返回的非 200 VendorResponse 详细信息.
+
+    补充 :func:`_log_http_error_detail` 的覆盖盲区：
+    当 ``send_message()`` 返回 ``VendorResponse(status_code>=400)``
+    而非抛出 httpx 异常时，该函数提供等价的诊断日志能力。
+
+    典型场景：Zhipu 等薄透传供应商将上游 500 原样包装为
+    VendorResponse 返回，executor 的异常捕获路径不会触发。
+    """
+    mode = "stream" if is_stream else "message"
+    detail_parts = [f"Tier {tier_name} {mode} vendor error response:"]
+    detail_parts.append(f"  status={resp.status_code}")
+    detail_parts.append(f"  error_type={resp.error_type or 'N/A'}")
+    detail_parts.append(f"  error_msg={(resp.error_message or 'N/A')[:300]}")
+    # 请求上下文（模型 / 工具 / 工具结果）
+    model = body.get("model", "unknown")
+    has_tools = bool(body.get("tools"))
+    has_tool_results = _has_tool_results(body)
+    detail_parts.append(f"  model={model}")
+    detail_parts.append(f"  has_tools={has_tools}")
+    detail_parts.append(f"  has_tool_results={has_tool_results}")
+    # 响应体摘要
+    if resp.raw_body:
+        try:
+            raw_text = resp.raw_body.decode("utf-8", errors="replace")[:500]
+        except (AttributeError, UnicodeDecodeError):
+            raw_text = f"(binary, {len(resp.raw_body)} bytes)"
+        detail_parts.append(f"  response_body_preview={raw_text}")
+    logger.warning("\n".join(detail_parts))
+
 # tier.name → 上游 Vendor 协议标签映射（用于 token 用量日志标注）
 _VENDOR_PROTOCOL_LABEL_MAP: dict[str, str] = {
     "anthropic": "Anthropic",
@@ -251,6 +304,7 @@ class _RouteExecutor:
                     continue
 
                 # 最后一层或不可 failover 的错误：记录并返回原始响应
+                _log_vendor_response_error(tier.name, resp, body, is_stream=False)
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = resp.model_served or tier.vendor.map_model(model)

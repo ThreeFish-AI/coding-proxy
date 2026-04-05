@@ -27,7 +27,12 @@ from coding.proxy.compat.canonical import (
     CompatibilityStatus,
     build_canonical_request,
 )
-from coding.proxy.routing.executor import _RouteExecutor, _VENDOR_PROTOCOL_LABEL_MAP
+from coding.proxy.routing.executor import (
+    _RouteExecutor,
+    _VENDOR_PROTOCOL_LABEL_MAP,
+    _has_tool_results,
+    _log_vendor_response_error,
+)
 from coding.proxy.routing.session_manager import RouteSessionManager
 from coding.proxy.routing.tier import VendorTier
 from coding.proxy.routing.usage_recorder import UsageRecorder
@@ -603,3 +608,256 @@ class TestRouteSessionManagerIntegration:
         mgr = RouteSessionManager(compat_session_store=None)
         # 不抛异常即通过
         await mgr.persist_session(None, None)
+
+
+# ── _has_tool_results 测试 ─────────────────────────────────
+
+
+class TestHasToolResults:
+    """:func:`_has_tool_results` 辅助函数测试."""
+
+    def test_detects_tool_result_in_messages(self):
+        body = {
+            "messages": [
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}]},
+            ],
+        }
+        assert _has_tool_results(body) is True
+
+    def test_returns_false_when_no_tool_result(self):
+        body = {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+            ],
+        }
+        assert _has_tool_results(body) is False
+
+    def test_returns_false_for_empty_body(self):
+        assert _has_tool_results({}) is False
+
+    def test_returns_false_for_empty_messages(self):
+        assert _has_tool_results({"messages": []}) is False
+
+    def test_returns_false_for_string_content(self):
+        body = {"messages": [{"role": "user", "content": "plain text"}]}
+        assert _has_tool_results(body) is False
+
+    def test_returns_false_for_tool_use_only(self):
+        """tool_use 块不应被误判为 tool_result."""
+        body = {
+            "messages": [
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "tu_1", "name": "bash", "input": {}}]},
+            ],
+        }
+        assert _has_tool_results(body) is False
+
+    def test_detects_mixed_content_with_tool_result(self):
+        """混合内容块中只要有一个 tool_result 即返回 True."""
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "before"},
+                        {"type": "tool_result", "tool_use_id": "tu_1", "content": "result"},
+                        {"type": "text", "text": "after"},
+                    ],
+                },
+            ],
+        }
+        assert _has_tool_results(body) is True
+
+    def test_ignores_non_dict_blocks(self):
+        """非 dict 内容块不应导致异常."""
+        body = {
+            "messages": [
+                {"role": "user", "content": ["string_block", None, 42]},
+            ],
+        }
+        assert _has_tool_results(body) is False
+
+
+# ── _log_vendor_response_error 测试 ──────────────────────────
+
+
+class TestLogVendorResponseError:
+    """:func:`_log_vendor_response_error` 日志函数测试."""
+
+    def test_logs_warning_with_status_and_error_info(self, caplog):
+        import logging as _logging
+
+        resp = VendorResponse(
+            status_code=500,
+            raw_body=b'{"error":{"code":"500","message":"test error msg"}}',
+            error_type=None,
+            error_message="test error msg",
+        )
+        body = {"model": "claude-opus-4-6", "messages": []}
+
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            _log_vendor_response_error("zhipu", resp, body)
+
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert len(warnings) >= 1
+        log_msg = warnings[0].message
+        assert "zhipu" in log_msg
+        assert "status=500" in log_msg
+        assert "test error msg" in log_msg
+        assert "model=claude-opus-4-6" in log_msg
+
+    def test_logs_has_tool_results_true_when_present(self, caplog):
+        import logging as _logging
+
+        resp = VendorResponse(
+            status_code=500,
+            raw_body=b'{"error":{"message":"id attribute missing"}}',
+        )
+        body = {
+            "model": "glm-5v-turbo",
+            "tools": [{"name": "Bash"}],
+            "messages": [
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}]},
+            ],
+        }
+
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            _log_vendor_response_error("zhipu", resp, body)
+
+        log_msg = caplog.records[-1].message
+        assert "has_tools=True" in log_msg
+        assert "has_tool_results=True" in log_msg
+
+    def test_logs_has_tool_results_false_when_absent(self, caplog):
+        import logging as _logging
+
+        resp = VendorResponse(status_code=500, raw_body=b'{"error":"err"}')
+        body = {"model": "test-model", "messages": []}
+
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            _log_vendor_response_error("test", resp, body)
+
+        log_msg = caplog.records[-1].message
+        assert "has_tools=False" in log_msg
+        assert "has_tool_results=False" in log_msg
+
+    def test_includes_response_body_preview(self, caplog):
+        import logging as _logging
+
+        resp = VendorResponse(
+            status_code=500,
+            raw_body=b'{"error":{"code":"500","message":"\'ClaudeContentBlockToolResult\' object has no attribute \'id\'"}}',
+        )
+        body = {"model": "test", "messages": []}
+
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            _log_vendor_response_error("zhipu", resp, body)
+
+        log_msg = caplog.records[-1].message
+        assert "response_body_preview=" in log_msg
+        assert "ClaudeContentBlockToolResult" in log_msg
+
+    def test_handles_none_raw_body_gracefully(self, caplog):
+        import logging as _logging
+
+        resp = VendorResponse(status_code=500, raw_body=None)
+        body = {"model": "test", "messages": []}
+
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            _log_vendor_response_error("test", resp, body)
+
+        # 不应抛出异常
+        assert any(r.levelno == _logging.WARNING for r in caplog.records)
+
+    def test_handles_binary_raw_body(self, caplog):
+        import logging as _logging
+
+        resp = VendorResponse(status_code=500, raw_body=b"\x80\x81\x82")
+        body = {"model": "test", "messages": []}
+
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            _log_vendor_response_error("test", resp, body)
+
+        # 不应抛出异常；二进制内容经 errors="replace" 解码后含替换字符
+        assert any(r.levelno == _logging.WARNING for r in caplog.records)
+        log_msg = caplog.records[-1].message
+        assert "response_body_preview=" in log_msg
+
+    def test_truncates_long_error_messages(self, caplog):
+        import logging as _logging
+
+        long_msg = "x" * 500
+        resp = VendorResponse(
+            status_code=500,
+            raw_body=f'{{"error":{{"message":"{long_msg}"}}}}'.encode(),
+        )
+        body = {"model": "test", "messages": []}
+
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            _log_vendor_response_error("test", resp, body)
+
+        # error_msg 应截断至 300 字符以内
+        log_msg = caplog.records[-1].message
+        assert "error_msg=" in log_msg
+
+
+# ── execute_message 500 错误日志集成测试 ────────────────────
+
+
+class TestExecuteMessageVendorErrorLogging:
+    """execute_message 返回 VendorResponse 错误时的日志行为验证.
+
+    覆盖核心修复场景：当 vendor（如 Zhipu）返回 500 且非最后一层可 failover、
+    或为最后一层直接返回时，_log_vendor_response_error 均应被触发。
+    """
+
+    @pytest.mark.asyncio
+    async def test_last_tier_500_produces_warning_log(self, caplog):
+        """最后一层返回 500 时应输出结构化警告日志."""
+        import logging as _logging
+
+        vendor = _mock_vendor()
+        vendor.send_message = AsyncMock(return_value=VendorResponse(
+            status_code=500,
+            raw_body=b'{"error":{"code":"500","message":"internal error"}}',
+            error_type=None,
+            error_message="internal error",
+        ))
+        exec_inst = _executor([_make_tier(vendor)])
+
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 500
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert len(warnings) >= 1
+        log_text = "\n".join(r.message for r in warnings)
+        assert "vendor error response" in log_text
+        assert "status=500" in log_text
+
+    @pytest.mark.asyncio
+    async def test_last_tier_500_with_tool_results_logs_context(self, caplog):
+        """含 tool_result 的请求触发 500 时，日志应标记 has_tool_results=True."""
+        import logging as _logging
+
+        vendor = _mock_vendor()
+        vendor.send_message = AsyncMock(return_value=VendorResponse(
+            status_code=500,
+            raw_body=b'{"error":{"code":"500","message":"tool result id error"}}',
+        ))
+        exec_inst = _executor([_make_tier(vendor)])
+
+        body = {
+            "model": "claude-opus-4-6",
+            "tools": [{"name": "Bash"}],
+            "messages": [
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "output"}]},
+            ],
+        }
+
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            resp = await exec_inst.execute_message(body, {})
+
+        assert resp.status_code == 500
+        log_text = "\n".join(r.message for r in caplog.records if r.levelno == _logging.WARNING)
+        assert "has_tool_results=True" in log_text
+        assert "claude-opus-4-6" in log_text
