@@ -346,6 +346,33 @@ class TestExecuteMessage:
         resp = await exec_inst.execute_message({"model": "test"}, {})
         assert resp.status_code == 200
 
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_on_last_tier_propagates(self):
+        """最后一层非流式未预期异常应向上传播."""
+        vendor = _mock_vendor()
+        vendor.send_message.side_effect = KeyError("missing config key")
+        exec_inst = _executor([_make_tier(vendor)])
+
+        with pytest.raises(KeyError, match="missing config key"):
+            await exec_inst.execute_message({"model": "test"}, {})
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_on_non_last_tier_continues(self):
+        """非最后一层非流式未预期异常应触发故障转移."""
+        bad = _mock_vendor("bad")
+        bad.send_message.side_effect = RuntimeError("internal state corruption")
+
+        good = _mock_vendor("good")
+        good_resp = VendorResponse(
+            status_code=200, raw_body=b'{}',
+            usage=UsageInfo(input_tokens=1, output_tokens=1),
+        )
+        good.send_message = AsyncMock(return_value=good_resp)
+
+        exec_inst = _executor([_make_tier(bad), _make_tier(good)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+        assert resp.status_code == 200
+
 
 # ── execute_stream 测试 ──────────────────────────────────
 
@@ -409,6 +436,51 @@ class TestExecuteStream:
         with pytest.raises(httpx.HTTPStatusError):
             async for _ in exec_inst.execute_stream({"model": "test"}, {}):
                 pass
+
+    @pytest.mark.asyncio
+    async def test_stream_unexpected_exception_continues_to_next_tier(self):
+        """非最后一层流式未预期异常应触发故障转移到下一层."""
+        bad_vendor = _mock_vendor("bad")
+
+        async def _raise_unexpected(*a, **kw):
+            raise ValueError("upstream returned garbage")
+            yield  # noqa: PYS101
+
+        bad_vendor.send_message_stream = _raise_unexpected
+
+        good_vendor = _mock_vendor("good")
+
+        async def _good_stream(*a, **kw):
+            yield b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n'
+
+        good_vendor.send_message_stream = _good_stream
+
+        exec_inst = _executor([
+            _make_tier(bad_vendor),
+            _make_tier(good_vendor),
+        ])
+
+        collected = []
+        async for chunk, name in exec_inst.execute_stream({"model": "test"}, {}):
+            collected.append((chunk, name))
+        assert len(collected) > 0
+        assert name == "good"
+
+    @pytest.mark.asyncio
+    async def test_stream_unexpected_exception_on_last_tier_propagates(self):
+        """最后一层流式未预期异常应向上传播（由 _stream_proxy 接管）."""
+        vendor = _mock_vendor()
+
+        async def _raise_unexpected(*a, **kw):
+            raise RuntimeError("stream corrupted")
+            yield  # noqa: PYS101
+
+        vendor.send_message_stream = _raise_unexpected
+        exec_inst = _executor([_make_tier(vendor)])
+
+        with pytest.raises(RuntimeError, match="stream corrupted"):
+            async for _ in exec_inst.execute_stream({"model": "test"}, {}):
+                pass  # noqa: PLC0107
 
 
 # ── 错误处理测试 ─────────────────────────────────────────

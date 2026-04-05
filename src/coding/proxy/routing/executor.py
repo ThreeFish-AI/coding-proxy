@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any, AsyncIterator
@@ -39,6 +40,34 @@ NoCompatibleBackendError = NoCompatibleVendorError
 from ..compat.canonical import CompatibilityStatus, build_canonical_request
 
 logger = logging.getLogger(__name__)
+
+
+def _log_http_error_detail(tier_name: str, exc: Exception, *, is_stream: bool = False) -> None:
+    """记录 HTTP 错误的详细信息（状态码 / 响应体摘要 / 异常类型）.
+
+    替代原先单行 ``logger.warning("Tier %s stream failed: %s", ...)``，
+    在非 200 响应时输出更丰富的诊断上下文，便于跟踪上游故障根因。
+    """
+    detail_parts = [f"Tier {tier_name} {'stream' if is_stream else 'message'} failed:"]
+    detail_parts.append(f"  exc_type={type(exc).__name__}")
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        resp = exc.response
+        detail_parts.append(f"  status={resp.status_code}")
+        body_preview = (resp.text[:300] if resp.text else "(empty)") if resp.content else "(no content)"
+        detail_parts.append(f"  response_body={body_preview}")
+        # 尝试提取 error type / message
+        try:
+            payload = resp.json() if resp.content else None
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            err = payload.get("error", {})
+            if isinstance(err, dict):
+                detail_parts.append(f"  error_type={err.get('type', 'N/A')}")
+                detail_parts.append(f"  error_msg={err.get('message', 'N/A')[:200]}")
+    else:
+        detail_parts.append(f"  message={str(exc)[:300]}")
+    logger.warning("\n".join(detail_parts))
 
 # tier.name → 上游 Vendor 协议标签映射（用于 token 用量日志标注）
 _VENDOR_PROTOCOL_LABEL_MAP: dict[str, str] = {
@@ -143,12 +172,23 @@ class _RouteExecutor:
                     raise
 
             except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
-                logger.warning("Tier %s stream failed: %s", tier.name, exc)
+                _log_http_error_detail(tier.name, exc, is_stream=True)
                 should_continue, failed_tier_name, last_exc = await self._handle_http_error(tier, exc, is_last, failed_tier_name, last_exc, is_stream=True)
                 if should_continue:
                     continue
                 if is_last:
                     raise
+            except Exception as exc:
+                logger.error(
+                    "Tier %s stream unexpected error: %s: %s",
+                    tier.name, type(exc).__name__, exc,
+                    exc_info=True,
+                )
+                tier.record_failure()
+                failed_tier_name = tier.name
+                if not is_last:
+                    continue
+                raise
 
         if last_exc:
             raise last_exc
@@ -229,12 +269,23 @@ class _RouteExecutor:
                 continue
 
             except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
-                logger.warning("Tier %s connection error: %s", tier.name, exc)
+                _log_http_error_detail(tier.name, exc, is_stream=False)
                 tier.record_failure()
                 failed_tier_name = tier.name
                 if is_last:
                     raise
                 continue
+            except Exception as exc:
+                logger.error(
+                    "Tier %s message unexpected error: %s: %s",
+                    tier.name, type(exc).__name__, exc,
+                    exc_info=True,
+                )
+                tier.record_failure()
+                failed_tier_name = tier.name
+                if not is_last:
+                    continue
+                raise
 
         if incompatible_reasons:
             raise NoCompatibleVendorError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商", reasons=incompatible_reasons)
