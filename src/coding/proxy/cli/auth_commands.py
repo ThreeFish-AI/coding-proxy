@@ -10,7 +10,6 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from ..auth.store import TokenStoreManager
 from ..config.loader import load_config
 
 app = typer.Typer(name="auth", help="管理 OAuth 登录凭证")
@@ -20,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 def _build_token_store(cfg_path: Path | None = None):
     """按配置解析 Token Store 路径并完成加载."""
+    from ..auth.store import TokenStoreManager
+
     cfg = load_config(cfg_path)
     store = TokenStoreManager(
         store_path=Path(cfg.auth.token_store_path)

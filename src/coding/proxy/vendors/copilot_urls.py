@@ -3,8 +3,7 @@
 所有常量与函数已合并至 :mod:`coding.proxy.backends.copilot_models`。
 """
 
-# noqa: F401
-from .copilot_models import (
+from .copilot_models import (  # noqa: F401
     _COPILOT_VERSION,
     _EDITOR_PLUGIN_VERSION,
     _EDITOR_VERSION,
