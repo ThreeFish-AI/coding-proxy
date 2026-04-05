@@ -45,7 +45,7 @@ Claude Code 作为日常 AI 编程助手，其底层依赖 Anthropic Messages AP
 
 | 技术             | 选型理由                                                        |
 | ---------------- | --------------------------------------------------------------- |
-| **Python 3.13+** | 原生 async/await 成熟、类型提示完善、生态丰富                   |
+| **Python 3.12+** | 原生 async/await 成熟、类型提示完善、生态丰富                   |
 | **FastAPI**      | 原生异步、`StreamingResponse` 支持 SSE、自动 OpenAPI 文档       |
 | **httpx**        | 同时支持同步/异步、流式请求、完整的 HTTP 客户端功能             |
 | **Pydantic v2**  | 配置校验与类型安全、性能显著优于 v1；配置模型已正交拆分至子模块 |

@@ -6,7 +6,7 @@
 
 **面向 Claude Code 的多供应商高可用透明智能代理**
 
-[![Python Version](https://img.shields.io/badge/python-3.13%2B-blue?style=flat-square&logo=python)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.12%2B-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](#)
 [![Package Manager](https://img.shields.io/badge/pkg-uv-purple?style=flat-square)](https://github.com/astral-sh/uv)
 [![Architecture](https://img.shields.io/badge/architecture-N--tier-orange?style=flat-square)](#)
@@ -41,7 +41,7 @@
 ## 🚀 快速上手 (Quick Start)
 
 ### 1. 环境准备
-确保您的计算机上已安装 **Python 3.13+** 以及包管理器 **`uv`**（强烈推荐）。
+确保您的计算机上已安装 **Python 3.12+** 以及包管理器 **`uv`**（强烈推荐）。
 
 ### 2. 获取源码并安装
 ```bash
