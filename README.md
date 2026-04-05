@@ -6,7 +6,7 @@
 
 **A High-Availability, Transparent, and Smart Multi-Vendor Proxy for Claude Code**
 
-[![Python Version](https://img.shields.io/badge/python-3.13%2B-blue?style=flat-square&logo=python)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.12%2B-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](#)
 [![Package Manager](https://img.shields.io/badge/pkg-uv-purple?style=flat-square)](https://github.com/astral-sh/uv)
 [![Architecture](https://img.shields.io/badge/architecture-N--tier-orange?style=flat-square)](#)
@@ -41,7 +41,7 @@ When you're deeply immersed in your coding "zone" with **Claude Code** (or any A
 ## 🚀 Quick Start
 
 ### 1. Prerequisite Checks
-Make sure your rig has **Python 3.13+** and the **`uv`** package manager installed (highly recommended, because life is too short for slow package managers).
+Make sure your rig has **Python 3.12+** and the **`uv`** package manager installed (highly recommended, because life is too short for slow package managers).
 
 ### 2. Grab the Code & Install
 ```bash

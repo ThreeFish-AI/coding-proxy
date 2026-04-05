@@ -35,12 +35,15 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: '待提升的 prerelease tag（如 v0.2.0a1）'
+        description: "待提升的 prerelease tag（如 v0.2.0a1）"
         required: true
         type: string
 
 permissions:
-  contents: read
+  contents: read # validate job 仅需读取 release 信息；promote job 有独立的 job-level permissions 覆写
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 concurrency:
   group: promote-${{ inputs.tag_name }}
@@ -54,6 +57,9 @@ jobs:
     name: Validate prerelease status
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      release_id: ${{ steps.check-release.outputs.release_id }}
+      tag_name: ${{ steps.check-release.outputs.tag_name }}
 
     steps:
       - name: Check release exists and is a prerelease
@@ -64,7 +70,7 @@ jobs:
             const tag = context.payload.inputs.tag_name;
             const { owner, repo } = context.repo;
 
-            const release = await github.rest.releases.getReleaseByTag({
+            const release = await github.rest.repos.getReleaseByTag({
               owner,
               repo,
               tag,
@@ -93,12 +99,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: validate
     timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
     environment:
       name: pypi
       url: https://pypi.org/p/coding-proxy
     permissions:
-      contents: write   # 更新 Release 元数据所需
-      id-token: write   # OIDC Trusted Publishing 所需
+      contents: write # 更新 Release 元数据所需
+      id-token: write # OIDC Trusted Publishing 所需
 
     steps:
       # -----------------------------------------------------------------------
@@ -114,13 +123,17 @@ jobs:
       # Step 2: 更新 GitHub Release: prerelease=false, make_latest=true
       # -----------------------------------------------------------------------
       - name: Promote release to stable
+        env:
+          RELEASE_ID: ${{ needs.validate.outputs.release_id }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
         uses: actions/github-script@v7
         with:
           script: |
-            const releaseId = ${{ needs.validate.outputs.release_id }};
+            const releaseId = parseInt(process.env.RELEASE_ID);
+            const tagName = process.env.TAG_NAME;
             const { owner, repo } = context.repo;
 
-            await github.rest.releases.update({
+            await github.rest.repos.updateRelease({
               owner,
               repo,
               release_id: releaseId,
@@ -129,7 +142,7 @@ jobs:
             });
 
             core.notice(
-              `✅ Release #${releaseId} promoted to stable (make_latest=true)`
+              `✅ Release #${releaseId} (${tagName}) promoted to stable (make_latest=true)`
             );
 
       # -----------------------------------------------------------------------
@@ -138,7 +151,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v4
