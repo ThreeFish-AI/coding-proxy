@@ -577,9 +577,7 @@ class TestDefaultConfigAvailability:
 
         cfg = load_config()
         # default 中的 model_mapping 包含 vendors 字段（新格式特征）
-        has_new_format = any(
-            getattr(m, "vendors", None) for m in cfg.model_mapping
-        )
+        has_new_format = any(getattr(m, "vendors", None) for m in cfg.model_mapping)
         assert has_new_format, (
             "model_mapping 应使用 default 中的新格式（含 vendors 字段），"
             "而非 Pydantic 的旧格式默认值"
