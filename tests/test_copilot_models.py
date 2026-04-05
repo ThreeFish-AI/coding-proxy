@@ -2,33 +2,49 @@
 
 import time
 
-import pytest
-
 from coding.proxy.vendors.copilot_models import (
     CopilotExchangeDiagnostics,
     CopilotModelCatalog,
-    _select_copilot_model as select_copilot_model,
-    _copilot_model_family as copilot_model_family,
-    _copilot_model_major as copilot_model_major,
-    _copilot_model_version_rank as copilot_model_version_rank,
     normalize_copilot_requested_model,
 )
-
+from coding.proxy.vendors.copilot_models import (
+    _copilot_model_family as copilot_model_family,
+)
+from coding.proxy.vendors.copilot_models import (
+    _copilot_model_major as copilot_model_major,
+)
+from coding.proxy.vendors.copilot_models import (
+    _copilot_model_version_rank as copilot_model_version_rank,
+)
+from coding.proxy.vendors.copilot_models import (
+    _select_copilot_model as select_copilot_model,
+)
 
 # ── normalize_copilot_requested_model ────────────────────
 
 
 def test_normalize_claude_sonnet():
-    assert normalize_copilot_requested_model("claude-sonnet-4-20250514") == "claude-sonnet-4"
-    assert normalize_copilot_requested_model("claude-sonnet-4.5-20250514") == "claude-sonnet-4"
+    assert (
+        normalize_copilot_requested_model("claude-sonnet-4-20250514")
+        == "claude-sonnet-4"
+    )
+    assert (
+        normalize_copilot_requested_model("claude-sonnet-4.5-20250514")
+        == "claude-sonnet-4"
+    )
 
 
 def test_normalize_claude_opus():
-    assert normalize_copilot_requested_model("claude-opus-4-20250514") == "claude-opus-4"
+    assert (
+        normalize_copilot_requested_model("claude-opus-4-20250514") == "claude-opus-4"
+    )
 
 
 def test_normalize_claude_haiku():
-    assert normalize_copilot_requested_model("claude-haiku-4-5-20251001") == "claude-haiku-4"
+    assert (
+        normalize_copilot_requested_model("claude-haiku-4-5-20251001")
+        == "claude-haiku-4"
+    )
 
 
 def test_normalize_passthrough_non_claude():

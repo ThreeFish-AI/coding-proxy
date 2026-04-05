@@ -19,7 +19,6 @@ import aiosqlite
 # noqa: F401
 from ..model.compat import CompatSessionRecord
 
-
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS compat_session (
     session_key TEXT PRIMARY KEY,
@@ -97,7 +96,9 @@ class CompatSessionStore:
                 record.session_key,
                 record.trace_id,
                 json.dumps(record.tool_call_map, ensure_ascii=False, sort_keys=True),
-                json.dumps(record.thought_signature_map, ensure_ascii=False, sort_keys=True),
+                json.dumps(
+                    record.thought_signature_map, ensure_ascii=False, sort_keys=True
+                ),
                 json.dumps(record.provider_state, ensure_ascii=False, sort_keys=True),
                 record.state_version,
                 updated_at,
@@ -108,7 +109,9 @@ class CompatSessionStore:
     async def delete(self, session_key: str) -> None:
         if not self._db:
             return
-        await self._db.execute("DELETE FROM compat_session WHERE session_key = ?", (session_key,))
+        await self._db.execute(
+            "DELETE FROM compat_session WHERE session_key = ?", (session_key,)
+        )
         await self._db.commit()
 
     async def close(self) -> None:
@@ -126,7 +129,10 @@ class CompatSessionStore:
         )
 
     def _is_expired(self, updated_at_unix: int) -> bool:
-        return updated_at_unix > 0 and (int(time.time()) - updated_at_unix) > self._ttl_seconds
+        return (
+            updated_at_unix > 0
+            and (int(time.time()) - updated_at_unix) > self._ttl_seconds
+        )
 
 
 def _loads_dict(raw: str) -> dict[str, Any]:

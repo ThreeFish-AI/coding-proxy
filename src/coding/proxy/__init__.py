@@ -12,6 +12,7 @@ def __get_version() -> str:
     """
     try:
         from importlib.metadata import version as _meta_version
+
         return _meta_version("coding-proxy")
     except Exception:
         pass

@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
+from ..model.constants import (  # noqa: F401
+    PROXY_SKIP_HEADERS,
+    RESPONSE_SANITIZE_SKIP_HEADERS,
+)
+
 # 从 model/ 模块正交导入所有类型、常量与工具函数，并 re-export 以保持向后兼容
 from ..model.vendor import (  # noqa: F401
-    VendorCapabilities,
-    VendorResponse,
     CapabilityLossReason,
     CopilotExchangeDiagnostics,
     CopilotMisdirectedRequest,
@@ -19,13 +23,11 @@ from ..model.vendor import (  # noqa: F401
     NoCompatibleVendorError,
     RequestCapabilities,
     UsageInfo,
+    VendorCapabilities,
+    VendorResponse,
     decode_json_body,
     extract_error_message,
     sanitize_headers_for_synthetic_response,
-)
-from ..model.constants import (  # noqa: F401
-    PROXY_SKIP_HEADERS,
-    RESPONSE_SANITIZE_SKIP_HEADERS,
 )
 
 # ── 废弃别名（向后兼容旧名称） ──────────────────────────
@@ -94,7 +96,9 @@ class BaseVendor(ABC):
         return CompatibilityProfile(
             thinking=self._compat_status_from_bool(caps.supports_thinking),
             tool_calling=self._compat_status_from_bool(caps.supports_tools),
-            tool_streaming=CompatibilityStatus.SIMULATED if caps.supports_tools else CompatibilityStatus.UNSAFE,
+            tool_streaming=CompatibilityStatus.SIMULATED
+            if caps.supports_tools
+            else CompatibilityStatus.UNSAFE,
             mcp_tools=CompatibilityStatus.UNKNOWN,
             images=self._compat_status_from_bool(caps.supports_images),
             metadata=self._compat_status_from_bool(caps.supports_metadata),
@@ -107,36 +111,48 @@ class BaseVendor(ABC):
         """将布尔能力映射为兼容性状态."""
         return CompatibilityStatus.NATIVE if supported else CompatibilityStatus.UNSAFE
 
-    def make_compatibility_decision(self, request: CanonicalRequest) -> CompatibilityDecision:
+    def make_compatibility_decision(
+        self, request: CanonicalRequest
+    ) -> CompatibilityDecision:
         profile = self.get_compatibility_profile()
         simulation_actions: list[str] = []
         unsupported: list[str] = []
 
-        if request.thinking.enabled and profile.thinking is CompatibilityStatus.SIMULATED:
+        if (
+            request.thinking.enabled
+            and profile.thinking is CompatibilityStatus.SIMULATED
+        ):
             simulation_actions.append("thinking_simulation")
         elif request.thinking.enabled and profile.thinking not in {
-            CompatibilityStatus.NATIVE, CompatibilityStatus.SIMULATED,
+            CompatibilityStatus.NATIVE,
+            CompatibilityStatus.SIMULATED,
         }:
             unsupported.append("thinking")
 
         if request.tool_names and profile.tool_calling is CompatibilityStatus.SIMULATED:
             simulation_actions.append("tool_calling_simulation")
         elif request.tool_names and profile.tool_calling not in {
-            CompatibilityStatus.NATIVE, CompatibilityStatus.SIMULATED,
+            CompatibilityStatus.NATIVE,
+            CompatibilityStatus.SIMULATED,
         }:
             unsupported.append("tools")
 
         if request.metadata and profile.metadata is CompatibilityStatus.SIMULATED:
             simulation_actions.append("metadata_projection")
         elif request.metadata and profile.metadata not in {
-            CompatibilityStatus.NATIVE, CompatibilityStatus.SIMULATED,
+            CompatibilityStatus.NATIVE,
+            CompatibilityStatus.SIMULATED,
         }:
             unsupported.append("metadata")
 
-        if request.supports_json_output and profile.json_output is CompatibilityStatus.SIMULATED:
+        if (
+            request.supports_json_output
+            and profile.json_output is CompatibilityStatus.SIMULATED
+        ):
             simulation_actions.append("json_output_projection")
         elif request.supports_json_output and profile.json_output not in {
-            CompatibilityStatus.NATIVE, CompatibilityStatus.SIMULATED,
+            CompatibilityStatus.NATIVE,
+            CompatibilityStatus.SIMULATED,
         }:
             unsupported.append("response_format")
 
@@ -166,7 +182,8 @@ class BaseVendor(ABC):
         return self._compat_trace
 
     def supports_request(
-        self, request_caps: RequestCapabilities,
+        self,
+        request_caps: RequestCapabilities,
     ) -> tuple[bool, list[CapabilityLossReason]]:
         """判断供应商是否能无损承接该请求."""
         vendor_caps = self.get_capabilities()
@@ -199,7 +216,9 @@ class BaseVendor(ABC):
 
     # ── 响应处理钩子 ──────────────────────────────────────
 
-    def _pre_send_check(self, request_body: dict[str, Any], headers: dict[str, str]) -> None:
+    def _pre_send_check(
+        self, request_body: dict[str, Any], headers: dict[str, str]
+    ) -> None:
         """发送前检查钩子. 子类可覆写以实现快速失败（如缺少 API key）.
 
         默认实现为空操作（no-op）.
@@ -229,7 +248,9 @@ class BaseVendor(ABC):
             diagnostics["compat"] = self._compat_trace.to_dict()
         return diagnostics
 
-    def should_trigger_failover(self, status_code: int, body: dict[str, Any] | None) -> bool:
+    def should_trigger_failover(
+        self, status_code: int, body: dict[str, Any] | None
+    ) -> bool:
         """基于 FailoverConfig 的通用故障转移判断.
 
         无 failover_config 时返回 False（终端供应商默认行为）.
@@ -280,7 +301,9 @@ class BaseVendor(ABC):
                 error_body = await response.aread()
                 logger.warning(
                     "%s stream error: status=%d body=%s",
-                    self.get_name(), response.status_code, error_body[:500],
+                    self.get_name(),
+                    response.status_code,
+                    error_body[:500],
                 )
                 raise httpx.HTTPStatusError(
                     f"{self.get_name()} API error: {response.status_code}",
@@ -288,7 +311,9 @@ class BaseVendor(ABC):
                     response=httpx.Response(
                         response.status_code,
                         content=error_body,
-                        headers=_sanitize_headers_for_synthetic_response(response.headers),
+                        headers=_sanitize_headers_for_synthetic_response(
+                            response.headers
+                        ),
                         request=response.request,
                     ),
                 )
@@ -320,24 +345,35 @@ class BaseVendor(ABC):
             vendor_resp = VendorResponse(
                 status_code=response.status_code,
                 raw_body=raw_content,
-                error_type=resp_body.get("error", {}).get("type") if isinstance(resp_body, dict) and isinstance(resp_body.get("error"), dict) else None,
+                error_type=resp_body.get("error", {}).get("type")
+                if isinstance(resp_body, dict)
+                and isinstance(resp_body.get("error"), dict)
+                else None,
                 error_message=_extract_error_message(response, resp_body),
                 response_headers=dict(response.headers),
             )
-            return self._normalize_error_response(response.status_code, response, vendor_resp)
+            return self._normalize_error_response(
+                response.status_code, response, vendor_resp
+            )
 
         usage = resp_body.get("usage", {}) if isinstance(resp_body, dict) else {}
         return VendorResponse(
             status_code=response.status_code,
             raw_body=raw_content,
             usage=UsageInfo(
-                input_tokens=usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0) or usage.get("completion_tokens", 0),
+                input_tokens=usage.get("input_tokens", 0)
+                or usage.get("prompt_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0)
+                or usage.get("completion_tokens", 0),
                 cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
                 cache_read_tokens=usage.get("cache_read_input_tokens", 0),
-                request_id=resp_body.get("id", "") if isinstance(resp_body, dict) else "",
+                request_id=resp_body.get("id", "")
+                if isinstance(resp_body, dict)
+                else "",
             ),
-            model_served=resp_body.get("model") if isinstance(resp_body, dict) else None,
+            model_served=resp_body.get("model")
+            if isinstance(resp_body, dict)
+            else None,
         )
 
     async def close(self) -> None:

@@ -16,18 +16,29 @@ logger = logging.getLogger(__name__)
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
 
 # ── Legacy flat 格式字段集合（用于检测旧配置，避免与 example vendors 冲突） ──
-_LEGACY_FLAT_KEYS: frozenset[str] = frozenset({
-    "primary", "copilot", "antigravity", "fallback",
-    "circuit_breaker", "copilot_circuit_breaker", "antigravity_circuit_breaker",
-    "quota_guard", "copilot_quota_guard", "antigravity_quota_guard",
-})
+_LEGACY_FLAT_KEYS: frozenset[str] = frozenset(
+    {
+        "primary",
+        "copilot",
+        "antigravity",
+        "fallback",
+        "circuit_breaker",
+        "copilot_circuit_breaker",
+        "antigravity_circuit_breaker",
+        "quota_guard",
+        "copilot_quota_guard",
+        "antigravity_quota_guard",
+    }
+)
 
 
 def _expand_env(value: str) -> str:
     """将 ${VAR} 替换为环境变量值."""
+
     def _replacer(match: re.Match) -> str:
         var_name = match.group(1)
         return os.environ.get(var_name, "")
+
     return _ENV_VAR_RE.sub(_replacer, value)
 
 

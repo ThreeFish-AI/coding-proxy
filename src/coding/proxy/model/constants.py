@@ -3,14 +3,23 @@
 # ── 代理转发头过滤规则 ─────────────────────────────────────
 
 # 代理转发时应跳过的 hop-by-hop 请求头
-PROXY_SKIP_HEADERS: frozenset[str] = frozenset({
-    "host", "content-length", "transfer-encoding", "connection",
-})
+PROXY_SKIP_HEADERS: frozenset[str] = frozenset(
+    {
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+    }
+)
 
 # 构造合成 Response 时需移除的头部（避免 httpx 二次解压已解压内容）
-RESPONSE_SANITIZE_SKIP_HEADERS: frozenset[str] = frozenset({
-    "content-encoding", "content-length", "transfer-encoding",
-})
+RESPONSE_SANITIZE_SKIP_HEADERS: frozenset[str] = frozenset(
+    {
+        "content-encoding",
+        "content-length",
+        "transfer-encoding",
+    }
+)
 
 # ── Copilot URL / 版本常量 ─────────────────────────────────
 

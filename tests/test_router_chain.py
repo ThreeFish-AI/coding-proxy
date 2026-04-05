@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
-from coding.proxy.vendors.base import BaseVendor, VendorCapabilities, VendorResponse, UsageInfo
-from coding.proxy.vendors.copilot import CopilotVendor
-from coding.proxy.vendors.token_manager import TokenAcquireError
 from coding.proxy.config.schema import CopilotConfig, FailoverConfig
 from coding.proxy.routing.circuit_breaker import CircuitBreaker
 from coding.proxy.routing.quota_guard import QuotaGuard
 from coding.proxy.routing.router import RequestRouter
 from coding.proxy.routing.tier import VendorTier
-
+from coding.proxy.vendors.base import (
+    BaseVendor,
+    UsageInfo,
+    VendorCapabilities,
+    VendorResponse,
+)
+from coding.proxy.vendors.copilot import CopilotVendor
+from coding.proxy.vendors.token_manager import TokenAcquireError
 
 # --- 测试用 Mock 供应商 ---
 
@@ -76,12 +79,19 @@ def _headers() -> dict:
 @pytest.mark.asyncio
 async def test_route_message_primary_success():
     """首层成功 → 直接返回."""
-    b0 = FakeVendor("primary", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10, output_tokens=5)))
+    b0 = FakeVendor(
+        "primary",
+        VendorResponse(
+            status_code=200, usage=UsageInfo(input_tokens=10, output_tokens=5)
+        ),
+    )
     b1 = FakeVendor("fallback")
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1),
+        ]
+    )
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
     assert b0.call_count == 1
@@ -101,16 +111,21 @@ async def test_route_message_failover_to_tier1():
     )
     # 为 primary 配置 failover
     from coding.proxy.config.schema import FailoverConfig
+
     b0._failover_config = FailoverConfig()
 
-    b1 = FakeVendor("copilot", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=20)))
+    b1 = FakeVendor(
+        "copilot", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=20))
+    )
     b2 = FakeVendor("zhipu")
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b2),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b2),
+        ]
+    )
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
     assert b0.call_count == 1
@@ -122,12 +137,16 @@ async def test_route_message_failover_to_tier1():
 async def test_route_message_read_error_failover_to_tier1():
     """首层 ReadError → 次层接管."""
     b0 = FakeVendor("primary", raise_on_call=httpx.ReadError("boom"))
-    b1 = FakeVendor("copilot", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=20)))
+    b1 = FakeVendor(
+        "copilot", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=20))
+    )
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1),
+        ]
+    )
 
     resp = await router.route_message(_body(), _headers())
 
@@ -141,19 +160,33 @@ async def test_route_message_failover_to_terminal():
     """前两层都失败 → 终端层接管."""
     from coding.proxy.config.schema import FailoverConfig
 
-    b0 = FakeVendor("primary", VendorResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b0 = FakeVendor(
+        "primary",
+        VendorResponse(
+            status_code=429, error_type="rate_limit_error", error_message="limit"
+        ),
+    )
     b0._failover_config = FailoverConfig()
 
-    b1 = FakeVendor("copilot", VendorResponse(status_code=503, error_type="overloaded_error", error_message="overloaded"))
+    b1 = FakeVendor(
+        "copilot",
+        VendorResponse(
+            status_code=503, error_type="overloaded_error", error_message="overloaded"
+        ),
+    )
     b1._failover_config = FailoverConfig()
 
-    b2 = FakeVendor("zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=30)))
+    b2 = FakeVendor(
+        "zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=30))
+    )
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b2),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b2),
+        ]
+    )
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
     assert b0.call_count == 1
@@ -167,10 +200,12 @@ async def test_route_message_connection_error_failover():
     b0 = FakeVendor("primary", raise_on_call=httpx.ConnectError("connection refused"))
     b1 = FakeVendor("fallback", VendorResponse(status_code=200))
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1),
+        ]
+    )
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
     assert b0.call_count == 1
@@ -183,10 +218,12 @@ async def test_route_message_last_tier_raises():
     b0 = FakeVendor("primary", raise_on_call=httpx.ConnectError("refused"))
     b1 = FakeVendor("fallback", raise_on_call=httpx.ConnectError("also refused"))
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1),
+        ]
+    )
     with pytest.raises(httpx.ConnectError):
         await router.route_message(_body(), _headers())
 
@@ -200,10 +237,12 @@ async def test_circuit_open_skips_tier():
     cb0 = CircuitBreaker(failure_threshold=1)
     cb0.record_failure()  # OPEN
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=cb0),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=cb0),
+            VendorTier(vendor=b1),
+        ]
+    )
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
     assert b0.call_count == 0  # 被跳过
@@ -216,13 +255,20 @@ async def test_quota_exceeded_skips_tier():
     b0 = FakeVendor("primary", VendorResponse(status_code=200))
     b1 = FakeVendor("fallback", VendorResponse(status_code=200))
 
-    qg = QuotaGuard(enabled=True, token_budget=100, window_seconds=3600, probe_interval_seconds=99999)
+    qg = QuotaGuard(
+        enabled=True,
+        token_budget=100,
+        window_seconds=3600,
+        probe_interval_seconds=99999,
+    )
     qg.notify_cap_error()
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker(), quota_guard=qg),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker(), quota_guard=qg),
+            VendorTier(vendor=b1),
+        ]
+    )
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
     assert b0.call_count == 0
@@ -242,11 +288,13 @@ async def test_all_non_terminal_skipped_reaches_terminal():
     cb1 = CircuitBreaker(failure_threshold=1)
     cb1.record_failure()
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=cb0),
-        VendorTier(vendor=b1, circuit_breaker=cb1),
-        VendorTier(vendor=b2),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=cb0),
+            VendorTier(vendor=b1, circuit_breaker=cb1),
+            VendorTier(vendor=b2),
+        ]
+    )
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
     assert b0.call_count == 0
@@ -261,11 +309,13 @@ async def test_last_tier_always_tried_even_if_unavailable():
     # 终端层无 CB/QG，始终被执行
     b1 = FakeVendor("fallback", VendorResponse(status_code=200))
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1),
-    ])
-    resp = await router.route_message(_body(), _headers())
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1),
+        ]
+    )
+    await router.route_message(_body(), _headers())
     assert b1.call_count == 1
 
 
@@ -279,10 +329,12 @@ async def test_route_stream_primary_success():
     b0 = FakeVendor("primary", stream_chunks=chunks)
     b1 = FakeVendor("fallback")
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1),
+        ]
+    )
 
     collected = []
     async for chunk, name in router.route_stream(_body(), _headers()):
@@ -299,10 +351,12 @@ async def test_route_stream_failover():
     b0 = FakeVendor("primary", raise_on_call=httpx.ConnectError("refused"))
     b1 = FakeVendor("fallback", stream_chunks=[b"data: ok\n\n"])
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1),
+        ]
+    )
 
     collected = []
     async for chunk, name in router.route_stream(_body(), _headers()):
@@ -318,10 +372,12 @@ async def test_route_stream_read_error_failover():
     b0 = FakeVendor("primary", raise_on_call=httpx.ReadError("boom"))
     b1 = FakeVendor("fallback", stream_chunks=[b"data: ok\n\n"])
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1),
+        ]
+    )
 
     collected = []
     async for chunk, name in router.route_stream(_body(), _headers()):
@@ -337,10 +393,12 @@ async def test_route_stream_all_fail_raises():
     b0 = FakeVendor("primary", raise_on_call=httpx.ConnectError("refused"))
     b1 = FakeVendor("fallback", raise_on_call=httpx.ConnectError("also refused"))
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1),
+        ]
+    )
 
     with pytest.raises(httpx.ConnectError):
         async for _ in router.route_stream(_body(), _headers()):
@@ -362,10 +420,12 @@ async def test_router_close_calls_all_vendors():
     b0.close = AsyncMock()
     b1.close = AsyncMock()
 
-    router = RequestRouter([
-        VendorTier(vendor=b0),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0),
+            VendorTier(vendor=b1),
+        ]
+    )
     await router.close()
     b0.close.assert_awaited_once()
     b1.close.assert_awaited_once()
@@ -385,23 +445,42 @@ async def test_four_tier_failover_chain():
     """4-tier 完整降级：anthropic→copilot→antigravity→zhipu."""
     from coding.proxy.config.schema import FailoverConfig
 
-    b0 = FakeVendor("anthropic", VendorResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b0 = FakeVendor(
+        "anthropic",
+        VendorResponse(
+            status_code=429, error_type="rate_limit_error", error_message="limit"
+        ),
+    )
     b0._failover_config = FailoverConfig()
 
-    b1 = FakeVendor("copilot", VendorResponse(status_code=503, error_type="overloaded_error", error_message="overloaded"))
+    b1 = FakeVendor(
+        "copilot",
+        VendorResponse(
+            status_code=503, error_type="overloaded_error", error_message="overloaded"
+        ),
+    )
     b1._failover_config = FailoverConfig()
 
-    b2 = FakeVendor("antigravity", VendorResponse(status_code=403, error_type="api_error", error_message="forbidden"))
+    b2 = FakeVendor(
+        "antigravity",
+        VendorResponse(
+            status_code=403, error_type="api_error", error_message="forbidden"
+        ),
+    )
     b2._failover_config = FailoverConfig()
 
-    b3 = FakeVendor("zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=50)))
+    b3 = FakeVendor(
+        "zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=50))
+    )
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b2, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b3),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b2, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b3),
+        ]
+    )
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
     assert b0.call_count == 1
@@ -415,21 +494,38 @@ async def test_four_tier_antigravity_succeeds():
     """4-tier：前两层失败，antigravity 成功."""
     from coding.proxy.config.schema import FailoverConfig
 
-    b0 = FakeVendor("anthropic", VendorResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b0 = FakeVendor(
+        "anthropic",
+        VendorResponse(
+            status_code=429, error_type="rate_limit_error", error_message="limit"
+        ),
+    )
     b0._failover_config = FailoverConfig()
 
-    b1 = FakeVendor("copilot", VendorResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b1 = FakeVendor(
+        "copilot",
+        VendorResponse(
+            status_code=429, error_type="rate_limit_error", error_message="limit"
+        ),
+    )
     b1._failover_config = FailoverConfig()
 
-    b2 = FakeVendor("antigravity", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=40, output_tokens=20)))
+    b2 = FakeVendor(
+        "antigravity",
+        VendorResponse(
+            status_code=200, usage=UsageInfo(input_tokens=40, output_tokens=20)
+        ),
+    )
     b3 = FakeVendor("zhipu")
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b2, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b3),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b2, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b3),
+        ]
+    )
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
     assert b0.call_count == 1
@@ -450,12 +546,14 @@ async def test_four_tier_all_non_terminal_skipped():
     for cb in cbs:
         cb.record_failure()
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=cbs[0]),
-        VendorTier(vendor=b1, circuit_breaker=cbs[1]),
-        VendorTier(vendor=b2, circuit_breaker=cbs[2]),
-        VendorTier(vendor=b3),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=cbs[0]),
+            VendorTier(vendor=b1, circuit_breaker=cbs[1]),
+            VendorTier(vendor=b2, circuit_breaker=cbs[2]),
+            VendorTier(vendor=b3),
+        ]
+    )
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
     assert b0.call_count == 0
@@ -472,12 +570,14 @@ async def test_four_tier_stream_failover():
     b2 = FakeVendor("antigravity", raise_on_call=httpx.ConnectError("refused"))
     b3 = FakeVendor("zhipu", stream_chunks=[b"data: ok\n\n"])
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b2, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b3),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b2, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b3),
+        ]
+    )
 
     collected = []
     async for chunk, name in router.route_stream(_body(), _headers()):
@@ -496,19 +596,30 @@ async def test_four_tier_failover_when_copilot_token_acquire_fails():
     """Anthropic 429 后，Copilot token 获取失败仍应降级到 Antigravity."""
     from coding.proxy.config.schema import FailoverConfig
 
-    b0 = FakeVendor("anthropic", VendorResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b0 = FakeVendor(
+        "anthropic",
+        VendorResponse(
+            status_code=429, error_type="rate_limit_error", error_message="limit"
+        ),
+    )
     b0._failover_config = FailoverConfig()
 
-    b1 = FakeVendor("copilot", raise_on_call=TokenAcquireError("Copilot token 交换返回非预期响应"))
-    b2 = FakeVendor("antigravity", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=40)))
+    b1 = FakeVendor(
+        "copilot", raise_on_call=TokenAcquireError("Copilot token 交换返回非预期响应")
+    )
+    b2 = FakeVendor(
+        "antigravity", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=40))
+    )
     b3 = FakeVendor("zhipu")
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b2, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b3),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b2, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b3),
+        ]
+    )
 
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -522,16 +633,20 @@ async def test_four_tier_failover_when_copilot_token_acquire_fails():
 async def test_four_tier_stream_failover_when_copilot_token_acquire_fails():
     """流式请求下，Copilot token 获取失败也应继续降级."""
     b0 = FakeVendor("anthropic", raise_on_call=httpx.ConnectError("refused"))
-    b1 = FakeVendor("copilot", raise_on_call=TokenAcquireError("Copilot token 交换返回非预期响应"))
+    b1 = FakeVendor(
+        "copilot", raise_on_call=TokenAcquireError("Copilot token 交换返回非预期响应")
+    )
     b2 = FakeVendor("antigravity", stream_chunks=[b"data: ok\n\n"])
     b3 = FakeVendor("zhipu")
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b2, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b3),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b2, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b3),
+        ]
+    )
 
     collected = []
     async for chunk, name in router.route_stream(_body(), _headers()):
@@ -546,37 +661,45 @@ async def test_stream_failover_to_copilot_even_when_request_has_thinking():
     """Anthropic 429 且请求含 thinking 时，Copilot 仍应通过适配层接管."""
     from coding.proxy.config.schema import FailoverConfig as RouterFailoverConfig
 
-    b0 = FakeVendor("anthropic", raise_on_call=httpx.HTTPStatusError(
-        "anthropic API error: 429",
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
-        response=httpx.Response(
-            429,
-            content=b'{"error":{"type":"rate_limit_error","message":"limited"}}',
-            headers={"content-type": "application/json"},
+    b0 = FakeVendor(
+        "anthropic",
+        raise_on_call=httpx.HTTPStatusError(
+            "anthropic API error: 429",
             request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+            response=httpx.Response(
+                429,
+                content=b'{"error":{"type":"rate_limit_error","message":"limited"}}',
+                headers={"content-type": "application/json"},
+                request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+            ),
         ),
-    ))
+    )
     b0._failover_config = RouterFailoverConfig()
 
     copilot = CopilotVendor(CopilotConfig(github_token="ghp_test"), FailoverConfig())
     copilot.check_health = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
     async def _copilot_stream(_body, _headers):
-        yield b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-sonnet-4\",\"usage\":{\"input_tokens\":10}}}\n\n"
-        yield b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+        yield b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","model":"claude-sonnet-4","usage":{"input_tokens":10}}}\n\n'
+        yield b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
 
     copilot.send_message_stream = _copilot_stream  # type: ignore[method-assign]
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=copilot, circuit_breaker=CircuitBreaker()),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=copilot, circuit_breaker=CircuitBreaker()),
+        ]
+    )
 
     collected: list[tuple[bytes, str]] = []
-    async for chunk, name in router.route_stream({
-        **_body(),
-        "thinking": {"budget_tokens": 512},
-    }, _headers()):
+    async for chunk, name in router.route_stream(
+        {
+            **_body(),
+            "thinking": {"budget_tokens": 512},
+        },
+        _headers(),
+    ):
         collected.append((chunk, name))
 
     assert collected
@@ -599,7 +722,9 @@ async def test_stream_semantic_rejection_fails_over_without_opening_circuit():
     )
     b0 = FakeVendor(
         "anthropic",
-        raise_on_call=httpx.HTTPStatusError("anthropic API error: 400", request=request, response=response),
+        raise_on_call=httpx.HTTPStatusError(
+            "anthropic API error: 400", request=request, response=response
+        ),
     )
     b0._failover_config = FailoverConfig()
 
@@ -611,10 +736,12 @@ async def test_stream_semantic_rejection_fails_over_without_opening_circuit():
         ],
     )
     cb0 = CircuitBreaker(failure_threshold=1)
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=cb0),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=cb0),
+            VendorTier(vendor=b1),
+        ]
+    )
 
     collected: list[tuple[bytes, str]] = []
     async for chunk, name in router.route_stream(_body(), _headers()):
@@ -639,12 +766,16 @@ async def test_nonstream_semantic_rejection_fails_over_without_opening_circuit()
         ),
     )
     b0._failover_config = FailoverConfig()
-    b1 = FakeVendor("zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=8)))
+    b1 = FakeVendor(
+        "zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=8))
+    )
     cb0 = CircuitBreaker(failure_threshold=1)
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=cb0),
-        VendorTier(vendor=b1),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=cb0),
+            VendorTier(vendor=b1),
+        ]
+    )
 
     resp = await router.route_message(_body(), _headers())
 
@@ -657,28 +788,39 @@ async def test_nonstream_semantic_rejection_fails_over_without_opening_circuit()
 @pytest.mark.asyncio
 async def test_incompatible_tool_request_skips_non_compatible_tiers():
     """带 tools 的请求不会静默降级到不兼容的 antigravity/zhipu."""
-    b0 = FakeVendor("copilot", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+    b0 = FakeVendor(
+        "copilot", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10))
+    )
     b1 = FakeVendor("antigravity", VendorResponse(status_code=200))
     b2 = FakeVendor("zhipu", VendorResponse(status_code=200))
 
     b1.get_capabilities = lambda: VendorCapabilities(
-        supports_tools=False, supports_thinking=False, supports_images=True,
+        supports_tools=False,
+        supports_thinking=False,
+        supports_images=True,
     )
     b2.get_capabilities = lambda: VendorCapabilities(
-        supports_tools=False, supports_thinking=False, supports_images=True,
+        supports_tools=False,
+        supports_thinking=False,
+        supports_images=True,
         emits_vendor_tool_events=True,
     )
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b2),
-    ])
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b2),
+        ]
+    )
 
-    resp = await router.route_message({
-        **_body(),
-        "tools": [{"name": "analyze_image"}],
-    }, _headers())
+    resp = await router.route_message(
+        {
+            **_body(),
+            "tools": [{"name": "analyze_image"}],
+        },
+        _headers(),
+    )
     assert resp.status_code == 200
     assert b0.call_count == 1
     assert b1.call_count == 0
@@ -691,9 +833,13 @@ async def test_incompatible_tool_request_skips_non_compatible_tiers():
 class MappingFakeVendor(FakeVendor):
     """带模型映射的假供应商."""
 
-    def __init__(self, name: str = "mapping-fake", mapped_model: str = "glm-5.1",
-                 response: VendorResponse | None = None,
-                 stream_chunks: list[bytes] | None = None) -> None:
+    def __init__(
+        self,
+        name: str = "mapping-fake",
+        mapped_model: str = "glm-5.1",
+        response: VendorResponse | None = None,
+        stream_chunks: list[bytes] | None = None,
+    ) -> None:
         super().__init__(name=name, response=response, stream_chunks=stream_chunks)
         self._mapped_model = mapped_model
 
@@ -705,7 +851,9 @@ class MappingFakeVendor(FakeVendor):
 async def test_route_message_model_served_from_response():
     """非流式：model_served 从响应体提取."""
     logger_mock = AsyncMock()
-    resp = VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10), model_served="glm-5.1")
+    resp = VendorResponse(
+        status_code=200, usage=UsageInfo(input_tokens=10), model_served="glm-5.1"
+    )
     vendor = FakeVendor("zhipu", response=resp)
     router = RequestRouter([VendorTier(vendor=vendor)], token_logger=logger_mock)
 
@@ -740,12 +888,15 @@ async def test_route_message_model_served_fallback_to_map_model():
     resp = VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10))
     # model_served 默认为 None，但后端有模型映射
     vendor = MappingFakeVendor(
-        name="zhipu", mapped_model="glm-4.5-air", response=resp,
+        name="zhipu",
+        mapped_model="glm-4.5-air",
+        response=resp,
     )
     router = RequestRouter([VendorTier(vendor=vendor)], token_logger=logger_mock)
 
     await router.route_message(
-        {"model": "claude-haiku-4-5-20251001", "messages": []}, _headers(),
+        {"model": "claude-haiku-4-5-20251001", "messages": []},
+        _headers(),
     )
 
     logger_mock.log.assert_awaited_once()
@@ -759,9 +910,9 @@ async def test_route_stream_model_served_from_sse():
     """流式：model_served 从 SSE message_start 事件提取."""
     logger_mock = AsyncMock()
     sse_chunk = (
-        b'event: message_start\n'
+        b"event: message_start\n"
         b'data: {"type":"message_start","message":{"id":"msg_1","model":"glm-5.1","usage":{"input_tokens":10,"output_tokens":0}}}\n\n'
-        b'data: [DONE]\n\n'
+        b"data: [DONE]\n\n"
     )
     vendor = MappingFakeVendor(mapped_model="glm-5.1", stream_chunks=[sse_chunk])
     router = RequestRouter([VendorTier(vendor=vendor)], token_logger=logger_mock)
@@ -785,7 +936,8 @@ async def test_route_stream_model_served_fallback_to_map_model():
     router = RequestRouter([VendorTier(vendor=vendor)], token_logger=logger_mock)
 
     async for _ in router.route_stream(
-        {"model": "claude-haiku-4-5-20251001", "messages": []}, _headers(),
+        {"model": "claude-haiku-4-5-20251001", "messages": []},
+        _headers(),
     ):
         pass
 
@@ -817,11 +969,11 @@ async def test_route_stream_copilot_logs_cache_evidence():
     """Copilot 流式请求应额外写入 cache evidence 记录."""
     logger_mock = AsyncMock()
     chunk = (
-        b'event: message_start\n'
+        b"event: message_start\n"
         b'data: {"type":"message_start","message":{"id":"msg_cache","model":"claude-sonnet-4","usage":{"input_tokens":25}}}\n\n'
-        b'event: message_delta\n'
+        b"event: message_delta\n"
         b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":3,"cache_read_input_tokens":12}}\n\n'
-        b'data: [DONE]\n\n'
+        b"data: [DONE]\n\n"
     )
     vendor = FakeVendor("copilot", stream_chunks=[chunk])
     router = RequestRouter([VendorTier(vendor=vendor)], token_logger=logger_mock)
@@ -843,12 +995,12 @@ async def test_route_stream_cache_only_input_does_not_warn(caplog):
     """cache-only 输入信号不应被误判为缺失 usage."""
     logger_mock = AsyncMock()
     chunk = (
-        b'event: message_start\n'
+        b"event: message_start\n"
         b'data: {"type":"message_start","message":{"id":"msg_cache_only","model":"claude-haiku-4-5-20251001",'
         b'"usage":{"input_tokens":0,"cache_creation_input_tokens":1920,"cache_read_input_tokens":80488}}}\n\n'
-        b'event: message_delta\n'
+        b"event: message_delta\n"
         b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":368}}\n\n'
-        b'data: [DONE]\n\n'
+        b"data: [DONE]\n\n"
     )
     vendor = FakeVendor("anthropic", stream_chunks=[chunk])
     router = RequestRouter([VendorTier(vendor=vendor)], token_logger=logger_mock)
@@ -867,9 +1019,9 @@ async def test_route_stream_missing_input_signals_still_warns(caplog):
     """真正缺失所有输入信号时，仍应保留 WARNING."""
     logger_mock = AsyncMock()
     chunk = (
-        b'event: message_delta\n'
+        b"event: message_delta\n"
         b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":9}}\n\n'
-        b'data: [DONE]\n\n'
+        b"data: [DONE]\n\n"
     )
     vendor = FakeVendor("anthropic", stream_chunks=[chunk])
     router = RequestRouter([VendorTier(vendor=vendor)], token_logger=logger_mock)
@@ -887,7 +1039,10 @@ async def test_route_stream_missing_input_signals_still_warns(caplog):
 async def test_route_message_non_copilot_does_not_log_evidence():
     """非 Copilot 后端不应写 usage evidence."""
     logger_mock = AsyncMock()
-    vendor = FakeVendor("anthropic", response=VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+    vendor = FakeVendor(
+        "anthropic",
+        response=VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10)),
+    )
     router = RequestRouter([VendorTier(vendor=vendor)], token_logger=logger_mock)
 
     await router.route_message(_body(), _headers())
@@ -907,15 +1062,22 @@ async def test_failover_records_source():
     logger_mock = AsyncMock()
     b0 = FakeVendor(
         "anthropic",
-        VendorResponse(status_code=429, error_type="rate_limit_error", error_message="limit"),
+        VendorResponse(
+            status_code=429, error_type="rate_limit_error", error_message="limit"
+        ),
     )
     b0._failover_config = FailoverConfig()
-    b1 = FakeVendor("zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+    b1 = FakeVendor(
+        "zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10))
+    )
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1),
-    ], token_logger=logger_mock)
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1),
+        ],
+        token_logger=logger_mock,
+    )
 
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -933,15 +1095,20 @@ async def test_circuit_open_not_counted_as_failover():
     """CB OPEN 跳过后的请求不算故障转移."""
     logger_mock = AsyncMock()
     b0 = FakeVendor("anthropic", VendorResponse(status_code=200))
-    b1 = FakeVendor("zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+    b1 = FakeVendor(
+        "zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10))
+    )
 
     cb0 = CircuitBreaker(failure_threshold=1)
     cb0.record_failure()  # anthropic CB OPEN
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=cb0),
-        VendorTier(vendor=b1),
-    ], token_logger=logger_mock)
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=cb0),
+            VendorTier(vendor=b1),
+        ],
+        token_logger=logger_mock,
+    )
 
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -960,17 +1127,32 @@ async def test_multi_tier_failover_tracks_source():
     from coding.proxy.config.schema import FailoverConfig
 
     logger_mock = AsyncMock()
-    b0 = FakeVendor("anthropic", VendorResponse(status_code=429, error_type="rate_limit_error", error_message="limit"))
+    b0 = FakeVendor(
+        "anthropic",
+        VendorResponse(
+            status_code=429, error_type="rate_limit_error", error_message="limit"
+        ),
+    )
     b0._failover_config = FailoverConfig()
-    b1 = FakeVendor("copilot", VendorResponse(status_code=503, error_type="overloaded_error", error_message="overloaded"))
+    b1 = FakeVendor(
+        "copilot",
+        VendorResponse(
+            status_code=503, error_type="overloaded_error", error_message="overloaded"
+        ),
+    )
     b1._failover_config = FailoverConfig()
-    b2 = FakeVendor("zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=30)))
+    b2 = FakeVendor(
+        "zhipu", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=30))
+    )
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b2),
-    ], token_logger=logger_mock)
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b2),
+        ],
+        token_logger=logger_mock,
+    )
 
     resp = await router.route_message(_body(), _headers())
     assert resp.status_code == 200
@@ -988,10 +1170,13 @@ async def test_stream_failover_records_source():
     b0 = FakeVendor("anthropic", raise_on_call=httpx.ConnectError("refused"))
     b1 = FakeVendor("zhipu", stream_chunks=[b"data: ok\n\n"])
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-        VendorTier(vendor=b1),
-    ], token_logger=logger_mock)
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+            VendorTier(vendor=b1),
+        ],
+        token_logger=logger_mock,
+    )
 
     async for _ in router.route_stream(_body(), _headers()):
         pass
@@ -1012,10 +1197,13 @@ async def test_stream_circuit_open_not_failover():
     cb0 = CircuitBreaker(failure_threshold=1)
     cb0.record_failure()
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=cb0),
-        VendorTier(vendor=b1),
-    ], token_logger=logger_mock)
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=cb0),
+            VendorTier(vendor=b1),
+        ],
+        token_logger=logger_mock,
+    )
 
     async for _ in router.route_stream(_body(), _headers()):
         pass
@@ -1030,11 +1218,16 @@ async def test_stream_circuit_open_not_failover():
 async def test_primary_success_no_failover():
     """首层成功：无故障转移."""
     logger_mock = AsyncMock()
-    b0 = FakeVendor("anthropic", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+    b0 = FakeVendor(
+        "anthropic", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10))
+    )
 
-    router = RequestRouter([
-        VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
-    ], token_logger=logger_mock)
+    router = RequestRouter(
+        [
+            VendorTier(vendor=b0, circuit_breaker=CircuitBreaker()),
+        ],
+        token_logger=logger_mock,
+    )
 
     await router.route_message(_body(), _headers())
 
@@ -1075,7 +1268,9 @@ async def test_rate_limit_deadline_allows_probe_after_expiry():
     """rate limit deadline 已过期 → 允许探测，恢复正常路由."""
     import time
 
-    b0 = FakeVendor("anthropic", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10)))
+    b0 = FakeVendor(
+        "anthropic", VendorResponse(status_code=200, usage=UsageInfo(input_tokens=10))
+    )
     b1 = FakeVendor("zhipu", VendorResponse(status_code=200))
 
     cb0 = CircuitBreaker(failure_threshold=1, recovery_timeout_seconds=0)

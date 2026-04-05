@@ -35,39 +35,59 @@ def _append_usage_evidence(
     entries = usage.setdefault("_usage_evidence", [])
     if not isinstance(entries, list):
         return
-    entries.append({
-        "evidence_kind": evidence_kind,
-        "raw_usage": raw_usage,
-        "request_id": request_id or "",
-        "model_served": model_served or "",
-        "source_field_map": {
-            "input_tokens": next(
-                (key for key in ("input_tokens", "prompt_tokens") if key in raw_usage),
-                "",
-            ),
-            "output_tokens": next(
-                (key for key in ("output_tokens", "completion_tokens") if key in raw_usage),
-                "",
-            ),
-            "cache_creation_tokens": next(
-                (key for key in ("cache_creation_input_tokens",) if key in raw_usage),
-                "",
-            ),
-            "cache_read_tokens": next(
-                (
-                    key for key in (
-                        "cache_read_input_tokens",
-                        "cached_tokens",
-                    ) if key in raw_usage
+    entries.append(
+        {
+            "evidence_kind": evidence_kind,
+            "raw_usage": raw_usage,
+            "request_id": request_id or "",
+            "model_served": model_served or "",
+            "source_field_map": {
+                "input_tokens": next(
+                    (
+                        key
+                        for key in ("input_tokens", "prompt_tokens")
+                        if key in raw_usage
+                    ),
+                    "",
                 ),
-                "",
+                "output_tokens": next(
+                    (
+                        key
+                        for key in ("output_tokens", "completion_tokens")
+                        if key in raw_usage
+                    ),
+                    "",
+                ),
+                "cache_creation_tokens": next(
+                    (
+                        key
+                        for key in ("cache_creation_input_tokens",)
+                        if key in raw_usage
+                    ),
+                    "",
+                ),
+                "cache_read_tokens": next(
+                    (
+                        key
+                        for key in (
+                            "cache_read_input_tokens",
+                            "cached_tokens",
+                        )
+                        if key in raw_usage
+                    ),
+                    "",
+                ),
+            },
+            "cache_signal_present": any(
+                key in raw_usage
+                for key in (
+                    "cache_creation_input_tokens",
+                    "cache_read_input_tokens",
+                    "cached_tokens",
+                )
             ),
-        },
-        "cache_signal_present": any(
-            key in raw_usage
-            for key in ("cache_creation_input_tokens", "cache_read_input_tokens", "cached_tokens")
-        ),
-    })
+        }
+    )
 
 
 def build_usage_evidence_records(
@@ -91,23 +111,31 @@ def build_usage_evidence_records(
         source_field_map = entry.get("source_field_map")
         if not isinstance(source_field_map, dict):
             source_field_map = {}
-        records.append({
-            "vendor": vendor,
-            "request_id": str(entry.get("request_id") or request_id or ""),
-            "model_served": str(entry.get("model_served") or model_served or ""),
-            "evidence_kind": str(entry.get("evidence_kind") or "stream_usage"),
-            "raw_usage_json": json.dumps(raw_usage, ensure_ascii=False, sort_keys=True),
-            "parsed_input_tokens": usage.get("input_tokens", 0),
-            "parsed_output_tokens": usage.get("output_tokens", 0),
-            "parsed_cache_creation_tokens": usage.get("cache_creation_tokens", 0),
-            "parsed_cache_read_tokens": usage.get("cache_read_tokens", 0),
-            "cache_signal_present": bool(entry.get("cache_signal_present")),
-            "source_field_map_json": json.dumps(source_field_map, ensure_ascii=False, sort_keys=True),
-        })
+        records.append(
+            {
+                "vendor": vendor,
+                "request_id": str(entry.get("request_id") or request_id or ""),
+                "model_served": str(entry.get("model_served") or model_served or ""),
+                "evidence_kind": str(entry.get("evidence_kind") or "stream_usage"),
+                "raw_usage_json": json.dumps(
+                    raw_usage, ensure_ascii=False, sort_keys=True
+                ),
+                "parsed_input_tokens": usage.get("input_tokens", 0),
+                "parsed_output_tokens": usage.get("output_tokens", 0),
+                "parsed_cache_creation_tokens": usage.get("cache_creation_tokens", 0),
+                "parsed_cache_read_tokens": usage.get("cache_read_tokens", 0),
+                "cache_signal_present": bool(entry.get("cache_signal_present")),
+                "source_field_map_json": json.dumps(
+                    source_field_map, ensure_ascii=False, sort_keys=True
+                ),
+            }
+        )
     return records
 
 
-def parse_usage_from_chunk(chunk: bytes, usage: dict, *, vendor_label: str | None = None) -> None:
+def parse_usage_from_chunk(
+    chunk: bytes, usage: dict, *, vendor_label: str | None = None
+) -> None:
     """从 SSE chunk 提取 token 用量.
 
     同时支持 Anthropic 原生格式和 OpenAI/Zhipu 兼容格式：
@@ -135,10 +163,16 @@ def parse_usage_from_chunk(chunk: bytes, usage: dict, *, vendor_label: str | Non
             u = msg["usage"]
             input_tokens = u.get("input_tokens", 0) or u.get("prompt_tokens", 0)
             if input_tokens > 0:
-                logger.debug("Extracted input tokens from message.usage: %d", input_tokens)
+                logger.debug(
+                    "Extracted input tokens from message.usage: %d", input_tokens
+                )
             _set_if_nonzero(usage, "input_tokens", input_tokens)
-            _set_if_nonzero(usage, "cache_creation_tokens", u.get("cache_creation_input_tokens", 0))
-            _set_if_nonzero(usage, "cache_read_tokens", u.get("cache_read_input_tokens", 0))
+            _set_if_nonzero(
+                usage, "cache_creation_tokens", u.get("cache_creation_input_tokens", 0)
+            )
+            _set_if_nonzero(
+                usage, "cache_read_tokens", u.get("cache_read_input_tokens", 0)
+            )
             if "id" in msg:
                 usage["request_id"] = msg["id"]
             if "model" in msg:
@@ -162,9 +196,15 @@ def parse_usage_from_chunk(chunk: bytes, usage: dict, *, vendor_label: str | Non
 
             _label = f" ({vendor_label})" if vendor_label else ""
             if output_tokens > 0:
-                logger.debug("Extracted output tokens from data.usage: %d%s", output_tokens, _label)
+                logger.debug(
+                    "Extracted output tokens from data.usage: %d%s",
+                    output_tokens,
+                    _label,
+                )
             if input_tokens > 0:
-                logger.debug("Extracted input tokens from data.usage: %d%s", input_tokens, _label)
+                logger.debug(
+                    "Extracted input tokens from data.usage: %d%s", input_tokens, _label
+                )
 
             _set_if_nonzero(usage, "output_tokens", output_tokens)
             _set_if_nonzero(usage, "input_tokens", input_tokens)

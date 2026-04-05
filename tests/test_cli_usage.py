@@ -105,6 +105,6 @@ class TestCombinedParameters:
         assert result.exit_code == 0
         call_args = mock_show.call_args.args
         # positional: (logger, days, vendor, model, pricing_table)
-        assert call_args[1] == 30       # days
+        assert call_args[1] == 30  # days
         assert call_args[2] == "copilot"  # vendor
         assert call_args[3] == "claude-*"  # model

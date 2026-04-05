@@ -54,7 +54,9 @@ def test_price_field_types_are_float():
     }
     for f in fields(ModelPricing):
         if f.name in price_fields:
-            assert f.type == "float", f"字段 {f.name} 的类型注解应为 'float'，实际为 {f.type!r}"
+            assert f.type == "float", (
+                f"字段 {f.name} 的类型注解应为 'float'，实际为 {f.type!r}"
+            )
 
 
 def test_equality():

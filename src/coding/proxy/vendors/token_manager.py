@@ -104,9 +104,13 @@ class BaseTokenManager(ABC):
         kind: TokenErrorKind = TokenErrorKind.TEMPORARY,
         needs_reauth: bool = False,
     ) -> None:
-        self._record_error(TokenAcquireError.with_kind(
-            message, kind=kind, needs_reauth=needs_reauth,
-        ))
+        self._record_error(
+            TokenAcquireError.with_kind(
+                message,
+                kind=kind,
+                needs_reauth=needs_reauth,
+            )
+        )
 
     def clear_diagnostics(self) -> None:
         self._clear_error()

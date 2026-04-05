@@ -2,7 +2,7 @@
 
 import logging
 
-from coding.proxy.routing.usage_parser import parse_usage_from_chunk, _set_if_nonzero
+from coding.proxy.routing.usage_parser import _set_if_nonzero, parse_usage_from_chunk
 
 
 def _sse(data_str: str) -> bytes:
@@ -39,10 +39,13 @@ def test_anthropic_message_start_and_delta():
     usage: dict = {}
 
     # message_start
-    parse_usage_from_chunk(_sse(
-        '{"type":"message_start","message":{"id":"msg_123","model":"claude-sonnet-4-20250514",'
-        '"usage":{"input_tokens":100,"cache_creation_input_tokens":10,"cache_read_input_tokens":5}}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse(
+            '{"type":"message_start","message":{"id":"msg_123","model":"claude-sonnet-4-20250514",'
+            '"usage":{"input_tokens":100,"cache_creation_input_tokens":10,"cache_read_input_tokens":5}}}'
+        ),
+        usage,
+    )
     assert usage["input_tokens"] == 100
     assert usage["cache_creation_tokens"] == 10
     assert usage["cache_read_tokens"] == 5
@@ -50,10 +53,13 @@ def test_anthropic_message_start_and_delta():
     assert usage["model_served"] == "claude-sonnet-4-20250514"
 
     # message_delta
-    parse_usage_from_chunk(_sse(
-        '{"type":"message_delta","delta":{"stop_reason":"end_turn"},'
-        '"usage":{"output_tokens":50}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse(
+            '{"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+            '"usage":{"output_tokens":50}}'
+        ),
+        usage,
+    )
     assert usage["output_tokens"] == 50
     # input_tokens 不被覆盖
     assert usage["input_tokens"] == 100
@@ -62,27 +68,33 @@ def test_anthropic_message_start_and_delta():
 def test_anthropic_empty_usage():
     """message_start 中 usage 为空对象，后续有输出."""
     usage: dict = {}
-    parse_usage_from_chunk(_sse(
-        '{"type":"message_start","message":{"id":"msg_abc","usage":{}}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse('{"type":"message_start","message":{"id":"msg_abc","usage":{}}}'), usage
+    )
     assert usage.get("input_tokens", 0) == 0
 
-    parse_usage_from_chunk(_sse(
-        '{"type":"message_delta","delta":{},"usage":{"output_tokens":30}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse('{"type":"message_delta","delta":{},"usage":{"output_tokens":30}}'), usage
+    )
     assert usage["output_tokens"] == 30
 
 
 def test_anthropic_cache_only_input_signal():
     """Anthropic prompt caching 场景下，cache tokens 本身就是有效输入信号."""
     usage: dict = {}
-    parse_usage_from_chunk(_sse(
-        '{"type":"message_start","message":{"id":"msg_cache_only","usage":'
-        '{"input_tokens":0,"cache_creation_input_tokens":720,"cache_read_input_tokens":82408}}}'
-    ), usage)
-    parse_usage_from_chunk(_sse(
-        '{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8220}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse(
+            '{"type":"message_start","message":{"id":"msg_cache_only","usage":'
+            '{"input_tokens":0,"cache_creation_input_tokens":720,"cache_read_input_tokens":82408}}}'
+        ),
+        usage,
+    )
+    parse_usage_from_chunk(
+        _sse(
+            '{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8220}}'
+        ),
+        usage,
+    )
 
     assert usage.get("input_tokens", 0) == 0
     assert usage["cache_creation_tokens"] == 720
@@ -96,11 +108,14 @@ def test_anthropic_cache_only_input_signal():
 def test_openai_zhipu_final_chunk():
     """Zhipu 最后一个 chunk: 顶层 usage 含 prompt_tokens / completion_tokens."""
     usage: dict = {}
-    parse_usage_from_chunk(_sse(
-        '{"id":"chatcmpl-1","model":"glm-5.1",'
-        '"choices":[{"index":0,"finish_reason":"stop","delta":{"role":"assistant","content":""}}],'
-        '"usage":{"prompt_tokens":200,"completion_tokens":80,"total_tokens":280}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse(
+            '{"id":"chatcmpl-1","model":"glm-5.1",'
+            '"choices":[{"index":0,"finish_reason":"stop","delta":{"role":"assistant","content":""}}],'
+            '"usage":{"prompt_tokens":200,"completion_tokens":80,"total_tokens":280}}'
+        ),
+        usage,
+    )
     assert usage["input_tokens"] == 200
     assert usage["output_tokens"] == 80
     assert usage["request_id"] == "chatcmpl-1"
@@ -109,10 +124,13 @@ def test_openai_zhipu_final_chunk():
 def test_openai_final_chunk_with_cache_tokens():
     """OpenAI/Copilot 风格最终 chunk 应提取 cache read / creation tokens."""
     usage: dict = {}
-    parse_usage_from_chunk(_sse(
-        '{"id":"chatcmpl-cache","usage":{"prompt_tokens":120,"completion_tokens":30,'
-        '"cache_read_input_tokens":40,"cache_creation_input_tokens":10}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse(
+            '{"id":"chatcmpl-cache","usage":{"prompt_tokens":120,"completion_tokens":30,'
+            '"cache_read_input_tokens":40,"cache_creation_input_tokens":10}}'
+        ),
+        usage,
+    )
     assert usage["input_tokens"] == 120
     assert usage["output_tokens"] == 30
     assert usage["cache_read_tokens"] == 40
@@ -123,18 +141,24 @@ def test_openai_final_chunk_with_cache_tokens():
 def test_openai_zhipu_content_chunks_no_usage():
     """Zhipu 中间 chunk 不含 usage，不应干扰."""
     usage: dict = {}
-    parse_usage_from_chunk(_sse(
-        '{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse(
+            '{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}'
+        ),
+        usage,
+    )
     assert usage.get("input_tokens", 0) == 0
     assert usage.get("output_tokens", 0) == 0
 
     # 最后一个 chunk 才有 usage
-    parse_usage_from_chunk(_sse(
-        '{"id":"chatcmpl-1","choices":[{"index":0,"finish_reason":"stop",'
-        '"delta":{"role":"assistant","content":""}}],'
-        '"usage":{"prompt_tokens":50,"completion_tokens":10}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse(
+            '{"id":"chatcmpl-1","choices":[{"index":0,"finish_reason":"stop",'
+            '"delta":{"role":"assistant","content":""}}],'
+            '"usage":{"prompt_tokens":50,"completion_tokens":10}}'
+        ),
+        usage,
+    )
     assert usage["input_tokens"] == 50
     assert usage["output_tokens"] == 10
 
@@ -145,15 +169,21 @@ def test_openai_zhipu_content_chunks_no_usage():
 def test_mixed_anthropic_input_openai_output():
     """Anthropic message_start 提供 input_tokens, Zhipu 最后 chunk 提供 completion_tokens."""
     usage: dict = {}
-    parse_usage_from_chunk(_sse(
-        '{"type":"message_start","message":{"id":"msg_mix","usage":{"input_tokens":150}}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse(
+            '{"type":"message_start","message":{"id":"msg_mix","usage":{"input_tokens":150}}}'
+        ),
+        usage,
+    )
     assert usage["input_tokens"] == 150
 
-    parse_usage_from_chunk(_sse(
-        '{"id":"mix-1","choices":[{"finish_reason":"stop","delta":{}}],'
-        '"usage":{"completion_tokens":40}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse(
+            '{"id":"mix-1","choices":[{"finish_reason":"stop","delta":{}}],'
+            '"usage":{"completion_tokens":40}}'
+        ),
+        usage,
+    )
     assert usage["output_tokens"] == 40
     assert usage["input_tokens"] == 150  # 不被后续 chunk 覆盖
 
@@ -164,15 +194,18 @@ def test_mixed_anthropic_input_openai_output():
 def test_zero_does_not_overwrite_nonzero():
     """后续 chunk 的 0 值不应覆盖已提取的非零值."""
     usage: dict = {}
-    parse_usage_from_chunk(_sse(
-        '{"type":"message_start","message":{"id":"msg_z","usage":{"input_tokens":100}}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse(
+            '{"type":"message_start","message":{"id":"msg_z","usage":{"input_tokens":100}}}'
+        ),
+        usage,
+    )
     assert usage["input_tokens"] == 100
 
     # 另一个 message_start 带 input_tokens=0（如 Anthropic 某些事件）
-    parse_usage_from_chunk(_sse(
-        '{"type":"message_start","message":{"usage":{"input_tokens":0}}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse('{"type":"message_start","message":{"usage":{"input_tokens":0}}}'), usage
+    )
     assert usage["input_tokens"] == 100
 
 
@@ -182,24 +215,28 @@ def test_zero_does_not_overwrite_nonzero():
 def test_request_id_from_top_level():
     """OpenAI 格式: id 在顶层而非 message 内."""
     usage: dict = {}
-    parse_usage_from_chunk(_sse(
-        '{"id":"top-level-id","usage":{"prompt_tokens":10,"completion_tokens":5}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse(
+            '{"id":"top-level-id","usage":{"prompt_tokens":10,"completion_tokens":5}}'
+        ),
+        usage,
+    )
     assert usage["request_id"] == "top-level-id"
 
 
 def test_request_id_message_priority():
     """message.id 应优先于顶层 data.id."""
     usage: dict = {}
-    parse_usage_from_chunk(_sse(
-        '{"id":"top-id","message":{"id":"msg-id","usage":{"input_tokens":10}}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse('{"id":"top-id","message":{"id":"msg-id","usage":{"input_tokens":10}}}'),
+        usage,
+    )
     assert usage["request_id"] == "msg-id"
 
     # 后续顶层 id 不应覆盖已设置的 message.id
-    parse_usage_from_chunk(_sse(
-        '{"id":"another-top-id","usage":{"output_tokens":5}}'
-    ), usage)
+    parse_usage_from_chunk(
+        _sse('{"id":"another-top-id","usage":{"output_tokens":5}}'), usage
+    )
     assert usage["request_id"] == "msg-id"
 
 
@@ -240,7 +277,9 @@ def test_vendor_label_anthropic(caplog):
     caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.usage_parser")
     usage: dict = {}
     parse_usage_from_chunk(
-        _sse('{"type":"message_delta","delta":{},"usage":{"output_tokens":42,"input_tokens":10}}'),
+        _sse(
+            '{"type":"message_delta","delta":{},"usage":{"output_tokens":42,"input_tokens":10}}'
+        ),
         usage,
         vendor_label="Anthropic",
     )
@@ -264,7 +303,9 @@ def test_vendor_label_gemini(caplog):
     caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.usage_parser")
     usage: dict = {}
     parse_usage_from_chunk(
-        _sse('{"type":"message_delta","delta":{},"usage":{"output_tokens":30,"input_tokens":200}}'),
+        _sse(
+            '{"type":"message_delta","delta":{},"usage":{"output_tokens":30,"input_tokens":200}}'
+        ),
         usage,
         vendor_label="Gemini",
     )
@@ -281,4 +322,8 @@ def test_no_vendor_label_omits_parenthesis(caplog):
     )
     # 不应有任何带括号的 vendor 标签
     for record in caplog.records:
-        assert "(" not in record.message or "Extracted" not in record.message or ") " not in record.message[record.message.index("("):]
+        assert (
+            "(" not in record.message
+            or "Extracted" not in record.message
+            or ") " not in record.message[record.message.index("(") :]
+        )

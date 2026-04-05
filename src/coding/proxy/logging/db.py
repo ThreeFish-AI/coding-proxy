@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
-
-import aiosqlite
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+import aiosqlite
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ def _local_tz() -> ZoneInfo:
         return datetime.now().astimezone().tzinfo  # type: ignore[return-value]
     except Exception:
         logger.warning("无法获取系统本地时区，降级使用 UTC")
-        return timezone.utc
+        return UTC
 
 
 def _days_start_utc_iso(days: int) -> str:
@@ -31,12 +31,12 @@ def _days_start_utc_iso(days: int) -> str:
     tz = _local_tz()
     start_date = datetime.now(tz).date() - timedelta(days=max(1, days) - 1)
     start_dt = datetime(start_date.year, start_date.month, start_date.day, tzinfo=tz)
-    return start_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%f+00:00")
+    return start_dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%f+00:00")
 
 
 def _hours_ago_utc_iso(hours: float) -> str:
     """计算 hours 小时前的 UTC ISO 字符串（用于滚动窗口）."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
     return cutoff.strftime("%Y-%m-%dT%H:%M:%f+00:00")
 
 
@@ -51,9 +51,11 @@ def _local_date_udf(ts_str: str) -> str:
     """
     try:
         tz = _local_tz()
-        return datetime.fromisoformat(
-            ts_str.replace("Z", "+00:00")
-        ).astimezone(tz).strftime("%Y-%m-%d")
+        return (
+            datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            .astimezone(tz)
+            .strftime("%Y-%m-%d")
+        )
     except (ValueError, TypeError, AttributeError):
         # 非 ISO 格式（如旧数据 'now'）降级为字符串截取前 10 位
         if isinstance(ts_str, str) and len(ts_str) >= 10:
@@ -142,15 +144,28 @@ class TokenLogger:
             cursor = await self._db.execute(f"PRAGMA table_info({table})")
             columns = {row["name"] for row in await cursor.fetchall()}
             if "backend" in columns and "vendor" not in columns:
-                await self._db.execute(f"ALTER TABLE {table} RENAME COLUMN backend TO vendor")
-                logger.info("Migration: renamed 'backend' column to 'vendor' in %s", table)
+                await self._db.execute(
+                    f"ALTER TABLE {table} RENAME COLUMN backend TO vendor"
+                )
+                logger.info(
+                    "Migration: renamed 'backend' column to 'vendor' in %s", table
+                )
 
-    async def log(self, vendor: str, model_requested: str, model_served: str,
-                  input_tokens: int = 0, output_tokens: int = 0,
-                  cache_creation_tokens: int = 0, cache_read_tokens: int = 0,
-                  duration_ms: int = 0, success: bool = True,
-                  failover: bool = False, failover_from: str | None = None,
-                  request_id: str = "") -> None:
+    async def log(
+        self,
+        vendor: str,
+        model_requested: str,
+        model_served: str,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        duration_ms: int = 0,
+        success: bool = True,
+        failover: bool = False,
+        failover_from: str | None = None,
+        request_id: str = "",
+    ) -> None:
         if not self._db:
             return
         await self._db.execute(
@@ -160,10 +175,21 @@ class TokenLogger:
                 cache_creation_tokens, cache_read_tokens,
                 duration_ms, success, failover, failover_from, request_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (vendor, model_requested, model_served,
-             input_tokens, output_tokens,
-             cache_creation_tokens, cache_read_tokens,
-             duration_ms, success, failover, failover_from, request_id))
+            (
+                vendor,
+                model_requested,
+                model_served,
+                input_tokens,
+                output_tokens,
+                cache_creation_tokens,
+                cache_read_tokens,
+                duration_ms,
+                success,
+                failover,
+                failover_from,
+                request_id,
+            ),
+        )
         await self._db.commit()
 
     async def log_evidence(
@@ -222,8 +248,9 @@ class TokenLogger:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
-    async def query_daily(self, days: int = 7, vendor: str | None = None,
-                          model: str | None = None) -> list[dict]:
+    async def query_daily(
+        self, days: int = 7, vendor: str | None = None, model: str | None = None
+    ) -> list[dict]:
         if not self._db:
             return []
         days = max(1, days)
@@ -244,13 +271,17 @@ class TokenLogger:
         if model:
             sql += " AND model_requested = ?"
             params.append(model)
-        sql += (" GROUP BY local_date(ts), vendor, model_requested, model_served"
-                " ORDER BY local_date(ts) DESC, vendor, model_requested, model_served")
+        sql += (
+            " GROUP BY local_date(ts), vendor, model_requested, model_served"
+            " ORDER BY local_date(ts) DESC, vendor, model_requested, model_served"
+        )
         cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
-    async def query_failover_stats(self, days: int = 7, include_model_info: bool = False) -> list[dict]:
+    async def query_failover_stats(
+        self, days: int = 7, include_model_info: bool = False
+    ) -> list[dict]:
         """
         按 failover_from → vendor 聚合故障转移次数.
 
@@ -286,7 +317,9 @@ class TokenLogger:
         return [dict(row) for row in rows]
 
     async def query_window_total(
-        self, window_hours: float, vendor: str = "anthropic",
+        self,
+        window_hours: float,
+        vendor: str = "anthropic",
     ) -> int:
         """查询滚动时间窗口内指定供应商的 token 总用量."""
         if not self._db:

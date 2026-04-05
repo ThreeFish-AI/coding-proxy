@@ -34,12 +34,16 @@ def convert_response(
     content_blocks = _convert_parts(content_parts)
 
     finish_reason = candidate.get("finishReason", "STOP")
-    stop_reason = "tool_use" if any(block.get("type") == "tool_use" for block in content_blocks) else (
-        GEMINI_FINISH_REASON_MAP.get(finish_reason, "end_turn")
+    stop_reason = (
+        "tool_use"
+        if any(block.get("type") == "tool_use" for block in content_blocks)
+        else (GEMINI_FINISH_REASON_MAP.get(finish_reason, "end_turn"))
     )
 
     usage = extract_usage(gemini_resp)
-    msg_id = request_id or gemini_resp.get("responseId") or f"msg_{uuid.uuid4().hex[:24]}"
+    msg_id = (
+        request_id or gemini_resp.get("responseId") or f"msg_{uuid.uuid4().hex[:24]}"
+    )
 
     result = {
         "id": msg_id,
@@ -75,24 +79,30 @@ def _convert_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         signature = part.get("thoughtSignature")
         if part.get("functionCall"):
             fc = part["functionCall"]
-            blocks.append({
-                "type": "tool_use",
-                "id": fc.get("id") or f"toolu_{uuid.uuid4().hex[:24]}",
-                "name": fc.get("name", ""),
-                "input": fc.get("args", {}),
-                **({"signature": signature} if signature else {}),
-            })
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": fc.get("id") or f"toolu_{uuid.uuid4().hex[:24]}",
+                    "name": fc.get("name", ""),
+                    "input": fc.get("args", {}),
+                    **({"signature": signature} if signature else {}),
+                }
+            )
             continue
         if part.get("text") is not None:
             text = part.get("text", "")
             if part.get("thought"):
-                blocks.append({
-                    "type": "thinking",
-                    "thinking": text,
-                    **({"signature": signature} if signature else {}),
-                })
+                blocks.append(
+                    {
+                        "type": "thinking",
+                        "thinking": text,
+                        **({"signature": signature} if signature else {}),
+                    }
+                )
             elif text:
                 blocks.append({"type": "text", "text": text})
             elif signature:
-                blocks.append({"type": "thinking", "thinking": "", "signature": signature})
+                blocks.append(
+                    {"type": "thinking", "thinking": "", "signature": signature}
+                )
     return blocks

@@ -28,8 +28,8 @@ dependencies = [
 
 [project.urls]
 "Source Code" = "https://github.com/ThreeFish-AI/coding-proxy"
-docs = "https://github.com/ThreeFish-AI/coding-proxy/blob/master/docs/user-guide.md"
-bug-tracker = "https://github.com/ThreeFish-AI/coding-proxy/issues"
+"User Guide" = "https://github.com/ThreeFish-AI/coding-proxy/blob/master/docs/user-guide.md"
+"Bug Tracker" = "https://github.com/ThreeFish-AI/coding-proxy/issues"
 
 [project.scripts]
 coding-proxy = "coding.proxy.cli:app"
@@ -45,4 +45,45 @@ packages = ["src/coding"]
 dev = [
     "pytest>=9.0",
     "pytest-asyncio>=1.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.9.0",
+]
+
+# ── Ruff: Linter & Formatter（替代 flake8 + isort + Black + pyupgrade 等 6+ 工具） ──
+# 文档: https://docs.astral.sh/ruff/
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "F",   # Pyflakes（未定义变量、导入错误等 — 捕获真实 Bug）
+    "E",   # pycodestyle 错误
+    "W",   # pycodestyle 警告
+    "I",   # isort（导入排序）
+    "UP",  # pyupgrade（Python 语法现代化，安全自动修复）
+]
+ignore = [
+    "E501", # 行过长（由 formatter 处理）
+    "E402", # 模块级非顶层导入（__init__.py 文档化分组等合理场景）
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["coding"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # __init__.py 允许未使用的导入（re-export）
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+# ── Pytest 配置 ──
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
 ]

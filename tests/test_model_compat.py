@@ -23,7 +23,6 @@ from coding.proxy.model.compat import (
     CompatSessionRecord,
 )
 
-
 # ═══════════════════════════════════════════════════════════════
 # 1. 枚举值完整性
 # ═══════════════════════════════════════════════════════════════
@@ -151,7 +150,10 @@ class TestCanonicalThinkingFullConstruction:
 
     def test_full_fields(self) -> None:
         t = CanonicalThinking(
-            enabled=True, budget_tokens=1024, effort="high", source_field="thinking",
+            enabled=True,
+            budget_tokens=1024,
+            effort="high",
+            source_field="thinking",
         )
         assert t.enabled is True
         assert t.budget_tokens == 1024
@@ -186,7 +188,9 @@ class TestCanonicalRequestFullConstruction:
             model="claude-sonnet-4-20250514",
             messages=[
                 CanonicalMessagePart(
-                    type=CanonicalPartType.TEXT, role="user", text="hello",
+                    type=CanonicalPartType.TEXT,
+                    role="user",
+                    text="hello",
                 ),
                 CanonicalMessagePart(
                     type=CanonicalPartType.TOOL_USE,
@@ -253,8 +257,14 @@ class TestFrozenImmutability:
 
     def test_canonical_request_is_frozen(self) -> None:
         req = CanonicalRequest(
-            session_key="a", trace_id="b", request_id="c", model="d",
-            messages=[], thinking=CanonicalThinking(), metadata={}, tool_names=[],
+            session_key="a",
+            trace_id="b",
+            request_id="c",
+            model="d",
+            messages=[],
+            thinking=CanonicalThinking(),
+            metadata={},
+            tool_names=[],
             supports_json_output=False,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
@@ -317,8 +327,11 @@ class TestCompatibilityTraceToDict:
     def test_to_dict_returns_independent_copy(self) -> None:
         """to_dict() 返回的 dict 不应与内部状态共享可变引用."""
         trace = CompatibilityTrace(
-            trace_id="tr_3", vendor="x", session_key="y",
-            provider_protocol="z", compat_mode="m",
+            trace_id="tr_3",
+            vendor="x",
+            session_key="y",
+            provider_protocol="z",
+            compat_mode="m",
             simulation_actions=["a"],
         )
         d = trace.to_dict()
@@ -362,10 +375,14 @@ class TestNestedTypeRelationships:
         thinking = CanonicalThinking(enabled=True, budget_tokens=2048)
         messages = [
             CanonicalMessagePart(
-                type=CanonicalPartType.TEXT, role="user", text="explain recursion",
+                type=CanonicalPartType.TEXT,
+                role="user",
+                text="explain recursion",
             ),
             CanonicalMessagePart(
-                type=CanonicalPartType.THINKING, role="assistant", text="let me think...",
+                type=CanonicalPartType.THINKING,
+                role="assistant",
+                text="let me think...",
             ),
         ]
         req = CanonicalRequest(
@@ -417,8 +434,14 @@ class TestEdgeCases:
 
     def test_canonical_request_empty_messages(self) -> None:
         req = CanonicalRequest(
-            session_key="sk_e", trace_id="tr_e", request_id="req_e", model="m",
-            messages=[], thinking=CanonicalThinking(), metadata={}, tool_names=[],
+            session_key="sk_e",
+            trace_id="tr_e",
+            request_id="req_e",
+            model="m",
+            messages=[],
+            thinking=CanonicalThinking(),
+            metadata={},
+            tool_names=[],
             supports_json_output=False,
         )
         assert req.messages == []
@@ -431,8 +454,11 @@ class TestEdgeCases:
 
     def test_compatibility_trace_default_lists_are_empty(self) -> None:
         trace = CompatibilityTrace(
-            trace_id="t", vendor="b", session_key="s",
-            provider_protocol="p", compat_mode="c",
+            trace_id="t",
+            vendor="b",
+            session_key="s",
+            provider_protocol="p",
+            compat_mode="c",
         )
         assert trace.simulation_actions == []
         assert trace.unsupported_semantics == []
@@ -458,7 +484,9 @@ class TestEdgeCases:
     def test_canonical_message_part_raw_block_preserved(self) -> None:
         raw = {"type": "text", "text": "original", "extra": 42}
         part = CanonicalMessagePart(
-            type=CanonicalPartType.UNKNOWN, role="assistant", raw_block=raw,
+            type=CanonicalPartType.UNKNOWN,
+            role="assistant",
+            raw_block=raw,
         )
         assert part.raw_block == raw
         assert part.raw_block["extra"] == 42

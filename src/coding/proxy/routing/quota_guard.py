@@ -63,7 +63,9 @@ class QuotaGuard:
         with self._lock:
             self._expire()
             if self._state == QuotaState.WITHIN_QUOTA:
-                if self._budget > 0 and self._total >= int(self._budget * self._threshold):
+                if self._budget > 0 and self._total >= int(
+                    self._budget * self._threshold
+                ):
                     self._transition_to(QuotaState.QUOTA_EXCEEDED)
                     logger.warning(
                         "Quota guard: WITHIN_QUOTA → EXCEEDED (%.1f%%)",
@@ -72,7 +74,11 @@ class QuotaGuard:
                     return False
                 return True
             # QUOTA_EXCEEDED — cap 错误触发时仅允许探测恢复，不做预算自动恢复
-            if not self._cap_error_active and self._budget > 0 and self._total < int(self._budget * self._threshold):
+            if (
+                not self._cap_error_active
+                and self._budget > 0
+                and self._total < int(self._budget * self._threshold)
+            ):
                 self._transition_to(QuotaState.WITHIN_QUOTA)
                 logger.info("Quota guard: EXCEEDED → WITHIN_QUOTA (usage dropped)")
                 return True
@@ -149,7 +155,9 @@ class QuotaGuard:
                 "state": self._state.value,
                 "window_usage_tokens": self._total,
                 "budget_tokens": self._budget,
-                "usage_percent": round(self._total / self._budget * 100, 1) if self._budget > 0 else 0,
+                "usage_percent": round(self._total / self._budget * 100, 1)
+                if self._budget > 0
+                else 0,
                 "threshold_percent": self._threshold * 100,
             }
 

@@ -7,7 +7,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-
 _ANTHROPIC_TOOL_USE_ID_RE = re.compile(r"^toolu_[A-Za-z0-9_]+$")
 _ANTHROPIC_SERVER_TOOL_USE_ID_RE = re.compile(r"^srvtoolu_[A-Za-z0-9_]+$")
 _VENDOR_TOOL_BLOCK_TYPES = {
@@ -56,10 +55,15 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
             adaptations.append(f"vendor_block_removed:{block_type}")
             return None
 
-        if message_role == "assistant" and block_type in {"tool_use", "server_tool_use"}:
+        if message_role == "assistant" and block_type in {
+            "tool_use",
+            "server_tool_use",
+        }:
             normalized_block = dict(block)
             tool_id = normalized_block.get("id")
-            if isinstance(tool_id, str) and _ANTHROPIC_SERVER_TOOL_USE_ID_RE.match(tool_id):
+            if isinstance(tool_id, str) and _ANTHROPIC_SERVER_TOOL_USE_ID_RE.match(
+                tool_id
+            ):
                 new_id = next_tool_id()
                 tool_id_map[tool_id] = new_id
                 normalized_block["id"] = new_id

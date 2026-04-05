@@ -15,7 +15,6 @@ import json
 import pytest
 
 from coding.proxy.streaming.anthropic_compat import (
-    _OpenAICompatState,
     _extract_cache_creation_tokens,
     _extract_cache_read_tokens,
     _extract_text_fragments,
@@ -23,9 +22,9 @@ from coding.proxy.streaming.anthropic_compat import (
     _normalize_direct_event,
     _normalize_openai_chunk,
     _normalize_stream_event,
+    _OpenAICompatState,
     normalize_anthropic_compatible_stream,
 )
-
 
 # ── 辅助函数 ───────────────────────────────────────────────
 
@@ -70,10 +69,13 @@ class TestMakeEvent:
         assert text.endswith("\n\n")
 
     def test_unicode_content(self):
-        result = _make_event("content_block_delta", {
-            "type": "content_block_delta",
-            "delta": {"type": "text_delta", "text": "你好世界"},
-        })
+        result = _make_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "你好世界"},
+            },
+        )
         data = json.loads(result.decode().split("data: ")[1])
         assert data["delta"]["text"] == "你好世界"
 
@@ -345,7 +347,12 @@ class TestNormalizeDirectEvent:
         data = {
             "type": "content_block_start",
             "index": 0,
-            "content_block": {"type": "tool_use", "id": "tu_1", "name": "bash", "input": {}},
+            "content_block": {
+                "type": "tool_use",
+                "id": "tu_1",
+                "name": "bash",
+                "input": {},
+            },
         }
         result = _normalize_direct_event(data, "content_block_start")
         assert len(result) == 1
@@ -371,7 +378,12 @@ class TestNormalizeDirectEvent:
         data = {
             "type": "content_block_start",
             "index": 0,
-            "content_block": {"type": "tool_call", "id": "tc_1", "name": "fn", "input": {}},
+            "content_block": {
+                "type": "tool_call",
+                "id": "tc_1",
+                "name": "fn",
+                "input": {},
+            },
         }
         result = _normalize_direct_event(data, "content_block_start")
         assert len(result) == 1
@@ -382,7 +394,12 @@ class TestNormalizeDirectEvent:
         data = {
             "type": "content_block_start",
             "index": 0,
-            "content_block": {"type": "function_call", "id": "fc_1", "name": "fn2", "input": {}},
+            "content_block": {
+                "type": "function_call",
+                "id": "fc_1",
+                "name": "fn2",
+                "input": {},
+            },
         }
         result = _normalize_direct_event(data, "content_block_start")
         block_data = json.loads(result[0].decode().split("data: ")[1])
@@ -434,7 +451,11 @@ class TestNormalizeStreamEvent:
     def test_valid_nested_event(self):
         data = {
             "type": "stream_event",
-            "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "hi"},
+            },
         }
         result = _normalize_stream_event(data, "content_block_delta")
         assert len(result) == 1
@@ -471,101 +492,151 @@ class TestNormalizeOpenAIChunk:
 
     def test_text_content_produces_text_delta(self):
         state = self._make_state()
-        chunks = _normalize_openai_chunk({
-            "choices": [{"delta": {"content": "Hello"}, "finish_reason": None}],
-        }, state)
+        chunks = _normalize_openai_chunk(
+            {
+                "choices": [{"delta": {"content": "Hello"}, "finish_reason": None}],
+            },
+            state,
+        )
         assert any(b"text_delta" in c and b"Hello" in c for c in chunks)
 
     def test_reasoning_content_opens_thinking_block(self):
         state = self._make_state()
-        chunks = _normalize_openai_chunk({
-            "choices": [{"delta": {"reasoning_content": "Thinking..."}, "finish_reason": None}],
-        }, state)
+        chunks = _normalize_openai_chunk(
+            {
+                "choices": [
+                    {
+                        "delta": {"reasoning_content": "Thinking..."},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            state,
+        )
         assert any(b"thinking" in c and b"Thinking..." in c for c in chunks)
         assert state.thinking_block_open is True
 
     def test_finish_reason_stop_maps_to_end_turn(self):
         state = self._make_state()
-        chunks = _normalize_openai_chunk({
-            "choices": [{"delta": {}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 3},
-        }, state)
+        chunks = _normalize_openai_chunk(
+            {
+                "choices": [{"delta": {}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3},
+            },
+            state,
+        )
         assert any(b"end_turn" in c for c in chunks)
 
     def test_finish_reason_length_maps_to_max_tokens(self):
         state = self._make_state()
-        chunks = _normalize_openai_chunk({
-            "choices": [{"delta": {}, "finish_reason": "length"}],
-        }, state)
+        chunks = _normalize_openai_chunk(
+            {
+                "choices": [{"delta": {}, "finish_reason": "length"}],
+            },
+            state,
+        )
         assert any(b"max_tokens" in c for c in chunks)
 
     def test_finish_reason_tool_calls_maps_to_tool_use(self):
         state = self._make_state()
-        chunks = _normalize_openai_chunk({
-            "choices": [{"delta": {}, "finish_reason": "tool_calls"}],
-        }, state)
+        chunks = _normalize_openai_chunk(
+            {
+                "choices": [{"delta": {}, "finish_reason": "tool_calls"}],
+            },
+            state,
+        )
         assert any(b"tool_use" in c for c in chunks)
 
     def test_tool_call_registration(self):
         state = self._make_state()
-        chunks = _normalize_openai_chunk({
-            "choices": [{
-                "delta": {
-                    "tool_calls": [{
-                        "index": 0,
-                        "id": "call_1",
-                        "function": {"name": "get_weather"},
-                    }],
-                },
-                "finish_reason": None,
-            }],
-        }, state)
+        chunks = _normalize_openai_chunk(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "function": {"name": "get_weather"},
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            state,
+        )
         assert any(b"tool_use" in c and b"get_weather" in c for c in chunks)
         assert 0 in state.tool_calls
 
     def test_tool_call_argument_feeding(self):
         state = self._make_state()
         # 先注册工具
-        _normalize_openai_chunk({
-            "choices": [{
-                "delta": {
-                    "tool_calls": [{
-                        "index": 0,
-                        "id": "call_1",
-                        "function": {"name": "bash"},
-                    }],
-                },
-                "finish_reason": None,
-            }],
-        }, state)
+        _normalize_openai_chunk(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "function": {"name": "bash"},
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            state,
+        )
         # 再追加参数
-        chunks = _normalize_openai_chunk({
-            "choices": [{
-                "delta": {
-                    "tool_calls": [{
-                        "index": 0,
-                        "function": {"arguments": '{"cmd":"ls"}'},
-                    }],
-                },
-                "finish_reason": None,
-            }],
-        }, state)
+        chunks = _normalize_openai_chunk(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {"arguments": '{"cmd":"ls"}'},
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            state,
+        )
         assert any(b"input_json_delta" in c for c in chunks)
 
     def test_null_choice_skipped(self):
         """choices 中含 None 元素时，生产代码会抛出 AttributeError（已知边界行为）."""
         state = self._make_state()
         with pytest.raises(AttributeError):
-            _normalize_openai_chunk({
-                "choices": [None, {"delta": {"content": "ok"}, "finish_reason": "stop"}],
-            }, state)
+            _normalize_openai_chunk(
+                {
+                    "choices": [
+                        None,
+                        {"delta": {"content": "ok"}, "finish_reason": "stop"},
+                    ],
+                },
+                state,
+            )
 
     def test_usage_updated_from_chunk(self):
         state = self._make_state()
-        _normalize_openai_chunk({
-            "usage": {"prompt_tokens": 100, "completion_tokens": 20},
-            "choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}],
-        }, state)
+        _normalize_openai_chunk(
+            {
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+                "choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}],
+            },
+            state,
+        )
         assert state.input_tokens == 100
         assert state.output_tokens == 20
 
@@ -581,7 +652,8 @@ class TestNormalizeAnthropicCompatibleStream:
         """空输入流仍应输出 close 事件."""
         collected = []
         async for chunk in normalize_anthropic_compatible_stream(
-            _raw_chunks([]), model="test",
+            _raw_chunks([]),
+            model="test",
         ):
             collected.append(chunk)
         events = _parse_events(collected)
@@ -596,7 +668,8 @@ class TestNormalizeAnthropicCompatibleStream:
         ]
         collected = []
         async for chunk in normalize_anthropic_compatible_stream(
-            _raw_chunks(chunks), model="test",
+            _raw_chunks(chunks),
+            model="test",
         ):
             collected.append(chunk)
         events = _parse_events(collected)
@@ -606,13 +679,14 @@ class TestNormalizeAnthropicCompatibleStream:
     async def test_malformed_json_skipped(self):
         """格式错误的 JSON 行被跳过，不中断处理."""
         chunks = [
-            'data: {invalid json}\n\n',
+            "data: {invalid json}\n\n",
             'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n',
             "data: [DONE]\n\n",
         ]
         collected = []
         async for chunk in normalize_anthropic_compatible_stream(
-            _raw_chunks(chunks), model="test",
+            _raw_chunks(chunks),
+            model="test",
         ):
             collected.append(chunk)
         events = _parse_events(collected)
@@ -632,14 +706,19 @@ class TestNormalizeAnthropicCompatibleStream:
         ]
         collected = []
         async for chunk in normalize_anthropic_compatible_stream(
-            _raw_chunks(chunks), model="claude-sonnet-4",
+            _raw_chunks(chunks),
+            model="claude-sonnet-4",
         ):
             collected.append(chunk)
         events = _parse_events(collected)
         event_types = [e["event"] for e in events]
         assert event_types == [
-            "message_start", "content_block_start", "content_block_delta",
-            "content_block_stop", "message_delta", "message_stop",
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
         ]
 
     @pytest.mark.asyncio
@@ -648,7 +727,8 @@ class TestNormalizeAnthropicCompatibleStream:
         chunks = ['event: ping\ndata: {"type":"ping"}\n\n']
         collected = []
         async for chunk in normalize_anthropic_compatible_stream(
-            _raw_chunks(chunks), model="test",
+            _raw_chunks(chunks),
+            model="test",
         ):
             collected.append(chunk)
         events = _parse_events(collected)
@@ -664,7 +744,8 @@ class TestNormalizeAnthropicCompatibleStream:
         ]
         collected = []
         async for chunk in normalize_anthropic_compatible_stream(
-            _raw_chunks(chunks), model="test",
+            _raw_chunks(chunks),
+            model="test",
         ):
             collected.append(chunk)
         events = _parse_events(collected)

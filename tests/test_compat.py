@@ -25,7 +25,14 @@ def test_build_canonical_request_extracts_session_and_semantics():
                 {"role": "user", "content": [{"type": "text", "text": "hello"}]},
                 {
                     "role": "assistant",
-                    "content": [{"type": "tool_use", "id": "toolu_1", "name": "read_file", "input": {"path": "a"}}],
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "read_file",
+                            "input": {"path": "a"},
+                        }
+                    ],
                 },
             ],
         },
@@ -52,7 +59,9 @@ async def test_compat_session_store_roundtrip(tmp_path: Path):
         trace_id="trace_1",
         tool_call_map={"toolu_1": "call_1"},
         thought_signature_map={"sig_1": "provider_sig_1"},
-        provider_state={"copilot": {"compat_mode": CompatibilityStatus.SIMULATED.value}},
+        provider_state={
+            "copilot": {"compat_mode": CompatibilityStatus.SIMULATED.value}
+        },
     )
     await store.upsert(record)
 
@@ -62,7 +71,10 @@ async def test_compat_session_store_roundtrip(tmp_path: Path):
     assert loaded.trace_id == "trace_1"
     assert loaded.tool_call_map == {"toolu_1": "call_1"}
     assert loaded.thought_signature_map == {"sig_1": "provider_sig_1"}
-    assert loaded.provider_state["copilot"]["compat_mode"] == CompatibilityStatus.SIMULATED.value
+    assert (
+        loaded.provider_state["copilot"]["compat_mode"]
+        == CompatibilityStatus.SIMULATED.value
+    )
 
     await store.close()
 

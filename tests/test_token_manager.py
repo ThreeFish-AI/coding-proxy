@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -139,7 +138,9 @@ async def test_concurrent_safety():
 
     tm = _SlowManager()
     results = await asyncio.gather(
-        tm.get_token(), tm.get_token(), tm.get_token(),
+        tm.get_token(),
+        tm.get_token(),
+        tm.get_token(),
     )
     assert all(r == "concurrent_tok" for r in results)
     assert call_count == 1
@@ -171,6 +172,7 @@ async def test_close():
 @pytest.mark.asyncio
 async def test_refresh_margin():
     """验证 _REFRESH_MARGIN 提前刷新."""
+
     class _MarginManager(BaseTokenManager):
         _REFRESH_MARGIN = 500
 

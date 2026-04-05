@@ -96,7 +96,9 @@ def _translate_model_name(model: str) -> str:
 
     # 新增：处理带 minor 版本的 Anthropic 格式
     # 例如 claude-sonnet-4.6-20250514 -> claude-sonnet-4.6
-    versioned_match = re.match(r"^(claude-(?:sonnet|opus|haiku))-(\d+\.\d+)-\d+$", model)
+    versioned_match = re.match(
+        r"^(claude-(?:sonnet|opus|haiku))-(\d+\.\d+)-\d+$", model
+    )
     if versioned_match:
         family = versioned_match.group(1)
         version = versioned_match.group(2)
@@ -154,7 +156,9 @@ def _translate_messages(
     return translated
 
 
-def _translate_system(system: str | list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+def _translate_system(
+    system: str | list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
     """转换 system prompt，保留 cache_control 边界信息（通过 DEBUG 日志）.
 
     OpenAI 的 system role message 不原生支持 cache_control block。
@@ -196,8 +200,16 @@ def _translate_user_message(message: dict[str, Any]) -> list[dict[str, Any]]:
         return [{"role": "user", "content": content or ""}]
 
     translated: list[dict[str, Any]] = []
-    tool_results = [block for block in content if isinstance(block, dict) and block.get("type") == "tool_result"]
-    other_blocks = [block for block in content if isinstance(block, dict) and block.get("type") != "tool_result"]
+    tool_results = [
+        block
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "tool_result"
+    ]
+    other_blocks = [
+        block
+        for block in content
+        if isinstance(block, dict) and block.get("type") != "tool_result"
+    ]
 
     for block in tool_results:
         tool_result_content = _map_block_content(block.get("content", ""))
@@ -209,17 +221,21 @@ def _translate_user_message(message: dict[str, Any]) -> list[dict[str, Any]]:
                 block.get("tool_use_id", ""),
             )
             tool_result_content = f"[ERROR]\n{tool_result_content}"
-        translated.append({
-            "role": "tool",
-            "tool_call_id": block.get("tool_use_id", ""),
-            "content": tool_result_content,
-        })
+        translated.append(
+            {
+                "role": "tool",
+                "tool_call_id": block.get("tool_use_id", ""),
+                "content": tool_result_content,
+            }
+        )
 
     if other_blocks:
-        translated.append({
-            "role": "user",
-            "content": _map_block_content(other_blocks),
-        })
+        translated.append(
+            {
+                "role": "user",
+                "content": _map_block_content(other_blocks),
+            }
+        )
     return translated
 
 
@@ -228,7 +244,11 @@ def _translate_assistant_message(message: dict[str, Any]) -> list[dict[str, Any]
     if not isinstance(content, list):
         return [{"role": "assistant", "content": content or ""}]
 
-    tool_uses = [block for block in content if isinstance(block, dict) and block.get("type") == "tool_use"]
+    tool_uses = [
+        block
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "tool_use"
+    ]
     text_parts: list[str] = []
     thinking_parts: list[str] = []
 
@@ -253,7 +273,8 @@ def _translate_assistant_message(message: dict[str, Any]) -> list[dict[str, Any]
         logger.debug(
             "copilot: assistant message has both thinking (%d blocks) and text (%d blocks), "
             "thinking will be prepended as [Thinking]...[/Thinking] context",
-            len(thinking_parts), len(text_parts),
+            len(thinking_parts),
+            len(text_parts),
         )
         final_text_parts = [
             f"[Thinking]\n{''.join(thinking_parts)}\n[/Thinking]\n\n",
@@ -263,27 +284,35 @@ def _translate_assistant_message(message: dict[str, Any]) -> list[dict[str, Any]
         final_text_parts = text_parts
 
     if tool_uses:
-        return [{
-            "role": "assistant",
-            "content": "\n\n".join(part for part in final_text_parts if part) or None,
-            "tool_calls": [
-                {
-                    "id": block.get("id", ""),
-                    "type": "function",
-                    "function": {
-                        "name": block.get("name", ""),
-                        "arguments": json.dumps(block.get("input", {}), ensure_ascii=False),
-                    },
-                }
-                for block in tool_uses
-            ],
-        }]
+        return [
+            {
+                "role": "assistant",
+                "content": "\n\n".join(part for part in final_text_parts if part)
+                or None,
+                "tool_calls": [
+                    {
+                        "id": block.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name", ""),
+                            "arguments": json.dumps(
+                                block.get("input", {}), ensure_ascii=False
+                            ),
+                        },
+                    }
+                    for block in tool_uses
+                ],
+            }
+        ]
 
-    return [{
-        "role": "assistant",
-        "content": _map_block_content(content) if not thinking_parts and not tool_uses
-              else "\n\n".join(part for part in final_text_parts if part) or "",
-    }]
+    return [
+        {
+            "role": "assistant",
+            "content": _map_block_content(content)
+            if not thinking_parts and not tool_uses
+            else "\n\n".join(part for part in final_text_parts if part) or "",
+        }
+    ]
 
 
 def _map_block_content(content: Any) -> Any:
@@ -292,7 +321,9 @@ def _map_block_content(content: Any) -> Any:
     if not isinstance(content, list):
         return None
 
-    has_image = any(isinstance(block, dict) and block.get("type") == "image" for block in content)
+    has_image = any(
+        isinstance(block, dict) and block.get("type") == "image" for block in content
+    )
     if not has_image:
         parts: list[str] = []
         for block in content:
@@ -314,12 +345,14 @@ def _map_block_content(content: Any) -> Any:
             translated.append({"type": "text", "text": block.get("thinking", "")})
         elif block.get("type") == "image":
             source = block.get("source", {})
-            translated.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{source.get('media_type', 'image/png')};base64,{source.get('data', '')}",
-                },
-            })
+            translated.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{source.get('media_type', 'image/png')};base64,{source.get('data', '')}",
+                    },
+                }
+            )
     return translated
 
 
@@ -334,7 +367,9 @@ def _translate_tool(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _translate_tool_choice(tool_choice: dict[str, Any] | None) -> str | dict[str, Any] | None:
+def _translate_tool_choice(
+    tool_choice: dict[str, Any] | None,
+) -> str | dict[str, Any] | None:
     if not isinstance(tool_choice, dict):
         return None
     choice_type = tool_choice.get("type")

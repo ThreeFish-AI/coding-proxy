@@ -41,6 +41,10 @@ class QuotaGuardConfig(BaseModel):
     threshold_percent: float = 99.0
     probe_interval_seconds: int = 300
 
+
 __all__ = [
-    "CircuitBreakerConfig", "RetryConfig", "FailoverConfig", "QuotaGuardConfig",
+    "CircuitBreakerConfig",
+    "RetryConfig",
+    "FailoverConfig",
+    "QuotaGuardConfig",
 ]

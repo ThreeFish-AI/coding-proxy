@@ -63,7 +63,9 @@ def convert_request(
         result["contents"] = [{"role": "user", "parts": [{"text": " "}]}]
         adaptations.append("empty_contents_padded")
 
-    generation_config = _build_generation_config(anthropic_body, model=model, adaptations=adaptations)
+    generation_config = _build_generation_config(
+        anthropic_body, model=model, adaptations=adaptations
+    )
     if generation_config:
         result["generationConfig"] = generation_config
 
@@ -168,12 +170,14 @@ def _convert_content(
         elif block_type == "image":
             source = block.get("source", {})
             if source.get("type") == "base64":
-                parts.append({
-                    "inlineData": {
-                        "mimeType": source.get("media_type", "image/png"),
-                        "data": source.get("data", ""),
+                parts.append(
+                    {
+                        "inlineData": {
+                            "mimeType": source.get("media_type", "image/png"),
+                            "data": source.get("data", ""),
+                        }
                     }
-                })
+                )
         elif block_type == "tool_use":
             name = block.get("name", "")
             tool_id = block.get("id", "")
@@ -194,13 +198,15 @@ def _convert_content(
             tool_use_id = block.get("tool_use_id", "")
             tool_content = block.get("content", "")
             text = _stringify_tool_content(tool_content)
-            parts.append({
-                "functionResponse": {
-                    "name": tool_name_by_id.get(tool_use_id, tool_use_id),
-                    "response": {"result": text},
-                    "id": tool_use_id or None,
+            parts.append(
+                {
+                    "functionResponse": {
+                        "name": tool_name_by_id.get(tool_use_id, tool_use_id),
+                        "response": {"result": text},
+                        "id": tool_use_id or None,
+                    }
                 }
-            })
+            )
             if tool_use_id and tool_use_id not in tool_name_by_id:
                 adaptations.append("tool_result_name_fallback_to_tool_use_id")
         else:
@@ -280,7 +286,13 @@ def _build_generation_config(
         )
         for msg in body.get("messages", [])
     )
-    if config.get("thinkingConfig") and has_tools and has_tool_use and model and not model.startswith("gemini-"):
+    if (
+        config.get("thinkingConfig")
+        and has_tools
+        and has_tool_use
+        and model
+        and not model.startswith("gemini-")
+    ):
         del config["thinkingConfig"]
         adaptations.append("thinking_disabled_for_tool_call_compatibility")
 
@@ -344,7 +356,9 @@ def _build_tools(
                 if isinstance(name, str) and name:
                     mode = "ANY"
                     allowed_names = [name]
-                    adaptations.append("tool_choice_tool_mapped_to_allowed_function_names")
+                    adaptations.append(
+                        "tool_choice_tool_mapped_to_allowed_function_names"
+                    )
         tool_config = {"functionCallingConfig": {"mode": mode}}
         if allowed_names:
             tool_config["functionCallingConfig"]["allowedFunctionNames"] = allowed_names

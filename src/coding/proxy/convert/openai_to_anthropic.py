@@ -33,7 +33,11 @@ def convert_response(response: dict[str, Any]) -> dict[str, Any]:
             text_blocks.append({"type": "text", "text": content})
         elif isinstance(content, list):
             for part in content:
-                if isinstance(part, dict) and part.get("type") == "text" and part.get("text"):
+                if (
+                    isinstance(part, dict)
+                    and part.get("type") == "text"
+                    and part.get("text")
+                ):
                     text_blocks.append({"type": "text", "text": part["text"]})
 
         for tool_call in message.get("tool_calls", []) or []:
@@ -42,18 +46,24 @@ def convert_response(response: dict[str, Any]) -> dict[str, Any]:
             function = tool_call.get("function", {})
             arguments = function.get("arguments", "{}")
             try:
-                parsed_arguments = json.loads(arguments) if isinstance(arguments, str) else arguments
+                parsed_arguments = (
+                    json.loads(arguments) if isinstance(arguments, str) else arguments
+                )
             except json.JSONDecodeError:
                 parsed_arguments = {}
-            tool_use_blocks.append({
-                "type": "tool_use",
-                "id": tool_call.get("id", ""),
-                "name": function.get("name", ""),
-                "input": parsed_arguments if isinstance(parsed_arguments, dict) else {},
-            })
+            tool_use_blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": tool_call.get("id", ""),
+                    "name": function.get("name", ""),
+                    "input": parsed_arguments
+                    if isinstance(parsed_arguments, dict)
+                    else {},
+                }
+            )
 
     usage = response.get("usage", {}) or {}
-    cached_tokens = ((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0))
+    cached_tokens = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
     content_blocks = [*text_blocks, *tool_use_blocks]
 
     return {
@@ -65,7 +75,9 @@ def convert_response(response: dict[str, Any]) -> dict[str, Any]:
         "stop_reason": _map_stop_reason(finish_reason) or "end_turn",
         "stop_sequence": None,
         "usage": {
-            "input_tokens": max((usage.get("prompt_tokens", 0) or 0) - cached_tokens, 0),
+            "input_tokens": max(
+                (usage.get("prompt_tokens", 0) or 0) - cached_tokens, 0
+            ),
             "output_tokens": usage.get("completion_tokens", 0) or 0,
             **({"cache_read_input_tokens": cached_tokens} if cached_tokens else {}),
         },
@@ -83,6 +95,8 @@ def _map_stop_reason(reason: str | None) -> str | None:
     }
     mapped = mapping.get(reason)
     if mapped is None:
-        logger.debug("copilot: unknown finish_reason '%s', defaulting to end_turn", reason)
+        logger.debug(
+            "copilot: unknown finish_reason '%s', defaulting to end_turn", reason
+        )
         return "end_turn"
     return mapped

@@ -28,9 +28,7 @@ def test_unexpanded_env_var_becomes_empty(tmp_path: Path):
 
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "copilot:\n"
-        "  enabled: true\n"
-        '  github_token: "${NONEXISTENT_VAR_12345}"\n'
+        'copilot:\n  enabled: true\n  github_token: "${NONEXISTENT_VAR_12345}"\n'
     )
     cfg = load_config(cfg_file)
     assert cfg.copilot.github_token == ""
@@ -65,8 +63,7 @@ async def test_skip_login_when_tier_disabled(tmp_path: Path):
 
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "copilot:\n  enabled: false\n"
-        "antigravity:\n  refresh_token: skip\n"
+        "copilot:\n  enabled: false\nantigravity:\n  refresh_token: skip\n"
     )
 
     mock_prov = AsyncMock()
@@ -76,7 +73,10 @@ async def test_skip_login_when_tier_disabled(tmp_path: Path):
     empty_store = _make_store()
 
     with (
-        patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider", return_value=mock_prov),
+        patch(
+            "coding.proxy.auth.providers.github.GitHubDeviceFlowProvider",
+            return_value=mock_prov,
+        ),
         patch("coding.proxy.auth.store.TokenStoreManager", return_value=empty_store),
     ):
         await _auto_login_if_needed(cfg_file)
@@ -92,8 +92,7 @@ async def test_skip_login_when_store_has_credentials(tmp_path: Path):
 
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "copilot:\n  enabled: true\n"
-        "antigravity:\n  refresh_token: skip\n"
+        "copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n"
     )
 
     mock_prov = AsyncMock()
@@ -103,7 +102,10 @@ async def test_skip_login_when_store_has_credentials(tmp_path: Path):
     valid_store = _make_store({"github": {"access_token": "ghp_valid"}})
 
     with (
-        patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider", return_value=mock_prov),
+        patch(
+            "coding.proxy.auth.providers.github.GitHubDeviceFlowProvider",
+            return_value=mock_prov,
+        ),
         patch("coding.proxy.auth.store.TokenStoreManager", return_value=valid_store),
     ):
         await _auto_login_if_needed(cfg_file)
@@ -126,7 +128,9 @@ async def test_skip_when_config_has_token(tmp_path: Path, monkeypatch):
         "  refresh_token: skip\n"
     )
 
-    with patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider") as mock_cls:
+    with patch(
+        "coding.proxy.auth.providers.github.GitHubDeviceFlowProvider"
+    ) as mock_cls:
         await _auto_login_if_needed(cfg_file)
         mock_cls.assert_not_called()
 
@@ -137,7 +141,9 @@ async def test_trigger_login_when_no_token(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n")
+    cfg_file.write_text(
+        "copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n"
+    )
 
     mock_prov = AsyncMock()
     mock_prov.needs_login.return_value = True
@@ -146,7 +152,10 @@ async def test_trigger_login_when_no_token(tmp_path: Path):
     empty_store = _make_store()
 
     with (
-        patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider", return_value=mock_prov),
+        patch(
+            "coding.proxy.auth.providers.github.GitHubDeviceFlowProvider",
+            return_value=mock_prov,
+        ),
         patch("coding.proxy.auth.store.TokenStoreManager", return_value=empty_store),
     ):
         await _auto_login_if_needed(cfg_file)
@@ -161,7 +170,9 @@ async def test_validate_stale_token_triggers_login(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n")
+    cfg_file.write_text(
+        "copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n"
+    )
 
     mock_prov = AsyncMock()
     mock_prov.needs_login = MagicMock(return_value=False)  # 同步方法需用 MagicMock
@@ -171,7 +182,10 @@ async def test_validate_stale_token_triggers_login(tmp_path: Path):
     stale_store = _make_store({"github": {"access_token": "ghp_stale"}})
 
     with (
-        patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider", return_value=mock_prov),
+        patch(
+            "coding.proxy.auth.providers.github.GitHubDeviceFlowProvider",
+            return_value=mock_prov,
+        ),
         patch("coding.proxy.auth.store.TokenStoreManager", return_value=stale_store),
     ):
         await _auto_login_if_needed(cfg_file)
@@ -186,7 +200,9 @@ async def test_skip_login_when_token_valid(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n")
+    cfg_file.write_text(
+        "copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n"
+    )
 
     mock_prov = AsyncMock()
     mock_prov.needs_login = MagicMock(return_value=False)  # 同步方法需用 MagicMock
@@ -195,7 +211,10 @@ async def test_skip_login_when_token_valid(tmp_path: Path):
     valid_store = _make_store({"github": {"access_token": "ghp_valid"}})
 
     with (
-        patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider", return_value=mock_prov),
+        patch(
+            "coding.proxy.auth.providers.github.GitHubDeviceFlowProvider",
+            return_value=mock_prov,
+        ),
         patch("coding.proxy.auth.store.TokenStoreManager", return_value=valid_store),
     ):
         await _auto_login_if_needed(cfg_file)
@@ -210,7 +229,9 @@ async def test_network_failure_does_not_block_startup(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n")
+    cfg_file.write_text(
+        "copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n"
+    )
 
     mock_prov = AsyncMock()
     mock_prov.needs_login = MagicMock(return_value=False)  # 同步方法需用 MagicMock
@@ -219,7 +240,10 @@ async def test_network_failure_does_not_block_startup(tmp_path: Path):
     store = _make_store({"github": {"access_token": "ghp_maybe_valid"}})
 
     with (
-        patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider", return_value=mock_prov),
+        patch(
+            "coding.proxy.auth.providers.github.GitHubDeviceFlowProvider",
+            return_value=mock_prov,
+        ),
         patch("coding.proxy.auth.store.TokenStoreManager", return_value=store),
     ):
         await _auto_login_if_needed(cfg_file)
@@ -233,7 +257,9 @@ async def test_login_failure_closes_provider(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n")
+    cfg_file.write_text(
+        "copilot:\n  enabled: true\nantigravity:\n  refresh_token: skip\n"
+    )
 
     mock_prov = AsyncMock()
     mock_prov.needs_login.return_value = True
@@ -242,7 +268,10 @@ async def test_login_failure_closes_provider(tmp_path: Path):
     store = _make_store()
 
     with (
-        patch("coding.proxy.auth.providers.github.GitHubDeviceFlowProvider", return_value=mock_prov),
+        patch(
+            "coding.proxy.auth.providers.github.GitHubDeviceFlowProvider",
+            return_value=mock_prov,
+        ),
         patch("coding.proxy.auth.store.TokenStoreManager", return_value=store),
     ):
         await _auto_login_if_needed(cfg_file)
@@ -256,18 +285,24 @@ async def test_antigravity_trigger_login_when_no_refresh_token(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  github_token: skip\nantigravity:\n  enabled: true\n")
+    cfg_file.write_text(
+        "copilot:\n  github_token: skip\nantigravity:\n  enabled: true\n"
+    )
 
     mock_prov = AsyncMock()
     mock_prov.needs_login.return_value = True
     mock_prov.login.return_value = ProviderTokens(
-        access_token="goog_access", refresh_token="goog_refresh",
+        access_token="goog_access",
+        refresh_token="goog_refresh",
     )
 
     empty_store = _make_store()
 
     with (
-        patch("coding.proxy.auth.providers.google.GoogleOAuthProvider", return_value=mock_prov),
+        patch(
+            "coding.proxy.auth.providers.google.GoogleOAuthProvider",
+            return_value=mock_prov,
+        ),
         patch("coding.proxy.auth.store.TokenStoreManager", return_value=empty_store),
     ):
         await _auto_login_if_needed(cfg_file)
@@ -282,15 +317,19 @@ async def test_antigravity_refresh_expired_access_token_before_login(tmp_path: P
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  github_token: skip\nantigravity:\n  enabled: true\n")
+    cfg_file.write_text(
+        "copilot:\n  github_token: skip\nantigravity:\n  enabled: true\n"
+    )
 
-    expired_store = _make_store({
-        "google": {
-            "access_token": "goog_old",
-            "refresh_token": "goog_refresh",
-            "expires_at": 1,
-        },
-    })
+    expired_store = _make_store(
+        {
+            "google": {
+                "access_token": "goog_old",
+                "refresh_token": "goog_refresh",
+                "expires_at": 1,
+            },
+        }
+    )
 
     mock_prov = AsyncMock()
     mock_prov.needs_login = MagicMock(return_value=False)
@@ -301,7 +340,10 @@ async def test_antigravity_refresh_expired_access_token_before_login(tmp_path: P
     )
 
     with (
-        patch("coding.proxy.auth.providers.google.GoogleOAuthProvider", return_value=mock_prov),
+        patch(
+            "coding.proxy.auth.providers.google.GoogleOAuthProvider",
+            return_value=mock_prov,
+        ),
         patch("coding.proxy.auth.store.TokenStoreManager", return_value=expired_store),
     ):
         await _auto_login_if_needed(cfg_file)
@@ -317,15 +359,19 @@ async def test_antigravity_refresh_failure_falls_back_to_login(tmp_path: Path):
     from coding.proxy.cli import _auto_login_if_needed
 
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("copilot:\n  github_token: skip\nantigravity:\n  enabled: true\n")
+    cfg_file.write_text(
+        "copilot:\n  github_token: skip\nantigravity:\n  enabled: true\n"
+    )
 
-    expired_store = _make_store({
-        "google": {
-            "access_token": "goog_old",
-            "refresh_token": "goog_refresh",
-            "expires_at": 1,
-        },
-    })
+    expired_store = _make_store(
+        {
+            "google": {
+                "access_token": "goog_old",
+                "refresh_token": "goog_refresh",
+                "expires_at": 1,
+            },
+        }
+    )
 
     mock_prov = AsyncMock()
     mock_prov.needs_login = MagicMock(return_value=False)
@@ -336,7 +382,10 @@ async def test_antigravity_refresh_failure_falls_back_to_login(tmp_path: Path):
     )
 
     with (
-        patch("coding.proxy.auth.providers.google.GoogleOAuthProvider", return_value=mock_prov),
+        patch(
+            "coding.proxy.auth.providers.google.GoogleOAuthProvider",
+            return_value=mock_prov,
+        ),
         patch("coding.proxy.auth.store.TokenStoreManager", return_value=expired_store),
     ):
         await _auto_login_if_needed(cfg_file)
@@ -352,10 +401,7 @@ def test_build_token_store_uses_configured_path(tmp_path: Path):
 
     cfg_file = tmp_path / "config.yaml"
     store_path = tmp_path / "nested" / "tokens.json"
-    cfg_file.write_text(
-        "auth:\n"
-        f'  token_store_path: "{store_path}"\n'
-    )
+    cfg_file.write_text(f'auth:\n  token_store_path: "{store_path}"\n')
 
     _, store = _build_token_store(cfg_file)
 
