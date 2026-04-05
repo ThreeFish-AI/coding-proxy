@@ -30,28 +30,28 @@ Claude Code 作为日常 AI 编程助手，其底层依赖 Anthropic Messages AP
 
 ### 1.2 设计目标
 
-| 目标 | 说明 |
-|------|------|
-| **透明代理** | 对 Claude Code 完全透明，客户端无需修改任何协议或配置（仅需指定代理地址） |
-| **N-tier 链式降级** | 支持 N 个后端层级按优先级链式降级，每个层级独立配置弹性设施 |
-| **能力感知路由** | 基于请求能力画像与供应商能力声明的正交匹配，自动跳过不兼容层级 |
-| **配额管理** | 基于滑动窗口的 Token 预算追踪（日度 + 周度双窗口），主动避免触发上游配额限制 |
-| **可观测性** | Token 用量持久化追踪、各层级熔断器/配额守卫状态实时查询、定价日志输出 |
-| **运行时重认证** | OAuth 凭证过期时后台触发浏览器登录流程，热更新凭证无需重启服务 |
-| **可扩展性** | 易于添加新供应商实现、新模型映射规则、新故障转移策略 |
-| **轻量部署** | 单进程运行，仅依赖 SQLite（无外部数据库/消息队列），适合本地开发环境 |
+| 目标                | 说明                                                                         |
+| ------------------- | ---------------------------------------------------------------------------- |
+| **透明代理**        | 对 Claude Code 完全透明，客户端无需修改任何协议或配置（仅需指定代理地址）    |
+| **N-tier 链式降级** | 支持 N 个后端层级按优先级链式降级，每个层级独立配置弹性设施                  |
+| **能力感知路由**    | 基于请求能力画像与供应商能力声明的正交匹配，自动跳过不兼容层级               |
+| **配额管理**        | 基于滑动窗口的 Token 预算追踪（日度 + 周度双窗口），主动避免触发上游配额限制 |
+| **可观测性**        | Token 用量持久化追踪、各层级熔断器/配额守卫状态实时查询、定价日志输出        |
+| **运行时重认证**    | OAuth 凭证过期时后台触发浏览器登录流程，热更新凭证无需重启服务               |
+| **可扩展性**        | 易于添加新供应商实现、新模型映射规则、新故障转移策略                         |
+| **轻量部署**        | 单进程运行，仅依赖 SQLite（无外部数据库/消息队列），适合本地开发环境         |
 
 ### 1.3 技术选型
 
-| 技术 | 选型理由 |
-|------|---------|
-| **Python 3.13+** | 原生 async/await 成熟、类型提示完善、生态丰富 |
-| **FastAPI** | 原生异步、`StreamingResponse` 支持 SSE、自动 OpenAPI 文档 |
-| **httpx** | 同时支持同步/异步、流式请求、完整的 HTTP 客户端功能 |
-| **Pydantic v2** | 配置校验与类型安全、性能显著优于 v1；配置模型已正交拆分至子模块 |
-| **aiosqlite** | 异步 SQLite 访问、WAL 模式支持并发读写 |
-| **Typer + Rich** | 现代化 CLI 体验、类型安全的参数声明、美观的终端输出 |
-| **UV** | 极速包管理器、lockfile 确保可复现构建 |
+| 技术             | 选型理由                                                        |
+| ---------------- | --------------------------------------------------------------- |
+| **Python 3.13+** | 原生 async/await 成熟、类型提示完善、生态丰富                   |
+| **FastAPI**      | 原生异步、`StreamingResponse` 支持 SSE、自动 OpenAPI 文档       |
+| **httpx**        | 同时支持同步/异步、流式请求、完整的 HTTP 客户端功能             |
+| **Pydantic v2**  | 配置校验与类型安全、性能显著优于 v1；配置模型已正交拆分至子模块 |
+| **aiosqlite**    | 异步 SQLite 访问、WAL 模式支持并发读写                          |
+| **Typer + Rich** | 现代化 CLI 体验、类型安全的参数声明、美观的终端输出             |
+| **UV**           | 极速包管理器、lockfile 确保可复现构建                           |
 
 ---
 
@@ -130,31 +130,31 @@ graph TD
 
 **术语表**：
 
-| 缩写 | 全称 | 来源 |
-|------|------|------|
-| **CB** | CircuitBreaker（熔断器） | [`routing/circuit_breaker.py`](../src/coding/proxy/routing/circuit_breaker.py) |
-| **QG** | QuotaGuard（配额守卫—日度） | [`routing/quota_guard.py`](../src/coding/proxy/routing/quota_guard.py) |
-| **WQG** | WeeklyQuotaGuard（周度配额守卫） | [`routing/quota_guard.py`](../src/coding/proxy/routing/quota_guard.py)（同一类，不同实例） |
-| **RL** | Rate Limit Deadline（速率限制截止） | [`routing/tier.py`](../src/coding/proxy/routing/tier.py) + [`routing/rate_limit.py`](../src/coding/proxy/routing/rate_limit.py) |
-| **Tier** | VendorTier（供应商层级） | [`routing/tier.py`](../src/coding/proxy/routing/tier.py) |
+| 缩写     | 全称                                | 来源                                                                                                                            |
+| -------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **CB**   | CircuitBreaker（熔断器）            | [`routing/circuit_breaker.py`](../src/coding/proxy/routing/circuit_breaker.py)                                                  |
+| **QG**   | QuotaGuard（配额守卫—日度）         | [`routing/quota_guard.py`](../src/coding/proxy/routing/quota_guard.py)                                                          |
+| **WQG**  | WeeklyQuotaGuard（周度配额守卫）    | [`routing/quota_guard.py`](../src/coding/proxy/routing/quota_guard.py)（同一类，不同实例）                                      |
+| **RL**   | Rate Limit Deadline（速率限制截止） | [`routing/tier.py`](../src/coding/proxy/routing/tier.py) + [`routing/rate_limit.py`](../src/coding/proxy/routing/rate_limit.py) |
+| **Tier** | VendorTier（供应商层级）            | [`routing/tier.py`](../src/coding/proxy/routing/tier.py)                                                                        |
 
 ### 2.2 模块职责一览
 
-| 模块 | 路径 | 职责 |
-|------|------|------|
-| **vendors** | [`vendors/`](../src/coding/proxy/vendors/) | **供应商适配器（主架构）**：`BaseVendor` 抽象基类 + 4 个具体实现（Anthropic/Copilot/Antigravity/Zhipu） |
-| **backends** | [`backends/`](../src/coding/proxy/backends/) | 向后兼容层（遗留），类型别名指向 `vendors/` 模块 |
-| **routing** | [`routing/`](../src/coding/proxy/routing/) | N-tier 链式路由核心（正交分解为 executor/tier/CB/QG/retry/rate_limit/error_classifier/session_manager/usage_recorder/usage_parser/model_mapper） |
-| **compat** | [`compat/`](../src/coding/proxy/compat/) | 兼容性抽象系统：`CanonicalRequest` / `CompatibilityDecision` / `session_store` |
-| **auth** | [`auth/`](../src/coding/proxy/auth/) | 认证系统：OAuth providers（GitHub Device Flow / Google OAuth2）/ runtime reauth / token store |
-| **model** | [`model/`](../src/coding/proxy/model/) | 数据模型正交分解：vendor / compat / constants / pricing / token / backend |
-| **config** | [`config/`](../src/coding/proxy/config/) | Pydantic v2 配置模型（正交拆分为 server/vendors/resiliency/routing/auth_schema）+ YAML 加载器 |
-| **convert** | [`convert/`](../src/coding/proxy/convert/) | API 格式转换（Anthropic ↔ Gemini ↔ OpenAI 三向转换，含 SSE 流适配） |
-| **logging** | [`logging/`](../src/coding/proxy/logging/) | Token 用量 SQLite 持久化、evidence 记录、统计查询与 Rich 格式化展示 |
-| **server** | [`server/`](../src/coding/proxy/server/) | FastAPI 应用工厂与生命周期管理（正交拆分为 app.py/factory.py/routes.py/request_normalizer.py/responses.py） |
-| **cli** | [`cli/`](../src/coding/proxy/cli/) | Typer 命令行入口（start/status/usage/reset/auth） |
-| **streaming** | [`streaming/`](../src/coding/proxy/streaming/) | Anthropic 兼容流式处理 |
-| **pricing** | [`pricing.py`](../src/coding/pricing.py) | 定价表（`PricingTable`）：按 (vendor, model) 查询单价并计算费用 |
+| 模块          | 路径                                           | 职责                                                                                                                                             |
+| ------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **vendors**   | [`vendors/`](../src/coding/proxy/vendors/)     | **供应商适配器（主架构）**：`BaseVendor` 抽象基类 + 4 个具体实现（Anthropic/Copilot/Antigravity/Zhipu）                                          |
+| **backends**  | [`backends/`](../src/coding/proxy/backends/)   | 向后兼容层（遗留），类型别名指向 `vendors/` 模块                                                                                                 |
+| **routing**   | [`routing/`](../src/coding/proxy/routing/)     | N-tier 链式路由核心（正交分解为 executor/tier/CB/QG/retry/rate_limit/error_classifier/session_manager/usage_recorder/usage_parser/model_mapper） |
+| **compat**    | [`compat/`](../src/coding/proxy/compat/)       | 兼容性抽象系统：`CanonicalRequest` / `CompatibilityDecision` / `session_store`                                                                   |
+| **auth**      | [`auth/`](../src/coding/proxy/auth/)           | 认证系统：OAuth providers（GitHub Device Flow / Google OAuth2）/ runtime reauth / token store                                                    |
+| **model**     | [`model/`](../src/coding/proxy/model/)         | 数据模型正交分解：vendor / compat / constants / pricing / token / backend                                                                        |
+| **config**    | [`config/`](../src/coding/proxy/config/)       | Pydantic v2 配置模型（正交拆分为 server/vendors/resiliency/routing/auth_schema）+ YAML 加载器                                                    |
+| **convert**   | [`convert/`](../src/coding/proxy/convert/)     | API 格式转换（Anthropic ↔ Gemini ↔ OpenAI 三向转换，含 SSE 流适配）                                                                              |
+| **logging**   | [`logging/`](../src/coding/proxy/logging/)     | Token 用量 SQLite 持久化、evidence 记录、统计查询与 Rich 格式化展示                                                                              |
+| **server**    | [`server/`](../src/coding/proxy/server/)       | FastAPI 应用工厂与生命周期管理（正交拆分为 app.py/factory.py/routes.py/request_normalizer.py/responses.py）                                      |
+| **cli**       | [`cli/`](../src/coding/proxy/cli/)             | Typer 命令行入口（start/status/usage/reset/auth）                                                                                                |
+| **streaming** | [`streaming/`](../src/coding/proxy/streaming/) | Anthropic 兼容流式处理                                                                                                                           |
+| **pricing**   | [`pricing.py`](../src/coding/pricing.py)       | 定价表（`PricingTable`）：按 (vendor, model) 查询单价并计算费用                                                                                  |
 
 ---
 
@@ -250,14 +250,14 @@ classDiagram
 
 四个具体 Vendor 子类的差异化实现：
 
-| 方法 | AnthropicVendor | CopilotVendor | AntigravityVendor | ZhipuVendor |
-|------|-----------------|---------------|-------------------|-------------|
-| `_prepare_request()` | 过滤 hop-by-hop 头 | 过滤头 + 异步 token 注入 | Gemini 格式转换 + OAuth token | 模型映射 + API Key |
-| `map_model()` | 恒等映射 | 恒等映射 | 恒等映射 | **覆写**（claude-* → glm-*） |
-| `_get_endpoint()` | `/v1/messages` | `/v1/chat/completions` | `/{model}:generateContent` | `/api/anthropic/v1/messages` |
-| `_on_error_status()` | 继承基类（空操作） | 401/403 token 失效 | 401/403 token 失效 | 继承基类（空操作） |
-| `get_capabilities()` | 全部支持 | 不支持 thinking | 不支持 tools/thinking/metadata | 不支持 thinking/images/metadata |
-| `check_health()` | 继承（True） | 继承（True） | **覆写**（OAuth token 有效性检查） | 继承（True） |
+| 方法                 | AnthropicVendor    | CopilotVendor            | AntigravityVendor                  | ZhipuVendor                     |
+| -------------------- | ------------------ | ------------------------ | ---------------------------------- | ------------------------------- |
+| `_prepare_request()` | 过滤 hop-by-hop 头 | 过滤头 + 异步 token 注入 | Gemini 格式转换 + OAuth token      | 模型映射 + API Key              |
+| `map_model()`        | 恒等映射           | 恒等映射                 | 恒等映射                           | **覆写**（claude-* → glm-*）    |
+| `_get_endpoint()`    | `/v1/messages`     | `/v1/chat/completions`   | `/{model}:generateContent`         | `/api/anthropic/v1/messages`    |
+| `_on_error_status()` | 继承基类（空操作） | 401/403 token 失效       | 401/403 token 失效                 | 继承基类（空操作）              |
+| `get_capabilities()` | 全部支持           | 不支持 thinking          | 不支持 tools/thinking/metadata     | 不支持 thinking/images/metadata |
+| `check_health()`     | 继承（True）       | 继承（True）             | **覆写**（OAuth token 有效性检查） | 继承（True）                    |
 
 ### 3.2 Circuit Breaker（熔断器模式）
 
@@ -286,12 +286,12 @@ stateDiagram-v2
 
 **状态转换条件**：
 
-| 转换 | 条件 | 默认值 |
-|------|------|--------|
-| CLOSED → OPEN | 连续失败次数 ≥ `failure_threshold` | 3 次 |
-| OPEN → HALF_OPEN | 距上次失败 ≥ `recovery_timeout_seconds` | 300 秒 |
-| HALF_OPEN → CLOSED | 连续成功次数 ≥ `success_threshold` | 2 次 |
-| HALF_OPEN → OPEN | 任意一次失败 | — |
+| 转换               | 条件                                    | 默认值 |
+| ------------------ | --------------------------------------- | ------ |
+| CLOSED → OPEN      | 连续失败次数 ≥ `failure_threshold`      | 3 次   |
+| OPEN → HALF_OPEN   | 距上次失败 ≥ `recovery_timeout_seconds` | 300 秒 |
+| HALF_OPEN → CLOSED | 连续成功次数 ≥ `success_threshold`      | 2 次   |
+| HALF_OPEN → OPEN   | 任意一次失败                            | —      |
 
 **指数退避 (Exponential Backoff)**：每次从 HALF_OPEN 回退到 OPEN 时，恢复等待时间翻倍（`recovery_timeout *= 2`），上限为 `max_recovery_seconds`（默认 3600 秒）。避免对仍未恢复的后端频繁重试。
 
@@ -327,12 +327,12 @@ flowchart TD
 
 **默认映射规则**：
 
-| 模式 | 目标 | 类型 |
-|------|------|------|
-| `claude-sonnet-.*` | `glm-5.1` | 正则 |
-| `claude-opus-.*` | `glm-5.1` | 正则 |
-| `claude-haiku-.*` | `glm-4.5-air` | 正则 |
-| `claude-.*` | `glm-5.1` | 正则（兜底） |
+| 模式               | 目标          | 类型         |
+| ------------------ | ------------- | ------------ |
+| `claude-sonnet-.*` | `glm-5.1`     | 正则         |
+| `claude-opus-.*`   | `glm-5.1`     | 正则         |
+| `claude-haiku-.*`  | `glm-4.5-air` | 正则         |
+| `claude-.*`        | `glm-5.1`     | 正则（兜底） |
 
 正则表达式在 `__init__` 时预编译（`re.compile()`），`map()` 调用时直接使用编译后的对象，避免重复编译开销。
 
@@ -432,15 +432,15 @@ classDiagram
 
 **关键方法**：
 
-| 方法 | 逻辑 |
-|------|------|
-| `name` | → `vendor.get_name()` |
-| `is_terminal` | → `circuit_breaker is None`（终端层无故障转移） |
-| `can_execute()` | CB.can_execute() AND QG.can_use_primary() AND WQG.can_use_primary() |
-| `can_execute_with_health_check()` | 三层恢复门控：Rate Limit Deadline → Health Check → Cautious Probe |
-| `record_success(usage_tokens)` | CB.record_success() + QG/WQG 探测恢复 + 用量记录 + 清除 RL deadline |
+| 方法                                                                     | 逻辑                                                                      |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `name`                                                                   | → `vendor.get_name()`                                                     |
+| `is_terminal`                                                            | → `circuit_breaker is None`（终端层无故障转移）                           |
+| `can_execute()`                                                          | CB.can_execute() AND QG.can_use_primary() AND WQG.can_use_primary()       |
+| `can_execute_with_health_check()`                                        | 三层恢复门控：Rate Limit Deadline → Health Check → Cautious Probe         |
+| `record_success(usage_tokens)`                                           | CB.record_success() + QG/WQG 探测恢复 + 用量记录 + 清除 RL deadline       |
 | `record_failure(is_cap_error, retry_after_seconds, rate_limit_deadline)` | CB.record_failure(+retry) + 若 cap error 则通知 QG/WQG + 更新 RL deadline |
-| `is_rate_limited` | `_rate_limit_deadline > time.monotonic()` |
+| `is_rate_limited`                                                        | `_rate_limit_deadline > time.monotonic()`                                 |
 
 ### 3.7 State Machine（状态机模式）— QuotaGuard
 
@@ -494,10 +494,10 @@ async with self._lock:
     await self._exchange()  # 或 self._refresh()
 ```
 
-| Token Manager | 认证流程 | 有效期 | 提前刷新余量 |
-|---------------|---------|--------|-------------|
-| `CopilotTokenManager` | GitHub token -> GET `copilot_internal/v2/token` -> `token`/`access_token` | ~30 分钟 | 60 秒 |
-| `GoogleOAuthTokenManager` | refresh_token -> POST oauth2.googleapis.com/token -> access_token | ~1 小时 | 120 秒 |
+| Token Manager             | 认证流程                                                                  | 有效期   | 提前刷新余量 |
+| ------------------------- | ------------------------------------------------------------------------- | -------- | ------------ |
+| `CopilotTokenManager`     | GitHub token -> GET `copilot_internal/v2/token` -> `token`/`access_token` | ~30 分钟 | 60 秒        |
+| `GoogleOAuthTokenManager` | refresh_token -> POST oauth2.googleapis.com/token -> access_token         | ~1 小时  | 120 秒       |
 
 两者均支持**被动刷新**：当后端返回 401/403 时，通过 `_on_error_status()` 调用 `invalidate()` 标记 token 失效，下次请求自动触发重新获取。若 `needs_reauth=True`，还会联动 `RuntimeReauthCoordinator` 触发后台重认证流程。
 
@@ -531,12 +531,12 @@ graph LR
 
 **委托关系**：
 
-| 公开方法 | 内部委托 |
-|----------|----------|
-| `route_stream(body, headers)` | -> `_executor.execute_stream(body, headers)` |
+| 公开方法                       | 内部委托                                      |
+| ------------------------------ | --------------------------------------------- |
+| `route_stream(body, headers)`  | -> `_executor.execute_stream(body, headers)`  |
 | `route_message(body, headers)` | -> `_executor.execute_message(body, headers)` |
-| `set_pricing_table(table)` | -> `_recorder.set_pricing_table(table)` |
-| `close()` | -> 遍历 `tiers` 调用 `tier.vendor.close()` |
+| `set_pricing_table(table)`     | -> `_recorder.set_pricing_table(table)`       |
+| `close()`                      | -> 遍历 `tiers` 调用 `tier.vendor.close()`    |
 
 这种正交 decomposition 使得每个子组件可以独立演进和测试，同时 `RequestRouter` 保持对外接口稳定。
 
@@ -550,22 +550,22 @@ graph LR
 
 每个 Vendor 子类充当 Adapter 角色，将异构的上游 API 适配为统一的 `BaseVendor` 接口：
 
-| Vendor | 上游协议 | 适配行为 |
-|--------|----------|----------|
-| `AnthropicVendor` | Anthropic Messages API | 透传（近乎零适配开销） |
-| `CopilotVendor` | OpenAI Chat Completions API | 请求体/响应体双向格式转换 + token 注入 |
-| `AntigravityVendor` | Gemini GenerateContent API | Anthropic <-> Gemini 双向格式转换 + SSE 流适配 + OAuth |
-| `ZhipuVendor` | Anthropic-compatible API | 模型名映射 + API Key 认证头替换 |
+| Vendor              | 上游协议                    | 适配行为                                               |
+| ------------------- | --------------------------- | ------------------------------------------------------ |
+| `AnthropicVendor`   | Anthropic Messages API      | 透传（近乎零适配开销）                                 |
+| `CopilotVendor`     | OpenAI Chat Completions API | 请求体/响应体双向格式转换 + token 注入                 |
+| `AntigravityVendor` | Gemini GenerateContent API  | Anthropic <-> Gemini 双向格式转换 + SSE 流适配 + OAuth |
+| `ZhipuVendor`       | Anthropic-compatible API    | 模型名映射 + API Key 认证头替换                        |
 
 此外，[`convert/`](../src/coding/proxy/convert/) 模块提供独立的纯函数适配器层，支持三向格式转换：
 
-| 转换方向 | 模块 | 说明 |
-|----------|------|------|
-| Anthropic -> Gemini | [`convert/anthropic_to_gemini.py`](../src/coding/proxy/convert/anthropic_to_gemini.py) | 请求格式转换 |
-| Gemini -> Anthropic | [`convert/gemini_to_anthropic.py`](../src/coding/proxy/convert/gemini_to_anthropic.py) | 响应格式转换 |
-| Gemini SSE -> Anthropic SSE | [`convert/gemini_sse_adapter.py`](../src/coding/proxy/convert/gemini_sse_adapter.py) | 流式事件重构 |
-| Anthropic -> OpenAI | [`convert/anthropic_to_openai.py`](../src/coding/proxy/convert/anthropic_to_openai.py) | Copilot 请求适配 |
-| OpenAI -> Anthropic | [`convert/openai_to_anthropic.py`](../src/coding/proxy/convert/openai_to_anthropic.py) | Copilot 响应逆适配 |
+| 转换方向                    | 模块                                                                                   | 说明               |
+| --------------------------- | -------------------------------------------------------------------------------------- | ------------------ |
+| Anthropic -> Gemini         | [`convert/anthropic_to_gemini.py`](../src/coding/proxy/convert/anthropic_to_gemini.py) | 请求格式转换       |
+| Gemini -> Anthropic         | [`convert/gemini_to_anthropic.py`](../src/coding/proxy/convert/gemini_to_anthropic.py) | 响应格式转换       |
+| Gemini SSE -> Anthropic SSE | [`convert/gemini_sse_adapter.py`](../src/coding/proxy/convert/gemini_sse_adapter.py)   | 流式事件重构       |
+| Anthropic -> OpenAI         | [`convert/anthropic_to_openai.py`](../src/coding/proxy/convert/anthropic_to_openai.py) | Copilot 请求适配   |
+| OpenAI -> Anthropic         | [`convert/openai_to_anthropic.py`](../src/coding/proxy/convert/openai_to_anthropic.py) | Copilot 响应逆适配 |
 
 ### 3.11 Capability-Based Routing（基于能力的路由）
 
@@ -578,12 +578,12 @@ graph LR
 
 基于请求能力画像与供应商能力声明的正交匹配矩阵，在路由阶段即排除无法无损承接请求的层级：
 
-| 维度 \ 能力 | `tools` | `thinking` | `images` | `metadata` | `vend_tools` |
-|:-----------|:-------:|:----------:|:--------:|:----------:|:------------:|
-| **tools** | ✅ OK | — | — | — | ❌ skip |
-| **thinking** | — | ✅ OK | — | — | — |
-| **images** | — | — | ✅ OK | — | — |
-| **metadata** | — | — | — | ✅ OK | — |
+| 维度 \ 能力  | `tools` | `thinking` | `images` | `metadata` | `vend_tools` |
+| :----------- | :-----: | :--------: | :------: | :--------: | :----------: |
+| **tools**    |  ✅ OK   |     —      |    —     |     —      |    ❌ skip    |
+| **thinking** |    —    |    ✅ OK    |    —     |     —      |      —       |
+| **images**   |    —    |     —      |   ✅ OK   |     —      |      —       |
+| **metadata** |    —    |     —      |    —     |    ✅ OK    |      —       |
 
 > ✅ = 可承接；❌ = `CapabilityLossReason`（跳过此 tier）
 
@@ -598,16 +598,16 @@ graph LR
 
 **CompatibilityDecision 三态决策矩阵**：
 
-| 请求特征 | NATIVE | SIMULATED | UNSAFE |
-|----------|--------|-----------|--------|
-| thinking + 支持 thinking | OK | | |
-| thinking + 不支持 thinking | | thinking_simulation | X |
-| tools + 支持 tools | OK | | |
-| tools + 不支持 tools | | tool_calling_simulation | X |
-| metadata + 支持 metadata | OK | | |
-| metadata + 不支持 metadata | | metadata_projection | X |
-| json_output + 支持 | OK | | |
-| json_output + 不支持 | | json_output_projection | X |
+| 请求特征                   | NATIVE | SIMULATED               | UNSAFE |
+| -------------------------- | ------ | ----------------------- | ------ |
+| thinking + 支持 thinking   | OK     |                         |        |
+| thinking + 不支持 thinking |        | thinking_simulation     | X      |
+| tools + 支持 tools         | OK     |                         |        |
+| tools + 不支持 tools       |        | tool_calling_simulation | X      |
+| metadata + 支持 metadata   | OK     |                         |        |
+| metadata + 不支持 metadata |        | metadata_projection     | X      |
+| json_output + 支持         | OK     |                         |        |
+| json_output + 不支持       |        | json_output_projection  | X      |
 
 ### 3.12 Retry with Full Jitter（带完全抖动的重试模式）
 
@@ -619,12 +619,12 @@ graph LR
 
 传输层重试策略处理瞬态网络故障，与 CircuitBreaker 形成正交互补：
 
-| 维度 | Retry | CircuitBreaker |
-|------|-------|-----------------|
-| 处理范围 | 单次请求内的瞬态抖动 | 跨请求的持续故障 |
-| 恢复时间尺度 | 秒级（500ms ~ 5s） | 分钟级（300s ~ 3600s） |
-| 触发条件 | TimeoutException / ConnectError / 5xx | 连续 N 次失败 |
-| 失败贡献 | 每次 retry 失败仅向 CB 贡献 1 次计数 | 累积计数触发 OPEN |
+| 维度         | Retry                                 | CircuitBreaker         |
+| ------------ | ------------------------------------- | ---------------------- |
+| 处理范围     | 单次请求内的瞬态抖动                  | 跨请求的持续故障       |
+| 恢复时间尺度 | 秒级（500ms ~ 5s）                    | 分钟级（300s ~ 3600s） |
+| 触发条件     | TimeoutException / ConnectError / 5xx | 连续 N 次失败          |
+| 失败贡献     | 每次 retry 失败仅向 CB 贡献 1 次计数  | 累积计数触发 OPEN      |
 
 **Full Jitter 计算**：
 
@@ -632,19 +632,19 @@ $$
 \text{delay} = \text{random}\left(0,\; \min\left(\text{initial\_delay} \times \text{backoff}^{\text{attempt}},\; \text{max\_delay}\right)\right)
 $$
 
-| 参数 | `max_retries` | `initial_delay_ms` | `max_delay_ms` | `backoff_multiplier` | `jitter` |
-|------|:---:|:---:|:---:|:---:|:---:|
-| 默认值 | 2 | 500 | 5000 | 2.0 | ✅ true |
+| 参数   | `max_retries` | `initial_delay_ms` | `max_delay_ms` | `backoff_multiplier` | `jitter` |
+| ------ | :-----------: | :----------------: | :------------: | :------------------: | :------: |
+| 默认值 |       2       |        500         |      5000      |         2.0          |  ✅ true  |
 
 **可重试异常判定**（`is_retryable_error()`）：
 
-| 异常类型 | 可重试 | 原因 |
-|----------|--------|------|
-| `httpx.TimeoutException` | OK | 瞬态超时 |
-| `httpx.ConnectError` | OK | 网络连接失败 |
-| `httpx.HTTPStatusError` (5xx) | OK | 服务端瞬时错误 |
-| `httpx.HTTPStatusError` (4xx) | NO | 客户端错误（不应重试） |
-| `TokenAcquireError` | NO | 认证层错误（应触发重认证） |
+| 异常类型                      | 可重试 | 原因                       |
+| ----------------------------- | ------ | -------------------------- |
+| `httpx.TimeoutException`      | OK     | 瞬态超时                   |
+| `httpx.ConnectError`          | OK     | 网络连接失败               |
+| `httpx.HTTPStatusError` (5xx) | OK     | 服务端瞬时错误             |
+| `httpx.HTTPStatusError` (4xx) | NO     | 客户端错误（不应重试）     |
+| `TokenAcquireError`           | NO     | 认证层错误（应触发重认证） |
 
 ### 3.13 Rate Limit Deadline Tracking（速率限制截止追踪）
 
@@ -658,11 +658,11 @@ $$
 
 **解析的信息源**：
 
-| Header | 格式 | 含义 |
-|--------|------|------|
-| `Retry-After` | 秒数或 HTTP Date | 标准速率限制恢复时间 |
-| `anthropic-ratelimit-requests-reset` | ISO 8601 datetime | 请求计数重置时间 |
-| `anthropic-ratelimit-tokens-reset` | ISO 8601 datetime | Token 配额重置时间 |
+| Header                               | 格式              | 含义                 |
+| ------------------------------------ | ----------------- | -------------------- |
+| `Retry-After`                        | 秒数或 HTTP Date  | 标准速率限制恢复时间 |
+| `anthropic-ratelimit-requests-reset` | ISO 8601 datetime | 请求计数重置时间     |
+| `anthropic-ratelimit-tokens-reset`   | ISO 8601 datetime | Token 配额重置时间   |
 
 **计算策略**：
 
@@ -799,12 +799,12 @@ flowchart TD
 
 **最终层异常处理**（`_stream_proxy` 生成器内）：
 
-| 异常类型 | SSE 错误事件 |
-|----------|-------------|
-| `NoCompatibleVendorError` | `error` event + `invalid_request_error` |
-| `TokenAcquireError` | `error` event + `authentication_error` |
-| `TimeoutException/ConnectError/ReadError` | `error` event + `api_error` |
-| `HTTPStatusError` | `error` event + 提取的 error type/message |
+| 异常类型                                  | SSE 错误事件                              |
+| ----------------------------------------- | ----------------------------------------- |
+| `NoCompatibleVendorError`                 | `error` event + `invalid_request_error`   |
+| `TokenAcquireError`                       | `error` event + `authentication_error`    |
+| `TimeoutException/ConnectError/ReadError` | `error` event + `api_error`               |
+| `HTTPStatusError`                         | `error` event + 提取的 error type/message |
 
 ### 4.3 非流式请求处理
 
@@ -820,20 +820,20 @@ flowchart TD
 
 **VendorResponse 新增字段**：
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `model_served` | `str \| None` | 后端实际使用的模型名（可能经 map_model 转换） |
-| `response_headers` | `dict[str, str]` | 原始响应头（用于 rate limit 解析） |
+| 字段               | 类型             | 说明                                          |
+| ------------------ | ---------------- | --------------------------------------------- |
+| `model_served`     | `str \| None`    | 后端实际使用的模型名（可能经 map_model 转换） |
+| `response_headers` | `dict[str, str]` | 原始响应头（用于 rate limit 解析）            |
 
 ### 4.4 故障转移判定逻辑
 
 故障转移的判定在 `BaseVendor.should_trigger_failover()` 中实现，依据三层条件（可通过配置文件自定义）：
 
-| 层级 | 条件 | 默认值 |
-|------|------|--------|
-| HTTP 状态码 | `status_code in failover.status_codes` | `[429, 403, 503, 500]` |
-| 错误类型 | `error.type in failover.error_types` | `["rate_limit_error", "overloaded_error", "api_error"]` |
-| 错误消息 | `pattern in error.message`（不区分大小写） | `["quota", "limit exceeded", "usage cap", "capacity"]` |
+| 层级        | 条件                                       | 默认值                                                  |
+| ----------- | ------------------------------------------ | ------------------------------------------------------- |
+| HTTP 状态码 | `status_code in failover.status_codes`     | `[429, 403, 503, 500]`                                  |
+| 错误类型    | `error.type in failover.error_types`       | `["rate_limit_error", "overloaded_error", "api_error"]` |
+| 错误消息    | `pattern in error.message`（不区分大小写） | `["quota", "limit exceeded", "usage cap", "capacity"]`  |
 
 **特殊规则**：对于 429 和 503 状态码，即使无法解析响应体（body），也会强制触发故障转移。
 
@@ -953,22 +953,22 @@ class VendorCapabilities:
 
 **四个具体 Vendor 实现**：
 
-| Vendor | 文件 | 协议 | 认证方式 | 特殊能力 |
-|--------|------|------|----------|----------|
-| **AnthropicVendor** | [`vendors/anthropic.py`](../src/coding/proxy/vendors/anthropic.py) | Anthropic Messages API | 透传 OAuth token | 全能力支持，旁路 count_tokens |
-| **CopilotVendor** | [`vendors/copilot.py`](../src/coding/proxy/vendors/copilot.py) | OpenAI Chat Completions | GitHub token -> Copilot token 交换 | 不支持 thinking；内置模型探测 |
-| **AntigravityVendor** | [`vendors/antigravity.py`](../src/coding/proxy/vendors/antigravity.py) | Gemini GenerateContent | Google OAuth2 refresh_token | 不支持 tools/thinking/metadata；覆写 health check |
-| **ZhipuVendor** | [`vendors/zhipu.py`](../src/coding/proxy/vendors/zhipu.py) | Anthropic-compatible API | x-api-key | 不支持 thinking/images/metadata；覆写 map_model |
+| Vendor                | 文件                                                                   | 协议                     | 认证方式                           | 特殊能力                                          |
+| --------------------- | ---------------------------------------------------------------------- | ------------------------ | ---------------------------------- | ------------------------------------------------- |
+| **AnthropicVendor**   | [`vendors/anthropic.py`](../src/coding/proxy/vendors/anthropic.py)     | Anthropic Messages API   | 透传 OAuth token                   | 全能力支持，旁路 count_tokens                     |
+| **CopilotVendor**     | [`vendors/copilot.py`](../src/coding/proxy/vendors/copilot.py)         | OpenAI Chat Completions  | GitHub token -> Copilot token 交换 | 不支持 thinking；内置模型探测                     |
+| **AntigravityVendor** | [`vendors/antigravity.py`](../src/coding/proxy/vendors/antigravity.py) | Gemini GenerateContent   | Google OAuth2 refresh_token        | 不支持 tools/thinking/metadata；覆写 health check |
+| **ZhipuVendor**       | [`vendors/zhipu.py`](../src/coding/proxy/vendors/zhipu.py)             | Anthropic-compatible API | x-api-key                          | 不支持 thinking/images/metadata；覆写 map_model   |
 
 **向后兼容别名汇总**（均标记 `deprecated`，保障迁移期兼容性）：
 
-| 旧名称 | 新名称 | 定义位置 |
-|--------|--------|----------|
-| `BaseBackend` | `BaseVendor` | `vendors/base.py` |
+| 旧名称                     | 新名称                    | 定义位置          |
+| -------------------------- | ------------------------- | ----------------- |
+| `BaseBackend`              | `BaseVendor`              | `vendors/base.py` |
 | `NoCompatibleBackendError` | `NoCompatibleVendorError` | `vendors/base.py` |
-| `BackendTier` | `VendorTier` | `routing/tier.py` |
-| `BackendCapabilities` | `VendorCapabilities` | `model/vendor.py` |
-| `BackendResponse` | `VendorResponse` | `model/vendor.py` |
+| `BackendTier`              | `VendorTier`              | `routing/tier.py` |
+| `BackendCapabilities`      | `VendorCapabilities`      | `model/vendor.py` |
+| `BackendResponse`          | `VendorResponse`          | `model/vendor.py` |
 
 ### 5.2 routing/ -- 路由模块
 
@@ -999,99 +999,99 @@ class VendorTier:
 
 **关键方法**：
 
-| 方法 | 说明 |
-|------|------|
-| `execute_stream(body, headers)` | 流式路由主循环，yield `(chunk, vendor_name)` |
-| `execute_message(body, headers)` | 非流式路由主循环，返回 `VendorResponse` |
-| `_try_gate_tier(tier, is_last, caps, canonical, session, reasons)` | 单 tier 门控：能力匹配 -> 兼容性决策 -> 上下文应用 -> 健康检查 |
-| `_handle_token_error(tier, exc, is_last, failed_name)` | TokenAcquireError 处理 + reauth 触发 |
-| `_handle_http_error(tier, exc, ...)` | HTTP 错误处理：语义拒绝 / cap error / rate limit 解析 / failure 记录 |
-| `_is_cap_error(resp)` | 静态方法：检测 429/403 + 配额关键词 |
+| 方法                                                               | 说明                                                                 |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `execute_stream(body, headers)`                                    | 流式路由主循环，yield `(chunk, vendor_name)`                         |
+| `execute_message(body, headers)`                                   | 非流式路由主循环，返回 `VendorResponse`                              |
+| `_try_gate_tier(tier, is_last, caps, canonical, session, reasons)` | 单 tier 门控：能力匹配 -> 兼容性决策 -> 上下文应用 -> 健康检查       |
+| `_handle_token_error(tier, exc, is_last, failed_name)`             | TokenAcquireError 处理 + reauth 触发                                 |
+| `_handle_http_error(tier, exc, ...)`                               | HTTP 错误处理：语义拒绝 / cap error / rate limit 解析 / failure 记录 |
+| `_is_cap_error(resp)`                                              | 静态方法：检测 429/403 + 配额关键词                                  |
 
 #### 5.2.3 UsageRecorder（[`routing/usage_recorder.py`](../src/coding/proxy/routing/usage_recorder.py)）
 
 封装路由层的用量记录、定价计算与证据构建：
 
-| 方法 | 说明 |
-|------|------|
-| `set_pricing_table(table)` | 注入 PricingTable（lifespan 启动时调用） |
-| `build_usage_info(usage_dict)` | 从原始 dict 构建结构化 UsageInfo |
-| `log_model_call(vendor, model_requested, model_served, duration, usage)` | 输出 ModelCall 级别 Access Log（含定价） |
-| `record(vendor, ..., evidence_records)` | 持久化用量到 TokenLogger + evidence 记录（Copilot 专用） |
-| `build_nonstream_evidence_records(...)` | 构建非流式证据记录 |
+| 方法                                                                     | 说明                                                     |
+| ------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `set_pricing_table(table)`                                               | 注入 PricingTable（lifespan 启动时调用）                 |
+| `build_usage_info(usage_dict)`                                           | 从原始 dict 构建结构化 UsageInfo                         |
+| `log_model_call(vendor, model_requested, model_served, duration, usage)` | 输出 ModelCall 级别 Access Log（含定价）                 |
+| `record(vendor, ..., evidence_records)`                                  | 持久化用量到 TokenLogger + evidence 记录（Copilot 专用） |
+| `build_nonstream_evidence_records(...)`                                  | 构建非流式证据记录                                       |
 
 #### 5.2.4 RouteSessionManager（[`routing/session_manager.py`](../src/coding/proxy/routing/session_manager.py)）
 
 管理单次路由请求的兼容性会话生命周期：
 
-| 方法 | 说明 |
-|------|------|
-| `get_or_create_record(session_key, trace_id)` | 获取或创建会话记录 |
+| 方法                                                       | 说明                                  |
+| ---------------------------------------------------------- | ------------------------------------- |
+| `get_or_create_record(session_key, trace_id)`              | 获取或创建会话记录                    |
 | `apply_compat_context(tier, canonical, decision, session)` | 构建 CompatibilityTrace 并注入 vendor |
-| `persist_session(trace, session)` | 持久化会话状态到 CompatSessionStore |
+| `persist_session(trace, session)`                          | 持久化会话状态到 CompatSessionStore   |
 
 #### 5.2.5 Error Classifier（[`routing/error_classifier.py`](../src/coding/proxy/routing/error_classifier.py)）
 
 HTTP 错误分类与请求能力画像提取：
 
-| 函数 | 说明 |
-|------|------|
-| `build_request_capabilities(body)` | 从请求体提取能力画像（tools/thinking/images/metadata） |
-| `is_semantic_rejection(status_code, error_type, error_message)` | 判断是否为语义拒绝（400 + 特定模式） |
-| `extract_error_payload_from_http_status(exc)` | 从 HTTPStatusError 安全提取 JSON payload |
+| 函数                                                            | 说明                                                   |
+| --------------------------------------------------------------- | ------------------------------------------------------ |
+| `build_request_capabilities(body)`                              | 从请求体提取能力画像（tools/thinking/images/metadata） |
+| `is_semantic_rejection(status_code, error_type, error_message)` | 判断是否为语义拒绝（400 + 特定模式）                   |
+| `extract_error_payload_from_http_status(exc)`                   | 从 HTTPStatusError 安全提取 JSON payload               |
 
 #### 5.2.6 Rate Limit（[`routing/rate_limit.py`](../src/coding/proxy/routing/rate_limit.py)）
 
 速率限制信息解析与截止时间计算：
 
-| 函数/类 | 说明 |
-|----------|------|
-| `RateLimitInfo` | 数据类：retry_after / requests_reset_at / tokens_reset_at / is_cap_error |
-| `parse_rate_limit_headers(headers, status, error_body)` | 从响应头解析所有速率限制信号 |
-| `compute_effective_retry_seconds(info)` | 计算最保守恢复等待时间（相对秒数，+10% 余量） |
-| `compute_rate_limit_deadline(info)` | 计算最保守恢复截止时间（绝对 monotonic 时间戳，+10% 余量） |
+| 函数/类                                                 | 说明                                                                     |
+| ------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `RateLimitInfo`                                         | 数据类：retry_after / requests_reset_at / tokens_reset_at / is_cap_error |
+| `parse_rate_limit_headers(headers, status, error_body)` | 从响应头解析所有速率限制信号                                             |
+| `compute_effective_retry_seconds(info)`                 | 计算最保守恢复等待时间（相对秒数，+10% 余量）                            |
+| `compute_rate_limit_deadline(info)`                     | 计算最保守恢复截止时间（绝对 monotonic 时间戳，+10% 余量）               |
 
 #### 5.2.7 Retry（[`routing/retry.py`](../src/coding/proxy/routing/retry.py)）
 
 传输层重试策略：
 
-| 函数/类 | 说明 |
-|----------|------|
-| `RetryConfig` | 数据类：max_retries / initial_delay_ms / max_delay_ms / backoff_multiplier / jitter |
-| `is_retryable_error(exc)` | 判断异常是否值得重试 |
-| `is_retryable_status(code)` | 判断状态码是否值得重试（5xx） |
-| `calculate_delay(attempt, cfg)` | 计算第 N 次重试延迟（含 Full Jitter） |
+| 函数/类                         | 说明                                                                                |
+| ------------------------------- | ----------------------------------------------------------------------------------- |
+| `RetryConfig`                   | 数据类：max_retries / initial_delay_ms / max_delay_ms / backoff_multiplier / jitter |
+| `is_retryable_error(exc)`       | 判断异常是否值得重试                                                                |
+| `is_retryable_status(code)`     | 判断状态码是否值得重试（5xx）                                                       |
+| `calculate_delay(attempt, cfg)` | 计算第 N 次重试延迟（含 Full Jitter）                                               |
 
 #### 5.2.8 CircuitBreaker 参数（[`routing/circuit_breaker.py`](../src/coding/proxy/routing/circuit_breaker.py)）
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `failure_threshold` | int | 3 | 触发 OPEN 的连续失败次数 |
-| `recovery_timeout_seconds` | int | 300 | OPEN -> HALF_OPEN 等待秒数 |
-| `success_threshold` | int | 2 | HALF_OPEN -> CLOSED 所需连续成功次数 |
-| `max_recovery_seconds` | int | 3600 | 指数退避最大恢复时间（秒） |
+| 参数                       | 类型 | 默认值 | 说明                                 |
+| -------------------------- | ---- | ------ | ------------------------------------ |
+| `failure_threshold`        | int  | 3      | 触发 OPEN 的连续失败次数             |
+| `recovery_timeout_seconds` | int  | 300    | OPEN -> HALF_OPEN 等待秒数           |
+| `success_threshold`        | int  | 2      | HALF_OPEN -> CLOSED 所需连续成功次数 |
+| `max_recovery_seconds`     | int  | 3600   | 指数退避最大恢复时间（秒）           |
 
 #### 5.2.9 QuotaGuard 参数（[`routing/quota_guard.py`](../src/coding/proxy/routing/quota_guard.py)）
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enabled` | bool | False | 是否启用配额守卫 |
-| `token_budget` | int | 0 | 滑动窗口内的 Token 预算上限 |
-| `window_hours` | float | 5.0 | 滑动窗口大小（小时），默认 5 小时 |
-| `threshold_percent` | float | 99.0 | 触发 QUOTA_EXCEEDED 的用量百分比阈值 |
-| `probe_interval_seconds` | int | 300 | QUOTA_EXCEEDED 状态下探测间隔（秒） |
+| 参数                     | 类型  | 默认值 | 说明                                 |
+| ------------------------ | ----- | ------ | ------------------------------------ |
+| `enabled`                | bool  | False  | 是否启用配额守卫                     |
+| `token_budget`           | int   | 0      | 滑动窗口内的 Token 预算上限          |
+| `window_hours`           | float | 5.0    | 滑动窗口大小（小时），默认 5 小时    |
+| `threshold_percent`      | float | 99.0   | 触发 QUOTA_EXCEEDED 的用量百分比阈值 |
+| `probe_interval_seconds` | int   | 300    | QUOTA_EXCEEDED 状态下探测间隔（秒）  |
 
 **QuotaGuard 公共方法**：
 
-| 方法 | 说明 |
-|------|------|
-| `can_use_primary()` | 综合判断是否允许使用此后端 |
-| `record_usage(tokens)` | 记录 Token 用量到滑动窗口 |
-| `record_primary_success()` | 探测成功后恢复为 WITHIN_QUOTA |
-| `notify_cap_error()` | 外部通知检测到 cap 错误，强制进入 QUOTA_EXCEEDED |
-| `load_baseline(total_tokens)` | 从数据库加载历史用量基线 |
-| `reset()` | 手动重置为 WITHIN_QUOTA |
-| `get_info()` | 获取状态信息（供 `/api/status` 使用） |
+| 方法                          | 说明                                             |
+| ----------------------------- | ------------------------------------------------ |
+| `can_use_primary()`           | 综合判断是否允许使用此后端                       |
+| `record_usage(tokens)`        | 记录 Token 用量到滑动窗口                        |
+| `record_primary_success()`    | 探测成功后恢复为 WITHIN_QUOTA                    |
+| `notify_cap_error()`          | 外部通知检测到 cap 错误，强制进入 QUOTA_EXCEEDED |
+| `load_baseline(total_tokens)` | 从数据库加载历史用量基线                         |
+| `reset()`                     | 手动重置为 WITHIN_QUOTA                          |
+| `get_info()`                  | 获取状态信息（供 `/api/status` 使用）            |
 
 ### 5.3 compat/ -- 兼容性抽象模块
 
@@ -1139,9 +1139,9 @@ class CompatibilityDecision:
 将 `VendorCapabilities` 映射为细粒度的兼容性状态：
 
 | VendorCapabilities | thinking | tool_calling | tool_streaming | mcp_tools | images | metadata | json_output | usage_tokens |
-|-------------------|----------|-------------|----------------|-----------|--------|---------|-------------|-------------|
-| supports=True | NATIVE | NATIVE | SIMULATED | UNKNOWN | NATIVE | NATIVE | UNKNOWN | SIMULATED |
-| supports=False | UNSAFE | UNSAFE | UNSAFE | UNSAFE | UNSAFE | UNSAFE | UNSAFE | SIMULATED |
+| ------------------ | -------- | ------------ | -------------- | --------- | ------ | -------- | ----------- | ------------ |
+| supports=True      | NATIVE   | NATIVE       | SIMULATED      | UNKNOWN   | NATIVE | NATIVE   | UNKNOWN     | SIMULATED    |
+| supports=False     | UNSAFE   | UNSAFE       | UNSAFE         | UNSAFE    | UNSAFE | UNSAFE   | UNSAFE      | SIMULATED    |
 
 #### 5.3.4 CompatSessionStore（[`compat/session_store.py`](../src/coding/proxy/compat/session_store.py)）
 
@@ -1155,23 +1155,23 @@ class CompatibilityDecision:
 
 数据模型的正交分解，遵循单一职责原则：
 
-| 子模块 | 文件 | 核心类型 |
-|--------|------|----------|
-| **vendor** | [`model/vendor.py`](../src/coding/proxy/model/vendor.py) | `UsageInfo`, `VendorResponse`, `NoCompatibleVendorError`, `RequestCapabilities`, `VendorCapabilities`, `CapabilityLossReason`, 兼容别名（`Backend*`），Copilot 诊断类, 工具函数 |
-| **compat** | [`model/compat.py`](../src/coding/proxy/model/compat.py) | `CanonicalRequest`, `CanonicalMessagePart`, `CanonicalThinking`, `CanonicalToolCall`, `CompatibilityDecision`, `CompatibilityProfile`, `CompatibilityStatus`, `CompatibilityTrace` |
-| **constants** | [`model/constants.py`](../src/coding/proxy/model/constants.py) | `PROXY_SKIP_HEADERS`, `RESPONSE_SANITIZE_SKIP_HEADERS` 等常量 |
-| **pricing** | [`model/pricing.py`](../src/coding/proxy/model/pricing.py) | `ModelPricing`, `CostValue`, `Currency` |
-| **token** | [`model/token.py`](../src/coding/proxy/model/token.py) | Token 相关模型 |
+| 子模块        | 文件                                                           | 核心类型                                                                                                                                                                           |
+| ------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **vendor**    | [`model/vendor.py`](../src/coding/proxy/model/vendor.py)       | `UsageInfo`, `VendorResponse`, `NoCompatibleVendorError`, `RequestCapabilities`, `VendorCapabilities`, `CapabilityLossReason`, 兼容别名（`Backend*`），Copilot 诊断类, 工具函数    |
+| **compat**    | [`model/compat.py`](../src/coding/proxy/model/compat.py)       | `CanonicalRequest`, `CanonicalMessagePart`, `CanonicalThinking`, `CanonicalToolCall`, `CompatibilityDecision`, `CompatibilityProfile`, `CompatibilityStatus`, `CompatibilityTrace` |
+| **constants** | [`model/constants.py`](../src/coding/proxy/model/constants.py) | `PROXY_SKIP_HEADERS`, `RESPONSE_SANITIZE_SKIP_HEADERS` 等常量                                                                                                                      |
+| **pricing**   | [`model/pricing.py`](../src/coding/proxy/model/pricing.py)     | `ModelPricing`, `CostValue`, `Currency`                                                                                                                                            |
+| **token**     | [`model/token.py`](../src/coding/proxy/model/token.py)         | Token 相关模型                                                                                                                                                                     |
 
 ### 5.5 auth/ -- 认证模块
 
 #### 5.5.1 OAuth Provider 架构（[`auth/providers/`](../src/coding/proxy/auth/providers/)）
 
-| Provider | 文件 | OAuth 流程 | 用途 |
-|----------|------|------------|------|
-| **GitHubDeviceFlowProvider** | [`providers/github.py`](../src/coding/proxy/auth/providers/github.py) | GitHub Device Authorization Grant | Copilot token 获取 |
-| **GoogleOAuthProvider** | [`providers/google.py`](../src/coding/proxy/auth/providers/google.py) | OAuth 2.0 Authorization Code + Refresh Token | Antigravity token 获取 |
-| **BaseOAuthProvider** | [`providers/base.py`](../src/coding/proxy/auth/providers/base.py) | 抽象基类 | 统一 login() 接口 |
+| Provider                     | 文件                                                                  | OAuth 流程                                   | 用途                   |
+| ---------------------------- | --------------------------------------------------------------------- | -------------------------------------------- | ---------------------- |
+| **GitHubDeviceFlowProvider** | [`providers/github.py`](../src/coding/proxy/auth/providers/github.py) | GitHub Device Authorization Grant            | Copilot token 获取     |
+| **GoogleOAuthProvider**      | [`providers/google.py`](../src/coding/proxy/auth/providers/google.py) | OAuth 2.0 Authorization Code + Refresh Token | Antigravity token 获取 |
+| **BaseOAuthProvider**        | [`providers/base.py`](../src/coding/proxy/auth/providers/base.py)     | 抽象基类                                     | 统一 login() 接口      |
 
 #### 5.5.2 RuntimeReauthCoordinator（[`auth/runtime.py`](../src/coding/proxy/auth/runtime.py)）
 
@@ -1181,10 +1181,10 @@ class CompatibilityDecision:
 
 **关键方法**：
 
-| 方法 | 说明 |
-|------|------|
-| `request_reauth(provider_name)` | 幂等触发重认证（后台 asyncio.Task） |
-| `get_status()` | 返回所有 provider 的 `{state, error?, completed_ago_seconds?}` |
+| 方法                            | 说明                                                           |
+| ------------------------------- | -------------------------------------------------------------- |
+| `request_reauth(provider_name)` | 幂等触发重认证（后台 asyncio.Task）                            |
+| `get_status()`                  | 返回所有 provider 的 `{state, error?, completed_ago_seconds?}` |
 
 **与熔断器的协同**：重认证期间 TokenManager 持续抛 `TokenAcquireError` -> Router 触发 failover -> CB 可能 OPEN -> 请求路由到下一层级 -> 重认证完成 -> CB 恢复 -> 后端重新可用。
 
@@ -1204,13 +1204,13 @@ Token 持久化管理器，支持凭证的跨进程/跨重启保持：
 
 配置模型已从单体 `schema.py` 正交拆分为 5 个子模块：
 
-| 子模块 | 文件 | 核心类型 |
-|--------|------|----------|
-| **server** | [`config/server.py`](../src/coding/proxy/config/server.py) | `ServerConfig`, `DatabaseConfig`, `LoggingConfig` |
-| **vendors** | [`config/vendors.py`](../src/coding/proxy/config/vendors.py) | `VendorConfig`, `VendorType`, `AnthropicConfig`, `CopilotConfig`, `AntigravityConfig`, `ZhipuConfig` |
-| **resiliency** | [`config/resiliency.py`](../src/coding/proxy/config/resiliency.py) | `CircuitBreakerConfig`, `RetryConfig`, `FailoverConfig`, `QuotaGuardConfig` |
-| **routing** | [`config/routing.py`](../src/coding/proxy/config/routing.py) | `VendorType`, `VendorConfig`, `ModelMappingRule`, `ModelPricingEntry` |
-| **auth_schema** | [`config/auth_schema.py`](../src/coding/proxy/config/auth_schema.py) | `AuthConfig` |
+| 子模块          | 文件                                                                 | 核心类型                                                                                             |
+| --------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **server**      | [`config/server.py`](../src/coding/proxy/config/server.py)           | `ServerConfig`, `DatabaseConfig`, `LoggingConfig`                                                    |
+| **vendors**     | [`config/vendors.py`](../src/coding/proxy/config/vendors.py)         | `VendorConfig`, `VendorType`, `AnthropicConfig`, `CopilotConfig`, `AntigravityConfig`, `ZhipuConfig` |
+| **resiliency**  | [`config/resiliency.py`](../src/coding/proxy/config/resiliency.py)   | `CircuitBreakerConfig`, `RetryConfig`, `FailoverConfig`, `QuotaGuardConfig`                          |
+| **routing**     | [`config/routing.py`](../src/coding/proxy/config/routing.py)         | `VendorType`, `VendorConfig`, `ModelMappingRule`, `ModelPricingEntry`                                |
+| **auth_schema** | [`config/auth_schema.py`](../src/coding/proxy/config/auth_schema.py) | `AuthConfig`                                                                                         |
 
 `config/schema.py` 作为聚合入口点 re-export 所有符号，并保留 `ProxyConfig` 顶层模型及旧格式迁移逻辑。
 
@@ -1279,21 +1279,21 @@ flowchart TD
 
 #### 5.7.1 usage_log 表结构（[`logging/db.py`](../src/coding/proxy/logging/db.py)）
 
-| 列名 | 类型 | 说明 |
-|------|------|------|
-| `id` | INTEGER PK | 自增主键 |
-| `ts` | TEXT | 时间戳（ISO 8601 格式，UTC） |
-| `vendor` | TEXT | 供应商标识（`"anthropic"` / `"copilot"` / `"antigravity"` / `"zhipu"`） |
-| `model_requested` | TEXT | 客户端请求的模型名称 |
-| `model_served` | TEXT | 实际使用的模型名称 |
-| `input_tokens` | INTEGER | 输入 Token 数 |
-| `output_tokens` | INTEGER | 输出 Token 数 |
-| `cache_creation_tokens` | INTEGER | 缓存创建 Token 数 |
-| `cache_read_tokens` | INTEGER | 缓存读取 Token 数 |
-| `duration_ms` | INTEGER | 请求耗时（毫秒） |
-| `success` | BOOLEAN | 是否成功 |
-| `failover` | BOOLEAN | 是否经过故障转移 |
-| `request_id` | TEXT | 请求 ID |
+| 列名                    | 类型       | 说明                                                                    |
+| ----------------------- | ---------- | ----------------------------------------------------------------------- |
+| `id`                    | INTEGER PK | 自增主键                                                                |
+| `ts`                    | TEXT       | 时间戳（ISO 8601 格式，UTC）                                            |
+| `vendor`                | TEXT       | 供应商标识（`"anthropic"` / `"copilot"` / `"antigravity"` / `"zhipu"`） |
+| `model_requested`       | TEXT       | 客户端请求的模型名称                                                    |
+| `model_served`          | TEXT       | 实际使用的模型名称                                                      |
+| `input_tokens`          | INTEGER    | 输入 Token 数                                                           |
+| `output_tokens`         | INTEGER    | 输出 Token 数                                                           |
+| `cache_creation_tokens` | INTEGER    | 缓存创建 Token 数                                                       |
+| `cache_read_tokens`     | INTEGER    | 缓存读取 Token 数                                                       |
+| `duration_ms`           | INTEGER    | 请求耗时（毫秒）                                                        |
+| `success`               | BOOLEAN    | 是否成功                                                                |
+| `failover`              | BOOLEAN    | 是否经过故障转移                                                        |
+| `request_id`            | TEXT       | 请求 ID                                                                 |
 
 **索引**：`idx_usage_ts`（时间戳）、`idx_usage_vendor`（供应商名）
 
@@ -1303,28 +1303,28 @@ flowchart TD
 
 #### 5.8.1 正交分解
 
-| 文件 | 职责 |
-|------|------|
-| [`server/app.py`](../src/coding/proxy/server/app.py) | FastAPI 应用工厂 `create_app()` + `lifespan` 生命周期管理 |
-| [`server/factory.py`](../src/coding/proxy/server/factory.py) | Vendor/Tier 构建工厂 + 凭证解析 |
-| [`server/routes.py`](../src/coding/proxy/server/routes.py) | 路由端点按职责分组注册 |
-| [`server/request_normalizer.py`](../src/coding/proxy/server/request_normalizer.py) | 入站请求标准化（清洗供应商私有块） |
-| [`server/responses.py`](../src/coding/proxy/server/responses.py) | 响应辅助工具（JSON error / stream error 构建） |
+| 文件                                                                               | 职责                                                      |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| [`server/app.py`](../src/coding/proxy/server/app.py)                               | FastAPI 应用工厂 `create_app()` + `lifespan` 生命周期管理 |
+| [`server/factory.py`](../src/coding/proxy/server/factory.py)                       | Vendor/Tier 构建工厂 + 凭证解析                           |
+| [`server/routes.py`](../src/coding/proxy/server/routes.py)                         | 路由端点按职责分组注册                                    |
+| [`server/request_normalizer.py`](../src/coding/proxy/server/request_normalizer.py) | 入站请求标准化（清洗供应商私有块）                        |
+| [`server/responses.py`](../src/coding/proxy/server/responses.py)                   | 响应辅助工具（JSON error / stream error 构建）            |
 
 #### 5.8.2 API 端点清单
 
-| 端点 | 方法 | 分组 | 说明 |
-|------|------|------|------|
-| `/v1/messages` | POST | core | 代理 Anthropic Messages API（流式 + 非流式） |
-| `/v1/messages/count_tokens` | POST | core | Token 计数透传（旁路直通 Anthropic） |
-| `/health` | GET | health | 健康检查 |
-| `HEAD /` / `GET /` | HEAD/GET | health | 根路径连通性探测（Claude Code 建连前发送） |
-| `/api/status` | GET | status | 各 tier 的 CB/QG/WQG/RL/诊断状态 |
-| `/api/reset` | POST | admin | 重置所有 tier 的熔断器和配额守卫 |
-| `/api/copilot/diagnostics` | GET | copilot | Copilot 认证与交换链路脱敏诊断 |
-| `/api/copilot/models` | GET | copilot | Copilot 可见模型列表探测 |
-| `/api/reauth/status` | GET | reauth | 运行时重认证状态查询 |
-| `/api/reauth/{provider}` | POST | reauth | 手动触发指定 provider 重认证 |
+| 端点                        | 方法     | 分组    | 说明                                         |
+| --------------------------- | -------- | ------- | -------------------------------------------- |
+| `/v1/messages`              | POST     | core    | 代理 Anthropic Messages API（流式 + 非流式） |
+| `/v1/messages/count_tokens` | POST     | core    | Token 计数透传（旁路直通 Anthropic）         |
+| `/health`                   | GET      | health  | 健康检查                                     |
+| `HEAD /` / `GET /`          | HEAD/GET | health  | 根路径连通性探测（Claude Code 建连前发送）   |
+| `/api/status`               | GET      | status  | 各 tier 的 CB/QG/WQG/RL/诊断状态             |
+| `/api/reset`                | POST     | admin   | 重置所有 tier 的熔断器和配额守卫             |
+| `/api/copilot/diagnostics`  | GET      | copilot | Copilot 认证与交换链路脱敏诊断               |
+| `/api/copilot/models`       | GET      | copilot | Copilot 可见模型列表探测                     |
+| `/api/reauth/status`        | GET      | reauth  | 运行时重认证状态查询                         |
+| `/api/reauth/{provider}`    | POST     | reauth  | 手动触发指定 provider 重认证                 |
 
 ---
 
@@ -1334,109 +1334,109 @@ flowchart TD
 
 **server -- 服务器配置**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `host` | str | `"127.0.0.1"` | 监听地址 |
-| `port` | int | `8046` | 监听端口 |
+| 字段   | 类型 | 默认值        | 说明     |
+| ------ | ---- | ------------- | -------- |
+| `host` | str  | `"127.0.0.1"` | 监听地址 |
+| `port` | int  | `8046`        | 监听端口 |
 
 **database -- 数据库配置**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `path` | str | `"~/.coding-proxy/usage.db"` | SQLite 数据库文件路径 |
-| `compat_state_path` | str | `"~/.coding-proxy/compat_state.db"` | 兼容性会话存储路径 |
-| `compat_state_ttl_seconds` | int | `86400` | 兼容性会话 TTL（秒） |
+| 字段                       | 类型 | 默认值                              | 说明                  |
+| -------------------------- | ---- | ----------------------------------- | --------------------- |
+| `path`                     | str  | `"~/.coding-proxy/usage.db"`        | SQLite 数据库文件路径 |
+| `compat_state_path`        | str  | `"~/.coding-proxy/compat_state.db"` | 兼容性会话存储路径    |
+| `compat_state_ttl_seconds` | int  | `86400`                             | 兼容性会话 TTL（秒）  |
 
 **logging -- 日志配置**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `level` | str | `"INFO"` | 日志级别 |
-| `file` | str \| null | `null` | 日志文件路径（null 输出到控制台） |
+| 字段    | 类型        | 默认值   | 说明                              |
+| ------- | ----------- | -------- | --------------------------------- |
+| `level` | str         | `"INFO"` | 日志级别                          |
+| `file`  | str \| null | `null`   | 日志文件路径（null 输出到控制台） |
 
 **auth -- 认证配置**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `token_store_path` | str | `""` | Token Store 文件路径（空则使用默认） |
+| 字段               | 类型 | 默认值 | 说明                                 |
+| ------------------ | ---- | ------ | ------------------------------------ |
+| `token_store_path` | str  | `""`   | Token Store 文件路径（空则使用默认） |
 
 **VendorConfig 通用字段**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `vendor` | enum | -- | 供应商类型：`anthropic` / `copilot` / `antigravity` / `zhipu` |
-| `enabled` | bool | `true` | 是否启用 |
-| `base_url` | str | `""` | API 基础 URL（留空使用默认值） |
-| `timeout_ms` | int | `300000` | 请求超时（毫秒） |
+| 字段         | 类型 | 默认值   | 说明                                                          |
+| ------------ | ---- | -------- | ------------------------------------------------------------- |
+| `vendor`     | enum | --       | 供应商类型：`anthropic` / `copilot` / `antigravity` / `zhipu` |
+| `enabled`    | bool | `true`   | 是否启用                                                      |
+| `base_url`   | str  | `""`     | API 基础 URL（留空使用默认值）                                |
+| `timeout_ms` | int  | `300000` | 请求超时（毫秒）                                              |
 
 **VendorConfig 弹性字段**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `circuit_breaker` | config \| None | `None` | 熔断器配置（None = 终端层） |
-| `retry` | config | `RetryConfig()` | 重试策略配置 |
-| `quota_guard` | config | `QuotaGuardConfig()` | 日度配额守卫配置 |
-| `weekly_quota_guard` | config | `QuotaGuardConfig()` | 周度配额守卫配置 |
+| 字段                 | 类型           | 默认值               | 说明                        |
+| -------------------- | -------------- | -------------------- | --------------------------- |
+| `circuit_breaker`    | config \| None | `None`               | 熔断器配置（None = 终端层） |
+| `retry`              | config         | `RetryConfig()`      | 重试策略配置                |
+| `quota_guard`        | config         | `QuotaGuardConfig()` | 日度配额守卫配置            |
+| `weekly_quota_guard` | config         | `QuotaGuardConfig()` | 周度配额守卫配置            |
 
 **Copilot 专属字段**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `github_token` | str | `""` | GitHub OAuth token / PAT（支持 `${ENV_VAR}`） |
-| `account_type` | str | `"individual"` | 账号类型：`individual` / `business` / `enterprise` |
-| `token_url` | str | `"https://..."` | Token 交换端点 |
-| `models_cache_ttl_seconds` | int | `300` | 模型列表缓存 TTL |
+| 字段                       | 类型 | 默认值          | 说明                                               |
+| -------------------------- | ---- | --------------- | -------------------------------------------------- |
+| `github_token`             | str  | `""`            | GitHub OAuth token / PAT（支持 `${ENV_VAR}`）      |
+| `account_type`             | str  | `"individual"`  | 账号类型：`individual` / `business` / `enterprise` |
+| `token_url`                | str  | `"https://..."` | Token 交换端点                                     |
+| `models_cache_ttl_seconds` | int  | `300`           | 模型列表缓存 TTL                                   |
 
 **Antigravity 专属字段**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `client_id` | str | `""` | Google OAuth2 Client ID |
-| `client_secret` | str | `""` | Google OAuth2 Client Secret |
-| `refresh_token` | str | `""` | Google OAuth2 Refresh Token |
-| `model_endpoint` | str | `"models/claude-sonnet-4-20250514"` | Gemini 模型端点路径 |
+| 字段             | 类型 | 默认值                              | 说明                        |
+| ---------------- | ---- | ----------------------------------- | --------------------------- |
+| `client_id`      | str  | `""`                                | Google OAuth2 Client ID     |
+| `client_secret`  | str  | `""`                                | Google OAuth2 Client Secret |
+| `refresh_token`  | str  | `""`                                | Google OAuth2 Refresh Token |
+| `model_endpoint` | str  | `"models/claude-sonnet-4-20250514"` | Gemini 模型端点路径         |
 
 **Zhipu 专属字段**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `api_key` | str | `""` | 智谱 API Key（支持 `${ENV_VAR}`） |
+| 字段      | 类型 | 默认值 | 说明                              |
+| --------- | ---- | ------ | --------------------------------- |
+| `api_key` | str  | `""`   | 智谱 API Key（支持 `${ENV_VAR}`） |
 
 > **弹性参数速查**：以下 4 类参数的详细语义参见对应设计模式章节——[§3.2 CircuitBreaker](#32-circuit-breaker熔断器模式)、[§3.7 QuotaGuard](#37-state-machine状态机模式--quotaguard)、[§3.12 Retry](#312-retry-with-full-jitter带完全抖动的重试模式)、[§4.4 故障转移判定](#44-故障转移判定逻辑)。
 
 **CircuitBreakerConfig / QuotaGuardConfig / RetryConfig / FailoverConfig — 弹性参数一览**
 
-| 配置类 | 字段 | 类型 | 默认值 |
-|--------|------|------|--------|
-| **CB** | `failure_threshold` / `recovery_timeout_seconds` / `success_threshold` / `max_recovery_seconds` | int / int / int / int | `3` / `300` / `2` / `3600` |
-| **QG** | `enabled` / `token_budget` / `window_hours` / `threshold_percent` / `probe_interval_seconds` | bool / int / float / float / int | `false` / `0` / `5.0` / `99.0` / `300` |
-| **Retry** | `max_retries` / `initial_delay_ms` / `max_delay_ms` / `backoff_multiplier` / `jitter` | int / int / int / float / bool | `2` / `500` / `5000` / `2.0` / `true` |
-| **Failover** | `status_codes` / `error_types` / `error_message_patterns` | list[int] / list[str] / list[str] | `[429,403,503,500]` / 见 §4.4 / 见 §4.4 |
+| 配置类       | 字段                                                                                            | 类型                              | 默认值                                  |
+| ------------ | ----------------------------------------------------------------------------------------------- | --------------------------------- | --------------------------------------- |
+| **CB**       | `failure_threshold` / `recovery_timeout_seconds` / `success_threshold` / `max_recovery_seconds` | int / int / int / int             | `3` / `300` / `2` / `3600`              |
+| **QG**       | `enabled` / `token_budget` / `window_hours` / `threshold_percent` / `probe_interval_seconds`    | bool / int / float / float / int  | `false` / `0` / `5.0` / `99.0` / `300`  |
+| **Retry**    | `max_retries` / `initial_delay_ms` / `max_delay_ms` / `backoff_multiplier` / `jitter`           | int / int / int / float / bool    | `2` / `500` / `5000` / `2.0` / `true`   |
+| **Failover** | `status_codes` / `error_types` / `error_message_patterns`                                       | list[int] / list[str] / list[str] | `[429,403,503,500]` / 见 §4.4 / 见 §4.4 |
 
 **ModelMappingRule 字段**
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `pattern` | str | 匹配模式（精确/通配符/正则） |
-| `target` | str | 目标模型名称 |
-| `is_regex` | bool | 是否为正则表达式（默认 `false`） |
-| `vendors` | list[str] | 规则作用域（留空仅作用于 fallback/zhipu） |
+| 字段       | 类型      | 说明                                      |
+| ---------- | --------- | ----------------------------------------- |
+| `pattern`  | str       | 匹配模式（精确/通配符/正则）              |
+| `target`   | str       | 目标模型名称                              |
+| `is_regex` | bool      | 是否为正则表达式（默认 `false`）          |
+| `vendors`  | list[str] | 规则作用域（留空仅作用于 fallback/zhipu） |
 
 **ModelPricingEntry 字段**
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `vendor` | str | 供应商名称 |
-| `model` | str | 实际模型名 |
-| `input_cost_per_mtok` | float | 输入 Token 单价（$/百万 token，支持 `$`/`yen` 前缀） |
-| `output_cost_per_mtok` | float | 输出 Token 单价 |
-| `cache_write_cost_per_mtok` | float | 缓存创建 Token 单价 |
-| `cache_read_cost_per_mtok` | float | 缓存读取 Token 单价 |
+| 字段                        | 类型  | 说明                                                 |
+| --------------------------- | ----- | ---------------------------------------------------- |
+| `vendor`                    | str   | 供应商名称                                           |
+| `model`                     | str   | 实际模型名                                           |
+| `input_cost_per_mtok`       | float | 输入 Token 单价（$/百万 token，支持 `$`/`yen` 前缀） |
+| `output_cost_per_mtok`      | float | 输出 Token 单价                                      |
+| `cache_write_cost_per_mtok` | float | 缓存创建 Token 单价                                  |
+| `cache_read_cost_per_mtok`  | float | 缓存读取 Token 单价                                  |
 
 **tiers -- 显式优先级**
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
+| 字段    | 类型                     | 说明                                       |
+| ------- | ------------------------ | ------------------------------------------ |
 | `tiers` | list[VendorType] \| None | 降级链路优先级（None 时回退 vendors 顺序） |
 
 ---
@@ -1518,17 +1518,17 @@ vendors:
 
 **转换映射**：
 
-| Anthropic 字段 | Gemini 字段 | 说明 |
-|---------------|------------|------|
-| `system`（str \| list） | `systemInstruction.parts[].text` | 支持字符串和文本块列表两种格式 |
-| `messages[]` | `contents[]` | 角色映射：`assistant` -> `model`，`user` -> `user` |
-| `content`（text） | `parts[].text` | 文本内容块 |
-| `content`（image） | `parts[].inlineData` | Base64 数据 + MIME 类型 |
-| `content`（tool_use） | `parts[].functionCall` | `name` + `input` -> `args` |
-| `content`（tool_result） | `parts[].functionResponse` | `tool_use_id` -> `name`，`content` -> `result` |
-| `max_tokens` | `generationConfig.maxOutputTokens` | |
-| `temperature` / `top_p` / `top_k` | `generationConfig.*` | 参数名驼峰转换 |
-| `stop_sequences` | `generationConfig.stopSequences` | |
+| Anthropic 字段                    | Gemini 字段                        | 说明                                               |
+| --------------------------------- | ---------------------------------- | -------------------------------------------------- |
+| `system`（str \| list）           | `systemInstruction.parts[].text`   | 支持字符串和文本块列表两种格式                     |
+| `messages[]`                      | `contents[]`                       | 角色映射：`assistant` -> `model`，`user` -> `user` |
+| `content`（text）                 | `parts[].text`                     | 文本内容块                                         |
+| `content`（image）                | `parts[].inlineData`               | Base64 数据 + MIME 类型                            |
+| `content`（tool_use）             | `parts[].functionCall`             | `name` + `input` -> `args`                         |
+| `content`（tool_result）          | `parts[].functionResponse`         | `tool_use_id` -> `name`，`content` -> `result`     |
+| `max_tokens`                      | `generationConfig.maxOutputTokens` |                                                    |
+| `temperature` / `top_p` / `top_k` | `generationConfig.*`               | 参数名驼峰转换                                     |
+| `stop_sequences`                  | `generationConfig.stopSequences`   |                                                    |
 
 **不支持的字段**（静默剥离并记录 WARNING）：`tools`、`tool_choice`、`metadata`、`extended_thinking`、`thinking`
 
@@ -1538,11 +1538,11 @@ vendors:
 
 **finishReason 映射**：
 
-| Gemini | Anthropic |
-|--------|-----------|
-| `STOP` | `end_turn` |
-| `MAX_TOKENS` | `max_tokens` |
-| `SAFETY` / `RECITATION` / `OTHER` | `end_turn` |
+| Gemini                            | Anthropic    |
+| --------------------------------- | ------------ |
+| `STOP`                            | `end_turn`   |
+| `MAX_TOKENS`                      | `max_tokens` |
+| `SAFETY` / `RECITATION` / `OTHER` | `end_turn`   |
 
 **Parts 转换**：
 - `text` -> `{"type": "text", "text": "..."}`
@@ -1590,34 +1590,34 @@ flowchart LR
 
 ### 9.1 单元测试覆盖
 
-| 测试文件 | 覆盖范围 |
-|---------|---------|
-| `test_circuit_breaker.py` | 状态转换（CLOSED->OPEN->HALF_OPEN->CLOSED）、恢复超时、指数退避、手动重置 |
-| `test_quota_guard.py` | 配额守卫状态机、预算追踪、探测机制、基线加载 |
-| `test_model_mapper.py` | 精确匹配、正则匹配、Glob 匹配、默认回退、空规则集 |
-| `test_vendor_tier.py` | VendorTier 可执行判断、成功/失败记录、终端判定、三层门控、Rate Limit deadline |
-| `test_vendors.py` | 请求头过滤、模型映射、故障转移判断、数据类默认值 |
-| `test_copilot_vendor.py` | CopilotTokenManager 交换/缓存/过期/失效、CopilotVendor 请求准备 |
+| 测试文件                     | 覆盖范围                                                                           |
+| ---------------------------- | ---------------------------------------------------------------------------------- |
+| `test_circuit_breaker.py`    | 状态转换（CLOSED->OPEN->HALF_OPEN->CLOSED）、恢复超时、指数退避、手动重置          |
+| `test_quota_guard.py`        | 配额守卫状态机、预算追踪、探测机制、基线加载                                       |
+| `test_model_mapper.py`       | 精确匹配、正则匹配、Glob 匹配、默认回退、空规则集                                  |
+| `test_vendor_tier.py`        | VendorTier 可执行判断、成功/失败记录、终端判定、三层门控、Rate Limit deadline      |
+| `test_vendors.py`            | 请求头过滤、模型映射、故障转移判断、数据类默认值                                   |
+| `test_copilot_vendor.py`     | CopilotTokenManager 交换/缓存/过期/失效、CopilotVendor 请求准备                    |
 | `test_antigravity_vendor.py` | GoogleOAuthTokenManager 刷新/缓存/过期/失效、AntigravityVendor 格式转换+token 注入 |
-| `test_convert_request.py` | Anthropic->Gemini 请求转换（文本、多轮、system、图片、工具、参数映射） |
-| `test_convert_response.py` | Gemini->Anthropic 响应转换（文本、多部件、usage 提取、finishReason 映射） |
-| `test_convert_sse.py` | Gemini SSE->Anthropic SSE 流适配（单/多 chunk、各 finishReason、边界情况） |
-| `test_convert_openai.py` | Anthropic<->OpenAI 双向格式转换 |
-| `test_router_chain.py` | N-tier 链式路由（2/3/4-tier 降级、CB/QG 跳过、流式/非流式、连接异常） |
-| `test_executor.py` | _RouteExecutor 门控逻辑、能力匹配、兼容性决策、语义拒绝、错误分类 |
-| `test_error_classifier.py` | 请求能力画像提取、语义拒绝判定、错误 payload 解析 |
-| `test_rate_limit.py` | Rate limit header 解析、deadline 计算、cap error 检测 |
-| `test_retry.py` | RetryConfig 参数、delay 计算、可重试异常判定 |
-| `test_usage_recorder.py` | UsageRecorder 用量构建、定价日志、evidence 记录 |
-| `test_session_manager.py` | RouteSessionManager 会话创建/上下文应用/持久化 |
-| `test_compat_canonical.py` | CanonicalRequest 构建、session_key 派生、thinking 提取、消息部分解析 |
-| `test_config_loader.py` | 配置文件搜索优先级、环境变量展开、缺失文件处理、vendors 格式解析 |
-| `test_config_schema.py` | ProxyConfig 校验、legacy 迁移、tiers 引用校验、vendor 专属字段 warning |
-| `test_token_logger.py` | 用量记录、窗口查询、按供应商/模型过滤、evidence 记录 |
-| `test_auth_runtime.py` | RuntimeReauthCoordinator 状态机、幂等触发、锁保护 |
-| `test_auth_store.py` | TokenStoreManager 存取、load/save、TTL |
-| `test_request_normalizer.py` | 请求标准化：私有块清洗、tool_use_id 重写、fatal_reasons |
-| `test_pricing.py` | PricingTable 加载、单价查询（精确+规范化）、费用计算、币种一致性 |
+| `test_convert_request.py`    | Anthropic->Gemini 请求转换（文本、多轮、system、图片、工具、参数映射）             |
+| `test_convert_response.py`   | Gemini->Anthropic 响应转换（文本、多部件、usage 提取、finishReason 映射）          |
+| `test_convert_sse.py`        | Gemini SSE->Anthropic SSE 流适配（单/多 chunk、各 finishReason、边界情况）         |
+| `test_convert_openai.py`     | Anthropic<->OpenAI 双向格式转换                                                    |
+| `test_router_chain.py`       | N-tier 链式路由（2/3/4-tier 降级、CB/QG 跳过、流式/非流式、连接异常）              |
+| `test_executor.py`           | _RouteExecutor 门控逻辑、能力匹配、兼容性决策、语义拒绝、错误分类                  |
+| `test_error_classifier.py`   | 请求能力画像提取、语义拒绝判定、错误 payload 解析                                  |
+| `test_rate_limit.py`         | Rate limit header 解析、deadline 计算、cap error 检测                              |
+| `test_retry.py`              | RetryConfig 参数、delay 计算、可重试异常判定                                       |
+| `test_usage_recorder.py`     | UsageRecorder 用量构建、定价日志、evidence 记录                                    |
+| `test_session_manager.py`    | RouteSessionManager 会话创建/上下文应用/持久化                                     |
+| `test_compat_canonical.py`   | CanonicalRequest 构建、session_key 派生、thinking 提取、消息部分解析               |
+| `test_config_loader.py`      | 配置文件搜索优先级、环境变量展开、缺失文件处理、vendors 格式解析                   |
+| `test_config_schema.py`      | ProxyConfig 校验、legacy 迁移、tiers 引用校验、vendor 专属字段 warning             |
+| `test_token_logger.py`       | 用量记录、窗口查询、按供应商/模型过滤、evidence 记录                               |
+| `test_auth_runtime.py`       | RuntimeReauthCoordinator 状态机、幂等触发、锁保护                                  |
+| `test_auth_store.py`         | TokenStoreManager 存取、load/save、TTL                                             |
+| `test_request_normalizer.py` | 请求标准化：私有块清洗、tool_use_id 重写、fatal_reasons                            |
+| `test_pricing.py`            | PricingTable 加载、单价查询（精确+规范化）、费用计算、币种一致性                   |
 
 ### 9.2 测试工具
 

@@ -35,12 +35,12 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: '待提升的 prerelease tag（如 v0.2.0a1）'
+        description: "待提升的 prerelease tag（如 v0.2.0a1）"
         required: true
         type: string
 
 permissions:
-  contents: read    # validate job 仅需读取 release 信息；promote job 有独立的 job-level permissions 覆写
+  contents: read # validate job 仅需读取 release 信息；promote job 有独立的 job-level permissions 覆写
 
 concurrency:
   group: promote-${{ inputs.tag_name }}
@@ -100,8 +100,8 @@ jobs:
       name: pypi
       url: https://pypi.org/p/coding-proxy
     permissions:
-      contents: write   # 更新 Release 元数据所需
-      id-token: write   # OIDC Trusted Publishing 所需
+      contents: write # 更新 Release 元数据所需
+      id-token: write # OIDC Trusted Publishing 所需
 
     steps:
       # -----------------------------------------------------------------------
