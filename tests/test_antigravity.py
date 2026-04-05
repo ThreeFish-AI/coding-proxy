@@ -6,12 +6,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from coding.proxy.config.schema import (
+    AntigravityConfig,
+    FailoverConfig,
+    ModelMappingRule,
+)
+from coding.proxy.routing.model_mapper import ModelMapper
 from coding.proxy.vendors.antigravity import AntigravityVendor, GoogleOAuthTokenManager
 from coding.proxy.vendors.base import RequestCapabilities
 from coding.proxy.vendors.token_manager import TokenAcquireError, TokenErrorKind
-from coding.proxy.config.schema import AntigravityConfig, FailoverConfig, ModelMappingRule
-from coding.proxy.routing.model_mapper import ModelMapper
-
 
 # --- GoogleOAuthTokenManager ---
 
@@ -187,20 +190,25 @@ async def test_prepare_request_converts_and_injects_token():
 
 @pytest.mark.asyncio
 async def test_prepare_request_resolves_model_from_mapping():
-    mapper = ModelMapper([
-        ModelMappingRule(
-            pattern="claude-sonnet-*",
-            target="claude-sonnet-4-6-thinking",
-            vendors=["antigravity"],
-        )
-    ])
+    mapper = ModelMapper(
+        [
+            ModelMappingRule(
+                pattern="claude-sonnet-*",
+                target="claude-sonnet-4-6-thinking",
+                vendors=["antigravity"],
+            )
+        ]
+    )
     vendor = AntigravityVendor(AntigravityConfig(), FailoverConfig(), mapper)
     vendor._token_manager.get_token = AsyncMock(return_value="goog_token")
 
-    prepared_body, _ = await vendor._prepare_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [{"role": "user", "content": "Hello"}],
-    }, {})
+    prepared_body, _ = await vendor._prepare_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+        {},
+    )
 
     assert prepared_body["contents"][0]["parts"] == [{"text": "Hello"}]
     diagnostics = vendor.get_diagnostics()
@@ -237,9 +245,9 @@ def test_inherits_failover():
 
     assert vendor.should_trigger_failover(429, None)
     assert not vendor.should_trigger_failover(200, None)
-    assert vendor.should_trigger_failover(429, {
-        "error": {"type": "rate_limit_error", "message": "limited"}
-    })
+    assert vendor.should_trigger_failover(
+        429, {"error": {"type": "rate_limit_error", "message": "limited"}}
+    )
 
 
 def test_model_endpoint_in_config():
@@ -259,11 +267,13 @@ def test_mark_scope_error_if_needed():
 
 def test_antigravity_supports_request_with_tools_thinking_and_metadata():
     vendor = AntigravityVendor(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
-    supported, reasons = vendor.supports_request(RequestCapabilities(
-        has_tools=True,
-        has_thinking=True,
-        has_metadata=True,
-    ))
+    supported, reasons = vendor.supports_request(
+        RequestCapabilities(
+            has_tools=True,
+            has_thinking=True,
+            has_metadata=True,
+        )
+    )
     assert supported is True
     assert reasons == []
 
@@ -278,10 +288,13 @@ async def test_prepare_request_no_anthropic_beta_header():
     vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
     vendor._token_manager.get_token = AsyncMock(return_value="tok")
 
-    _, headers = await vendor._prepare_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [{"role": "user", "content": "Hi"}],
-    }, {})
+    _, headers = await vendor._prepare_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hi"}],
+        },
+        {},
+    )
 
     assert "anthropic-beta" not in headers
     assert headers["authorization"] == "Bearer tok"
@@ -295,10 +308,13 @@ async def test_diagnostics_include_adaptations():
     vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
     vendor._token_manager.get_token = AsyncMock(return_value="tok")
 
-    await vendor._prepare_request({
-        "model": "test",
-        "messages": [{"role": "user", "content": ""}],
-    }, {})
+    await vendor._prepare_request(
+        {
+            "model": "test",
+            "messages": [{"role": "user", "content": ""}],
+        },
+        {},
+    )
 
     diag = vendor.get_diagnostics()
     assert "request_adaptations" in diag
@@ -310,21 +326,26 @@ async def test_diagnostics_include_adaptations():
 async def test_send_message_uses_cached_resolution():
     """send_message 不重复调用 map_model，使用 _prepare_request 缓存值."""
     config = AntigravityConfig()
-    mapper = ModelMapper([
-        ModelMappingRule(
-            pattern="claude-*",
-            target="resolved-model",
-            vendors=["antigravity"],
-        ),
-    ])
+    mapper = ModelMapper(
+        [
+            ModelMappingRule(
+                pattern="claude-*",
+                target="resolved-model",
+                vendors=["antigravity"],
+            ),
+        ]
+    )
     vendor = AntigravityVendor(config, FailoverConfig(), mapper)
     vendor._token_manager.get_token = AsyncMock(return_value="tok")
 
     # 先调用 _prepare_request 设置缓存
-    await vendor._prepare_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [{"role": "user", "content": "Hi"}],
-    }, {})
+    await vendor._prepare_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hi"}],
+        },
+        {},
+    )
 
     # 验证 _last_resolved_model 已被设置
     assert vendor._last_resolved_model == "resolved-model"

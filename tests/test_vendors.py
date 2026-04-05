@@ -3,16 +3,6 @@
 import httpx
 import pytest
 
-from coding.proxy.vendors.antigravity import AntigravityVendor
-from coding.proxy.vendors.anthropic import AnthropicVendor
-from coding.proxy.vendors.base import (
-    BaseVendor,
-    VendorResponse,
-    UsageInfo,
-    decode_json_body as _decode_json_body,
-    sanitize_headers_for_synthetic_response as _sanitize_headers_for_synthetic_response,
-)
-from coding.proxy.vendors.zhipu import ZhipuVendor
 from coding.proxy.config.schema import (
     AnthropicConfig,
     AntigravityConfig,
@@ -21,6 +11,19 @@ from coding.proxy.config.schema import (
     ZhipuConfig,
 )
 from coding.proxy.routing.model_mapper import ModelMapper
+from coding.proxy.vendors.anthropic import AnthropicVendor
+from coding.proxy.vendors.antigravity import AntigravityVendor
+from coding.proxy.vendors.base import (
+    UsageInfo,
+    VendorResponse,
+)
+from coding.proxy.vendors.base import (
+    decode_json_body as _decode_json_body,
+)
+from coding.proxy.vendors.base import (
+    sanitize_headers_for_synthetic_response as _sanitize_headers_for_synthetic_response,
+)
+from coding.proxy.vendors.zhipu import ZhipuVendor
 
 
 @pytest.mark.asyncio
@@ -43,9 +46,13 @@ async def test_anthropic_prepare_request_filters_headers():
 
 @pytest.mark.asyncio
 async def test_zhipu_prepare_request_maps_model():
-    mapper = ModelMapper([
-        ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True),
-    ])
+    mapper = ModelMapper(
+        [
+            ModelMappingRule(
+                pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True
+            ),
+        ]
+    )
     config = ZhipuConfig(api_key="test-key")
     zhipu_vendor = ZhipuVendor(config, mapper)
 
@@ -84,9 +91,9 @@ def test_anthropic_should_trigger_failover():
     anthropic_vendor = AnthropicVendor(AnthropicConfig(), failover)
 
     # 429 + rate_limit_error → True
-    assert anthropic_vendor.should_trigger_failover(429, {
-        "error": {"type": "rate_limit_error", "message": "Rate limited"}
-    })
+    assert anthropic_vendor.should_trigger_failover(
+        429, {"error": {"type": "rate_limit_error", "message": "Rate limited"}}
+    )
 
     # 429 without body → True (429/503 always trigger)
     assert anthropic_vendor.should_trigger_failover(429, None)
@@ -98,22 +105,24 @@ def test_anthropic_should_trigger_failover():
     assert not anthropic_vendor.should_trigger_failover(500, None)
 
     # error message pattern match
-    assert anthropic_vendor.should_trigger_failover(429, {
-        "error": {"type": "unknown", "message": "Quota exceeded"}
-    })
+    assert anthropic_vendor.should_trigger_failover(
+        429, {"error": {"type": "unknown", "message": "Quota exceeded"}}
+    )
 
 
 def test_zhipu_never_triggers_failover():
     mapper = ModelMapper([])
     zhipu_vendor = ZhipuVendor(ZhipuConfig(), mapper)
     assert not zhipu_vendor.should_trigger_failover(429, None)
-    assert not zhipu_vendor.should_trigger_failover(500, {"error": {"type": "rate_limit_error"}})
+    assert not zhipu_vendor.should_trigger_failover(
+        500, {"error": {"type": "rate_limit_error"}}
+    )
 
 
 def test_zhipu_supports_tools_and_thinking():
     """ZhipuVendor 应声明全部能力为 NATIVE（原生 Anthropic 兼容端点）."""
-    from coding.proxy.vendors.base import RequestCapabilities
     from coding.proxy.compat.canonical import CompatibilityStatus
+    from coding.proxy.vendors.base import RequestCapabilities
 
     mapper = ModelMapper([])
     zhipu_vendor = ZhipuVendor(ZhipuConfig(), mapper)
@@ -122,11 +131,15 @@ def test_zhipu_supports_tools_and_thinking():
     assert caps.supports_thinking is True
     assert caps.emits_vendor_tool_events is False
     # 含工具的请求应被接受
-    supported, reasons = zhipu_vendor.supports_request(RequestCapabilities(has_tools=True))
+    supported, reasons = zhipu_vendor.supports_request(
+        RequestCapabilities(has_tools=True)
+    )
     assert supported is True
     assert reasons == []
     # 含 thinking 的请求应被接受
-    supported, reasons = zhipu_vendor.supports_request(RequestCapabilities(has_thinking=True))
+    supported, reasons = zhipu_vendor.supports_request(
+        RequestCapabilities(has_thinking=True)
+    )
     assert supported is True
     assert reasons == []
     # 兼容性画像应全部为 NATIVE
@@ -177,11 +190,14 @@ async def test_zhipu_prepare_request_preserves_thinking():
 async def test_zhipu_prepare_request_preserves_anthropic_beta_header():
     zhipu_vendor = ZhipuVendor(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
     body = {"model": "claude-opus-4-6", "messages": []}
-    _, prepared_headers = await zhipu_vendor._prepare_request(body, {
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "computer-use-2025-01-24",
-        "x-request-id": "req-1",
-    })
+    _, prepared_headers = await zhipu_vendor._prepare_request(
+        body,
+        {
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "computer-use-2025-01-24",
+            "x-request-id": "req-1",
+        },
+    )
     assert prepared_headers["anthropic-beta"] == "computer-use-2025-01-24"
     assert prepared_headers["x-request-id"] == "req-1"
 
@@ -189,30 +205,57 @@ async def test_zhipu_prepare_request_preserves_anthropic_beta_header():
 @pytest.mark.parametrize(
     ("tool_name", "input_payload"),
     [
-        ("Task", {"description": "sub task", "prompt": "do it", "subagent_type": "general"}),
+        (
+            "Task",
+            {"description": "sub task", "prompt": "do it", "subagent_type": "general"},
+        ),
         ("Bash", {"command": "pwd", "description": "check cwd"}),
         ("Grep", {"pattern": "TODO", "path": "."}),
         ("Glob", {"pattern": "**/*.py", "path": "."}),
         ("Edit", {"file_path": "a.py", "old_string": "x", "new_string": "y"}),
         ("Write", {"file_path": "a.py", "content": "print('x')\n"}),
         ("Read", {"file_path": "a.py", "offset": 1, "limit": 10}),
-        ("TodoWrite", {"todos": [{"content": "task-1", "status": "pending", "priority": "high"}]}),
+        (
+            "TodoWrite",
+            {"todos": [{"content": "task-1", "status": "pending", "priority": "high"}]},
+        ),
     ],
 )
 @pytest.mark.asyncio
-async def test_zhipu_prepare_request_preserves_claude_code_tool_shapes(tool_name, input_payload):
+async def test_zhipu_prepare_request_preserves_claude_code_tool_shapes(
+    tool_name, input_payload
+):
     zhipu_vendor = ZhipuVendor(ZhipuConfig(api_key="sk-test"), ModelMapper([]))
     body = {
         "model": "claude-opus-4-6",
-        "messages": [{
-            "role": "assistant",
-            "content": [{"type": "tool_use", "id": "toolu_1", "name": tool_name, "input": input_payload}],
-        }],
-        "tools": [{"name": tool_name, "input_schema": {"type": "object", "properties": {"payload": {"type": "string"}}}}],
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": tool_name,
+                        "input": input_payload,
+                    }
+                ],
+            }
+        ],
+        "tools": [
+            {
+                "name": tool_name,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"payload": {"type": "string"}},
+                },
+            }
+        ],
         "tool_choice": {"type": "any"},
     }
 
-    prepared_body, prepared_headers = await zhipu_vendor._prepare_request(body, {"anthropic-beta": "code-tools-1"})
+    prepared_body, prepared_headers = await zhipu_vendor._prepare_request(
+        body, {"anthropic-beta": "code-tools-1"}
+    )
 
     assert prepared_body["tools"][0]["name"] == tool_name
     assert prepared_body["messages"][0]["content"][0]["name"] == tool_name
@@ -237,7 +280,9 @@ async def test_zhipu_send_message_normalizes_401_auth_error():
     )
 
     # 直接测试 _normalize_error_response 钩子（无需 mock 基类 send_message）
-    result = zhipu_vendor._normalize_error_response(401, httpx.Response(401, content=raw_body), input_resp)
+    result = zhipu_vendor._normalize_error_response(
+        401, httpx.Response(401, content=raw_body), input_resp
+    )
 
     assert result.status_code == 401
     assert result.error_type == "authentication_error"
@@ -256,7 +301,9 @@ def test_zhipu_normalize_error_response_passthrough_non_401():
         error_message="Too many requests",
     )
 
-    result = zhipu_vendor._normalize_error_response(429, httpx.Response(429, content=input_resp.raw_body), input_resp)
+    result = zhipu_vendor._normalize_error_response(
+        429, httpx.Response(429, content=input_resp.raw_body), input_resp
+    )
 
     assert result.error_type == "rate_limit_error"
     assert result is input_resp  # 透传：返回同一对象
@@ -266,7 +313,9 @@ def test_zhipu_normalize_error_response_passthrough_non_401():
 async def test_zhipu_send_message_without_api_key_fails_fast():
     zhipu_vendor = ZhipuVendor(ZhipuConfig(api_key=""), ModelMapper([]))
 
-    resp = await zhipu_vendor.send_message({"model": "claude-opus-4-6", "messages": {}}, {})
+    resp = await zhipu_vendor.send_message(
+        {"model": "claude-opus-4-6", "messages": {}}, {}
+    )
 
     assert resp.status_code == 401
     assert resp.error_type == "authentication_error"
@@ -309,19 +358,22 @@ def test_usage_info_defaults():
 
 def test_base_failover_with_config():
     """基类 should_trigger_failover 在有 FailoverConfig 时正确判断."""
-    anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig(
-        status_codes=[429],
-        error_types=["rate_limit_error"],
-        error_message_patterns=["quota"],
-    ))
+    anthropic_vendor = AnthropicVendor(
+        AnthropicConfig(),
+        FailoverConfig(
+            status_codes=[429],
+            error_types=["rate_limit_error"],
+            error_message_patterns=["quota"],
+        ),
+    )
     # 匹配 status_code + error_type
-    assert anthropic_vendor.should_trigger_failover(429, {
-        "error": {"type": "rate_limit_error", "message": "test"}
-    })
+    assert anthropic_vendor.should_trigger_failover(
+        429, {"error": {"type": "rate_limit_error", "message": "test"}}
+    )
     # 匹配 status_code + error_message
-    assert anthropic_vendor.should_trigger_failover(429, {
-        "error": {"type": "unknown", "message": "Quota exceeded"}
-    })
+    assert anthropic_vendor.should_trigger_failover(
+        429, {"error": {"type": "unknown", "message": "Quota exceeded"}}
+    )
     # 429 无 body → 仍触发
     assert anthropic_vendor.should_trigger_failover(429, None)
     # status_code 不匹配
@@ -333,9 +385,9 @@ def test_base_failover_without_config_returns_false():
     mapper = ModelMapper([])
     zhipu_vendor = ZhipuVendor(ZhipuConfig(), mapper)
     assert not zhipu_vendor.should_trigger_failover(429, None)
-    assert not zhipu_vendor.should_trigger_failover(429, {
-        "error": {"type": "rate_limit_error", "message": "limited"}
-    })
+    assert not zhipu_vendor.should_trigger_failover(
+        429, {"error": {"type": "rate_limit_error", "message": "limited"}}
+    )
     assert not zhipu_vendor.should_trigger_failover(503, None)
 
 
@@ -344,13 +396,15 @@ def test_base_failover_without_config_returns_false():
 
 def test_sanitize_headers_removes_encoding():
     """移除 content-encoding/content-length/transfer-encoding."""
-    raw = httpx.Headers({
-        "content-type": "application/json",
-        "content-encoding": "gzip",
-        "content-length": "123",
-        "transfer-encoding": "chunked",
-        "x-request-id": "abc",
-    })
+    raw = httpx.Headers(
+        {
+            "content-type": "application/json",
+            "content-encoding": "gzip",
+            "content-length": "123",
+            "transfer-encoding": "chunked",
+            "x-request-id": "abc",
+        }
+    )
     result = _sanitize_headers_for_synthetic_response(raw)
     assert "content-type" in result
     assert "x-request-id" in result
@@ -361,10 +415,12 @@ def test_sanitize_headers_removes_encoding():
 
 def test_sanitize_headers_preserves_other():
     """非跳过头部全部保留."""
-    raw = httpx.Headers({
-        "retry-after": "60",
-        "x-ratelimit-remaining": "0",
-    })
+    raw = httpx.Headers(
+        {
+            "retry-after": "60",
+            "x-ratelimit-remaining": "0",
+        }
+    )
     result = _sanitize_headers_for_synthetic_response(raw)
     assert result["retry-after"] == "60"
     assert result["x-ratelimit-remaining"] == "0"
@@ -373,10 +429,12 @@ def test_sanitize_headers_preserves_other():
 def test_synthetic_response_no_decompression_error():
     """验证清洗后的头部构造 httpx.Response 不触发 zlib 解压错误."""
     # 这是原始 bug 的精确复现: 已解压的 content + gzip header → zlib error
-    raw_headers = httpx.Headers({
-        "content-type": "application/json",
-        "content-encoding": "gzip",
-    })
+    raw_headers = httpx.Headers(
+        {
+            "content-type": "application/json",
+            "content-encoding": "gzip",
+        }
+    )
     clean_headers = _sanitize_headers_for_synthetic_response(raw_headers)
     # 使用已解压的 JSON 文本构造 Response — 不应抛异常
     resp = httpx.Response(
@@ -415,7 +473,9 @@ async def test_antigravity_check_health_token_success():
     from unittest.mock import AsyncMock
 
     config = AntigravityConfig(
-        client_id="cid", client_secret="csecret", refresh_token="rtoken",
+        client_id="cid",
+        client_secret="csecret",
+        refresh_token="rtoken",
     )
     antigravity_vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
     # Mock token manager 返回有效 token
@@ -432,11 +492,15 @@ async def test_antigravity_check_health_token_failure():
     from unittest.mock import AsyncMock
 
     config = AntigravityConfig(
-        client_id="cid", client_secret="csecret", refresh_token="rtoken",
+        client_id="cid",
+        client_secret="csecret",
+        refresh_token="rtoken",
     )
     antigravity_vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
     # Mock token manager 抛出异常
-    antigravity_vendor._token_manager.get_token = AsyncMock(side_effect=Exception("refresh failed"))
+    antigravity_vendor._token_manager.get_token = AsyncMock(
+        side_effect=Exception("refresh failed")
+    )
 
     result = await antigravity_vendor.check_health()
     assert result is False

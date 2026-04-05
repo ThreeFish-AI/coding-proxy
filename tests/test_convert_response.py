@@ -7,20 +7,21 @@ from coding.proxy.convert.gemini_to_anthropic import (
     extract_usage,
 )
 
-
 # --- convert_response ---
 
 
 def test_simple_text_response():
     """简单文本响应转换."""
     gemini = {
-        "candidates": [{
-            "content": {
-                "parts": [{"text": "Hello, world!"}],
-                "role": "model",
-            },
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "Hello, world!"}],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {
             "promptTokenCount": 10,
             "candidatesTokenCount": 5,
@@ -40,10 +41,12 @@ def test_simple_text_response():
 def test_max_tokens_finish_reason():
     """MAX_TOKENS finishReason 映射."""
     gemini = {
-        "candidates": [{
-            "content": {"parts": [{"text": "partial"}], "role": "model"},
-            "finishReason": "MAX_TOKENS",
-        }],
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "partial"}], "role": "model"},
+                "finishReason": "MAX_TOKENS",
+            }
+        ],
         "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 100},
     }
     result = convert_response(gemini)
@@ -53,10 +56,12 @@ def test_max_tokens_finish_reason():
 def test_safety_finish_reason():
     """SAFETY finishReason → end_turn."""
     gemini = {
-        "candidates": [{
-            "content": {"parts": [{"text": ""}], "role": "model"},
-            "finishReason": "SAFETY",
-        }],
+        "candidates": [
+            {
+                "content": {"parts": [{"text": ""}], "role": "model"},
+                "finishReason": "SAFETY",
+            }
+        ],
         "usageMetadata": {},
     }
     result = convert_response(gemini)
@@ -66,10 +71,12 @@ def test_safety_finish_reason():
 def test_unknown_finish_reason():
     """未知 finishReason 默认 end_turn."""
     gemini = {
-        "candidates": [{
-            "content": {"parts": [{"text": "ok"}], "role": "model"},
-            "finishReason": "UNKNOWN_NEW_VALUE",
-        }],
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "ok"}], "role": "model"},
+                "finishReason": "UNKNOWN_NEW_VALUE",
+            }
+        ],
         "usageMetadata": {},
     }
     result = convert_response(gemini)
@@ -79,18 +86,22 @@ def test_unknown_finish_reason():
 def test_function_call_response():
     """functionCall 响应 → tool_use 内容块."""
     gemini = {
-        "candidates": [{
-            "content": {
-                "parts": [{
-                    "functionCall": {
-                        "name": "get_weather",
-                        "args": {"city": "Paris"},
-                    }
-                }],
-                "role": "model",
-            },
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_weather",
+                                "args": {"city": "Paris"},
+                            }
+                        }
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 10},
     }
     result = convert_response(gemini)
@@ -105,16 +116,18 @@ def test_function_call_response():
 def test_multi_part_response():
     """多 parts 响应."""
     gemini = {
-        "candidates": [{
-            "content": {
-                "parts": [
-                    {"text": "Here's the result: "},
-                    {"text": "42"},
-                ],
-                "role": "model",
-            },
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": "Here's the result: "},
+                        {"text": "42"},
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {},
     }
     result = convert_response(gemini)
@@ -134,10 +147,12 @@ def test_empty_candidates():
 def test_custom_request_id():
     """自定义 request_id."""
     gemini = {
-        "candidates": [{
-            "content": {"parts": [{"text": "hi"}], "role": "model"},
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "hi"}], "role": "model"},
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {},
     }
     result = convert_response(gemini, request_id="msg_custom_123")
@@ -147,10 +162,12 @@ def test_custom_request_id():
 def test_auto_generated_id():
     """自动生成 msg_id."""
     gemini = {
-        "candidates": [{
-            "content": {"parts": [{"text": "hi"}], "role": "model"},
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "hi"}], "role": "model"},
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {},
     }
     result = convert_response(gemini)
@@ -198,13 +215,21 @@ def test_extract_usage_partial():
 def test_thinking_response_with_signature():
     """thoughtSignature 正确映射为 signature 字段."""
     gemini = {
-        "candidates": [{
-            "content": {
-                "parts": [{"text": "Let me think", "thought": True, "thoughtSignature": "sig_abc"}],
-                "role": "model",
-            },
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "text": "Let me think",
+                            "thought": True,
+                            "thoughtSignature": "sig_abc",
+                        }
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {},
     }
     result = convert_response(gemini)
@@ -216,19 +241,23 @@ def test_thinking_response_with_signature():
 def test_function_call_with_id_preserved():
     """functionCall.id 被保留到 tool_use.id."""
     gemini = {
-        "candidates": [{
-            "content": {
-                "parts": [{
-                    "functionCall": {
-                        "id": "fc_custom_1",
-                        "name": "search",
-                        "args": {"q": "test"},
-                    }
-                }],
-                "role": "model",
-            },
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "id": "fc_custom_1",
+                                "name": "search",
+                                "args": {"q": "test"},
+                            }
+                        }
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {},
     }
     result = convert_response(gemini)
@@ -238,13 +267,15 @@ def test_function_call_with_id_preserved():
 def test_text_part_with_signature_only():
     """text 为空但有 signature 时生成 thinking 块."""
     gemini = {
-        "candidates": [{
-            "content": {
-                "parts": [{"text": "", "thoughtSignature": "sig_only"}],
-                "role": "model",
-            },
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "", "thoughtSignature": "sig_only"}],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {},
     }
     result = convert_response(gemini)
@@ -256,16 +287,18 @@ def test_text_part_with_signature_only():
 def test_mixed_text_and_function_call():
     """文本 + functionCall 混合响应生成两个 content blocks."""
     gemini = {
-        "candidates": [{
-            "content": {
-                "parts": [
-                    {"text": "I'll search for you."},
-                    {"functionCall": {"name": "search", "args": {"q": "gemini"}}},
-                ],
-                "role": "model",
-            },
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": "I'll search for you."},
+                        {"functionCall": {"name": "search", "args": {"q": "gemini"}}},
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {},
     }
     result = convert_response(gemini)

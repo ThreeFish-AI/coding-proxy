@@ -10,7 +10,9 @@ import httpx
 from ..vendors.base import RequestCapabilities
 
 
-def extract_error_payload_from_http_status(exc: httpx.HTTPStatusError) -> dict[str, Any] | None:
+def extract_error_payload_from_http_status(
+    exc: httpx.HTTPStatusError,
+) -> dict[str, Any] | None:
     response = exc.response
     if response is None or not response.content:
         return None

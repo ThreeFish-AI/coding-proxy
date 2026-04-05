@@ -42,7 +42,9 @@ class ModelMapper:
         normalized = {self._normalize_vendor(name) for name in rule.vendors}
         return vendor in normalized
 
-    def map(self, model: str, vendor: str = "fallback", default: str | None = None) -> str:
+    def map(
+        self, model: str, vendor: str = "fallback", default: str | None = None
+    ) -> str:
         """将源模型名映射为目标模型名.
 
         优先级：精确匹配 > 通配符/正则匹配 > default/_DEFAULT_TARGET。
@@ -57,7 +59,9 @@ class ModelMapper:
                 if rule.pattern == model:
                     logger.debug(
                         "Model mapped: %s -> %s (vendor=%s exact)",
-                        model, rule.target, display_name,
+                        model,
+                        rule.target,
+                        display_name,
                     )
                     return rule.target
 
@@ -70,14 +74,20 @@ class ModelMapper:
                 if compiled.fullmatch(model):
                     logger.debug(
                         "Model mapped: %s -> %s (vendor=%s regex=%s)",
-                        model, rule.target, display_name, rule.pattern,
+                        model,
+                        rule.target,
+                        display_name,
+                        rule.pattern,
                     )
                     return rule.target
             elif "*" in rule.pattern:
                 if fnmatch.fnmatch(model, rule.pattern):
                     logger.debug(
                         "Model mapped: %s -> %s (vendor=%s glob=%s)",
-                        model, rule.target, display_name, rule.pattern,
+                        model,
+                        rule.target,
+                        display_name,
+                        rule.pattern,
                     )
                     return rule.target
 
@@ -85,6 +95,8 @@ class ModelMapper:
         fallback_target = default or _DEFAULT_TARGET
         logger.debug(
             "Model unmapped: %s -> %s (vendor=%s default)",
-            model, fallback_target, display_name,
+            model,
+            fallback_target,
+            display_name,
         )
         return fallback_target

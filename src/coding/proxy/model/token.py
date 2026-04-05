@@ -38,7 +38,7 @@ class TokenAcquireError(Exception):
         *,
         kind: TokenErrorKind,
         needs_reauth: bool = False,
-    ) -> "TokenAcquireError":
+    ) -> TokenAcquireError:
         err = cls(message, needs_reauth=needs_reauth)
         err.kind = kind
         return err

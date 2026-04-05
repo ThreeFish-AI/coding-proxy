@@ -9,16 +9,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
-
 
 # ═══════════════════════════════════════════════════════════════
 # 消息部分类型体系
 # ═══════════════════════════════════════════════════════════════
 
 
-class CanonicalPartType(str, Enum):
+class CanonicalPartType(StrEnum):
     """规范消息部分的类型枚举."""
 
     TEXT = "text"
@@ -82,7 +81,7 @@ class CanonicalRequest:
 # ═══════════════════════════════════════════════════════════════
 
 
-class CompatibilityStatus(str, Enum):
+class CompatibilityStatus(StrEnum):
     """供应商对某语义特性的兼容状态."""
 
     NATIVE = "native"
@@ -127,7 +126,9 @@ class CompatibilityTrace:
     unsupported_semantics: list[str] = field(default_factory=list)
     session_state_hits: int = 0
     request_adaptations: list[str] = field(default_factory=list)
-    generated_at_unix: int = field(default_factory=lambda: int(__import__("time").time()))
+    generated_at_unix: int = field(
+        default_factory=lambda: int(__import__("time").time())
+    )
 
     def to_dict(self) -> dict[str, Any]:
         from dataclasses import asdict

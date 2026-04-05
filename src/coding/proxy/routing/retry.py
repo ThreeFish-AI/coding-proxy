@@ -25,11 +25,11 @@ logger = logging.getLogger(__name__)
 class RetryConfig:
     """传输层重试配置（运行时）."""
 
-    max_retries: int = 2            # 最大重试次数（0 = 禁用）
-    initial_delay_ms: int = 500     # 初始退避延迟（毫秒）
-    max_delay_ms: int = 5000        # 最大退避延迟（毫秒）
-    backoff_multiplier: float = 2.0 # 退避倍数
-    jitter: bool = True             # 是否添加随机抖动
+    max_retries: int = 2  # 最大重试次数（0 = 禁用）
+    initial_delay_ms: int = 500  # 初始退避延迟（毫秒）
+    max_delay_ms: int = 5000  # 最大退避延迟（毫秒）
+    backoff_multiplier: float = 2.0  # 退避倍数
+    jitter: bool = True  # 是否添加随机抖动
 
     @property
     def enabled(self) -> bool:
@@ -73,7 +73,7 @@ def calculate_delay(attempt: int, cfg: RetryConfig) -> float:
     Full Jitter 策略: delay = random(0, min(initial * backoff^attempt, max))
     参考: AWS "Exponential Backoff And Jitter" (Marc Brooker, 2015)
     """
-    delay = cfg.initial_delay_ms * (cfg.backoff_multiplier ** attempt)
+    delay = cfg.initial_delay_ms * (cfg.backoff_multiplier**attempt)
     delay = min(delay, cfg.max_delay_ms)
 
     if cfg.jitter:

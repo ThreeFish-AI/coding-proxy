@@ -6,17 +6,22 @@ import pytest
 from coding.proxy.vendors.base import (
     PROXY_SKIP_HEADERS,
     RESPONSE_SANITIZE_SKIP_HEADERS,
-    VendorCapabilities,
-    VendorResponse,
     CapabilityLossReason,
     NoCompatibleVendorError,
     RequestCapabilities,
     UsageInfo,
+    VendorCapabilities,
+    VendorResponse,
+)
+from coding.proxy.vendors.base import (
     decode_json_body as _decode_json_body,
+)
+from coding.proxy.vendors.base import (
     extract_error_message as _extract_error_message,
+)
+from coding.proxy.vendors.base import (
     sanitize_headers_for_synthetic_response as _sanitize_headers_for_synthetic_response,
 )
-
 
 # ── UsageInfo ────────────────────────────────────────────
 
@@ -32,7 +37,11 @@ def test_usage_info_defaults():
 
 def test_usage_info_with_values():
     usage = UsageInfo(
-        input_tokens=100, output_tokens=50, cache_creation_tokens=10, cache_read_tokens=20, request_id="req_1",
+        input_tokens=100,
+        output_tokens=50,
+        cache_creation_tokens=10,
+        cache_read_tokens=20,
+        request_id="req_1",
     )
     assert usage.input_tokens == 100
     assert usage.output_tokens == 50
@@ -120,13 +129,15 @@ def test_response_sanitize_skip_headers_contains_expected():
 
 
 def test_sanitize_headers_removes_encoding():
-    raw = httpx.Headers({
-        "content-type": "application/json",
-        "content-encoding": "gzip",
-        "content-length": "123",
-        "transfer-encoding": "chunked",
-        "x-request-id": "abc",
-    })
+    raw = httpx.Headers(
+        {
+            "content-type": "application/json",
+            "content-encoding": "gzip",
+            "content-length": "123",
+            "transfer-encoding": "chunked",
+            "x-request-id": "abc",
+        }
+    )
     result = _sanitize_headers_for_synthetic_response(raw)
     assert "content-type" in result
     assert "x-request-id" in result
@@ -136,10 +147,12 @@ def test_sanitize_headers_removes_encoding():
 
 
 def test_sanitize_headers_preserves_other():
-    raw = httpx.Headers({
-        "retry-after": "60",
-        "x-ratelimit-remaining": "0",
-    })
+    raw = httpx.Headers(
+        {
+            "retry-after": "60",
+            "x-ratelimit-remaining": "0",
+        }
+    )
     result = _sanitize_headers_for_synthetic_response(raw)
     assert result["retry-after"] == "60"
     assert result["x-ratelimit-remaining"] == "0"
@@ -147,10 +160,12 @@ def test_sanitize_headers_preserves_other():
 
 def test_synthetic_response_no_decompression_error():
     """验证清洗后的头部构造 httpx.Response 不触发 zlib 解压错误."""
-    raw_headers = httpx.Headers({
-        "content-type": "application/json",
-        "content-encoding": "gzip",
-    })
+    raw_headers = httpx.Headers(
+        {
+            "content-type": "application/json",
+            "content-encoding": "gzip",
+        }
+    )
     clean_headers = _sanitize_headers_for_synthetic_response(raw_headers)
     resp = httpx.Response(
         429,
@@ -166,31 +181,41 @@ def test_synthetic_response_no_decompression_error():
 
 
 def test_decode_json_body_valid_json():
-    resp = httpx.Response(200, content=b'{"key":"value"}', headers={"content-type": "application/json"})
+    resp = httpx.Response(
+        200, content=b'{"key":"value"}', headers={"content-type": "application/json"}
+    )
     result = _decode_json_body(resp)
     assert result == {"key": "value"}
 
 
 def test_decode_json_body_returns_none_for_html():
-    resp = httpx.Response(200, content=b"<html>not json</html>", headers={"content-type": "text/html"})
+    resp = httpx.Response(
+        200, content=b"<html>not json</html>", headers={"content-type": "text/html"}
+    )
     # HTML 但内容是有效 JSON → 应返回解析结果
     result = _decode_json_body(resp)
     assert result is None
 
 
 def test_decode_json_body_empty_content():
-    resp = httpx.Response(200, content=b"", headers={"content-type": "application/json"})
+    resp = httpx.Response(
+        200, content=b"", headers={"content-type": "application/json"}
+    )
     assert _decode_json_body(resp) is None
 
 
 def test_decode_json_body_invalid_json():
-    resp = httpx.Response(200, content=b"{invalid", headers={"content-type": "application/json"})
+    resp = httpx.Response(
+        200, content=b"{invalid", headers={"content-type": "application/json"}
+    )
     assert _decode_json_body(resp) is None
 
 
 def test_decode_json_body_non_json_content_type_with_valid_json():
     """非 JSON content-type 但内容为合法 JSON → 尝试解析."""
-    resp = httpx.Response(200, content=b'{"ok":true}', headers={"content-type": "text/plain"})
+    resp = httpx.Response(
+        200, content=b'{"ok":true}', headers={"content-type": "text/plain"}
+    )
     result = _decode_json_body(resp)
     assert result == {"ok": True}
 
@@ -199,8 +224,12 @@ def test_decode_json_body_non_json_content_type_with_valid_json():
 
 
 def test_extract_error_nested_dict():
-    resp = httpx.Response(401, content=b'{"error":{"type":"auth","message":"bad token"}}')
-    msg = _extract_error_message(resp, {"error": {"type": "auth", "message": "bad token"}})
+    resp = httpx.Response(
+        401, content=b'{"error":{"type":"auth","message":"bad token"}}'
+    )
+    msg = _extract_error_message(
+        resp, {"error": {"type": "auth", "message": "bad token"}}
+    )
     assert msg == "bad token"
 
 

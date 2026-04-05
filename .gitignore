@@ -10,6 +10,12 @@ build/
 *.whl
 .uv/
 
+# Coverage reports (pytest-cov)
+.coverage
+htmlcov/
+coverage.xml
+junit.xml
+
 # Custom
 .idea/
 .temp/

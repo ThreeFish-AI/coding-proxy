@@ -20,4 +20,5 @@ class LoggingConfig(BaseModel):
     level: str = "INFO"
     file: str | None = None
 
+
 __all__ = ["ServerConfig", "DatabaseConfig", "LoggingConfig"]

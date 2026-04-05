@@ -12,25 +12,25 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from .. import __version__
 from ..auth.providers.github import GitHubDeviceFlowProvider
 from ..auth.providers.google import GoogleOAuthProvider
 from ..auth.runtime import RuntimeReauthCoordinator
 from ..auth.store import TokenStoreManager
-from ..vendors.antigravity import AntigravityVendor
-from ..vendors.copilot import CopilotVendor
-from ..config.loader import load_config
 from ..compat.session_store import CompatSessionStore
+from ..config.loader import load_config
 from ..config.schema import ProxyConfig
 from ..logging.db import TokenLogger
 from ..routing.router import RequestRouter
 from ..routing.tier import VendorTier
+from ..vendors.antigravity import AntigravityVendor
+from ..vendors.copilot import CopilotVendor
 from .factory import (  # noqa: F401
     _build_circuit_breaker,
     _build_quota_guard,
     _create_vendor_from_config,
 )
 from .routes import register_all_routes
-from .. import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,9 @@ async def lifespan(app: FastAPI):
             )
             tier.weekly_quota_guard.load_baseline(total)
 
-    logger.info("coding-proxy started: host=%s port=%d", config.server.host, config.server.port)
+    logger.info(
+        "coding-proxy started: host=%s port=%d", config.server.host, config.server.port
+    )
     yield
     await router.close()
     await compat_session_store.close()
@@ -92,7 +94,9 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     # 加载 Token Store 用于凭证合并
     token_store = TokenStoreManager(
-        store_path=Path(config.auth.token_store_path) if config.auth.token_store_path else None
+        store_path=Path(config.auth.token_store_path)
+        if config.auth.token_store_path
+        else None
     )
     token_store.load()
 
@@ -101,11 +105,19 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     for vendor_cfg in config.vendors:
         if not vendor_cfg.enabled:
             continue
-        vendor = _create_vendor_from_config(vendor_cfg, config.failover, mapper, token_store)
-        cb = _build_circuit_breaker(vendor_cfg.circuit_breaker) if vendor_cfg.circuit_breaker else None
+        vendor = _create_vendor_from_config(
+            vendor_cfg, config.failover, mapper, token_store
+        )
+        cb = (
+            _build_circuit_breaker(vendor_cfg.circuit_breaker)
+            if vendor_cfg.circuit_breaker
+            else None
+        )
         qg = _build_quota_guard(vendor_cfg.quota_guard)
         wqg = _build_quota_guard(vendor_cfg.weekly_quota_guard)
-        _vendor_map[vendor_cfg.vendor] = VendorTier(vendor=vendor, circuit_breaker=cb, quota_guard=qg, weekly_quota_guard=wqg)
+        _vendor_map[vendor_cfg.vendor] = VendorTier(
+            vendor=vendor, circuit_breaker=cb, quota_guard=qg, weekly_quota_guard=wqg
+        )
 
     # 阶段二：按 tiers 指定的顺序组装最终链路（或回退到 vendors 原始顺序）
     if config.tiers is not None:
@@ -126,9 +138,13 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     reauth_coordinator: RuntimeReauthCoordinator | None = None
     if reauth_providers:
-        reauth_coordinator = RuntimeReauthCoordinator(token_store, reauth_providers, token_updaters)
+        reauth_coordinator = RuntimeReauthCoordinator(
+            token_store, reauth_providers, token_updaters
+        )
 
-    router = RequestRouter(tiers, token_logger, reauth_coordinator, compat_session_store)
+    router = RequestRouter(
+        tiers, token_logger, reauth_coordinator, compat_session_store
+    )
 
     app = FastAPI(title="coding-proxy", version=__version__, lifespan=lifespan)
     app.state.router = router

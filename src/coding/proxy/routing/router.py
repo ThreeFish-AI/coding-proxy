@@ -10,7 +10,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..pricing import PricingTable
@@ -21,9 +22,9 @@ from .tier import VendorTier
 
 # 向后兼容别名
 BackendTier = VendorTier
-from .usage_recorder import UsageRecorder
 from ..compat.session_store import CompatSessionStore
 from ..logging.db import TokenLogger
+from .usage_recorder import UsageRecorder
 
 
 class RequestRouter:

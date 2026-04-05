@@ -6,7 +6,7 @@ import asyncio
 import enum
 import logging
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from .providers.base import OAuthProvider
 from .store import TokenStoreManager

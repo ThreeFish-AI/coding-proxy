@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 
 class CircuitState(Enum):
-    CLOSED = "closed"           # 正常：使用主后端
-    OPEN = "open"               # 故障：使用备选后端
-    HALF_OPEN = "half_open"     # 试探：测试主后端是否恢复
+    CLOSED = "closed"  # 正常：使用主后端
+    OPEN = "open"  # 故障：使用备选后端
+    HALF_OPEN = "half_open"  # 试探：测试主后端是否恢复
 
 
 class CircuitBreaker:
@@ -92,9 +92,13 @@ class CircuitBreaker:
             elif self._state == CircuitState.CLOSED:
                 if self._failure_count >= self._failure_threshold:
                     self._transition_to(CircuitState.OPEN)
-                    if retry_after_seconds and retry_after_seconds > self._current_recovery:
+                    if (
+                        retry_after_seconds
+                        and retry_after_seconds > self._current_recovery
+                    ):
                         self._current_recovery = min(
-                            retry_after_seconds, self._max_recovery,
+                            retry_after_seconds,
+                            self._max_recovery,
                         )
                     logger.warning(
                         "Circuit breaker: CLOSED → OPEN (%d consecutive failures, next retry in %ds)",
@@ -133,7 +137,6 @@ class CircuitBreaker:
             logger.info("Circuit breaker: OPEN → HALF_OPEN (recovery timeout)")
 
     def _transition_to(self, new_state: CircuitState) -> None:
-        old = self._state
         self._state = new_state
         if new_state == CircuitState.CLOSED:
             self._failure_count = 0

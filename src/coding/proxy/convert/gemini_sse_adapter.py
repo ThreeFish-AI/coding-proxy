@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from .gemini_to_anthropic import GEMINI_FINISH_REASON_MAP
 
@@ -62,77 +63,114 @@ async def adapt_sse_stream(
                     continue
                 if not started:
                     started = True
-                    yield _make_event("message_start", {
-                        "type": "message_start",
-                        "message": {
-                            "id": msg_id,
-                            "type": "message",
-                            "role": "assistant",
-                            "content": [],
-                            "model": model,
-                            "usage": {"input_tokens": input_tokens, "output_tokens": 0},
+                    yield _make_event(
+                        "message_start",
+                        {
+                            "type": "message_start",
+                            "message": {
+                                "id": msg_id,
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [],
+                                "model": model,
+                                "usage": {
+                                    "input_tokens": input_tokens,
+                                    "output_tokens": 0,
+                                },
+                            },
                         },
-                    })
+                    )
 
                 if current_block_type != block_type:
                     if current_block_type is not None:
-                        yield _make_event("content_block_stop", {
-                            "type": "content_block_stop",
-                            "index": block_index,
-                        })
+                        yield _make_event(
+                            "content_block_stop",
+                            {
+                                "type": "content_block_stop",
+                                "index": block_index,
+                            },
+                        )
                         block_index += 1
-                    yield _make_event("content_block_start", {
-                        "type": "content_block_start",
-                        "index": block_index,
-                        "content_block": start_block,
-                    })
+                    yield _make_event(
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": block_index,
+                            "content_block": start_block,
+                        },
+                    )
                     current_block_type = block_type
 
-                yield _make_event("content_block_delta", {
-                    "type": "content_block_delta",
-                    "index": block_index,
-                    "delta": delta,
-                })
+                yield _make_event(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": block_index,
+                        "delta": delta,
+                    },
+                )
 
                 if block_type == "tool_use":
                     used_tool = True
-                    yield _make_event("content_block_stop", {
-                        "type": "content_block_stop",
-                        "index": block_index,
-                    })
+                    yield _make_event(
+                        "content_block_stop",
+                        {
+                            "type": "content_block_stop",
+                            "index": block_index,
+                        },
+                    )
                     block_index += 1
                     current_block_type = None
 
             if finish_reason and finish_reason != "FINISH_REASON_UNSPECIFIED":
                 if current_block_type is not None:
-                    yield _make_event("content_block_stop", {
-                        "type": "content_block_stop",
-                        "index": block_index,
-                    })
+                    yield _make_event(
+                        "content_block_stop",
+                        {
+                            "type": "content_block_stop",
+                            "index": block_index,
+                        },
+                    )
                     current_block_type = None
-                stop_reason = "tool_use" if used_tool else _map_finish_reason(finish_reason)
-                yield _make_event("message_delta", {
-                    "type": "message_delta",
-                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-                    "usage": {"output_tokens": total_output_tokens},
-                })
+                stop_reason = (
+                    "tool_use" if used_tool else _map_finish_reason(finish_reason)
+                )
+                yield _make_event(
+                    "message_delta",
+                    {
+                        "type": "message_delta",
+                        "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                        "usage": {"output_tokens": total_output_tokens},
+                    },
+                )
                 yield _make_event("message_stop", {"type": "message_stop"})
                 return
 
     if current_block_type is not None:
-        yield _make_event("content_block_stop", {
-            "type": "content_block_stop",
-            "index": block_index,
-        })
-    yield _make_event("message_delta", {
-        "type": "message_delta",
-        "delta": {"stop_reason": "tool_use" if used_tool else "end_turn", "stop_sequence": None},
-        "usage": {"output_tokens": total_output_tokens},
-    })
+        yield _make_event(
+            "content_block_stop",
+            {
+                "type": "content_block_stop",
+                "index": block_index,
+            },
+        )
+    yield _make_event(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": "tool_use" if used_tool else "end_turn",
+                "stop_sequence": None,
+            },
+            "usage": {"output_tokens": total_output_tokens},
+        },
+    )
     yield _make_event("message_stop", {"type": "message_stop"})
 
 
-def _part_to_events(part: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any] | None]:
+def _part_to_events(
+    part: dict[str, Any],
+) -> tuple[str, dict[str, Any], dict[str, Any] | None]:
     if part.get("functionCall"):
         fc = part["functionCall"]
         start_block = {
@@ -141,22 +179,34 @@ def _part_to_events(part: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str
             "name": fc.get("name", ""),
             "input": {},
         }
-        return "tool_use", start_block, {
-            "type": "input_json_delta",
-            "partial_json": json.dumps(fc.get("args", {}), ensure_ascii=False),
-        }
+        return (
+            "tool_use",
+            start_block,
+            {
+                "type": "input_json_delta",
+                "partial_json": json.dumps(fc.get("args", {}), ensure_ascii=False),
+            },
+        )
 
     if part.get("text") is not None and part.get("thought"):
-        return "thinking", {"type": "thinking", "thinking": ""}, {
-            "type": "thinking_delta",
-            "thinking": part.get("text", ""),
-        }
+        return (
+            "thinking",
+            {"type": "thinking", "thinking": ""},
+            {
+                "type": "thinking_delta",
+                "thinking": part.get("text", ""),
+            },
+        )
 
     if part.get("text"):
-        return "text", {"type": "text", "text": ""}, {
-            "type": "text_delta",
-            "text": part["text"],
-        }
+        return (
+            "text",
+            {"type": "text", "text": ""},
+            {
+                "type": "text_delta",
+                "text": part["text"],
+            },
+        )
 
     return "text", {"type": "text", "text": ""}, None
 

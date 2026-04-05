@@ -49,6 +49,7 @@ class TestPricingTable:
 
     def _make_entry(self, vendor: str = "copilot", model: str = "test", **kwargs):
         from coding.proxy.config.routing import ModelPricingEntry
+
         # 字段单位为 USD / 1M tokens，直接传入原始值（如 3 表示 $3/M tokens）
         return ModelPricingEntry(
             vendor=vendor,
@@ -65,9 +66,11 @@ class TestPricingTable:
         assert table.compute_cost("copilot", "any", 100, 200, 0, 0) is None
 
     def test_exact_match(self):
-        table = PricingTable([
-            self._make_entry("copilot", "model-a", input=2, output=10),
-        ])
+        table = PricingTable(
+            [
+                self._make_entry("copilot", "model-a", input=2, output=10),
+            ]
+        )
         pricing = table.get_pricing("copilot", "model-a")
         assert pricing is not None
         assert pricing.input_cost_per_token == 2e-6
@@ -75,18 +78,22 @@ class TestPricingTable:
 
     def test_normalized_match(self):
         """规范化匹配：'glm.4.5-air' → 'glm-4-5-air'."""
-        table = PricingTable([
-            self._make_entry("antigravity", "glm.4.5.air", input=1, output=5),
-        ])
+        table = PricingTable(
+            [
+                self._make_entry("antigravity", "glm.4.5.air", input=1, output=5),
+            ]
+        )
         # 精确不命中（含点号）
         assert table.get_pricing("antigravity", "glm.4.5.air") is not None
         # 规范化命中
         assert table.get_pricing("antigravity", "glm-4-5-air") is not None
 
     def test_compute_cost(self):
-        table = PricingTable([
-            self._make_entry("copilot", "m", input=3, output=15, cwrite=1, cread=2),
-        ])
+        table = PricingTable(
+            [
+                self._make_entry("copilot", "m", input=3, output=15, cwrite=1, cread=2),
+            ]
+        )
         cost_value = table.compute_cost("copilot", "m", 1000, 2000, 50, 100)
         assert cost_value is not None
         assert isinstance(cost_value, CostValue)
@@ -100,10 +107,12 @@ class TestPricingTable:
 
     def test_multiple_entries_same_vendor(self):
         """同一 vendor 下多模型独立定价."""
-        table = PricingTable([
-            self._make_entry("copilot", "cheap", input=1, output=1),
-            self._make_entry("copilot", "expensive", input=10, output=50),
-        ])
+        table = PricingTable(
+            [
+                self._make_entry("copilot", "cheap", input=1, output=1),
+                self._make_entry("copilot", "expensive", input=10, output=50),
+            ]
+        )
         cheap = table.get_pricing("copilot", "cheap")
         expensive = table.get_pricing("copilot", "expensive")
         assert cheap.input_cost_per_token < expensive.input_cost_per_token
@@ -114,6 +123,7 @@ class TestPricingTableCurrency:
 
     def _make_usd_entry(self, **kwargs):
         from coding.proxy.config.routing import ModelPricingEntry
+
         return ModelPricingEntry(
             vendor="anthropic",
             model="claude-test",
@@ -125,6 +135,7 @@ class TestPricingTableCurrency:
 
     def _make_cny_entry(self, **kwargs):
         from coding.proxy.config.routing import ModelPricingEntry
+
         return ModelPricingEntry(
             vendor="zhipu",
             model="glm-test",
@@ -160,7 +171,9 @@ class TestPricingTableCurrency:
 
     def test_compute_cost_amount_correct_cny(self):
         """CNY 定价金额计算正确."""
-        table = PricingTable([self._make_cny_entry(input="\u00a51.0", output="\u00a53.2")])
+        table = PricingTable(
+            [self._make_cny_entry(input="\u00a51.0", output="\u00a53.2")]
+        )
         result = table.compute_cost("zhipu", "glm-test", 1000, 2000, 0, 0)
         assert result is not None
         expected = 1000 * 1e-6 + 2000 * 3.2e-6
@@ -183,8 +196,10 @@ class TestPricingTableCurrency:
     def test_backward_compatible_plain_number(self):
         """不带前缀的纯数字应默认为 USD（向后兼容）."""
         from coding.proxy.config.routing import ModelPricingEntry
+
         entry = ModelPricingEntry(
-            vendor="copilot", model="legacy",
+            vendor="copilot",
+            model="legacy",
             input_cost_per_mtok=3.0,
             output_cost_per_mtok=15.0,
         )
@@ -204,9 +219,11 @@ class TestPricingTableCurrency:
     def test_mixed_currency_rejected(self):
         """同一 entry 内混用 $ 和 ¥ 应抛出 ValidationError."""
         from coding.proxy.config.routing import ModelPricingEntry
-        with pytest.raises(Exception):   # pydantic.ValidationError
+
+        with pytest.raises(Exception):  # pydantic.ValidationError
             ModelPricingEntry(
-                vendor="test", model="mixed",
+                vendor="test",
+                model="mixed",
                 input_cost_per_mtok="$3.0",
                 output_cost_per_mtok="\u00a35.0",
             )
@@ -214,9 +231,11 @@ class TestPricingTableCurrency:
     def test_negative_price_rejected(self):
         """负数价格应抛出 ValidationError."""
         from coding.proxy.config.routing import ModelPricingEntry
-        with pytest.raises(Exception):   # pydantic.ValidationError
+
+        with pytest.raises(Exception):  # pydantic.ValidationError
             ModelPricingEntry(
-                vendor="test", model="neg",
+                vendor="test",
+                model="neg",
                 input_cost_per_mtok="$-3.0",
                 output_cost_per_mtok="$15.0",
             )
@@ -224,6 +243,7 @@ class TestPricingTableCurrency:
     def test_private_attr_not_in_dump(self):
         """_currency 不应出现在 model_dump 序列化输出中."""
         from coding.proxy.config.routing import ModelPricingEntry
+
         entry = ModelPricingEntry(vendor="t", model="m", input_cost_per_mtok="$3.0")
         dump = entry.model_dump()
         assert "__currency__" not in dump
@@ -233,5 +253,6 @@ class TestPricingTableCurrency:
     def test_all_zero_no_currency_error(self):
         """所有价格字段为零时不应触发币种校验错误."""
         from coding.proxy.config.routing import ModelPricingEntry
+
         entry = ModelPricingEntry(vendor="t", model="m")
-        assert entry.currency == "USD"   # 默认值
+        assert entry.currency == "USD"  # 默认值

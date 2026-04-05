@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class AnthropicConfig(BaseModel):
@@ -48,6 +48,10 @@ class ZhipuConfig(BaseModel):
     api_key: str = ""
     timeout_ms: int = 3000000
 
+
 __all__ = [
-    "AnthropicConfig", "CopilotConfig", "AntigravityConfig", "ZhipuConfig",
+    "AnthropicConfig",
+    "CopilotConfig",
+    "AntigravityConfig",
+    "ZhipuConfig",
 ]

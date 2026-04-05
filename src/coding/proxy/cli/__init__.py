@@ -20,7 +20,8 @@ from rich.console import Console
 from ..config.loader import load_config
 from ..logging.db import TokenLogger
 from ..logging.stats import show_usage
-from .auth_commands import app as auth_app, auto_login_if_needed as _auto_login_if_needed
+from .auth_commands import app as auth_app
+from .auth_commands import auto_login_if_needed as _auto_login_if_needed
 
 app = typer.Typer(name="coding-proxy", help="Claude Code 多供应商智能代理服务")
 console = Console()
@@ -36,10 +37,14 @@ def _build_token_store(cfg_path: Path | None = None):
 
     cfg = load_config(cfg_path)
     store = TokenStoreManager(
-        store_path=Path(cfg.auth.token_store_path) if cfg.auth.token_store_path else None,
+        store_path=Path(cfg.auth.token_store_path)
+        if cfg.auth.token_store_path
+        else None,
     )
     store.load()
-    logger.debug("OAuth token store loaded from config path: %s", cfg.auth.token_store_path)
+    logger.debug(
+        "OAuth token store loaded from config path: %s", cfg.auth.token_store_path
+    )
     return cfg, store
 
 
@@ -48,9 +53,9 @@ def _build_token_store(cfg_path: Path | None = None):
 
 @app.command()
 def start(
-    config: Optional[str] = typer.Option(None, "--config", "-c", help="配置文件路径"),
-    port: Optional[int] = typer.Option(None, "--port", "-p", help="监听端口"),
-    host: Optional[str] = typer.Option(None, "--host", "-h", help="监听地址"),
+    config: str | None = typer.Option(None, "--config", "-c", help="配置文件路径"),
+    port: int | None = typer.Option(None, "--port", "-p", help="监听端口"),
+    host: str | None = typer.Option(None, "--host", "-h", help="监听地址"),
 ) -> None:
     """启动代理服务."""
     import uvicorn
@@ -94,10 +99,14 @@ def status(
             console.print(f"\n[bold green]{name}[/bold green]")
             cb = tier_info.get("circuit_breaker")
             if cb:
-                console.print(f"  [cyan]熔断器:[/] {cb.get('state', 'unknown')}  失败={cb.get('failure_count', 0)}")
+                console.print(
+                    f"  [cyan]熔断器:[/] {cb.get('state', 'unknown')}  失败={cb.get('failure_count', 0)}"
+                )
             qg = tier_info.get("quota_guard")
             if qg:
-                console.print(f"  [cyan]配额:[/] {qg.get('state', 'unknown')}  {qg.get('usage_percent', 0)}% ({qg.get('window_usage_tokens', 0)}/{qg.get('budget_tokens', 0)})")
+                console.print(
+                    f"  [cyan]配额:[/] {qg.get('state', 'unknown')}  {qg.get('usage_percent', 0)}% ({qg.get('window_usage_tokens', 0)}/{qg.get('budget_tokens', 0)})"
+                )
     except httpx.ConnectError:
         console.print("[red]代理服务未运行[/red]")
 
@@ -105,9 +114,9 @@ def status(
 @app.command()
 def usage(
     days: int = typer.Option(7, "--days", "-d", help="统计天数"),
-    vendor: Optional[str] = typer.Option(None, "--vendor", "-v", help="过滤供应商"),
-    model: Optional[str] = typer.Option(None, "--model", "-m", help="过滤请求模型"),
-    db_path: Optional[str] = typer.Option(None, "--db", help="数据库路径"),
+    vendor: str | None = typer.Option(None, "--vendor", "-v", help="过滤供应商"),
+    model: str | None = typer.Option(None, "--model", "-m", help="过滤请求模型"),
+    db_path: str | None = typer.Option(None, "--db", help="数据库路径"),
 ) -> None:
     """查看 Token 使用统计."""
     cfg = load_config(Path(db_path) if db_path else None)
@@ -115,9 +124,15 @@ def usage(
     asyncio.run(_run_usage(token_logger, days, vendor, model, cfg))
 
 
-async def _run_usage(token_logger: TokenLogger, days: int, vendor: str | None,
-                     model: str | None, cfg: "ProxyConfig") -> None:
+async def _run_usage(
+    token_logger: TokenLogger,
+    days: int,
+    vendor: str | None,
+    model: str | None,
+    cfg: ProxyConfig,
+) -> None:
     from ..pricing import PricingTable
+
     await token_logger.init()
     pricing_table = PricingTable(cfg.pricing)
     await show_usage(token_logger, days, vendor, model, pricing_table)

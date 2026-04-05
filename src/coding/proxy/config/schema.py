@@ -19,35 +19,35 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
-# ── 子模块 re-export ────────────────────────────────────────────
-
-from .server import ServerConfig, DatabaseConfig, LoggingConfig  # noqa: F401
-from .vendors import (                                 # noqa: F401
-    AnthropicConfig,
-    CopilotConfig,
-    AntigravityConfig,
-    ZhipuConfig,
-)
-from .resiliency import (                              # noqa: F401
+from .auth_schema import AuthConfig  # noqa: F401
+from .resiliency import (  # noqa: F401
     CircuitBreakerConfig,
-    RetryConfig,
     FailoverConfig,
     QuotaGuardConfig,
+    RetryConfig,
 )
-from .routing import (                                  # noqa: F401
-    VendorType,
-    VendorConfig,
-    TierConfig,  # 向后兼容别名
+from .routing import (  # noqa: F401
+    _ANTIGRAVITY_FIELDS,
+    _BACKEND_EXCLUSIVE_FIELDS,  # 向后兼容别名
+    _COPILOT_FIELDS,
+    _VENDOR_EXCLUSIVE_FIELDS,
+    _ZHIPU_FIELDS,
     BackendType,  # 向后兼容别名
     ModelMappingRule,
     ModelPricingEntry,
-    _COPILOT_FIELDS,
-    _ANTIGRAVITY_FIELDS,
-    _ZHIPU_FIELDS,
-    _VENDOR_EXCLUSIVE_FIELDS,
-    _BACKEND_EXCLUSIVE_FIELDS,  # 向后兼容别名
+    TierConfig,  # 向后兼容别名
+    VendorConfig,
+    VendorType,
 )
-from .auth_schema import AuthConfig                     # noqa: F401
+
+# ── 子模块 re-export ────────────────────────────────────────────
+from .server import DatabaseConfig, LoggingConfig, ServerConfig  # noqa: F401
+from .vendors import (  # noqa: F401
+    AnthropicConfig,
+    AntigravityConfig,
+    CopilotConfig,
+    ZhipuConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,9 +99,13 @@ class ProxyConfig(BaseModel):
     failover: FailoverConfig = FailoverConfig()
     model_mapping: list[ModelMappingRule] = Field(
         default=[
-            ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True),
+            ModelMappingRule(
+                pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True
+            ),
             ModelMappingRule(pattern="claude-opus-.*", target="glm-5.1", is_regex=True),
-            ModelMappingRule(pattern="claude-haiku-.*", target="glm-4.5-air", is_regex=True),
+            ModelMappingRule(
+                pattern="claude-haiku-.*", target="glm-4.5-air", is_regex=True
+            ),
             ModelMappingRule(pattern="claude-.*", target="glm-5.1", is_regex=True),
         ],
     )
@@ -157,18 +161,33 @@ class ProxyConfig(BaseModel):
         #    使用 key 存在性检测（而非真值检测），以正确处理 vendors: [] 等显式空配置
         if "vendors" in data or "tiers" in data:
             # 如果用户使用了旧的 tiers 字段名但实际是 vendor 定义列表，重映射
-            if "tiers" in data and "vendors" not in data and isinstance(data["tiers"], list):
+            if (
+                "tiers" in data
+                and "vendors" not in data
+                and isinstance(data["tiers"], list)
+            ):
                 # 检测是否为新格式的 vendor 定义列表（每项有 vendor 字段，兼容旧 backend 字段）
                 first_item = data["tiers"][0] if data["tiers"] else {}
-                if isinstance(first_item, dict) and ("vendor" in first_item or "backend" in first_item):
+                if isinstance(first_item, dict) and (
+                    "vendor" in first_item or "backend" in first_item
+                ):
                     data["vendors"] = data.pop("tiers")
             return data
 
         # 3. 从旧 flat 格式自动构建 vendors（触发时记录废弃日志）
         vendors: list[dict[str, Any]] = []
-        _legacy_keys = {"primary", "copilot", "antigravity", "fallback",
-                        "circuit_breaker", "copilot_circuit_breaker", "antigravity_circuit_breaker",
-                        "quota_guard", "copilot_quota_guard", "antigravity_quota_guard"}
+        _legacy_keys = {
+            "primary",
+            "copilot",
+            "antigravity",
+            "fallback",
+            "circuit_breaker",
+            "copilot_circuit_breaker",
+            "antigravity_circuit_breaker",
+            "quota_guard",
+            "copilot_quota_guard",
+            "antigravity_quota_guard",
+        }
         if any(k in data for k in _legacy_keys):
             logger.info(
                 "检测到旧 flat 格式配置字段，已自动迁移至 vendors 列表格式。"
@@ -217,7 +236,7 @@ class ProxyConfig(BaseModel):
         return data
 
     @model_validator(mode="after")
-    def _validate_tiers(self) -> "ProxyConfig":
+    def _validate_tiers(self) -> ProxyConfig:
         """校验 tiers 引用的 vendor 必须在 enabled vendors 中存在."""
         if self.tiers is None:
             return self  # 未配置，跳过校验
@@ -229,9 +248,7 @@ class ProxyConfig(BaseModel):
         seen: set[str] = set()
         for name in self.tiers:
             if name in seen:
-                raise ValueError(
-                    f"tiers 包含重复的 vendor 名称: {name!r}"
-                )
+                raise ValueError(f"tiers 包含重复的 vendor 名称: {name!r}")
             seen.add(name)
 
             # 检查引用是否存在
@@ -245,8 +262,7 @@ class ProxyConfig(BaseModel):
             # 存在但 disabled → warning
             if name not in enabled_vendors:
                 logger.warning(
-                    "tiers 引用了 disabled 的 vendor: %s，"
-                    "该层级将在运行时被跳过",
+                    "tiers 引用了 disabled 的 vendor: %s，该层级将在运行时被跳过",
                     name,
                 )
 
@@ -264,17 +280,31 @@ class ProxyConfig(BaseModel):
 __all__ = [
     "ProxyConfig",
     # server
-    "ServerConfig", "DatabaseConfig", "LoggingConfig",
+    "ServerConfig",
+    "DatabaseConfig",
+    "LoggingConfig",
     # vendors
-    "AnthropicConfig", "CopilotConfig", "AntigravityConfig", "ZhipuConfig",
+    "AnthropicConfig",
+    "CopilotConfig",
+    "AntigravityConfig",
+    "ZhipuConfig",
     # resiliency
-    "CircuitBreakerConfig", "RetryConfig", "FailoverConfig", "QuotaGuardConfig",
+    "CircuitBreakerConfig",
+    "RetryConfig",
+    "FailoverConfig",
+    "QuotaGuardConfig",
     # routing
-    "VendorType", "VendorConfig", "ModelMappingRule", "ModelPricingEntry",
+    "VendorType",
+    "VendorConfig",
+    "ModelMappingRule",
+    "ModelPricingEntry",
     "TierConfig",  # 向后兼容别名
     "BackendType",  # 向后兼容别名
-    "_COPILOT_FIELDS", "_ANTIGRAVITY_FIELDS", "_ZHIPU_FIELDS",
-    "_VENDOR_EXCLUSIVE_FIELDS", "_BACKEND_EXCLUSIVE_FIELDS",
+    "_COPILOT_FIELDS",
+    "_ANTIGRAVITY_FIELDS",
+    "_ZHIPU_FIELDS",
+    "_VENDOR_EXCLUSIVE_FIELDS",
+    "_BACKEND_EXCLUSIVE_FIELDS",
     # auth
     "AuthConfig",
 ]

@@ -11,6 +11,7 @@ from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
 
 from ..vendors.base import NoCompatibleVendorError
+
 # 向后兼容别名
 NoCompatibleBackendError = NoCompatibleVendorError  # noqa: F401  (deprecated)
 from ..vendors.token_manager import TokenAcquireError
@@ -46,7 +47,8 @@ async def _stream_proxy(router: Any, body: dict, headers: dict) -> Any:
     except Exception as exc:
         logger.error(
             "_stream_proxy 未预期异常: %s: %s",
-            type(exc).__name__, exc,
+            type(exc).__name__,
+            exc,
             exc_info=True,
         )
         yield stream_error_event(
@@ -69,7 +71,10 @@ def register_core_routes(app: Any, router: Any) -> None:
         is_streaming = body.get("stream", False)
 
         if normalization.adaptations:
-            logger.debug("Request normalized before routing: %s", ", ".join(normalization.adaptations))
+            logger.debug(
+                "Request normalized before routing: %s",
+                ", ".join(normalization.adaptations),
+            )
 
         if is_streaming:
             return StreamingResponse(
@@ -81,18 +86,30 @@ def register_core_routes(app: Any, router: Any) -> None:
         try:
             resp = await router.route_message(body, headers)
         except NoCompatibleVendorError as exc:
-            return json_error_response(400, error_type="invalid_request_error", message=str(exc), details=exc.reasons)
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message=str(exc),
+                details=exc.reasons,
+            )
         except TokenAcquireError as exc:
-            return json_error_response(503, error_type="authentication_error", message=str(exc))
+            return json_error_response(
+                503, error_type="authentication_error", message=str(exc)
+            )
         except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
-            return json_error_response(502, error_type="api_error", message=f"上游不可达: {exc}")
+            return json_error_response(
+                502, error_type="api_error", message=f"上游不可达: {exc}"
+            )
         except Exception as exc:
             logger.error(
                 "messages() 非流式路径未预期异常: %s: %s",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
                 exc_info=True,
             )
-            return json_error_response(500, error_type="api_error", message=f"内部错误: {type(exc).__name__}")
+            return json_error_response(
+                500, error_type="api_error", message=f"内部错误: {type(exc).__name__}"
+            )
 
         # 对上游返回的非标准错误格式输出诊断日志（如 Zhipu 使用 code 而非 type）
         if resp.status_code >= 500 and resp.raw_body:
@@ -108,7 +125,11 @@ def register_core_routes(app: Any, router: Any) -> None:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 pass
 
-        return Response(content=resp.raw_body or b"{}", status_code=resp.status_code, media_type="application/json")
+        return Response(
+            content=resp.raw_body or b"{}",
+            status_code=resp.status_code,
+            media_type="application/json",
+        )
 
     @app.post("/v1/messages/count_tokens")
     async def count_tokens(request: Request) -> Response:
@@ -128,7 +149,9 @@ def register_core_routes(app: Any, router: Any) -> None:
 
         body = await request.json()
         headers = dict(request.headers)
-        prepared_body, prepared_headers = await anthropic_vendor._prepare_request(body, headers)
+        prepared_body, prepared_headers = await anthropic_vendor._prepare_request(
+            body, headers
+        )
 
         client = anthropic_vendor._get_client()
         url = "/v1/messages/count_tokens"
@@ -136,8 +159,14 @@ def register_core_routes(app: Any, router: Any) -> None:
             url = f"{url}?{request.query_params}"
 
         try:
-            response = await client.post(url, json=prepared_body, headers=prepared_headers)
-            return Response(content=response.content, status_code=response.status_code, media_type="application/json")
+            response = await client.post(
+                url, json=prepared_body, headers=prepared_headers
+            )
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                media_type="application/json",
+            )
         except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
             logger.warning("count_tokens proxy failed: %s", exc)
             return Response(
@@ -192,7 +221,9 @@ def register_copilot_routes(app: Any, router: Any) -> None:
         """返回 Copilot 认证与交换链路的脱敏诊断信息."""
         vendor = _find_copilot_vendor(router)
         if vendor is None:
-            return json_error_response(404, error_type="not_found", message="copilot vendor not enabled")
+            return json_error_response(
+                404, error_type="not_found", message="copilot vendor not enabled"
+            )
         return Response(
             content=json.dumps(vendor.get_diagnostics(), ensure_ascii=False).encode(),
             status_code=200,
@@ -204,13 +235,21 @@ def register_copilot_routes(app: Any, router: Any) -> None:
         """按需探测当前 Copilot 会话可见模型列表."""
         vendor = _find_copilot_vendor(router)
         if vendor is None:
-            return json_error_response(404, error_type="not_found", message="copilot vendor not enabled")
+            return json_error_response(
+                404, error_type="not_found", message="copilot vendor not enabled"
+            )
         try:
             probe = await vendor.probe_models()
         except TokenAcquireError as exc:
-            return json_error_response(503, error_type="authentication_error", message=str(exc))
+            return json_error_response(
+                503, error_type="authentication_error", message=str(exc)
+            )
         except (httpx.TimeoutException, httpx.ConnectError) as exc:
-            return json_error_response(502, error_type="api_error", message=f"copilot models probe failed: {exc}")
+            return json_error_response(
+                502,
+                error_type="api_error",
+                message=f"copilot models probe failed: {exc}",
+            )
         return Response(
             content=json.dumps(probe, ensure_ascii=False).encode(),
             status_code=200 if probe.get("probe_status") == "ok" else 502,
@@ -248,12 +287,22 @@ def register_reauth_routes(app: Any, reauth_coordinator: Any) -> None:
     async def trigger_reauth(provider: str) -> Response:
         """手动触发指定 provider 的运行时重认证."""
         if not reauth_coordinator:
-            return Response(content=b'{"error":"reauth not available"}', status_code=404, media_type="application/json")
+            return Response(
+                content=b'{"error":"reauth not available"}',
+                status_code=404,
+                media_type="application/json",
+            )
         await reauth_coordinator.request_reauth(provider)
-        return Response(content=b'{"status":"reauth requested"}', status_code=202, media_type="application/json")
+        return Response(
+            content=b'{"status":"reauth requested"}',
+            status_code=202,
+            media_type="application/json",
+        )
 
 
-def register_all_routes(app: Any, router: Any, reauth_coordinator: Any | None = None) -> None:
+def register_all_routes(
+    app: Any, router: Any, reauth_coordinator: Any | None = None
+) -> None:
     """一次性注册所有路由分组."""
     register_core_routes(app, router)
     register_health_routes(app)

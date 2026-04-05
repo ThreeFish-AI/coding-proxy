@@ -2,7 +2,11 @@
 
 from pathlib import Path
 
-from coding.proxy.config.loader import _deep_merge, _get_example_config_path, load_config
+from coding.proxy.config.loader import (
+    _deep_merge,
+    _get_example_config_path,
+    load_config,
+)
 
 
 def test_load_from_explicit_path(tmp_path: Path):
@@ -127,7 +131,9 @@ def test_antigravity_config_defaults():
     assert cfg.antigravity.client_id == ""
     assert cfg.antigravity.client_secret == ""
     assert cfg.antigravity.refresh_token == ""
-    assert cfg.antigravity.base_url == "https://generativelanguage.googleapis.com/v1beta"
+    assert (
+        cfg.antigravity.base_url == "https://generativelanguage.googleapis.com/v1beta"
+    )
     assert cfg.antigravity.model_endpoint == "models/claude-sonnet-4-20250514"
 
 
@@ -212,11 +218,11 @@ def test_vendors_custom_order(tmp_path: Path, monkeypatch):
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
         "vendors:\n"
-        '  - vendor: zhipu\n'
+        "  - vendor: zhipu\n"
         '    api_key: "${ZHIPU_KEY}"\n'
-        '    circuit_breaker:\n'
-        '      failure_threshold: 5\n'
-        '  - vendor: anthropic\n'
+        "    circuit_breaker:\n"
+        "      failure_threshold: 5\n"
+        "  - vendor: anthropic\n"
         '    base_url: "https://api.anthropic.com"\n'
     )
     cfg = load_config(cfg_file)
@@ -376,6 +382,7 @@ def test_get_example_config_path_returns_path():
 def test_get_example_config_path_missing_returns_none(monkeypatch):
     """_get_example_config_path 被mock为返回None时正确降级."""
     import coding.proxy.config.loader as loader_module
+
     monkeypatch.setattr(loader_module, "_get_example_config_path", lambda: None)
     assert loader_module._get_example_config_path() is None
 
@@ -432,11 +439,7 @@ def test_load_config_full_user_override(tmp_path: Path):
     """用户提供完整配置时，example 默认被完全覆盖."""
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
-        "server:\n"
-        "  host: '0.0.0.0'\n"
-        "  port: 8000\n"
-        "vendors: []\n"
-        "pricing: []\n"
+        "server:\n  host: '0.0.0.0'\n  port: 8000\nvendors: []\npricing: []\n"
     )
     cfg = load_config(cfg_file)
     assert cfg.server.host == "0.0.0.0"

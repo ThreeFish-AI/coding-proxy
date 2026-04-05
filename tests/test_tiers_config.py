@@ -2,16 +2,17 @@
 
 from pathlib import Path
 
-import yaml
 import pytest
 
-from coding.proxy.config.schema import ProxyConfig, VendorType, VendorConfig
+from coding.proxy.config.schema import ProxyConfig
 
 
 def _load_yaml_config(text: str) -> ProxyConfig:
     """从 YAML 文本加载 ProxyConfig（通过 loader 模块）."""
-    from coding.proxy.config.loader import load_config
     import tempfile
+
+    from coding.proxy.config.loader import load_config
+
     with tempfile.TemporaryDirectory() as tmpdir:
         cfg_file = Path(tmpdir) / "config.yaml"
         cfg_file.write_text(text)
@@ -38,21 +39,14 @@ def test_tiers_basic_load(tmp_path: Path):
 
 def test_tiers_default_none(tmp_path: Path):
     """无 tiers 字段时为 None."""
-    cfg = _load_yaml_config(
-        "vendors:\n"
-        "  - vendor: anthropic\n"
-        "    enabled: true\n"
-    )
+    cfg = _load_yaml_config("vendors:\n  - vendor: anthropic\n    enabled: true\n")
     assert cfg.tiers is None
 
 
 def test_tiers_empty_list(tmp_path: Path):
     """空列表合法（表示不启用任何降级链路）."""
     cfg = _load_yaml_config(
-        "vendors:\n"
-        "  - vendor: anthropic\n"
-        "    enabled: true\n"
-        "tiers: []\n"
+        "vendors:\n  - vendor: anthropic\n    enabled: true\ntiers: []\n"
     )
     assert cfg.tiers == []
 
@@ -60,11 +54,7 @@ def test_tiers_empty_list(tmp_path: Path):
 def test_tiers_single_entry(tmp_path: Path):
     """仅含一项."""
     cfg = _load_yaml_config(
-        "vendors:\n"
-        "  - vendor: zhipu\n"
-        "    api_key: sk-test\n"
-        "tiers:\n"
-        "  - zhipu\n"
+        "vendors:\n  - vendor: zhipu\n    api_key: sk-test\ntiers:\n  - zhipu\n"
     )
     assert cfg.tiers == ["zhipu"]
 
@@ -96,24 +86,17 @@ def test_tiers_all_four_vendors(tmp_path: Path):
 def test_tiers_rejects_invalid_vendor(tmp_path: Path):
     """非法 vendor 值触发 ValidationError."""
     import pydantic
+
     with pytest.raises(pydantic.ValidationError):
-        _load_yaml_config(
-            "vendors:\n"
-            "  - vendor: anthropic\n"
-            "tiers:\n"
-            "  - openai\n"
-        )
+        _load_yaml_config("vendors:\n  - vendor: anthropic\ntiers:\n  - openai\n")
 
 
 def test_tiers_rejects_wrong_type(tmp_path: Path):
     """非列表类型触发 ValidationError."""
     import pydantic
+
     with pytest.raises(pydantic.ValidationError):
-        _load_yaml_config(
-            "vendors:\n"
-            "  - vendor: anthropic\n"
-            "tiers: anthropic\n"
-        )
+        _load_yaml_config("vendors:\n  - vendor: anthropic\ntiers: anthropic\n")
 
 
 # ── C 组：语义校验 ──────────────────────────────────────
@@ -122,6 +105,7 @@ def test_tiers_rejects_wrong_type(tmp_path: Path):
 def test_tiers_rejects_unknown_vendor(tmp_path: Path):
     """引用不存在的 vendor 触发 ValidationError（Pydantic Literal 校验）."""
     import pydantic
+
     with pytest.raises(pydantic.ValidationError):
         _load_yaml_config(
             "vendors:\n"
@@ -151,6 +135,7 @@ def test_tiers_rejects_duplicates(tmp_path: Path):
 def test_tiers_warns_on_disabled_vendor(tmp_path: Path, caplog):
     """引用 disabled 的 vendor 发出 warning."""
     import logging
+
     with caplog.at_level(logging.WARNING, logger="coding.proxy.config.schema"):
         _load_yaml_config(
             "vendors:\n"
@@ -162,7 +147,11 @@ def test_tiers_warns_on_disabled_vendor(tmp_path: Path, caplog):
             "  - anthropic\n"
             "  - copilot\n"
         )
-    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING and "disabled" in r.message]
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "disabled" in r.message
+    ]
     assert len(warnings) >= 1
 
 
@@ -202,10 +191,7 @@ def test_no_tiers_preserves_vendor_order(tmp_path: Path):
 def test_legacy_format_no_tiers(tmp_path: Path):
     """旧 flat 格式迁移后 tiers 为 None."""
     cfg = _load_yaml_config(
-        "primary:\n"
-        "  enabled: true\n"
-        "fallback:\n"
-        "  api_key: sk-legacy\n"
+        "primary:\n  enabled: true\nfallback:\n  api_key: sk-legacy\n"
     )
     assert cfg.tiers is None
     # vendors 应由迁移器自动生成

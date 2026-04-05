@@ -1,5 +1,6 @@
 """TokenLogger 查询扩展单元测试."""
 
+import aiosqlite
 import pytest
 import pytest_asyncio
 
@@ -46,15 +47,19 @@ async def test_log_evidence_and_query_by_request_id(logger):
 @pytest.mark.asyncio
 async def test_query_window_total_sums_correctly(logger):
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=100, output_tokens=50,
+        input_tokens=100,
+        output_tokens=50,
         success=True,
     )
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=200, output_tokens=80,
+        input_tokens=200,
+        output_tokens=80,
         success=True,
     )
     total = await logger.query_window_total(5.0)
@@ -64,15 +69,19 @@ async def test_query_window_total_sums_correctly(logger):
 @pytest.mark.asyncio
 async def test_query_window_total_filters_vendor(logger):
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=100, output_tokens=50,
+        input_tokens=100,
+        output_tokens=50,
         success=True,
     )
     await logger.log(
-        vendor="zhipu", model_requested="claude-sonnet-4",
+        vendor="zhipu",
+        model_requested="claude-sonnet-4",
         model_served="glm-5.1",
-        input_tokens=200, output_tokens=80,
+        input_tokens=200,
+        output_tokens=80,
         success=True,
     )
     total = await logger.query_window_total(5.0, vendor="anthropic")
@@ -82,15 +91,19 @@ async def test_query_window_total_filters_vendor(logger):
 @pytest.mark.asyncio
 async def test_query_window_total_excludes_failures(logger):
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=100, output_tokens=50,
+        input_tokens=100,
+        output_tokens=50,
         success=True,
     )
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=500, output_tokens=0,
+        input_tokens=500,
+        output_tokens=0,
         success=False,
     )
     total = await logger.query_window_total(5.0)
@@ -101,19 +114,25 @@ async def test_query_window_total_excludes_failures(logger):
 async def test_query_daily_groups_by_model(logger):
     """query_daily 应按 model_requested 和 model_served 分组."""
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=100, output_tokens=50,
+        input_tokens=100,
+        output_tokens=50,
     )
     await logger.log(
-        vendor="anthropic", model_requested="claude-opus-4",
+        vendor="anthropic",
+        model_requested="claude-opus-4",
         model_served="claude-opus-4",
-        input_tokens=200, output_tokens=80,
+        input_tokens=200,
+        output_tokens=80,
     )
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=150, output_tokens=60,
+        input_tokens=150,
+        output_tokens=60,
     )
     rows = await logger.query_daily(days=7)
     assert len(rows) == 2
@@ -130,14 +149,18 @@ async def test_query_daily_groups_by_model(logger):
 async def test_query_daily_model_filter(logger):
     """query_daily 的 model 参数应正确过滤."""
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=100, output_tokens=50,
+        input_tokens=100,
+        output_tokens=50,
     )
     await logger.log(
-        vendor="anthropic", model_requested="claude-opus-4",
+        vendor="anthropic",
+        model_requested="claude-opus-4",
         model_served="claude-opus-4",
-        input_tokens=200, output_tokens=80,
+        input_tokens=200,
+        output_tokens=80,
     )
     rows = await logger.query_daily(days=7, model="claude-opus-4")
     assert len(rows) == 1
@@ -149,15 +172,20 @@ async def test_query_daily_model_filter(logger):
 async def test_query_daily_shows_model_mapping(logger):
     """故障转移场景：model_requested 与 model_served 不同时应分别展示."""
     await logger.log(
-        vendor="zhipu", model_requested="claude-sonnet-4",
+        vendor="zhipu",
+        model_requested="claude-sonnet-4",
         model_served="glm-5.1",
-        input_tokens=300, output_tokens=100, failover=True,
+        input_tokens=300,
+        output_tokens=100,
+        failover=True,
         failover_from="anthropic",
     )
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=100, output_tokens=50,
+        input_tokens=100,
+        output_tokens=50,
     )
     rows = await logger.query_daily(days=7)
     assert len(rows) == 2
@@ -171,10 +199,13 @@ async def test_query_daily_shows_model_mapping(logger):
 async def test_log_with_failover_from(logger):
     """log() 接受 failover_from 参数并正确写入数据库."""
     await logger.log(
-        vendor="zhipu", model_requested="claude-sonnet-4",
+        vendor="zhipu",
+        model_requested="claude-sonnet-4",
         model_served="glm-5.1",
-        input_tokens=100, output_tokens=50,
-        failover=True, failover_from="anthropic",
+        input_tokens=100,
+        output_tokens=50,
+        failover=True,
+        failover_from="anthropic",
     )
     rows = await logger.query_daily(days=7)
     assert len(rows) == 1
@@ -189,9 +220,11 @@ async def test_log_with_failover_from(logger):
 async def test_log_without_failover_from(logger):
     """不传 failover_from 时默认为 None."""
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=100, output_tokens=50,
+        input_tokens=100,
+        output_tokens=50,
     )
     rows = await logger.query_daily(days=7)
     assert len(rows) == 1
@@ -203,12 +236,16 @@ async def test_log_without_failover_from(logger):
 async def test_query_daily_merges_failover_rows(logger):
     """query_daily no longer groups by failover_from, rows merge."""
     await logger.log(
-        vendor="zhipu", model_requested="claude-sonnet-4",
+        vendor="zhipu",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        input_tokens=100, failover=True, failover_from="anthropic",
+        input_tokens=100,
+        failover=True,
+        failover_from="anthropic",
     )
     await logger.log(
-        vendor="zhipu", model_requested="claude-sonnet-4",
+        vendor="zhipu",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
         input_tokens=200,
     )
@@ -222,7 +259,6 @@ async def test_query_daily_merges_failover_rows(logger):
 @pytest.mark.asyncio
 async def test_migration_adds_failover_from_column(tmp_path):
     """旧数据库（无 failover_from 列）迁移后新列存在."""
-    import aiosqlite
 
     db_path = tmp_path / "old.db"
     # 创建旧表（不含 failover_from，使用 vendor 列名）
@@ -262,22 +298,29 @@ async def test_migration_adds_failover_from_column(tmp_path):
 async def test_query_failover_stats(logger):
     """query_failover_stats 按来源→目标聚合故障转移次数."""
     await logger.log(
-        vendor="zhipu", model_requested="claude-sonnet-4",
+        vendor="zhipu",
+        model_requested="claude-sonnet-4",
         model_served="glm-5.1",
-        failover=True, failover_from="anthropic",
+        failover=True,
+        failover_from="anthropic",
     )
     await logger.log(
-        vendor="zhipu", model_requested="claude-opus-4",
+        vendor="zhipu",
+        model_requested="claude-opus-4",
         model_served="glm-5.1",
-        failover=True, failover_from="anthropic",
+        failover=True,
+        failover_from="anthropic",
     )
     await logger.log(
-        vendor="zhipu", model_requested="claude-sonnet-4",
+        vendor="zhipu",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
-        failover=True, failover_from="copilot",
+        failover=True,
+        failover_from="copilot",
     )
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
         model_served="claude-sonnet-4",
         # 非 failover，不应出现在统计中
     )
@@ -294,8 +337,7 @@ async def test_query_failover_stats(logger):
 # 天数边界与时区修正测试
 # ---------------------------------------------------------------------------
 
-import aiosqlite
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -307,9 +349,11 @@ async def test_query_daily_days_one_shows_one_day(logger):
     """-d 1 应仅返回今天（本地日期）的数据，不含昨天."""
     now_local = datetime.now(_SHANGHAI)
     today_start_utc = datetime(
-        now_local.year, now_local.month, now_local.day,
+        now_local.year,
+        now_local.month,
+        now_local.day,
         tzinfo=_SHANGHAI,
-    ).astimezone(timezone.utc)
+    ).astimezone(UTC)
     yesterday_start_utc = today_start_utc - timedelta(days=1)
 
     # 插入一条"今天"的记录
@@ -340,11 +384,13 @@ async def test_query_daily_days_one_shows_one_day(logger):
 async def test_query_daily_days_boundary_exact(logger):
     """-d N 的范围应精确包含 N 个自然日."""
     now_local = datetime.now(_SHANGHAI)
-    today_start = datetime(now_local.year, now_local.month, now_local.day, tzinfo=_SHANGHAI)
+    today_start = datetime(
+        now_local.year, now_local.month, now_local.day, tzinfo=_SHANGHAI
+    )
 
     # 插入今天、昨天、前天共 3 条数据
     for day_offset in range(3):
-        dt = (today_start - timedelta(days=day_offset)).astimezone(timezone.utc)
+        dt = (today_start - timedelta(days=day_offset)).astimezone(UTC)
         await logger._db.execute(
             """INSERT INTO usage_log (ts, vendor, model_requested, model_served,
                                       input_tokens, output_tokens)
@@ -386,7 +432,7 @@ async def test_query_daily_groups_by_local_date(logger):
 async def test_query_window_total_uses_utc_baseline(logger):
     """滚动窗口应基于 UTC 时间计算，避免本地时区偏移."""
     # 插入一条 2 小时前的记录
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    cutoff = datetime.now(UTC) - timedelta(hours=2)
     await logger._db.execute(
         """INSERT INTO usage_log (ts, vendor, model_requested, model_served,
                                   input_tokens, output_tokens, success)
@@ -407,8 +453,10 @@ async def test_query_window_total_uses_utc_baseline(logger):
 async def test_query_failover_stats_day_boundary(logger):
     """故障转移统计应遵循与 query_daily 相同的天数边界."""
     now_local = datetime.now(_SHANGHAI)
-    today_start = datetime(now_local.year, now_local.month, now_local.day, tzinfo=_SHANGHAI)
-    yesterday_start_utc = (today_start - timedelta(days=1)).astimezone(timezone.utc)
+    today_start = datetime(
+        now_local.year, now_local.month, now_local.day, tzinfo=_SHANGHAI
+    )
+    yesterday_start_utc = (today_start - timedelta(days=1)).astimezone(UTC)
 
     # 昨天的 failover 记录
     await logger._db.execute(
@@ -434,8 +482,11 @@ async def test_query_failover_stats_day_boundary(logger):
 async def test_query_daily_clamps_zero_days(logger):
     """days=0 应被提升为 1（等价于查今天）."""
     await logger.log(
-        vendor="anthropic", model_requested="claude-sonnet-4",
-        model_served="claude-sonnet-4", input_tokens=100, output_tokens=50,
+        vendor="anthropic",
+        model_requested="claude-sonnet-4",
+        model_served="claude-sonnet-4",
+        input_tokens=100,
+        output_tokens=50,
     )
     # days=0 不应报错，行为等同 days=1
     rows = await logger.query_daily(days=0)

@@ -6,7 +6,9 @@ import json
 
 import pytest
 
-from coding.proxy.streaming.anthropic_compat import normalize_anthropic_compatible_stream
+from coding.proxy.streaming.anthropic_compat import (
+    normalize_anthropic_compatible_stream,
+)
 
 
 async def _raw_chunks(lines: list[str]):
@@ -44,12 +46,16 @@ async def test_filters_vendor_tool_events():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="glm-5.1",
+        _raw_chunks(chunks),
+        model="glm-5.1",
     ):
         collected.append(chunk)
 
     events = _parse_events(collected)
-    assert [event["event"] for event in events] == ["content_block_delta", "message_stop"]
+    assert [event["event"] for event in events] == [
+        "content_block_delta",
+        "message_stop",
+    ]
 
 
 @pytest.mark.asyncio
@@ -63,7 +69,8 @@ async def test_openai_style_stream_is_converted():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="glm-5.1",
+        _raw_chunks(chunks),
+        model="glm-5.1",
     ):
         collected.append(chunk)
 
@@ -88,7 +95,8 @@ async def test_openai_style_stream_preserves_cache_read_tokens():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="claude-sonnet-4",
+        _raw_chunks(chunks),
+        model="claude-sonnet-4",
     ):
         collected.append(chunk)
 
@@ -113,7 +121,8 @@ async def test_anthropic_format_tool_use_block_passes_through():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="glm-5.1",
+        _raw_chunks(chunks),
+        model="glm-5.1",
     ):
         collected.append(chunk)
 
@@ -153,7 +162,8 @@ async def test_anthropic_format_vendor_block_still_filtered():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="glm-5.1",
+        _raw_chunks(chunks),
+        model="glm-5.1",
     ):
         collected.append(chunk)
 
@@ -185,7 +195,8 @@ async def test_anthropic_format_thinking_block_passes_through():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="glm-5.1",
+        _raw_chunks(chunks),
+        model="glm-5.1",
     ):
         collected.append(chunk)
 
@@ -217,7 +228,8 @@ async def test_openai_format_reasoning_content_converted_to_thinking():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="glm-5.1",
+        _raw_chunks(chunks),
+        model="glm-5.1",
     ):
         collected.append(chunk)
 
@@ -229,12 +241,22 @@ async def test_openai_format_reasoning_content_converted_to_thinking():
     assert block_starts[0]["data"]["content_block"]["type"] == "thinking"
     assert block_starts[1]["data"]["content_block"]["type"] == "text"
     # thinking_delta 片段
-    thinking_deltas = [d for d in block_deltas if d["data"]["delta"]["type"] == "thinking_delta"]
+    thinking_deltas = [
+        d for d in block_deltas if d["data"]["delta"]["type"] == "thinking_delta"
+    ]
     assert len(thinking_deltas) == 2
-    assert thinking_deltas[0]["data"]["delta"]["thinking"] == "Let me think step by step..."
-    assert thinking_deltas[1]["data"]["delta"]["thinking"] == " First, I need to consider..."
+    assert (
+        thinking_deltas[0]["data"]["delta"]["thinking"]
+        == "Let me think step by step..."
+    )
+    assert (
+        thinking_deltas[1]["data"]["delta"]["thinking"]
+        == " First, I need to consider..."
+    )
     # text_delta 片段
-    text_deltas = [d for d in block_deltas if d["data"]["delta"]["type"] == "text_delta"]
+    text_deltas = [
+        d for d in block_deltas if d["data"]["delta"]["type"] == "text_delta"
+    ]
     assert len(text_deltas) == 1
     assert text_deltas[0]["data"]["delta"]["text"] == "The answer is 42."
 
@@ -250,13 +272,18 @@ async def test_openai_tool_call_stream_is_converted():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="claude-opus-4",
+        _raw_chunks(chunks),
+        model="claude-opus-4",
     ):
         collected.append(chunk)
 
     events = _parse_events(collected)
-    tool_start = next(event for event in events if event["event"] == "content_block_start")
-    tool_delta = next(event for event in events if event["event"] == "content_block_delta")
+    tool_start = next(
+        event for event in events if event["event"] == "content_block_start"
+    )
+    tool_delta = next(
+        event for event in events if event["event"] == "content_block_delta"
+    )
     message_delta = next(event for event in events if event["event"] == "message_delta")
     assert tool_start["data"]["content_block"]["type"] == "tool_use"
     assert tool_start["data"]["content_block"]["name"] == "get_weather"
@@ -285,7 +312,8 @@ async def test_anthropic_format_tool_use_with_inline_arguments():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="glm-5.1",
+        _raw_chunks(chunks),
+        model="glm-5.1",
     ):
         collected.append(chunk)
 
@@ -303,7 +331,9 @@ async def test_anthropic_format_tool_use_with_inline_arguments():
         (event for event in events if event["event"] == "content_block_delta"),
         None,
     )
-    assert tool_delta is not None, "Should emit synthetic input_json_delta for inline args"
+    assert tool_delta is not None, (
+        "Should emit synthetic input_json_delta for inline args"
+    )
     assert tool_delta["data"]["delta"]["type"] == "input_json_delta"
     args = json.loads(tool_delta["data"]["delta"]["partial_json"])
     assert args["description"] == "test task"
@@ -321,12 +351,15 @@ async def test_openai_tool_call_with_null_arguments():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="glm-5.1",
+        _raw_chunks(chunks),
+        model="glm-5.1",
     ):
         collected.append(chunk)
 
     events = _parse_events(collected)
-    tool_start = next(event for event in events if event["event"] == "content_block_start")
+    tool_start = next(
+        event for event in events if event["event"] == "content_block_start"
+    )
     assert tool_start["data"]["content_block"]["type"] == "tool_use"
     assert tool_start["data"]["content_block"]["name"] == "Task"
     # 应正常完成，不崩溃
@@ -347,7 +380,8 @@ async def test_nonstandard_tool_call_block_type():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="glm-5.1",
+        _raw_chunks(chunks),
+        model="glm-5.1",
     ):
         collected.append(chunk)
 
@@ -380,7 +414,8 @@ async def test_nonstandard_arguments_delta_type():
 
     collected = []
     async for chunk in normalize_anthropic_compatible_stream(
-        _raw_chunks(chunks), model="glm-5.1",
+        _raw_chunks(chunks),
+        model="glm-5.1",
     ):
         collected.append(chunk)
 
@@ -389,6 +424,8 @@ async def test_nonstandard_arguments_delta_type():
         (event for event in events if event["event"] == "content_block_delta"),
         None,
     )
-    assert tool_delta is not None, "arguments_delta should be mapped to input_json_delta"
+    assert tool_delta is not None, (
+        "arguments_delta should be mapped to input_json_delta"
+    )
     assert tool_delta["data"]["delta"]["type"] == "input_json_delta"
     assert tool_delta["data"]["delta"]["partial_json"] == '{"cmd":"ls"}'

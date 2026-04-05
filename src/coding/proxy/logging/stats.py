@@ -42,11 +42,7 @@ def _detect_model_variants(failover_stats: list[dict]) -> bool:
         for stat in failover_stats
     }
     # 检查是否存在模型映射（请求模型与实际模型不同）
-    return any(
-        pair[0] != pair[1]
-        for pair in model_pairs
-        if pair[0] and pair[1]
-    )
+    return any(pair[0] != pair[1] for pair in model_pairs if pair[0] and pair[1])
 
 
 async def show_usage(
@@ -54,7 +50,7 @@ async def show_usage(
     days: int = 7,
     vendor: str | None = None,
     model: str | None = None,
-    pricing_table: "PricingTable | None" = None,
+    pricing_table: PricingTable | None = None,
 ) -> None:
     """展示 Token 使用统计."""
     console = Console()
@@ -83,14 +79,20 @@ async def show_usage(
         total_output = row.get("total_output", 0) or 0
         total_cache_creation = row.get("total_cache_creation", 0) or 0
         total_cache_read = row.get("total_cache_read", 0) or 0
-        total_tokens = total_input + total_output + total_cache_creation + total_cache_read
+        total_tokens = (
+            total_input + total_output + total_cache_creation + total_cache_read
+        )
 
         vendor_name = str(row.get("vendor", ""))
         model_served = str(row.get("model_served", ""))
         if pricing_table is not None:
             cost_value = pricing_table.compute_cost(
-                vendor_name, model_served,
-                total_input, total_output, total_cache_creation, total_cache_read,
+                vendor_name,
+                model_served,
+                total_input,
+                total_output,
+                total_cache_creation,
+                total_cache_read,
             )
             cost_str = cost_value.format() if cost_value is not None else "-"
         else:

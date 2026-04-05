@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 import uuid
+from typing import Any
 
 # noqa: F401
 from ..model.compat import (
@@ -62,7 +62,9 @@ def build_canonical_request(
     )
 
 
-def _extract_request_id(body: dict[str, Any], headers: dict[str, str], trace_id: str) -> str:
+def _extract_request_id(
+    body: dict[str, Any], headers: dict[str, str], trace_id: str
+) -> str:
     for key in ("request_id", "id"):
         value = body.get(key)
         if isinstance(value, str) and value.strip():
@@ -94,7 +96,9 @@ def _derive_session_key(body: dict[str, Any], headers: dict[str, str]) -> str:
         "messages": body.get("messages", [])[-6:],
     }
     digest = hashlib.sha256(
-        json.dumps(digest_body, ensure_ascii=False, sort_keys=True, default=str).encode()
+        json.dumps(
+            digest_body, ensure_ascii=False, sort_keys=True, default=str
+        ).encode()
     ).hexdigest()
     return f"compat_{digest[:24]}"
 
@@ -107,7 +111,9 @@ def _extract_thinking(body: dict[str, Any]) -> CanonicalThinking:
         if isinstance(value, dict):
             return CanonicalThinking(
                 enabled=True,
-                budget_tokens=value.get("budget_tokens") if isinstance(value.get("budget_tokens"), int) else None,
+                budget_tokens=value.get("budget_tokens")
+                if isinstance(value.get("budget_tokens"), int)
+                else None,
                 effort=str(value.get("effort")) if value.get("effort") else None,
                 source_field=source_field,
             )
@@ -123,7 +129,11 @@ def _extract_parts(messages: list[dict[str, Any]]) -> list[CanonicalMessagePart]
         role = str(message.get("role", "user"))
         content = message.get("content")
         if isinstance(content, str):
-            parts.append(CanonicalMessagePart(type=CanonicalPartType.TEXT, role=role, text=content))
+            parts.append(
+                CanonicalMessagePart(
+                    type=CanonicalPartType.TEXT, role=role, text=content
+                )
+            )
             continue
         if not isinstance(content, list):
             continue
@@ -132,50 +142,64 @@ def _extract_parts(messages: list[dict[str, Any]]) -> list[CanonicalMessagePart]
                 continue
             block_type = str(block.get("type", ""))
             if block_type == "text":
-                parts.append(CanonicalMessagePart(
-                    type=CanonicalPartType.TEXT,
-                    role=role,
-                    text=str(block.get("text", "")),
-                    raw_block=block,
-                ))
+                parts.append(
+                    CanonicalMessagePart(
+                        type=CanonicalPartType.TEXT,
+                        role=role,
+                        text=str(block.get("text", "")),
+                        raw_block=block,
+                    )
+                )
             elif block_type == "thinking":
-                parts.append(CanonicalMessagePart(
-                    type=CanonicalPartType.THINKING,
-                    role=role,
-                    text=str(block.get("thinking", "")),
-                    raw_block=block,
-                ))
+                parts.append(
+                    CanonicalMessagePart(
+                        type=CanonicalPartType.THINKING,
+                        role=role,
+                        text=str(block.get("thinking", "")),
+                        raw_block=block,
+                    )
+                )
             elif block_type == "image":
-                parts.append(CanonicalMessagePart(
-                    type=CanonicalPartType.IMAGE,
-                    role=role,
-                    raw_block=block,
-                ))
+                parts.append(
+                    CanonicalMessagePart(
+                        type=CanonicalPartType.IMAGE,
+                        role=role,
+                        raw_block=block,
+                    )
+                )
             elif block_type in {"tool_use", "server_tool_use"}:
-                parts.append(CanonicalMessagePart(
-                    type=CanonicalPartType.TOOL_USE,
-                    role=role,
-                    tool_call=CanonicalToolCall(
-                        tool_id=str(block.get("id", "")),
-                        name=str(block.get("name", "")),
-                        arguments=block.get("input", {}) if isinstance(block.get("input"), dict) else {},
-                    ),
-                    raw_block=block,
-                ))
+                parts.append(
+                    CanonicalMessagePart(
+                        type=CanonicalPartType.TOOL_USE,
+                        role=role,
+                        tool_call=CanonicalToolCall(
+                            tool_id=str(block.get("id", "")),
+                            name=str(block.get("name", "")),
+                            arguments=block.get("input", {})
+                            if isinstance(block.get("input"), dict)
+                            else {},
+                        ),
+                        raw_block=block,
+                    )
+                )
             elif block_type == "tool_result":
-                parts.append(CanonicalMessagePart(
-                    type=CanonicalPartType.TOOL_RESULT,
-                    role=role,
-                    text=_stringify_tool_result_content(block.get("content")),
-                    tool_result_id=str(block.get("tool_use_id", "")),
-                    raw_block=block,
-                ))
+                parts.append(
+                    CanonicalMessagePart(
+                        type=CanonicalPartType.TOOL_RESULT,
+                        role=role,
+                        text=_stringify_tool_result_content(block.get("content")),
+                        tool_result_id=str(block.get("tool_use_id", "")),
+                        raw_block=block,
+                    )
+                )
             else:
-                parts.append(CanonicalMessagePart(
-                    type=CanonicalPartType.UNKNOWN,
-                    role=role,
-                    raw_block=block,
-                ))
+                parts.append(
+                    CanonicalMessagePart(
+                        type=CanonicalPartType.UNKNOWN,
+                        role=role,
+                        raw_block=block,
+                    )
+                )
     return parts
 
 

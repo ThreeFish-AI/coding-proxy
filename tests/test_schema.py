@@ -2,16 +2,13 @@
 
 import logging
 
-import pytest
-
 from coding.proxy.config.schema import (
-    VendorConfig,
     _ANTIGRAVITY_FIELDS,
-    _VENDOR_EXCLUSIVE_FIELDS,
     _COPILOT_FIELDS,
+    _VENDOR_EXCLUSIVE_FIELDS,
     _ZHIPU_FIELDS,
+    VendorConfig,
 )
-
 
 # ── 供应商专属字段分组常量 ────────────────────────────────────
 
@@ -48,14 +45,18 @@ def test_vendorconfig_copilot_fields_have_description():
     """Copilot 专属字段应包含 [copilot] 前缀的 description."""
     for field_name in _COPILOT_FIELDS:
         field_info = VendorConfig.model_fields[field_name]
-        assert "[copilot]" in field_info.description, f"{field_name} 缺少 [copilot] 标注"
+        assert "[copilot]" in field_info.description, (
+            f"{field_name} 缺少 [copilot] 标注"
+        )
 
 
 def test_vendorconfig_antigravity_fields_have_description():
     """Antigravity 专属字段应包含 [antigravity] 前缀的 description."""
     for field_name in _ANTIGRAVITY_FIELDS:
         field_info = VendorConfig.model_fields[field_name]
-        assert "[antigravity]" in field_info.description, f"{field_name} 缺少 [antigravity] 标注"
+        assert "[antigravity]" in field_info.description, (
+            f"{field_name} 缺少 [antigravity] 标注"
+        )
 
 
 def test_vendorconfig_zhipu_field_has_description():
@@ -81,9 +82,13 @@ def test_warn_irrelevant_fields_copilot_with_antigravity_values(caplog):
             vendor="copilot",
             github_token="ghp_test",
             client_id="should_be_ignored",  # Antigravity 专属
-            refresh_token="also_ignored",   # Antigravity 专属
+            refresh_token="also_ignored",  # Antigravity 专属
         )
-    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING and "将被忽略" in r.message]
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "将被忽略" in r.message
+    ]
     assert len(warnings) >= 2  # client_id 和 refresh_token 各一条 warning
 
 
@@ -94,9 +99,13 @@ def test_warn_irrelevant_fields_antigravity_with_copilot_values(caplog):
             vendor="antigravity",
             client_id="cid_test",
             github_token="ghp_misplaced",  # Copilot 专属
-            account_type="business",       # Copilot 专属
+            account_type="business",  # Copilot 专属
         )
-    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING and "将被忽略" in r.message]
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "将被忽略" in r.message
+    ]
     assert len(warnings) >= 2
 
 
@@ -104,7 +113,11 @@ def test_no_warning_for_correct_fields(caplog):
     """正确配置的字段不应触发 warning."""
     with caplog.at_level(logging.WARNING, logger="coding.proxy.config.schema"):
         VendorConfig(vendor="copilot", github_token="ghp_ok")
-    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING and "将被忽略" in r.message]
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "将被忽略" in r.message
+    ]
     assert len(warnings) == 0
 
 
@@ -112,7 +125,11 @@ def test_no_warning_for_default_values(caplog):
     """使用默认值的非当前 vendor 字段不应触发 warning（空字符串等于默认值）."""
     with caplog.at_level(logging.WARNING, logger="coding.proxy.config.schema"):
         VendorConfig(vendor="anthropic", base_url="https://api.anthropic.com")
-    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING and "将被忽略" in r.message]
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "将被忽略" in r.message
+    ]
     assert len(warnings) == 0
 
 
@@ -132,9 +149,16 @@ def test_proxyconfig_legacy_fields_have_deprecation_marker():
     from coding.proxy.config.schema import ProxyConfig
 
     legacy_fields = [
-        "primary", "copilot", "antigravity", "fallback",
-        "circuit_breaker", "copilot_circuit_breaker", "antigravity_circuit_breaker",
-        "quota_guard", "copilot_quota_guard", "antigravity_quota_guard",
+        "primary",
+        "copilot",
+        "antigravity",
+        "fallback",
+        "circuit_breaker",
+        "copilot_circuit_breaker",
+        "antigravity_circuit_breaker",
+        "quota_guard",
+        "copilot_quota_guard",
+        "antigravity_quota_guard",
     ]
     for field_name in legacy_fields:
         field_info = ProxyConfig.model_fields[field_name]
@@ -145,8 +169,16 @@ def test_proxyconfig_non_legacy_fields_no_deprecation():
     """非 legacy 字段不应包含 [legacy] 标记."""
     from coding.proxy.config.schema import ProxyConfig
 
-    non_legacy = ["server", "failover", "model_mapping", "pricing", "tiers",
-                  "auth", "database", "logging"]
+    non_legacy = [
+        "server",
+        "failover",
+        "model_mapping",
+        "pricing",
+        "tiers",
+        "auth",
+        "database",
+        "logging",
+    ]
     for field_name in non_legacy:
         field_info = ProxyConfig.model_fields[field_name]
         assert "[legacy]" not in (field_info.description or ""), (

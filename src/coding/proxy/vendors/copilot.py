@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 from uuid import uuid4
 
 import httpx
 
-from ..config.schema import CopilotConfig, FailoverConfig
 from ..compat.canonical import CompatibilityProfile, CompatibilityStatus
+from ..config.schema import CopilotConfig, FailoverConfig
 from ..convert.anthropic_to_openai import convert_request as convert_openai_request
 from ..convert.openai_to_anthropic import convert_response as convert_openai_response
-from ..streaming.anthropic_compat import normalize_anthropic_compatible_stream
 from ..routing.model_mapper import ModelMapper
+from ..streaming.anthropic_compat import normalize_anthropic_compatible_stream
 from .base import (
     PROXY_SKIP_HEADERS,
     BaseVendor,
@@ -44,6 +45,7 @@ from .copilot_urls import (  # noqa: F401
     build_copilot_candidate_base_urls,
     resolve_copilot_base_url,
 )
+
 # Copilot421RetryHandler 已从 copilot_retry.py 合并至本文件末尾
 from .mixins import TokenBackendMixin
 
@@ -77,7 +79,10 @@ class Copilot421RetryHandler:
         self._backend._begin_request(current_base_url)
 
         response = await self._backend._get_client().request(
-            method, endpoint, json=json_body, headers=headers,
+            method,
+            endpoint,
+            json=json_body,
+            headers=headers,
         )
         if response.status_code != 421:
             return response
@@ -87,9 +92,14 @@ class Copilot421RetryHandler:
 
         for retry_base_url in self._backend._retry_base_urls(current_base_url):
             self._backend._last_retry_base_url = retry_base_url
-            async with self._backend._create_fresh_client(retry_base_url) as retry_client:
+            async with self._backend._create_fresh_client(
+                retry_base_url
+            ) as retry_client:
                 retry_response = await retry_client.request(
-                    method, endpoint, json=json_body, headers=headers,
+                    method,
+                    endpoint,
+                    json=json_body,
+                    headers=headers,
                 )
             last_response = retry_response
             if retry_response.status_code != 421:
@@ -124,7 +134,9 @@ class Copilot421RetryHandler:
 
         for retry_base_url in self._backend._retry_base_urls(current_base_url):
             self._backend._last_retry_base_url = retry_base_url
-            async with self._backend._create_fresh_client(retry_base_url) as retry_client:
+            async with self._backend._create_fresh_client(
+                retry_base_url
+            ) as retry_client:
                 try:
                     async for chunk in stream_fn(retry_client):
                         yield chunk
@@ -132,7 +144,10 @@ class Copilot421RetryHandler:
                     return
                 except httpx.HTTPStatusError as retry_exc:
                     last_exc = retry_exc
-                    if retry_exc.response is None or retry_exc.response.status_code != 421:
+                    if (
+                        retry_exc.response is None
+                        or retry_exc.response.status_code != 421
+                    ):
                         raise
                     self._backend._last_421_base_url = retry_base_url
 
@@ -155,8 +170,12 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
     ) -> None:
         self._account_type = (config.account_type or "individual").strip().lower()
         self._configured_base_url = config.base_url
-        self._candidate_base_urls = build_copilot_candidate_base_urls(self._account_type, config.base_url)
-        self._resolved_base_url = resolve_copilot_base_url(self._account_type, config.base_url)
+        self._candidate_base_urls = build_copilot_candidate_base_urls(
+            self._account_type, config.base_url
+        )
+        self._resolved_base_url = resolve_copilot_base_url(
+            self._account_type, config.base_url
+        )
         # 模型解析委托给 CopilotModelResolver 策略类
         self._model_resolver = CopilotModelResolver(
             models_cache_ttl_seconds=int(config.models_cache_ttl_seconds),
@@ -172,7 +191,9 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
         # _last_model_resolution_reason / _last_request_adaptations）由 Mixin 提供
         token_manager = CopilotTokenManager(config.github_token, config.token_url)
         TokenBackendMixin.__init__(self, token_manager)
-        BaseVendor.__init__(self, self._resolved_base_url, config.timeout_ms, failover_config)
+        BaseVendor.__init__(
+            self, self._resolved_base_url, config.timeout_ms, failover_config
+        )
 
     def get_name(self) -> str:
         return "copilot"
@@ -199,12 +220,17 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
         )
 
     def supports_request(
-        self, request_caps: RequestCapabilities,
+        self,
+        request_caps: RequestCapabilities,
     ) -> tuple[bool, list[CapabilityLossReason]]:
         """Copilot 可通过适配层吸收 thinking 语义，不在路由阶段直接拒绝."""
         supported, reasons = super().supports_request(request_caps)
         if not supported:
-            reasons = [reason for reason in reasons if reason is not CapabilityLossReason.THINKING]
+            reasons = [
+                reason
+                for reason in reasons
+                if reason is not CapabilityLossReason.THINKING
+            ]
         return len(reasons) == 0, reasons
 
     def _get_endpoint(self) -> str:
@@ -292,7 +318,8 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
         retry_urls = [normalized]
         if not self._configured_base_url.strip():
             retry_urls.extend(
-                candidate for candidate in self._candidate_base_urls
+                candidate
+                for candidate in self._candidate_base_urls
                 if candidate != normalized
             )
         return retry_urls
@@ -326,7 +353,9 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
         )
 
     @staticmethod
-    def _build_misdirected_request(response: httpx.Response, body: bytes, base_url: str) -> CopilotMisdirectedRequest:
+    def _build_misdirected_request(
+        response: httpx.Response, body: bytes, base_url: str
+    ) -> CopilotMisdirectedRequest:
         return CopilotMisdirectedRequest(
             base_url=_normalize_base_url(base_url),
             status_code=response.status_code,
@@ -336,7 +365,9 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
         )
 
     @staticmethod
-    def _build_http_status_error_from_misdirected(error: CopilotMisdirectedRequest) -> httpx.HTTPStatusError:
+    def _build_http_status_error_from_misdirected(
+        error: CopilotMisdirectedRequest,
+    ) -> httpx.HTTPStatusError:
         return httpx.HTTPStatusError(
             f"copilot API error: {error.status_code}",
             request=error.request,
@@ -358,7 +389,10 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
     ) -> httpx.Response:
         """同步请求的 421 Misdirected 重试 — 委托给 Copilot421RetryHandler."""
         return await self._421_handler.execute_request_with_retry(
-            method, endpoint, headers=headers, json_body=json_body,
+            method,
+            endpoint,
+            headers=headers,
+            json_body=json_body,
         )
 
     async def _stream_from_client(
@@ -387,7 +421,9 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
                 error_body = await response.aread()
                 logger.warning(
                     "%s stream error: status=%d body=%s",
-                    self.get_name(), response.status_code, error_body[:500],
+                    self.get_name(),
+                    response.status_code,
+                    error_body[:500],
                 )
                 raise httpx.HTTPStatusError(
                     f"{self.get_name()} API error: {response.status_code}",
@@ -419,7 +455,9 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
         model_refresh_reason: str = "request_prepare",
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """透传请求体，过滤 hop-by-hop 头并注入 Copilot token."""
-        filtered = {k: v for k, v in headers.items() if k.lower() not in PROXY_SKIP_HEADERS}
+        filtered = {
+            k: v for k, v in headers.items() if k.lower() not in PROXY_SKIP_HEADERS
+        }
         prepared = self._build_copilot_headers()
         for key, value in filtered.items():
             if key.lower() not in {item.lower() for item in prepared}:
@@ -505,7 +543,9 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
         if self._model_resolver.last_normalized_model:
             diagnostics["normalized_model"] = self._model_resolver.last_normalized_model
         if self._model_resolver.last_model_refresh_reason:
-            diagnostics["last_model_refresh_reason"] = self._model_resolver.last_model_refresh_reason
+            diagnostics["last_model_refresh_reason"] = (
+                self._model_resolver.last_model_refresh_reason
+            )
         cache_age = self._model_resolver.catalog.age_seconds()
         if cache_age is not None:
             diagnostics["available_models_cache_age_seconds"] = cache_age
@@ -532,7 +572,9 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
                     requested_model=self._last_requested_model,
                     normalized_model=self._model_resolver.last_normalized_model,
                     resolved_model=self._last_resolved_model,
-                    available_models=list(self._model_resolver.catalog.available_models),
+                    available_models=list(
+                        self._model_resolver.catalog.available_models
+                    ),
                 )
                 raw_content = response.content
                 resp_body = _decode_json_body(response)
@@ -540,7 +582,10 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
             return VendorResponse(
                 status_code=response.status_code,
                 raw_body=raw_content,
-                error_type=resp_body.get("error", {}).get("type") if isinstance(resp_body, dict) and isinstance(resp_body.get("error"), dict) else None,
+                error_type=resp_body.get("error", {}).get("type")
+                if isinstance(resp_body, dict)
+                and isinstance(resp_body.get("error"), dict)
+                else None,
                 error_message=_extract_error_message(response, resp_body),
                 response_headers=dict(response.headers),
             )
@@ -583,7 +628,9 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
 
         # 首次尝试（含 421 重试）
         try:
-            async for chunk in self._stream_with_421_retry(body, prepared_headers, request_model):
+            async for chunk in self._stream_with_421_retry(
+                body, prepared_headers, request_model
+            ):
                 yield chunk
             return
         except httpx.HTTPStatusError as exc:
@@ -591,7 +638,9 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
                 raise
 
         # 模型不支持时强制刷新模型列表后重试
-        async for chunk in self._retry_stream_with_fresh_model(request_body, headers, request_model):
+        async for chunk in self._retry_stream_with_fresh_model(
+            request_body, headers, request_model
+        ):
             yield chunk
 
     async def _stream_with_421_retry(
@@ -636,7 +685,10 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
                     return
                 except httpx.HTTPStatusError as retry_exc:
                     last_exc = retry_exc
-                    if retry_exc.response is None or retry_exc.response.status_code != 421:
+                    if (
+                        retry_exc.response is None
+                        or retry_exc.response.status_code != 421
+                    ):
                         raise
 
         if last_exc:
@@ -650,14 +702,22 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
     ) -> AsyncIterator[bytes]:
         """模型不支持时强制刷新模型列表后重试流式请求."""
         retried_body, retried_headers = await self._prepare_request(
-            request_body, headers, force_model_refresh=True, model_refresh_reason="model_not_supported_retry",
+            request_body,
+            headers,
+            force_model_refresh=True,
+            model_refresh_reason="model_not_supported_retry",
         )
         try:
-            async for chunk in self._stream_with_421_retry(retried_body, retried_headers, request_model):
+            async for chunk in self._stream_with_421_retry(
+                retried_body, retried_headers, request_model
+            ):
                 yield chunk
             return
         except httpx.HTTPStatusError as exc:
-            if CopilotModelResolver.is_model_not_supported_response(exc.response) and exc.response is not None:
+            if (
+                CopilotModelResolver.is_model_not_supported_response(exc.response)
+                and exc.response is not None
+            ):
                 raise httpx.HTTPStatusError(
                     "copilot API error: 400",
                     request=exc.request,
@@ -666,7 +726,9 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
                         requested_model=self._last_requested_model,
                         normalized_model=self._model_resolver.last_normalized_model,
                         resolved_model=self._last_resolved_model,
-                        available_models=list(self._model_resolver.catalog.available_models),
+                        available_models=list(
+                            self._model_resolver.catalog.available_models
+                        ),
                     ),
                 ) from exc
             raise
@@ -690,7 +752,9 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
             probe["failure_reason"] = "Copilot models probe returned empty directory"
             return probe
         probe["available_models"] = available_models
-        probe["has_claude_opus_4_6"] = any("opus" in model and "4.6" in model for model in available_models)
+        probe["has_claude_opus_4_6"] = any(
+            "opus" in model and "4.6" in model for model in available_models
+        )
         return probe
 
     async def close(self) -> None:

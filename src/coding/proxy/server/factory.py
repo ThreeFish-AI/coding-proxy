@@ -3,24 +3,24 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from ..auth.providers.google import (
-    GoogleOAuthProvider,
     _DEFAULT_CLIENT_ID as _GOOGLE_DEFAULT_CLIENT_ID,
+)
+from ..auth.providers.google import (
     _DEFAULT_CLIENT_SECRET as _GOOGLE_DEFAULT_CLIENT_SECRET,
+)
+from ..auth.providers.google import (
     _REQUIRED_SCOPE_SET as _GOOGLE_REQUIRED_SCOPE_SET,
 )
-from ..auth.runtime import RuntimeReauthCoordinator
+from ..auth.providers.google import (
+    GoogleOAuthProvider,
+)
 from ..auth.store import TokenStoreManager
-from ..vendors.antigravity import AntigravityVendor
-from ..vendors.anthropic import AnthropicVendor
-from ..vendors.copilot import CopilotVendor
-from ..vendors.zhipu import ZhipuVendor
 from ..config.schema import (
-    AntigravityConfig,
     AnthropicConfig,
+    AntigravityConfig,
     CircuitBreakerConfig,
     CopilotConfig,
     FailoverConfig,
@@ -32,6 +32,11 @@ from ..routing.circuit_breaker import CircuitBreaker
 from ..routing.model_mapper import ModelMapper
 from ..routing.quota_guard import QuotaGuard
 from ..routing.tier import VendorTier
+from ..vendors.anthropic import AnthropicVendor
+from ..vendors.antigravity import AntigravityVendor
+from ..vendors.copilot import CopilotVendor
+from ..vendors.zhipu import ZhipuVendor
+
 # 向后兼容别名
 BackendTier = VendorTier  # noqa: F401  (deprecated)
 
@@ -108,7 +113,8 @@ def _create_vendor_from_config(
                 client_id=vendor_cfg.client_id,
                 client_secret=vendor_cfg.client_secret,
                 refresh_token=vendor_cfg.refresh_token,
-                base_url=vendor_cfg.base_url or "https://generativelanguage.googleapis.com/v1beta",
+                base_url=vendor_cfg.base_url
+                or "https://generativelanguage.googleapis.com/v1beta",
                 model_endpoint=vendor_cfg.model_endpoint,
                 timeout_ms=vendor_cfg.timeout_ms,
             )
@@ -117,7 +123,8 @@ def _create_vendor_from_config(
         case "zhipu":
             cfg = ZhipuConfig(
                 enabled=vendor_cfg.enabled,
-                base_url=vendor_cfg.base_url or "https://open.bigmodel.cn/api/anthropic",
+                base_url=vendor_cfg.base_url
+                or "https://open.bigmodel.cn/api/anthropic",
                 api_key=vendor_cfg.api_key,
                 timeout_ms=vendor_cfg.timeout_ms,
             )
@@ -126,7 +133,9 @@ def _create_vendor_from_config(
             raise ValueError(f"未知的 vendor 类型: {vendor_cfg.vendor!r}")
 
 
-def _resolve_copilot_credentials(cfg: CopilotConfig, token_store: TokenStoreManager) -> CopilotConfig:
+def _resolve_copilot_credentials(
+    cfg: CopilotConfig, token_store: TokenStoreManager
+) -> CopilotConfig:
     """合并 Copilot 凭证: Token Store > Config YAML.
 
     返回更新后的 CopilotConfig（github_token 已填充）。
@@ -142,7 +151,9 @@ def _resolve_copilot_credentials(cfg: CopilotConfig, token_store: TokenStoreMana
     return cfg
 
 
-def _resolve_antigravity_credentials(cfg: AntigravityConfig, token_store: TokenStoreManager) -> AntigravityConfig:
+def _resolve_antigravity_credentials(
+    cfg: AntigravityConfig, token_store: TokenStoreManager
+) -> AntigravityConfig:
     """合并 Antigravity 凭证: Token Store > Config YAML.
 
     优先使用 Token Store 中的 refresh_token；
@@ -162,8 +173,13 @@ def _resolve_antigravity_credentials(cfg: AntigravityConfig, token_store: TokenS
         cfg = cfg.model_copy(update=updates)
         logger.info("Antigravity: 使用 Token Store 中的 Google 凭证")
         if tokens.scope and not GoogleOAuthProvider.has_required_scopes(tokens.scope):
-            missing = sorted(_GOOGLE_REQUIRED_SCOPE_SET.difference(tokens.scope.split()))
-            logger.warning("Antigravity: Token Store 中的 Google scope 不完整，缺少: %s", ", ".join(missing))
+            missing = sorted(
+                _GOOGLE_REQUIRED_SCOPE_SET.difference(tokens.scope.split())
+            )
+            logger.warning(
+                "Antigravity: Token Store 中的 Google scope 不完整，缺少: %s",
+                ", ".join(missing),
+            )
 
     return cfg
 

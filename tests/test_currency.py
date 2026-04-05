@@ -7,7 +7,6 @@ import pytest
 from coding.proxy.config.routing import _detect_currency, _price_to_float
 from coding.proxy.model.pricing import CostValue, Currency, ModelPricing
 
-
 # ── Currency 枚举 ────────────────────────────────────────────
 
 
@@ -18,7 +17,7 @@ class TestCurrency:
         assert Currency.USD.symbol == "$"
 
     def test_cny_symbol(self):
-        assert Currency.CNY.symbol == "\u00a5"   # ¥ (U+00A5)
+        assert Currency.CNY.symbol == "\u00a5"  # ¥ (U+00A5)
 
     def test_default_is_usd(self):
         assert Currency.default() == Currency.USD
@@ -79,7 +78,7 @@ class TestCostValue:
     def test_frozen_immutable(self):
         cv = CostValue(1.0, Currency.USD)
         with pytest.raises(AttributeError):
-            cv.amount = 2.0   # type: ignore[misc]
+            cv.amount = 2.0  # type: ignore[misc]
 
     def test_symbol_property(self):
         assert CostValue(1.0, Currency.USD).symbol == "$"
