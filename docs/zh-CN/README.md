@@ -41,33 +41,44 @@
 ## 🚀 快速上手 (Quick Start)
 
 ### 1. 环境准备
-确保您的计算机上已安装 **Python 3.12+** 以及包管理器 **`uv`**（强烈推荐）。
 
-### 2. 获取源码并安装
+确保您的计算机上已安装 **Python 3.12+** 以及包管理神器 **`uv`**（强烈推荐，人生苦短，远离缓慢的包管理工具）。
+
+### 2. 闪电安装
+
 ```bash
-git clone https://github.com/ThreeFish-AI/coding-proxy
-cd coding-proxy
-uv sync
+uv add coding-proxy
 ```
 
-### 3. 配置密钥 (以智谱 GLM 兜底为例)
-```bash
-cp config.default.yaml config.yaml
-# 使用环境变量注入保护你的密钥
-export ZHIPU_API_KEY="your-api-key-here"
-```
+### 3. 点火启动
 
-### 4. 启动代理服务
 ```bash
+## （可选）推荐启用智谱 GLM，使用环境变量防御性地注入密钥
+# export ZHIPU_API_KEY="your-api-key-here"
+
+# 使用默认配置启动 coding-proxy
+# 默认配置地址：~/.coding-proxy/config.yaml，
 uv run coding-proxy start
-#  INFO:     Started server process
-#  INFO:     Uvicorn running on http://127.0.0.1:8046 (Press CTRL+C to quit)
+
+## 参数 `-c` 可以指定自定义配置文件路径
+# uv run coding-proxy start -c ./coding-proxy.yaml
+
+# INFO:     Started server process [1403]
+# INFO:     Waiting for application startup.
+# ...
+# INFO:     coding-proxy started: host=127.0.0.1 port=8046
+# INFO:     Application startup complete.
+# INFO:     Uvicorn running on http://127.0.0.1:8046 (Press CTRL+C to quit)
 ```
 
-### 5. 一键接入 Claude Code
-打开一个新的终端标签页，启动 Claude Code 时指向代理服务器即可享受不中断的编程体验：
+### 4. 一键接入 Claude Code
+
+打开一个新的终端标签页，启动 Claude Code 前将流量指向 coding-proxy：
+
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8046
+
+# 享受如丝般顺滑、永不断连的编程心流：
 claude
 ```
 

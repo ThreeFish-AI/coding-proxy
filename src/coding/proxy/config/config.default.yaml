@@ -40,7 +40,7 @@ vendors:
 
   # Vendor 1: GitHub Copilot Plans（中间层，默认禁用）
   - vendor: copilot
-    enabled: false # 启用需 OAuth 登录或手动配置 github_token
+    enabled: true # 启用需 OAuth 登录或手动配置 github_token
     github_token: "${GITHUB_TOKEN}" # GitHub token（可选，运行 coding-proxy auth login 自动获取）
     account_type: "individual" # individual / business / enterprise
     token_url: "https://api.github.com/copilot_internal/v2/token"
@@ -51,7 +51,7 @@ vendors:
       recovery_timeout_seconds: 300
       success_threshold: 2
     quota_guard:
-      enabled: false
+      enabled: true
       token_budget: 0
       window_hours: 24.0
       threshold_percent: 95.0
@@ -59,7 +59,7 @@ vendors:
 
   # Vendor 2: Google Antigravity Plans（中间层，默认禁用）
   - vendor: antigravity
-    enabled: false # 启用需配置 OAuth 凭据
+    enabled: true # 启用需配置 OAuth 凭据
     client_id: "${GOOG_CLIENT_ID}" # Google OAuth2 Client ID
     client_secret: "${GOOG_CLIENT_SECRET}" # Google OAuth2 Client Secret
     refresh_token: "${GOOG_REFRESH_TOKEN}" # Google OAuth2 Refresh Token
@@ -71,7 +71,7 @@ vendors:
       recovery_timeout_seconds: 300
       success_threshold: 2
     quota_guard:
-      enabled: false # 启用后按 Premium Requests 配额管理
+      enabled: true # 启用后按 Premium Requests 配额管理
       token_budget: 0
       window_hours: 24.0
       threshold_percent: 95.0

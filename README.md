@@ -41,33 +41,44 @@ When you're deeply immersed in your coding "zone" with **Claude Code** (or any A
 ## 🚀 Quick Start
 
 ### 1. Prerequisite Checks
+
 Make sure your rig has **Python 3.12+** and the **`uv`** package manager installed (highly recommended, because life is too short for slow package managers).
 
-### 2. Grab the Code & Install
+### 2. Lightning Install
+
 ```bash
-git clone https://github.com/ThreeFish-AI/coding-proxy
-cd coding-proxy
-uv sync
+uv add coding-proxy
 ```
 
-### 3. Configure Keys (Using Zhipu GLM as a fallback example)
-```bash
-cp config.default.yaml config.yaml
-# Use environment variables to defensively inject your keys
-export ZHIPU_API_KEY="your-api-key-here"
-```
+### 3. Ignite the Proxy Server
 
-### 4. Ignite the Proxy Server
 ```bash
+## (Optional) Highly recommended to enable Zhipu GLM. Use env vars to defensively inject your keys
+# export ZHIPU_API_KEY="your-api-key-here"
+
+# Start coding-proxy with the default configuration
+# The default config lives at: ~/.coding-proxy/config.yaml.
 uv run coding-proxy start
-#  INFO:     Started server process
-#  INFO:     Uvicorn running on http://127.0.0.1:8046 (Press CTRL+C to quit)
+
+## Use the `-c` flag to gracefully point to a custom config path
+# uv run coding-proxy start -c ./coding-proxy.yaml
+
+# INFO:     Started server process [1403]
+# INFO:     Waiting for application startup.
+# ...
+# INFO:     coding-proxy started: host=127.0.0.1 port=8046
+# INFO:     Application startup complete.
+# INFO:     Uvicorn running on http://127.0.0.1:8046 (Press CTRL+C to quit)
 ```
 
-### 5. Seamless Claude Code Integration
-Open a fresh terminal tab, point to the proxy server when firing up Claude Code, and enjoy blissful, uninterrupted coding nirvana:
+### 4. Seamless Claude Code Integration
+
+Open a fresh terminal tab and route your traffic through coding-proxy before firing up Claude Code:
+
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8046
+
+# Enjoy blissful, silky-smooth, and uninterrupted coding nirvana:
 claude
 ```
 
