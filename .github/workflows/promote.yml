@@ -40,7 +40,7 @@ on:
         type: string
 
 permissions:
-  contents: write    # Fine-grained token 下 github.rest.releases namespace 需要(contents:write)才能完整注册
+  contents: read    # validate job 仅需读取 release 信息；promote job 有独立的 job-level permissions 覆写
 
 concurrency:
   group: promote-${{ inputs.tag_name }}
@@ -64,7 +64,7 @@ jobs:
             const tag = context.payload.inputs.tag_name;
             const { owner, repo } = context.repo;
 
-            const release = await github.rest.releases.getReleaseByTag({
+            const release = await github.rest.repos.getReleaseByTag({
               owner,
               repo,
               tag,
@@ -120,7 +120,7 @@ jobs:
             const releaseId = ${{ needs.validate.outputs.release_id }};
             const { owner, repo } = context.repo;
 
-            await github.rest.releases.update({
+            await github.rest.repos.updateRelease({
               owner,
               repo,
               release_id: releaseId,
