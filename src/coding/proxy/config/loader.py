@@ -173,14 +173,23 @@ def load_config(path: Path | None = None) -> ProxyConfig:
     with open(default_path) as f:
         defaults = yaml.safe_load(f) or {}
 
-    # ── Legacy 兼容：旧 flat 格式用户配置不应继承 default 的 vendors ──
-    # 当用户使用 legacy 字段时，移除 defaults 中的 vendors，
-    # 让 ProxyConfig._migrate_legacy_fields 迁移器正常接管 vendors 构建
+    # ── Legacy 兼容：旧 flat 格式用户配置不应继承 default 的 vendors/tiers ──
+    # 当用户使用 legacy 字段时，移除 defaults 中的 vendors 和 tiers，
+    # 让 ProxyConfig._migrate_legacy_fields 迁移器正常接管 vendors 构建，
+    # 并避免 default tiers 引用迁移后不存在的 vendor 导致校验失败。
     if any(k in user_raw for k in _LEGACY_FLAT_KEYS):
         defaults.pop("vendors", None)
+        defaults.pop("tiers", None)
 
     # ── 第 3 步：深度合并 ─────────────────────────────────────
     merged = _deep_merge(defaults, user_raw)
+
+    # ── 防止 default tiers 泄漏到自定义 vendors 配置中 ───────────
+    # 当用户显式定义了 vendors 但未定义 tiers 时，
+    # 继承的 default tiers 可能引用用户未配置的 vendor，导致校验失败。
+    # 此时移除 tiers，回退到 vendors 列表原始顺序作为优先级。
+    if "vendors" in user_raw and "tiers" not in user_raw:
+        merged.pop("tiers", None)
 
     # ── 诊断日志：关键字段合并结果校验 ────────────────────────
     _log_merge_diagnostics(defaults, user_raw, merged)
