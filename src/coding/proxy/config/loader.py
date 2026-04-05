@@ -117,6 +117,42 @@ def _get_default_config_path() -> Path | None:
     return None
 
 
+def _ensure_user_config() -> Path | None:
+    """确保 ~/.coding-proxy/config.yaml 存在（不存在则从 default 复制）.
+
+    首次运行时自动将 config.default.yaml 拷贝到用户目录，
+    作为用户可编辑的配置基础。幂等、非破坏性、优雅降级。
+
+    Returns:
+        创建/已存在的配置文件路径，失败时返回 None。
+    """
+    import shutil
+
+    _home_config = Path("~/.coding-proxy/config.yaml").expanduser()
+    _cwd_config = Path("config.yaml")
+
+    # 已有配置 → 直接返回（不覆盖）
+    if _cwd_config.exists():
+        return _cwd_config
+    if _home_config.exists():
+        return _home_config
+
+    # 无配置 → 从 default 复制
+    default_path = _get_default_config_path()
+    if default_path is None:
+        logger.warning("无法定位 config.default.yaml，跳过用户配置初始化。")
+        return None
+
+    try:
+        _home_config.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(default_path, _home_config)
+        logger.info("已初始化用户配置文件: %s", _home_config)
+        return _home_config
+    except OSError as exc:
+        logger.warning("无法创建用户配置文件 %s: %s", _home_config, exc)
+        return None
+
+
 def _log_merge_diagnostics(defaults: dict, user_raw: dict, merged: dict) -> None:
     """记录合并诊断信息，帮助排查配置缺失问题."""
     critical_fields = {
@@ -147,6 +183,11 @@ def load_config(path: Path | None = None) -> ProxyConfig:
 
     环境变量展开（${VAR}）在深度合并之后执行，确保用户可通过环境变量覆盖任意字段。
     """
+    # ── 第 0 步：首次运行自动初始化用户配置文件 ─────────────
+    # 仅在未指定显式路径时触发（用户通过 -c 显式指定时不干预）
+    if path is None:
+        _ensure_user_config()
+
     # ── 第 1 步：确定并加载用户配置 ─────────────────────────────
     user_raw: dict = {}
     if path is None:
@@ -173,14 +214,23 @@ def load_config(path: Path | None = None) -> ProxyConfig:
     with open(default_path) as f:
         defaults = yaml.safe_load(f) or {}
 
-    # ── Legacy 兼容：旧 flat 格式用户配置不应继承 default 的 vendors ──
-    # 当用户使用 legacy 字段时，移除 defaults 中的 vendors，
-    # 让 ProxyConfig._migrate_legacy_fields 迁移器正常接管 vendors 构建
+    # ── Legacy 兼容：旧 flat 格式用户配置不应继承 default 的 vendors/tiers ──
+    # 当用户使用 legacy 字段时，移除 defaults 中的 vendors 和 tiers，
+    # 让 ProxyConfig._migrate_legacy_fields 迁移器正常接管 vendors 构建，
+    # 并避免 default tiers 引用迁移后不存在的 vendor 导致校验失败。
     if any(k in user_raw for k in _LEGACY_FLAT_KEYS):
         defaults.pop("vendors", None)
+        defaults.pop("tiers", None)
 
     # ── 第 3 步：深度合并 ─────────────────────────────────────
     merged = _deep_merge(defaults, user_raw)
+
+    # ── 防止 default tiers 泄漏到自定义 vendors 配置中 ───────────
+    # 当用户显式定义了 vendors 但未定义 tiers 时，
+    # 继承的 default tiers 可能引用用户未配置的 vendor，导致校验失败。
+    # 此时移除 tiers，回退到 vendors 列表原始顺序作为优先级。
+    if "vendors" in user_raw and "tiers" not in user_raw:
+        merged.pop("tiers", None)
 
     # ── 诊断日志：关键字段合并结果校验 ────────────────────────
     _log_merge_diagnostics(defaults, user_raw, merged)
