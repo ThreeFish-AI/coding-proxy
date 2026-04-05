@@ -40,7 +40,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write    # Fine-grained token 下 github.rest.releases namespace 需要(contents:write)才能完整注册
 
 concurrency:
   group: promote-${{ inputs.tag_name }}
