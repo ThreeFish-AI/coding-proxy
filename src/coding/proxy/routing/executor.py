@@ -6,13 +6,19 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
+from ..vendors.base import (
+    NoCompatibleVendorError,
+    RequestCapabilities,
+    VendorResponse,
+)
+from ..vendors.token_manager import TokenAcquireError
 from .error_classifier import (
     build_request_capabilities,
     extract_error_payload_from_http_status,
@@ -31,8 +37,6 @@ from .usage_parser import (
     parse_usage_from_chunk,
 )
 from .usage_recorder import UsageRecorder
-from ..vendors.base import VendorResponse, NoCompatibleVendorError, RequestCapabilities, UsageInfo
-from ..vendors.token_manager import TokenAcquireError
 
 # 向后兼容别名
 BackendResponse = VendorResponse
@@ -42,7 +46,9 @@ from ..compat.canonical import CompatibilityStatus, build_canonical_request
 logger = logging.getLogger(__name__)
 
 
-def _log_http_error_detail(tier_name: str, exc: Exception, *, is_stream: bool = False) -> None:
+def _log_http_error_detail(
+    tier_name: str, exc: Exception, *, is_stream: bool = False
+) -> None:
     """记录 HTTP 错误的详细信息（状态码 / 响应体摘要 / 异常类型）.
 
     替代原先单行 ``logger.warning("Tier %s stream failed: %s", ...)``，
@@ -53,7 +59,11 @@ def _log_http_error_detail(tier_name: str, exc: Exception, *, is_stream: bool = 
     if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
         resp = exc.response
         detail_parts.append(f"  status={resp.status_code}")
-        body_preview = (resp.text[:300] if resp.text else "(empty)") if resp.content else "(no content)"
+        body_preview = (
+            (resp.text[:300] if resp.text else "(empty)")
+            if resp.content
+            else "(no content)"
+        )
         detail_parts.append(f"  response_body={body_preview}")
         # 尝试提取 error type / message
         try:
@@ -122,6 +132,7 @@ def _log_vendor_response_error(
         detail_parts.append(f"  response_body_preview={raw_text}")
     logger.warning("\n".join(detail_parts))
 
+
 # tier.name → 上游 Vendor 协议标签映射（用于 token 用量日志标注）
 _VENDOR_PROTOCOL_LABEL_MAP: dict[str, str] = {
     "anthropic": "Anthropic",
@@ -173,14 +184,22 @@ class _RouteExecutor:
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
         session_record = await self._session_mgr.get_or_create_record(
-            canonical_request.session_key, canonical_request.trace_id,
+            canonical_request.session_key,
+            canonical_request.trace_id,
         )
         incompatible_reasons: list[str] = []
 
         for i, tier in enumerate(self._tiers):
             is_last = i == last_idx
 
-            gate = await self._try_gate_tier(tier, is_last, request_caps, canonical_request, session_record, incompatible_reasons)
+            gate = await self._try_gate_tier(
+                tier,
+                is_last,
+                request_caps,
+                canonical_request,
+                session_record,
+                incompatible_reasons,
+            )
             if gate == "skip":
                 continue
 
@@ -190,7 +209,8 @@ class _RouteExecutor:
             try:
                 async for chunk in tier.vendor.send_message_stream(body, headers):
                     parse_usage_from_chunk(
-                        chunk, usage,
+                        chunk,
+                        usage,
                         vendor_label=_VENDOR_PROTOCOL_LABEL_MAP.get(tier.name),
                     )
                     yield chunk, tier.name
@@ -210,23 +230,55 @@ class _RouteExecutor:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = usage.get("model_served") or tier.vendor.map_model(model)
-                self._recorder.log_model_call(vendor=tier.name, model_requested=model, model_served=model_served, duration_ms=duration, usage=info)
-                await self._session_mgr.persist_session(tier.vendor.get_compat_trace(), session_record)
+                self._recorder.log_model_call(
+                    vendor=tier.name,
+                    model_requested=model,
+                    model_served=model_served,
+                    duration_ms=duration,
+                    usage=info,
+                )
+                await self._session_mgr.persist_session(
+                    tier.vendor.get_compat_trace(), session_record
+                )
                 await self._recorder.record(
-                    tier.name, model, model_served, info, duration, True,
-                    failed_tier_name is not None, failed_tier_name,
-                    evidence_records=build_usage_evidence_records(usage, vendor=tier.name, model_served=model_served, request_id=info.request_id),
+                    tier.name,
+                    model,
+                    model_served,
+                    info,
+                    duration,
+                    True,
+                    failed_tier_name is not None,
+                    failed_tier_name,
+                    evidence_records=build_usage_evidence_records(
+                        usage,
+                        vendor=tier.name,
+                        model_served=model_served,
+                        request_id=info.request_id,
+                    ),
                 )
                 return
 
             except TokenAcquireError as exc:
-                failed_tier_name, last_exc = await self._handle_token_error(tier, exc, is_last, failed_tier_name)
+                failed_tier_name, last_exc = await self._handle_token_error(
+                    tier, exc, is_last, failed_tier_name
+                )
                 if is_last and last_exc is exc:
                     raise
 
-            except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
+            except (
+                httpx.HTTPStatusError,
+                httpx.TimeoutException,
+                httpx.ConnectError,
+                httpx.ReadError,
+            ) as exc:
                 _log_http_error_detail(tier.name, exc, is_stream=True)
-                should_continue, failed_tier_name, last_exc = await self._handle_http_error(tier, exc, is_last, failed_tier_name, last_exc, is_stream=True)
+                (
+                    should_continue,
+                    failed_tier_name,
+                    last_exc,
+                ) = await self._handle_http_error(
+                    tier, exc, is_last, failed_tier_name, last_exc, is_stream=True
+                )
                 if should_continue:
                     continue
                 if is_last:
@@ -234,7 +286,9 @@ class _RouteExecutor:
             except Exception as exc:
                 logger.error(
                     "Tier %s stream unexpected error: %s: %s",
-                    tier.name, type(exc).__name__, exc,
+                    tier.name,
+                    type(exc).__name__,
+                    exc,
                     exc_info=True,
                 )
                 tier.record_failure()
@@ -245,7 +299,10 @@ class _RouteExecutor:
 
         if last_exc:
             raise last_exc
-        raise NoCompatibleVendorError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商", reasons=incompatible_reasons)
+        raise NoCompatibleVendorError(
+            "当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商",
+            reasons=incompatible_reasons,
+        )
 
     async def execute_message(
         self,
@@ -259,14 +316,22 @@ class _RouteExecutor:
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
         session_record = await self._session_mgr.get_or_create_record(
-            canonical_request.session_key, canonical_request.trace_id,
+            canonical_request.session_key,
+            canonical_request.trace_id,
         )
         incompatible_reasons: list[str] = []
 
         for i, tier in enumerate(self._tiers):
             is_last = i == last_idx
 
-            gate = await self._try_gate_tier(tier, is_last, request_caps, canonical_request, session_record, incompatible_reasons)
+            gate = await self._try_gate_tier(
+                tier,
+                is_last,
+                request_caps,
+                canonical_request,
+                session_record,
+                incompatible_reasons,
+            )
             if gate == "skip":
                 continue
 
@@ -277,24 +342,57 @@ class _RouteExecutor:
                     duration = int((time.monotonic() - start) * 1000)
                     model = body.get("model", "unknown")
                     model_served = resp.model_served or tier.vendor.map_model(model)
-                    self._recorder.log_model_call(vendor=tier.name, model_requested=model, model_served=model_served, duration_ms=duration, usage=resp.usage)
-                    await self._session_mgr.persist_session(tier.vendor.get_compat_trace(), session_record)
+                    self._recorder.log_model_call(
+                        vendor=tier.name,
+                        model_requested=model,
+                        model_served=model_served,
+                        duration_ms=duration,
+                        usage=resp.usage,
+                    )
+                    await self._session_mgr.persist_session(
+                        tier.vendor.get_compat_trace(), session_record
+                    )
                     await self._recorder.record(
-                        tier.name, model, model_served, resp.usage, duration, True,
-                        failed_tier_name is not None, failed_tier_name,
-                        evidence_records=self._recorder.build_nonstream_evidence_records(vendor=tier.name, model_served=model_served, usage=resp.usage),
+                        tier.name,
+                        model,
+                        model_served,
+                        resp.usage,
+                        duration,
+                        True,
+                        failed_tier_name is not None,
+                        failed_tier_name,
+                        evidence_records=self._recorder.build_nonstream_evidence_records(
+                            vendor=tier.name,
+                            model_served=model_served,
+                            usage=resp.usage,
+                        ),
                     )
                     return resp
 
                 # 非流式的 semantic rejection 和 failover 判断（从响应对象而非异常中提取）
-                if not is_last and is_semantic_rejection(status_code=resp.status_code, error_type=resp.error_type, error_message=resp.error_message):
-                    logger.warning("Tier %s semantic rejection (%s), trying next tier without recording failure", tier.name, resp.error_type or resp.status_code)
+                if not is_last and is_semantic_rejection(
+                    status_code=resp.status_code,
+                    error_type=resp.error_type,
+                    error_message=resp.error_message,
+                ):
+                    logger.warning(
+                        "Tier %s semantic rejection (%s), trying next tier without recording failure",
+                        tier.name,
+                        resp.error_type or resp.status_code,
+                    )
                     failed_tier_name = tier.name
                     continue
 
-                if not is_last and tier.vendor.should_trigger_failover(resp.status_code, {"error": {"type": resp.error_type, "message": resp.error_message}}):
-                    logger.warning("Tier %s error %d, failing over", tier.name, resp.status_code)
-                    rl_info = parse_rate_limit_headers(resp.response_headers, resp.status_code, resp.error_message)
+                if not is_last and tier.vendor.should_trigger_failover(
+                    resp.status_code,
+                    {"error": {"type": resp.error_type, "message": resp.error_message}},
+                ):
+                    logger.warning(
+                        "Tier %s error %d, failing over", tier.name, resp.status_code
+                    )
+                    rl_info = parse_rate_limit_headers(
+                        resp.response_headers, resp.status_code, resp.error_message
+                    )
                     tier.record_failure(
                         is_cap_error=self._is_cap_error(resp) or rl_info.is_cap_error,
                         retry_after_seconds=compute_effective_retry_seconds(rl_info),
@@ -308,16 +406,32 @@ class _RouteExecutor:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = resp.model_served or tier.vendor.map_model(model)
-                self._recorder.log_model_call(vendor=tier.name, model_requested=model, model_served=model_served, duration_ms=duration, usage=resp.usage)
+                self._recorder.log_model_call(
+                    vendor=tier.name,
+                    model_requested=model,
+                    model_served=model_served,
+                    duration_ms=duration,
+                    usage=resp.usage,
+                )
                 await self._recorder.record(
-                    tier.name, model, model_served, resp.usage, duration, resp.status_code < 400,
-                    failed_tier_name is not None, failed_tier_name,
-                    evidence_records=self._recorder.build_nonstream_evidence_records(vendor=tier.name, model_served=model_served, usage=resp.usage),
+                    tier.name,
+                    model,
+                    model_served,
+                    resp.usage,
+                    duration,
+                    resp.status_code < 400,
+                    failed_tier_name is not None,
+                    failed_tier_name,
+                    evidence_records=self._recorder.build_nonstream_evidence_records(
+                        vendor=tier.name, model_served=model_served, usage=resp.usage
+                    ),
                 )
                 return resp
 
             except TokenAcquireError as exc:
-                failed_tier_name, last_exc = await self._handle_token_error(tier, exc, is_last, failed_tier_name)
+                failed_tier_name, last_exc = await self._handle_token_error(
+                    tier, exc, is_last, failed_tier_name
+                )
                 if is_last:
                     raise
                 continue
@@ -332,7 +446,9 @@ class _RouteExecutor:
             except Exception as exc:
                 logger.error(
                     "Tier %s message unexpected error: %s: %s",
-                    tier.name, type(exc).__name__, exc,
+                    tier.name,
+                    type(exc).__name__,
+                    exc,
                     exc_info=True,
                 )
                 tier.record_failure()
@@ -342,7 +458,10 @@ class _RouteExecutor:
                 raise
 
         if incompatible_reasons:
-            raise NoCompatibleVendorError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商", reasons=incompatible_reasons)
+            raise NoCompatibleVendorError(
+                "当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商",
+                reasons=incompatible_reasons,
+            )
         raise RuntimeError("无可用供应商层级")
 
     # ── 门控与错误处理 ──────────────────────────────────────
@@ -366,18 +485,29 @@ class _RouteExecutor:
         if not supported:
             reason_text = ",".join(sorted({r.value for r in reasons}))
             incompatible_reasons.append(f"{tier.name}:{reason_text}")
-            logger.info("Tier %s skipped due to incompatible capabilities: %s", tier.name, reason_text)
+            logger.info(
+                "Tier %s skipped due to incompatible capabilities: %s",
+                tier.name,
+                reason_text,
+            )
             return "skip"
 
         decision = tier.vendor.make_compatibility_decision(canonical_request)
         if decision.status is CompatibilityStatus.UNSAFE:
             reason_text = ",".join(sorted(decision.unsupported_semantics))
             incompatible_reasons.append(f"{tier.name}:{reason_text}")
-            logger.info("Tier %s skipped due to compatibility decision: %s", tier.name, reason_text)
+            logger.info(
+                "Tier %s skipped due to compatibility decision: %s",
+                tier.name,
+                reason_text,
+            )
             return "skip"
 
         self._session_mgr.apply_compat_context(
-            tier=tier, canonical_request=canonical_request, decision=decision, session_record=session_record,
+            tier=tier,
+            canonical_request=canonical_request,
+            decision=decision,
+            session_record=session_record,
         )
 
         # 非终端层使用健康检查门控；终端层仅检查 can_execute
@@ -430,10 +560,17 @@ class _RouteExecutor:
                 error_message=error.get("message") if isinstance(error, dict) else None,
             )
             if semantic_rejection and not is_last:
-                logger.warning("Tier %s semantic rejection, trying next tier without recording failure", tier.name)
+                logger.warning(
+                    "Tier %s semantic rejection, trying next tier without recording failure",
+                    tier.name,
+                )
                 return True, tier.name, exc
 
-            rl_info = parse_rate_limit_headers(exc.response.headers, exc.response.status_code, exc.response.text[:500] if exc.response.text else None)
+            rl_info = parse_rate_limit_headers(
+                exc.response.headers,
+                exc.response.status_code,
+                exc.response.text[:500] if exc.response.text else None,
+            )
             tier.record_failure(
                 is_cap_error=rl_info.is_cap_error,
                 retry_after_seconds=compute_effective_retry_seconds(rl_info),

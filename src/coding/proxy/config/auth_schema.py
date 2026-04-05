@@ -15,10 +15,10 @@ class AuthConfig(BaseModel):
 
     github_client_id: str = "Iv1.b507a08c87ecfe98"
     google_client_id: str = (
-        "1071006060591-tmhssin2h21lcre235vtolojh4g403ep"
-        ".apps.googleusercontent.com"
+        "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
     )
     google_client_secret: str = "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"
     token_store_path: str = "~/.coding-proxy/tokens.json"
+
 
 __all__ = ["AuthConfig"]

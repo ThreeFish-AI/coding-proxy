@@ -18,8 +18,7 @@ from typing import Any
 
 import httpx
 
-from .constants import PROXY_SKIP_HEADERS, RESPONSE_SANITIZE_SKIP_HEADERS
-
+from .constants import RESPONSE_SANITIZE_SKIP_HEADERS
 
 # ═══════════════════════════════════════════════════════════════
 # 工具函数（公开 API，去除原 _ 前缀）
@@ -28,7 +27,11 @@ from .constants import PROXY_SKIP_HEADERS, RESPONSE_SANITIZE_SKIP_HEADERS
 
 def sanitize_headers_for_synthetic_response(headers: httpx.Headers) -> dict[str, str]:
     """移除 content-encoding 等头部，避免合成 httpx.Response 时触发二次解压."""
-    return {k: v for k, v in headers.items() if k.lower() not in RESPONSE_SANITIZE_SKIP_HEADERS}
+    return {
+        k: v
+        for k, v in headers.items()
+        if k.lower() not in RESPONSE_SANITIZE_SKIP_HEADERS
+    }
 
 
 def decode_json_body(response: httpx.Response) -> dict[str, Any] | list[Any] | None:
@@ -52,7 +55,9 @@ def decode_json_body(response: httpx.Response) -> dict[str, Any] | list[Any] | N
         return None
 
 
-def extract_error_message(response: httpx.Response, resp_body: dict[str, Any] | list[Any] | None) -> str | None:
+def extract_error_message(
+    response: httpx.Response, resp_body: dict[str, Any] | list[Any] | None
+) -> str | None:
     """从 HTTP 响应中提取可读错误消息."""
     if isinstance(resp_body, dict):
         error = resp_body.get("error")
@@ -175,7 +180,9 @@ class CopilotExchangeDiagnostics:
         if self.expires_in_seconds:
             data["expires_in_seconds"] = self.expires_in_seconds
         if self.expires_at_unix:
-            data["ttl_seconds"] = max(self.expires_at_unix - int(__import__("time").time()), 0)
+            data["ttl_seconds"] = max(
+                self.expires_at_unix - int(__import__("time").time()), 0
+            )
         if self.capabilities:
             data["capabilities"] = self.capabilities
         if self.updated_at_unix:
@@ -206,13 +213,23 @@ NoCompatibleBackendError = NoCompatibleVendorError
 
 __all__ = [
     # 新命名
-    "VendorCapabilities", "VendorResponse", "NoCompatibleVendorError",
+    "VendorCapabilities",
+    "VendorResponse",
+    "NoCompatibleVendorError",
     # 向后兼容别名
-    "BackendCapabilities", "BackendResponse", "NoCompatibleBackendError",
+    "BackendCapabilities",
+    "BackendResponse",
+    "NoCompatibleBackendError",
     # 通用类型（不变）
-    "UsageInfo", "CapabilityLossReason", "RequestCapabilities",
+    "UsageInfo",
+    "CapabilityLossReason",
+    "RequestCapabilities",
     # Copilot 诊断类
-    "CopilotExchangeDiagnostics", "CopilotMisdirectedRequest", "CopilotModelCatalog",
+    "CopilotExchangeDiagnostics",
+    "CopilotMisdirectedRequest",
+    "CopilotModelCatalog",
     # 工具函数
-    "decode_json_body", "extract_error_message", "sanitize_headers_for_synthetic_response",
+    "decode_json_body",
+    "extract_error_message",
+    "sanitize_headers_for_synthetic_response",
 ]

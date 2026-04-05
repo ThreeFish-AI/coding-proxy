@@ -6,7 +6,7 @@ import asyncio
 import logging
 import secrets
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -21,8 +21,7 @@ logger = logging.getLogger(__name__)
 # SOT（权威源）: coding.proxy.config.schema.AuthConfig
 # 此处默认值仅作 fallback，生产环境应通过 config.yaml 的 auth 段覆盖
 _DEFAULT_CLIENT_ID = (
-    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep"
-    ".apps.googleusercontent.com"
+    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
 )
 _DEFAULT_CLIENT_SECRET = "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"
 
@@ -44,7 +43,9 @@ class _CallbackHandler(BaseHTTPRequestHandler):
     使用实例级 result dict 避免类属性在并发场景下的交叉污染.
     """
 
-    def __init__(self, *args: Any, result: dict[str, str | None], **kwargs: Any) -> None:
+    def __init__(
+        self, *args: Any, result: dict[str, str | None], **kwargs: Any
+    ) -> None:
         self._result = result
         super().__init__(*args, **kwargs)
 
@@ -103,7 +104,11 @@ class GoogleOAuthProvider(OAuthProvider):
     async def login(self) -> ProviderTokens:
         """执行 Google OAuth2 Code Flow，返回 Token."""
         state = secrets.token_urlsafe(32)
-        result: dict[str, str | None] = {"auth_code": None, "state": None, "error": None}
+        result: dict[str, str | None] = {
+            "auth_code": None,
+            "state": None,
+            "error": None,
+        }
 
         def _make_handler(*args: Any, **kwargs: Any) -> _CallbackHandler:
             return _CallbackHandler(*args, result=result, **kwargs)
@@ -113,23 +118,26 @@ class GoogleOAuthProvider(OAuthProvider):
         redirect_port = server.server_address[1]
         redirect_uri = f"http://127.0.0.1:{redirect_port}/callback"
 
-        params = urlencode({
-            "client_id": self._client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(_SCOPES),
-            "state": state,
-            "access_type": "offline",
-            "prompt": "consent",
-        })
+        params = urlencode(
+            {
+                "client_id": self._client_id,
+                "redirect_uri": redirect_uri,
+                "response_type": "code",
+                "scope": " ".join(_SCOPES),
+                "state": state,
+                "access_type": "offline",
+                "prompt": "consent",
+            }
+        )
         auth_url = f"{_AUTH_URL}?{params}"
 
         logger.info("请在浏览器中完成 Google 授权")
-        print(f"\n  🔗 请在浏览器中访问以下链接完成授权:\n")
+        print("\n  🔗 请在浏览器中访问以下链接完成授权:\n")
         print(f"  {auth_url}\n")
 
         # 打开浏览器
         import webbrowser
+
         webbrowser.open(auth_url)
 
         # 等待回调
@@ -153,9 +161,7 @@ class GoogleOAuthProvider(OAuthProvider):
         # 交换 code → token
         return await self._exchange_code(result["auth_code"], redirect_uri)
 
-    async def _exchange_code(
-        self, code: str, redirect_uri: str
-    ) -> ProviderTokens:
+    async def _exchange_code(self, code: str, redirect_uri: str) -> ProviderTokens:
         """将 authorization code 交换为 access_token + refresh_token."""
         resp = await self._http.post(
             _TOKEN_URL,

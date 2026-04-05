@@ -9,17 +9,18 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Protocol
 
 import httpx
 
 # ── Copilot URL / 版本常量（SSOT: model/constants.py）──────
 
-from ..model.constants import (
+from ..model.constants import (  # noqa: F401
     _COPILOT_VERSION,
-    _EDITOR_VERSION,
     _EDITOR_PLUGIN_VERSION,
+    _EDITOR_VERSION,
     _GITHUB_API_VERSION,
     _USER_AGENT,
 )
@@ -29,7 +30,9 @@ def _normalize_base_url(url: str) -> str:
     return url.rstrip("/")
 
 
-def build_copilot_candidate_base_urls(account_type: str, configured_base_url: str) -> list[str]:
+def build_copilot_candidate_base_urls(
+    account_type: str, configured_base_url: str
+) -> list[str]:
     """构建 Copilot 候选基础地址列表."""
     if configured_base_url.strip():
         return [_normalize_base_url(configured_base_url.strip())]
@@ -91,7 +94,7 @@ def normalize_copilot_requested_model(model: str) -> str:
     )
     for prefix, family in family_aliases:
         if value.startswith(prefix):
-            remainder = value[len(prefix):]
+            remainder = value[len(prefix) :]
             major = remainder.split("-", 1)[0].split(".", 1)[0]
             if major.isdigit():
                 return f"{family}-{major}"
@@ -142,13 +145,15 @@ def select_copilot_model(
     requested_major = copilot_model_major(requested_model)
 
     family_candidates = [
-        model for model in unique_available
+        model
+        for model in unique_available
         if copilot_model_family(model) == requested_family
         and (requested_major is None or copilot_model_major(model) == requested_major)
     ]
     if not family_candidates:
         family_candidates = [
-            model for model in unique_available
+            model
+            for model in unique_available
             if copilot_model_family(model) == requested_family
         ]
     if not family_candidates:
@@ -334,7 +339,9 @@ class CopilotModelResolver:
         # 优先：配置规则显式映射
         if self._model_mapper is not None:
             mapped = self._model_mapper.map(
-                requested_model, vendor="copilot", default=requested_model,
+                requested_model,
+                vendor="copilot",
+                default=requested_model,
             )
             if mapped != requested_model:
                 diagnostics["requested_model"] = requested_model
@@ -353,14 +360,15 @@ class CopilotModelResolver:
             refresh_reason=refresh_reason,
         )
         resolved_model, resolution_reason = select_copilot_model(
-            requested_model, available_models,
+            requested_model,
+            available_models,
         )
         if not resolved_model:
             resolved_model = normalized_model or requested_model
             resolution_reason = (
                 "catalog_unavailable_fallback_to_normalized"
-                if not available_models else
-                "no_same_family_model_fallback_to_normalized"
+                if not available_models
+                else "no_same_family_model_fallback_to_normalized"
             )
 
         diagnostics["requested_model"] = requested_model

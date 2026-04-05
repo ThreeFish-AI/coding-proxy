@@ -6,13 +6,12 @@ import asyncio
 import inspect
 import logging
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
 
-from ..config.loader import load_config
 from ..auth.store import TokenStoreManager
+from ..config.loader import load_config
 
 app = typer.Typer(name="auth", help="管理 OAuth 登录凭证")
 console = Console()
@@ -23,10 +22,14 @@ def _build_token_store(cfg_path: Path | None = None):
     """按配置解析 Token Store 路径并完成加载."""
     cfg = load_config(cfg_path)
     store = TokenStoreManager(
-        store_path=Path(cfg.auth.token_store_path) if cfg.auth.token_store_path else None,
+        store_path=Path(cfg.auth.token_store_path)
+        if cfg.auth.token_store_path
+        else None,
     )
     store.load()
-    logger.debug("OAuth token store loaded from config path: %s", cfg.auth.token_store_path)
+    logger.debug(
+        "OAuth token store loaded from config path: %s", cfg.auth.token_store_path
+    )
     return cfg, store
 
 
@@ -35,7 +38,9 @@ def _build_token_store(cfg_path: Path | None = None):
 
 @app.command("login")
 def auth_login(
-    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="指定 provider (github/google)"),
+    provider: str | None = typer.Option(
+        None, "--provider", "-p", help="指定 provider (github/google)"
+    ),
 ) -> None:
     """执行 OAuth 浏览器登录."""
     asyncio.run(_run_auth_login(provider))
@@ -51,17 +56,25 @@ async def _run_auth_login(provider: str | None) -> None:
     if provider == "github":
         providers = [("github", GitHubDeviceFlowProvider())]
     elif provider == "google":
-        providers = [("google", GoogleOAuthProvider(
-            client_id=cfg.auth.google_client_id,
-            client_secret=cfg.auth.google_client_secret,
-        ))]
+        providers = [
+            (
+                "google",
+                GoogleOAuthProvider(
+                    client_id=cfg.auth.google_client_id,
+                    client_secret=cfg.auth.google_client_secret,
+                ),
+            )
+        ]
     elif provider is None:
         providers = [
             ("github", GitHubDeviceFlowProvider()),
-            ("google", GoogleOAuthProvider(
-                client_id=cfg.auth.google_client_id,
-                client_secret=cfg.auth.google_client_secret,
-            )),
+            (
+                "google",
+                GoogleOAuthProvider(
+                    client_id=cfg.auth.google_client_id,
+                    client_secret=cfg.auth.google_client_secret,
+                ),
+            ),
         ]
     else:
         console.print(f"[red]未知 provider: {provider}[/red]")
@@ -108,9 +121,11 @@ def auth_reauth(
     try:
         resp = _httpx.post(f"http://127.0.0.1:{port}/api/reauth/{provider}", timeout=5)
         if resp.status_code == 202:
-            console.print(f"[green]{provider} 重认证已触发，请在浏览器中完成登录[/green]")
+            console.print(
+                f"[green]{provider} 重认证已触发，请在浏览器中完成登录[/green]"
+            )
         elif resp.status_code == 404:
-            console.print(f"[red]重认证不可用（代理未启用对应后端）[/red]")
+            console.print("[red]重认证不可用（代理未启用对应后端）[/red]")
         else:
             console.print(f"[red]触发失败: {resp.status_code} {resp.text}[/red]")
     except _httpx.ConnectError:
@@ -119,7 +134,9 @@ def auth_reauth(
 
 @app.command("logout")
 def auth_logout(
-    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="指定 provider（不指定则全部登出）"),
+    provider: str | None = typer.Option(
+        None, "--provider", "-p", help="指定 provider（不指定则全部登出）"
+    ),
 ) -> None:
     """清除已存储的 OAuth 凭证."""
     _, store = _build_token_store()
@@ -170,7 +187,9 @@ async def auto_login_if_needed(cfg_path: Path | None) -> None:
             except Exception:
                 pass  # 网络失败不阻塞启动
         if needs:
-            console.print("[bold cyan]Copilot 层缺少有效凭证，启动 GitHub OAuth 登录...[/bold cyan]")
+            console.print(
+                "[bold cyan]Copilot 层缺少有效凭证，启动 GitHub OAuth 登录...[/bold cyan]"
+            )
             try:
                 tokens = await prov.login()
                 store.set("github", tokens)
@@ -192,14 +211,20 @@ async def auto_login_if_needed(cfg_path: Path | None) -> None:
         needs = await _resolve_needs_login(prov, tokens)
         try:
             if not needs and tokens.is_expired and tokens.refresh_token:
-                logger.info("Google access_token 已过期，尝试使用 refresh_token 静默刷新")
+                logger.info(
+                    "Google access_token 已过期，尝试使用 refresh_token 静默刷新"
+                )
                 try:
                     tokens = await prov.refresh(tokens)
                     store.set("google", tokens)
                     logger.info("Google refresh_token 静默刷新成功")
                 except Exception as exc:
-                    logger.warning("Google refresh_token 静默刷新失败，回退交互登录: %s", exc)
-                    console.print("[bold cyan]Antigravity 凭证刷新失败，启动 Google OAuth 登录...[/bold cyan]")
+                    logger.warning(
+                        "Google refresh_token 静默刷新失败，回退交互登录: %s", exc
+                    )
+                    console.print(
+                        "[bold cyan]Antigravity 凭证刷新失败，启动 Google OAuth 登录...[/bold cyan]"
+                    )
                     tokens = await prov.login()
                     store.set("google", tokens)
                     console.print("[green]Google 登录成功[/green]")
@@ -211,7 +236,9 @@ async def auto_login_if_needed(cfg_path: Path | None) -> None:
                     pass
 
             if needs:
-                console.print("[bold cyan]Antigravity 层缺少有效凭证，启动 Google OAuth 登录...[/bold cyan]")
+                console.print(
+                    "[bold cyan]Antigravity 层缺少有效凭证，启动 Google OAuth 登录...[/bold cyan]"
+                )
                 tokens = await prov.login()
                 store.set("google", tokens)
                 console.print("[green]Google 登录成功[/green]")

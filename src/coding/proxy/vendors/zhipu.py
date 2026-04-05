@@ -11,14 +11,19 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
 from ..config.schema import ZhipuConfig
 from ..routing.model_mapper import ModelMapper
-from .base import PROXY_SKIP_HEADERS, BaseVendor, VendorCapabilities, VendorResponse
-from .base import _sanitize_headers_for_synthetic_response
+from .base import (
+    PROXY_SKIP_HEADERS,
+    BaseVendor,
+    VendorCapabilities,
+    VendorResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +93,8 @@ class ZhipuVendor(BaseVendor):
 
         # 剥离原始认证头（authorization / x-api-key），由下方 new_headers 重建
         filtered = {
-            k: v for k, v in headers.items()
+            k: v
+            for k, v in headers.items()
             if k.lower() not in PROXY_SKIP_HEADERS
             and k.lower() not in ("x-api-key", "authorization")
         }
@@ -111,7 +117,9 @@ class ZhipuVendor(BaseVendor):
     ) -> VendorResponse:
         """最小化覆写：API key 缺失时快速返回 401 响应，其余委托基类（含 _normalize_error_response 钩子）."""
         if not self._api_key:
-            raw = json.dumps(self._missing_api_key_payload(), ensure_ascii=False).encode()
+            raw = json.dumps(
+                self._missing_api_key_payload(), ensure_ascii=False
+            ).encode()
             return VendorResponse(
                 status_code=401,
                 raw_body=raw,
@@ -138,8 +146,12 @@ class ZhipuVendor(BaseVendor):
         return VendorResponse(
             status_code=status_code,
             raw_body=raw_body,
-            error_type=error.get("type") if isinstance(error, dict) else "authentication_error",
-            error_message=error.get("message") if isinstance(error, dict) else "Zhipu API 认证失败",
+            error_type=error.get("type")
+            if isinstance(error, dict)
+            else "authentication_error",
+            error_message=error.get("message")
+            if isinstance(error, dict)
+            else "Zhipu API 认证失败",
             response_headers=backend_resp.response_headers,
             usage=backend_resp.usage,
             model_served=backend_resp.model_served,
@@ -160,7 +172,12 @@ class ZhipuVendor(BaseVendor):
             raise httpx.HTTPStatusError(
                 "zhipu API error: 401",
                 request=request,
-                response=httpx.Response(401, content=raw, headers={"content-type": "application/json"}, request=request),
+                response=httpx.Response(
+                    401,
+                    content=raw,
+                    headers={"content-type": "application/json"},
+                    request=request,
+                ),
             )
         try:
             async for chunk in super().send_message_stream(request_body, headers):
@@ -206,7 +223,10 @@ class ZhipuVendor(BaseVendor):
         payload["error"] = {
             **error,
             "type": "authentication_error",
-            "message": str(error.get("message") or "Zhipu API 认证失败，请检查 api_key 或兼容端点权限"),
+            "message": str(
+                error.get("message")
+                or "Zhipu API 认证失败，请检查 api_key 或兼容端点权限"
+            ),
         }
         return payload
 

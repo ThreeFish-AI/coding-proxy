@@ -25,10 +25,10 @@ class Currency(StrEnum):
         if self is Currency.USD:
             return "$"
         # CNY 及未来扩展币种
-        return "\u00a5"   # ¥ (U+00A5)
+        return "\u00a5"  # ¥ (U+00A5)
 
     @classmethod
-    def default(cls) -> "Currency":
+    def default(cls) -> Currency:
         """默认币种（向后兼容：无前缀视为 USD）."""
         return cls.USD
 

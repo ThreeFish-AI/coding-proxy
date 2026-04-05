@@ -32,7 +32,9 @@ def json_error_response(
     )
 
 
-def stream_error_event(error_type: str, message: str, details: list[str] | None = None) -> bytes:
+def stream_error_event(
+    error_type: str, message: str, details: list[str] | None = None
+) -> bytes:
     """构造 SSE 格式的错误事件."""
     payload: dict[str, Any] = {
         "type": "error",

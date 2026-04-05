@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-
 from dataclasses import dataclass, field
 
 from ..vendors.base import BaseVendor
@@ -90,9 +89,14 @@ class VendorTier:
         if self.quota_guard and is_cap_error:
             self.quota_guard.notify_cap_error(retry_after_seconds=retry_after_seconds)
         if self.weekly_quota_guard and is_cap_error:
-            self.weekly_quota_guard.notify_cap_error(retry_after_seconds=retry_after_seconds)
+            self.weekly_quota_guard.notify_cap_error(
+                retry_after_seconds=retry_after_seconds
+            )
 
-        if rate_limit_deadline is not None and rate_limit_deadline > self._rate_limit_deadline:
+        if (
+            rate_limit_deadline is not None
+            and rate_limit_deadline > self._rate_limit_deadline
+        ):
             self._rate_limit_deadline = rate_limit_deadline
             logger.info(
                 "Tier %s: rate limit deadline updated, %.1fs remaining",
@@ -120,7 +124,11 @@ class VendorTier:
 
         cb_allows = self.circuit_breaker.can_execute() if self.circuit_breaker else True
         qg_allows = self.quota_guard.can_use_primary() if self.quota_guard else True
-        wqg_allows = self.weekly_quota_guard.can_use_primary() if self.weekly_quota_guard else True
+        wqg_allows = (
+            self.weekly_quota_guard.can_use_primary()
+            if self.weekly_quota_guard
+            else True
+        )
 
         if not cb_allows and not qg_allows and not wqg_allows:
             return False
@@ -135,7 +143,10 @@ class VendorTier:
             if self.quota_guard._state == QuotaState.QUOTA_EXCEEDED and qg_allows:
                 is_probe_scenario = True
         if self.weekly_quota_guard:
-            if self.weekly_quota_guard._state == QuotaState.QUOTA_EXCEEDED and wqg_allows:
+            if (
+                self.weekly_quota_guard._state == QuotaState.QUOTA_EXCEEDED
+                and wqg_allows
+            ):
                 is_probe_scenario = True
 
         if not is_probe_scenario:

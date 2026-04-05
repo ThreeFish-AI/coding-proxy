@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -50,28 +51,35 @@ class _OpenAICompatState:
             return []
         self.started = True
         return [
-            _make_event("message_start", {
-                "type": "message_start",
-                "message": {
-                    "id": self.message_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [],
-                    "model": self.model,
-                    "usage": {
-                        "input_tokens": self.input_tokens,
-                        "output_tokens": 0,
-                        **(
-                            {"cache_creation_input_tokens": self.cache_creation_tokens}
-                            if self.cache_creation_tokens > 0 else {}
-                        ),
-                        **(
-                            {"cache_read_input_tokens": self.cache_read_tokens}
-                            if self.cache_read_tokens > 0 else {}
-                        ),
+            _make_event(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": self.message_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "model": self.model,
+                        "usage": {
+                            "input_tokens": self.input_tokens,
+                            "output_tokens": 0,
+                            **(
+                                {
+                                    "cache_creation_input_tokens": self.cache_creation_tokens
+                                }
+                                if self.cache_creation_tokens > 0
+                                else {}
+                            ),
+                            **(
+                                {"cache_read_input_tokens": self.cache_read_tokens}
+                                if self.cache_read_tokens > 0
+                                else {}
+                            ),
+                        },
                     },
                 },
-            }),
+            ),
         ]
 
     def close(self, reason: str = "end_turn") -> list[bytes]:
@@ -80,10 +88,15 @@ class _OpenAICompatState:
         self.stopped = True
         chunks: list[bytes] = []
         if self.started and self.content_block_open:
-            chunks.append(_make_event("content_block_stop", {
-                "type": "content_block_stop",
-                "index": self.block_index,
-            }))
+            chunks.append(
+                _make_event(
+                    "content_block_stop",
+                    {
+                        "type": "content_block_stop",
+                        "index": self.block_index,
+                    },
+                )
+            )
             self.content_block_open = False
         usage_data = {"output_tokens": self.output_tokens}
         if self.usage_updated and self.input_tokens > 0:
@@ -92,11 +105,16 @@ class _OpenAICompatState:
             usage_data["cache_creation_input_tokens"] = self.cache_creation_tokens
         if self.cache_read_tokens > 0:
             usage_data["cache_read_input_tokens"] = self.cache_read_tokens
-        chunks.append(_make_event("message_delta", {
-            "type": "message_delta",
-            "delta": {"stop_reason": reason, "stop_sequence": None},
-            "usage": usage_data,
-        }))
+        chunks.append(
+            _make_event(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": reason, "stop_sequence": None},
+                    "usage": usage_data,
+                },
+            )
+        )
         chunks.append(_make_event("message_stop", {"type": "message_stop"}))
         return chunks
 
@@ -127,10 +145,15 @@ class _OpenAICompatState:
             return []
         self.content_block_open = False
         self.block_index += 1
-        return [_make_event("content_block_stop", {
-            "type": "content_block_stop",
-            "index": self.block_index - 1,
-        })]
+        return [
+            _make_event(
+                "content_block_stop",
+                {
+                    "type": "content_block_stop",
+                    "index": self.block_index - 1,
+                },
+            )
+        ]
 
     def open_thinking_block(self) -> list[bytes]:
         """打开 thinking 内容块（如尚未打开）."""
@@ -138,12 +161,19 @@ class _OpenAICompatState:
             return []
         self.thinking_block_open = True
         self.content_block_open = True
-        logger.debug("copilot-stream: opening thinking block at index=%d", self.block_index)
-        return [_make_event("content_block_start", {
-            "type": "content_block_start",
-            "index": self.block_index,
-            "content_block": {"type": "thinking", "thinking": ""},
-        })]
+        logger.debug(
+            "copilot-stream: opening thinking block at index=%d", self.block_index
+        )
+        return [
+            _make_event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": self.block_index,
+                    "content_block": {"type": "thinking", "thinking": ""},
+                },
+            )
+        ]
 
     def ensure_text_block(self) -> list[bytes]:
         """确保当前为 text 内容块：先关闭 thinking，再处理工具块冲突，最后打开 text 块."""
@@ -154,10 +184,15 @@ class _OpenAICompatState:
                 "copilot-stream: closing thinking block at index=%d before opening text block",
                 self.block_index,
             )
-            chunks.append(_make_event("content_block_stop", {
-                "type": "content_block_stop",
-                "index": self.block_index,
-            }))
+            chunks.append(
+                _make_event(
+                    "content_block_stop",
+                    {
+                        "type": "content_block_stop",
+                        "index": self.block_index,
+                    },
+                )
+            )
             self.block_index += 1
             self.thinking_block_open = False
             self.content_block_open = False
@@ -169,15 +204,22 @@ class _OpenAICompatState:
             chunks.extend(self.close_content_block())
         # 打开 text 块
         if not self.content_block_open:
-            chunks.append(_make_event("content_block_start", {
-                "type": "content_block_start",
-                "index": self.block_index,
-                "content_block": {"type": "text", "text": ""},
-            }))
+            chunks.append(
+                _make_event(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": self.block_index,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                )
+            )
             self.content_block_open = True
         return chunks
 
-    def open_tool_block(self, tool_index: int, tool_call: dict[str, Any]) -> list[bytes]:
+    def open_tool_block(
+        self, tool_index: int, tool_call: dict[str, Any]
+    ) -> list[bytes]:
         """注册并打开 tool_use 内容块."""
         chunks: list[bytes] = []
         if self.content_block_open:
@@ -187,16 +229,21 @@ class _OpenAICompatState:
             "name": tool_call["function"]["name"],
             "anthropic_block_index": self.block_index,
         }
-        chunks.append(_make_event("content_block_start", {
-            "type": "content_block_start",
-            "index": self.block_index,
-            "content_block": {
-                "type": "tool_use",
-                "id": tool_call["id"],
-                "name": tool_call["function"]["name"],
-                "input": {},
-            },
-        }))
+        chunks.append(
+            _make_event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": self.block_index,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": tool_call["id"],
+                        "name": tool_call["function"]["name"],
+                        "input": {},
+                    },
+                },
+            )
+        )
         self.content_block_open = True
         return chunks
 
@@ -205,14 +252,19 @@ class _OpenAICompatState:
         tool_info = self.tool_calls.get(tool_index)
         if not tool_info or not arguments:
             return []
-        return [_make_event("content_block_delta", {
-            "type": "content_block_delta",
-            "index": tool_info["anthropic_block_index"],
-            "delta": {
-                "type": "input_json_delta",
-                "partial_json": arguments,
-            },
-        })]
+        return [
+            _make_event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": tool_info["anthropic_block_index"],
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": arguments,
+                    },
+                },
+            )
+        ]
 
 
 def _make_event(event_type: str, data: dict[str, Any]) -> bytes:
@@ -243,13 +295,17 @@ _TOOL_USE_BLOCK_TYPES = {"text", "tool_use", "tool_call", "function_call", "thin
 _INPUT_JSON_DELTA_TYPES = {"input_json_delta", "arguments_delta", "tool_call_delta"}
 
 
-def _normalize_direct_event(data: dict[str, Any], event_name: str | None) -> list[bytes]:
+def _normalize_direct_event(
+    data: dict[str, Any], event_name: str | None
+) -> list[bytes]:
     event_type = data.get("type")
     if event_type == "content_block_start":
         block = data.get("content_block", {})
         block_type = block.get("type")
         if block_type not in _TOOL_USE_BLOCK_TYPES:
-            logger.debug("Filtered non-standard content_block_start type: %s", block_type)
+            logger.debug(
+                "Filtered non-standard content_block_start type: %s", block_type
+            )
             return []
         # OpenAI 兼容供应商可能在 content_block_start.input 中内联返回完整工具参数
         if block_type == "tool_use":
@@ -261,18 +317,27 @@ def _normalize_direct_event(data: dict[str, Any], event_name: str | None) -> lis
                     block.get("name", "?"),
                     json.dumps(inline_input, ensure_ascii=False)[:200],
                 )
-                result.append(_make_event("content_block_delta", {
-                    "type": "content_block_delta",
-                    "index": data.get("index", 0),
-                    "delta": {
-                        "type": "input_json_delta",
-                        "partial_json": json.dumps(inline_input, ensure_ascii=False),
-                    },
-                }))
+                result.append(
+                    _make_event(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": data.get("index", 0),
+                            "delta": {
+                                "type": "input_json_delta",
+                                "partial_json": json.dumps(
+                                    inline_input, ensure_ascii=False
+                                ),
+                            },
+                        },
+                    )
+                )
             return result
         # 非标准类型归一化为 tool_use
         if block_type in ("tool_call", "function_call"):
-            logger.debug("Normalizing non-standard block type '%s' to 'tool_use'", block_type)
+            logger.debug(
+                "Normalizing non-standard block type '%s' to 'tool_use'", block_type
+            )
             normalized_block = {**block, "type": "tool_use"}
             normalized_data = {**data, "content_block": normalized_block}
             return [_make_event(event_name or event_type, normalized_data)]
@@ -286,10 +351,20 @@ def _normalize_direct_event(data: dict[str, Any], event_name: str | None) -> lis
         # 归一化非标准 input_json_delta 别名（OpenAI 兼容供应商可能使用 arguments_delta 等）
         if delta_type in _INPUT_JSON_DELTA_TYPES:
             normalized_delta = {**delta, "type": "input_json_delta"}
-            if "partial_json" not in normalized_delta and "arguments" in normalized_delta:
+            if (
+                "partial_json" not in normalized_delta
+                and "arguments" in normalized_delta
+            ):
                 normalized_delta["partial_json"] = normalized_delta.pop("arguments")
-            logger.debug("Normalizing non-standard delta type '%s' to 'input_json_delta'", delta_type)
-            return [_make_event(event_name or event_type, {**data, "delta": normalized_delta})]
+            logger.debug(
+                "Normalizing non-standard delta type '%s' to 'input_json_delta'",
+                delta_type,
+            )
+            return [
+                _make_event(
+                    event_name or event_type, {**data, "delta": normalized_delta}
+                )
+            ]
         # 其他 delta 类型过滤
         logger.debug("Filtered non-standard content_block_delta type: %s", delta_type)
         return []
@@ -300,7 +375,9 @@ def _normalize_direct_event(data: dict[str, Any], event_name: str | None) -> lis
     return [_make_event(event_name or event_type, data)]
 
 
-def _normalize_stream_event(data: dict[str, Any], event_name: str | None) -> list[bytes]:
+def _normalize_stream_event(
+    data: dict[str, Any], event_name: str | None
+) -> list[bytes]:
     nested = data.get("event")
     if not isinstance(nested, dict):
         return []
@@ -337,7 +414,9 @@ def _extract_cache_creation_tokens(usage: dict[str, Any]) -> int:
     return 0
 
 
-def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> list[bytes]:
+def _normalize_openai_chunk(
+    data: dict[str, Any], state: _OpenAICompatState
+) -> list[bytes]:
     """将 OpenAI 格式 chunk 转换为 Anthropic SSE 事件序列.
 
     重构后为纯粹的事件分发器：token 更新、块生命周期管理均委托给 State 方法。
@@ -360,11 +439,16 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
     if reasoning_content:
         chunks.extend(state.ensure_started())
         chunks.extend(state.open_thinking_block())
-        chunks.append(_make_event("content_block_delta", {
-            "type": "content_block_delta",
-            "index": state.block_index,
-            "delta": {"type": "thinking_delta", "thinking": reasoning_content},
-        }))
+        chunks.append(
+            _make_event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": state.block_index,
+                    "delta": {"type": "thinking_delta", "thinking": reasoning_content},
+                },
+            )
+        )
 
     # 3. Text 内容 → text 块
     text_fragments = _extract_text_fragments(delta.get("content"))
@@ -372,11 +456,16 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
         chunks.extend(state.ensure_started())
         chunks.extend(state.ensure_text_block())
         for text in text_fragments:
-            chunks.append(_make_event("content_block_delta", {
-                "type": "content_block_delta",
-                "index": state.block_index,
-                "delta": {"type": "text_delta", "text": text},
-            }))
+            chunks.append(
+                _make_event(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": state.block_index,
+                        "delta": {"type": "text_delta", "text": text},
+                    },
+                )
+            )
 
     # 4. Tool calls → tool_use 块
     tool_calls = delta.get("tool_calls") or []
@@ -385,7 +474,11 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
             continue
         tool_index = int(tool_call.get("index", 0))
         # 注册新工具调用
-        if tool_call.get("id") and isinstance(tool_call.get("function"), dict) and tool_call["function"].get("name"):
+        if (
+            tool_call.get("id")
+            and isinstance(tool_call.get("function"), dict)
+            and tool_call["function"].get("name")
+        ):
             chunks.extend(state.ensure_started())
             chunks.extend(state.open_tool_block(tool_index, tool_call))
         # 追加工具参数
@@ -395,10 +488,15 @@ def _normalize_openai_chunk(data: dict[str, Any], state: _OpenAICompatState) -> 
             tool_info = state.tool_calls.get(tool_index)
             if arguments:
                 chunks.extend(state.feed_tool_arguments(tool_index, arguments))
-            elif tool_info and arguments is None and finish_reason in ("tool_calls", "stop"):
+            elif (
+                tool_info
+                and arguments is None
+                and finish_reason in ("tool_calls", "stop")
+            ):
                 logger.debug(
                     "Tool call '%s' has null arguments at finish_reason=%s",
-                    tool_info.get("name", "?"), finish_reason,
+                    tool_info.get("name", "?"),
+                    finish_reason,
                 )
 
     # 5. Finish reason → 关闭消息

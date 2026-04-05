@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..pricing import PricingTable
     from ..logging.db import TokenLogger
+    from ..pricing import PricingTable
     from .usage_parser import UsageInfo
 
 logger = logging.getLogger(__name__)
@@ -70,9 +69,15 @@ class UsageRecorder:
         logger.info(
             "ModelCall: vendor=%s model_requested=%s model_served=%s "
             "duration=%dms tokens=[in:%d out:%d cache_create:%d cache_read:%d] cost=%s",
-            vendor, model_requested, model_served, duration_ms,
-            usage.input_tokens, usage.output_tokens,
-            usage.cache_creation_tokens, usage.cache_read_tokens, cost_str,
+            vendor,
+            model_requested,
+            model_served,
+            duration_ms,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_creation_tokens,
+            usage.cache_read_tokens,
+            cost_str,
         )
 
     # ── 持久化记录 ────────────────────────────────────────
@@ -92,10 +97,17 @@ class UsageRecorder:
         if not self._token_logger:
             return
         await self._token_logger.log(
-            vendor=vendor, model_requested=model_requested, model_served=model_served,
-            input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
-            cache_creation_tokens=usage.cache_creation_tokens, cache_read_tokens=usage.cache_read_tokens,
-            duration_ms=duration_ms, success=success, failover=failover, failover_from=failover_from,
+            vendor=vendor,
+            model_requested=model_requested,
+            model_served=model_served,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            duration_ms=duration_ms,
+            success=success,
+            failover=failover,
+            failover_from=failover_from,
             request_id=usage.request_id,
         )
         if not evidence_records or vendor != "copilot":
@@ -108,24 +120,47 @@ class UsageRecorder:
     # ── 证据记录构建 ──────────────────────────────────────
 
     @staticmethod
-    def build_nonstream_evidence_records(*, vendor: str, model_served: str, usage: UsageInfo) -> list[dict[str, Any]]:
+    def build_nonstream_evidence_records(
+        *, vendor: str, model_served: str, usage: UsageInfo
+    ) -> list[dict[str, Any]]:
         if vendor != "copilot":
             return []
-        raw_usage: dict[str, Any] = {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
+        raw_usage: dict[str, Any] = {
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+        }
         if usage.cache_creation_tokens > 0:
             raw_usage["cache_creation_input_tokens"] = usage.cache_creation_tokens
         if usage.cache_read_tokens > 0:
             raw_usage["cache_read_input_tokens"] = usage.cache_read_tokens
-        return [{
-            "vendor": vendor, "request_id": usage.request_id, "model_served": model_served,
-            "evidence_kind": "nonstream_usage_summary",
-            "raw_usage_json": json.dumps(raw_usage, ensure_ascii=False, sort_keys=True),
-            "parsed_input_tokens": usage.input_tokens, "parsed_output_tokens": usage.output_tokens,
-            "parsed_cache_creation_tokens": usage.cache_creation_tokens, "parsed_cache_read_tokens": usage.cache_read_tokens,
-            "cache_signal_present": usage.cache_creation_tokens > 0 or usage.cache_read_tokens > 0,
-            "source_field_map_json": json.dumps({
-                "input_tokens": "input_tokens", "output_tokens": "output_tokens",
-                "cache_creation_tokens": "cache_creation_input_tokens" if usage.cache_creation_tokens > 0 else "",
-                "cache_read_tokens": "cache_read_input_tokens" if usage.cache_read_tokens > 0 else "",
-            }, ensure_ascii=False, sort_keys=True),
-        }]
+        return [
+            {
+                "vendor": vendor,
+                "request_id": usage.request_id,
+                "model_served": model_served,
+                "evidence_kind": "nonstream_usage_summary",
+                "raw_usage_json": json.dumps(
+                    raw_usage, ensure_ascii=False, sort_keys=True
+                ),
+                "parsed_input_tokens": usage.input_tokens,
+                "parsed_output_tokens": usage.output_tokens,
+                "parsed_cache_creation_tokens": usage.cache_creation_tokens,
+                "parsed_cache_read_tokens": usage.cache_read_tokens,
+                "cache_signal_present": usage.cache_creation_tokens > 0
+                or usage.cache_read_tokens > 0,
+                "source_field_map_json": json.dumps(
+                    {
+                        "input_tokens": "input_tokens",
+                        "output_tokens": "output_tokens",
+                        "cache_creation_tokens": "cache_creation_input_tokens"
+                        if usage.cache_creation_tokens > 0
+                        else "",
+                        "cache_read_tokens": "cache_read_input_tokens"
+                        if usage.cache_read_tokens > 0
+                        else "",
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            }
+        ]

@@ -48,13 +48,18 @@ class CopilotTokenManager(BaseTokenManager):
 
     @classmethod
     def _build_missing_token_error(
-        cls, data: Any, status_code: int,
+        cls,
+        data: Any,
+        status_code: int,
     ) -> TokenAcquireError:
         detail = cls._format_body_excerpt(data)
         lowered = detail.lower()
         capability_keys = {
-            "chat_enabled", "agent_mode_auto_approval", "chat_jetbrains_enabled",
-            "annotations_enabled", "code_quote_enabled",
+            "chat_enabled",
+            "agent_mode_auto_approval",
+            "chat_jetbrains_enabled",
+            "annotations_enabled",
+            "code_quote_enabled",
         }
         if isinstance(data, dict) and capability_keys.intersection(data.keys()):
             return TokenAcquireError.with_kind(
@@ -63,9 +68,14 @@ class CopilotTokenManager(BaseTokenManager):
                 needs_reauth=True,
             )
         needs_reauth = status_code == 401 or any(
-            pattern in lowered for pattern in ("bad credentials", "invalid token", "unauthorized")
+            pattern in lowered
+            for pattern in ("bad credentials", "invalid token", "unauthorized")
         )
-        kind = TokenErrorKind.INVALID_CREDENTIALS if needs_reauth else TokenErrorKind.TEMPORARY
+        kind = (
+            TokenErrorKind.INVALID_CREDENTIALS
+            if needs_reauth
+            else TokenErrorKind.TEMPORARY
+        )
         return TokenAcquireError.with_kind(
             f"Copilot token 交换返回非预期响应: status={status_code}, detail={detail}",
             kind=kind,
@@ -85,10 +95,14 @@ class CopilotTokenManager(BaseTokenManager):
         )
         return {key: data[key] for key in capability_keys if key in data}
 
-    def _record_exchange(self, data: dict[str, Any], token_field: str, expires_in: int) -> None:
+    def _record_exchange(
+        self, data: dict[str, Any], token_field: str, expires_in: int
+    ) -> None:
         expires_at = int(time.time()) + max(expires_in, 0)
         self._last_exchange = CopilotExchangeDiagnostics(
-            raw_shape="token_refresh_in" if "token" in data else "access_token_expires_in",
+            raw_shape="token_refresh_in"
+            if "token" in data
+            else "access_token_expires_in",
             token_field=token_field,
             expires_in_seconds=expires_in,
             expires_at_unix=expires_at,

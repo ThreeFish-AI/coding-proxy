@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
 from ..compat.canonical import CompatibilityProfile, CompatibilityStatus
 from ..config.schema import AntigravityConfig, FailoverConfig
 from ..convert.anthropic_to_gemini import convert_request
-from ..convert.gemini_to_anthropic import convert_response, extract_usage
 from ..convert.gemini_sse_adapter import adapt_sse_stream
+from ..convert.gemini_to_anthropic import convert_response, extract_usage
 from ..routing.model_mapper import ModelMapper
 from .base import (
     BaseVendor,
@@ -20,8 +21,10 @@ from .base import (
     RequestCapabilities,
     UsageInfo,
     VendorCapabilities,
+    VendorResponse,
     _sanitize_headers_for_synthetic_response,
 )
+
 # GoogleOAuthTokenManager 已从 antigravity_token_manager.py 合并至本文件末尾
 from .mixins import TokenBackendMixin
 from .token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
@@ -123,7 +126,9 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         model_mapper: ModelMapper,
     ) -> None:
         token_manager = GoogleOAuthTokenManager(
-            config.client_id, config.client_secret, config.refresh_token,
+            config.client_id,
+            config.client_secret,
+            config.refresh_token,
         )
         TokenBackendMixin.__init__(self, token_manager)
         BaseVendor.__init__(self, config.base_url, config.timeout_ms, failover_config)
@@ -157,13 +162,16 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         )
 
     def supports_request(
-        self, request_caps: RequestCapabilities,
+        self,
+        request_caps: RequestCapabilities,
     ) -> tuple[bool, list[CapabilityLossReason]]:
         supported, reasons = super().supports_request(request_caps)
         if not supported:
             reasons = [
-                reason for reason in reasons
-                if reason not in {
+                reason
+                for reason in reasons
+                if reason
+                not in {
                     CapabilityLossReason.THINKING,
                     CapabilityLossReason.TOOLS,
                     CapabilityLossReason.METADATA,
@@ -180,7 +188,8 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         self._last_requested_model = model
         self._last_resolved_model = resolved
         self._last_model_resolution_reason = (
-            "configured_mapping" if resolved != self._default_model or model == self._default_model
+            "configured_mapping"
+            if resolved != self._default_model or model == self._default_model
             else "config_default_model_endpoint"
         )
         return resolved
@@ -292,7 +301,10 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         logger.debug("send_message_stream: POST %s", endpoint)
 
         async with client.stream(
-            "POST", endpoint, json=body, headers=prepared_headers,
+            "POST",
+            endpoint,
+            json=body,
+            headers=prepared_headers,
         ) as response:
             if response.status_code >= 400:
                 self._on_error_status(response.status_code)
@@ -302,7 +314,9 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
                 )
                 logger.warning(
                     "%s stream error: status=%d body=%s",
-                    self.get_name(), response.status_code, error_body[:500],
+                    self.get_name(),
+                    response.status_code,
+                    error_body[:500],
                 )
                 raise httpx.HTTPStatusError(
                     f"{self.get_name()} API error: {response.status_code}",
@@ -310,7 +324,9 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
                     response=httpx.Response(
                         response.status_code,
                         content=error_body,
-                        headers=_sanitize_headers_for_synthetic_response(response.headers),
+                        headers=_sanitize_headers_for_synthetic_response(
+                            response.headers
+                        ),
                         request=response.request,
                     ),
                 )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -140,7 +140,7 @@ def _parse_retry_after(value: str) -> float | None:
         pass
     try:
         dt = parsedate_to_datetime(value)
-        return max(0, (dt - datetime.now(timezone.utc)).total_seconds())
+        return max(0, (dt - datetime.now(UTC)).total_seconds())
     except (ValueError, TypeError):
         logger.warning("Cannot parse retry-after header: %s", value)
         return None
@@ -151,8 +151,8 @@ def _parse_reset_time(value: str) -> float | None:
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        remaining = (dt - datetime.now(timezone.utc)).total_seconds()
+            dt = dt.replace(tzinfo=UTC)
+        remaining = (dt - datetime.now(UTC)).total_seconds()
         return time.monotonic() + max(0, remaining)
     except (ValueError, TypeError):
         logger.warning("Cannot parse reset time: %s", value)
