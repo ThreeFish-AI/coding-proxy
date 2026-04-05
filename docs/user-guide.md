@@ -147,7 +147,7 @@ pip install -e .
 
 ```bash
 # 复制配置模板到项目根目录（模板已内置完整默认值，仅需覆盖密钥）
-cp config.example.yaml config.yaml
+cp config.default.yaml config.yaml
 ```
 
 设置智谱 API Key（二选一）：
@@ -240,7 +240,7 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:8046
 3. `~/.coding-proxy/config.yaml`（用户主目录）
 4. 内置默认值（无需配置文件也可启动）
 
-加载器会以 `config.example.yaml` 为基础模板进行深度合并，用户配置中的字段覆盖模板默认值。
+加载器会以 `config.default.yaml` 为基础模板进行深度合并，用户配置中的字段覆盖模板默认值。
 
 ### 3.2 vendors — 供应商定义
 
@@ -522,7 +522,7 @@ flowchart TD
 
 **匹配优先级**：同一供应商内精确匹配 > 正则匹配（按规则顺序） > 供应商默认值
 
-**典型配置**（基于 `config.example.yaml`）：
+**典型配置**（基于 `config.default.yaml`）：
 
 ```yaml
 model_mapping:
@@ -678,10 +678,10 @@ auth:
 如果配置文件中使用上述旧格式字段（而非 `vendors` 列表），系统会在启动时**自动迁移**至 vendors 格式并输出日志提示：
 
 ```
-检测到旧 flat 格式配置字段，已自动迁移至 vendors 列表格式。建议迁移至 config.example.yaml 中的 vendors 新格式。
+检测到旧 flat 格式配置字段，已自动迁移至 vendors 列表格式。建议迁移至 config.default.yaml 中的 vendors 新格式。
 ```
 
-**建议**：尽快迁移至 `config.example.yaml` 中的 vendors 新格式，以获得最完整的配置能力（如 `weekly_quota_guard`、`retry`、`pricing` 等新功能仅在 vendors 格式中可用）。
+**建议**：尽快迁移至 `config.default.yaml` 中的 vendors 新格式，以获得最完整的配置能力（如 `weekly_quota_guard`、`retry`、`pricing` 等新功能仅在 vendors 格式中可用）。
 
 > **迁移时间线**：旧 flat 格式自动迁移代码将在后续版本中移除。建议在新部署中直接使用 vendors 格式，避免依赖迁移逻辑。
 
@@ -1398,7 +1398,7 @@ coding-proxy auth reauth github
 
 ## 附录 B：完整配置参考
 
-> **说明**：本附录为 [`config.example.yaml`](../config.example.yaml) 的精简摘要。完整注释版（含每行注释说明）请直接参阅项目根目录下的 `config.example.yaml`，它是唯一权威配置模板。
+> **说明**：本附录为 [`config.default.yaml`](../config.default.yaml) 的精简摘要。完整注释版（含每行注释说明）请直接参阅项目根目录下的 `config.default.yaml`，它是唯一权威配置模板。
 >
 > 以下省略的字段在代码中均有合理默认值（参见各配置表格中的「默认值」列），无需显式配置即可生效。
 
@@ -1460,7 +1460,7 @@ failover:
   # 注：FailoverConfig 代码默认值额外包含 "limit exceeded" 和 "capacity"
 
 model_mapping:
-  # 完整列表参见 config.example.yaml 及 §3.5
+  # 完整列表参见 config.default.yaml 及 §3.5
   - pattern: "claude-sonnet-.*"
     vendors: ["copilot"]
     target: "claude-sonnet-4.6"
@@ -1468,7 +1468,7 @@ model_mapping:
   # ... 更多映射规则（按供应商分组） ...
 
 pricing:                                 # 可选：费用统计（四维定价 $/¥）
-  # 完整列表参见 config.example.yaml（~20 条，覆盖全部供应商与模型）
+  # 完整列表参见 config.default.yaml（~20 条，覆盖全部供应商与模型）
   - vendor: anthropic
     model: claude-sonnet-4-6
     input_cost_per_mtok: $3.0

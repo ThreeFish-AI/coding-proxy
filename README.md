@@ -52,7 +52,7 @@ uv sync
 
 ### 3. Configure Keys (Using Zhipu GLM as a fallback example)
 ```bash
-cp config.example.yaml config.yaml
+cp config.default.yaml config.yaml
 # Use environment variables to defensively inject your keys
 export ZHIPU_API_KEY="your-api-key-here"
 ```
