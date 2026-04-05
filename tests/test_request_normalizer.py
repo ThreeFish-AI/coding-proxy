@@ -6,31 +6,33 @@ from coding.proxy.server.request_normalizer import normalize_anthropic_request
 
 
 def test_rewrites_server_tool_use_to_standard_tool_use():
-    result = normalize_anthropic_request({
-        "messages": [
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "server_tool_use",
-                        "id": "srvtoolu_bad_1",
-                        "name": "bash",
-                        "input": {"cmd": "pwd"},
-                    },
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "srvtoolu_bad_1",
-                        "content": "ok",
-                    },
-                ],
-            },
-        ],
-    })
+    result = normalize_anthropic_request(
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_bad_1",
+                            "name": "bash",
+                            "input": {"cmd": "pwd"},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "srvtoolu_bad_1",
+                            "content": "ok",
+                        },
+                    ],
+                },
+            ],
+        }
+    )
 
     assistant_block = result.body["messages"][0]["content"][0]
     user_block = result.body["messages"][1]["content"][0]
@@ -43,18 +45,23 @@ def test_rewrites_server_tool_use_to_standard_tool_use():
 
 
 def test_filters_vendor_delta_blocks():
-    result = normalize_anthropic_request({
-        "messages": [
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": "before"},
-                    {"type": "server_tool_use_delta", "partial_json": '{"cmd":"pwd"}'},
-                    {"type": "text", "text": "after"},
-                ],
-            },
-        ],
-    })
+    result = normalize_anthropic_request(
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "before"},
+                        {
+                            "type": "server_tool_use_delta",
+                            "partial_json": '{"cmd":"pwd"}',
+                        },
+                        {"type": "text", "text": "after"},
+                    ],
+                },
+            ],
+        }
+    )
 
     content = result.body["messages"][0]["content"]
     assert len(content) == 2
@@ -63,20 +70,22 @@ def test_filters_vendor_delta_blocks():
 
 
 def test_unknown_tool_result_id_marks_fatal_reason():
-    result = normalize_anthropic_request({
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "bad_unknown_id",
-                        "content": "nope",
-                    },
-                ],
-            },
-        ],
-    })
+    result = normalize_anthropic_request(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "bad_unknown_id",
+                            "content": "nope",
+                        },
+                    ],
+                },
+            ],
+        }
+    )
 
     assert result.recoverable is False
     assert result.fatal_reasons

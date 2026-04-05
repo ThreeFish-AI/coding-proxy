@@ -11,9 +11,11 @@
 import httpx
 import pytest
 
+from coding.proxy.model.constants import (
+    PROXY_SKIP_HEADERS,
+    RESPONSE_SANITIZE_SKIP_HEADERS,
+)
 from coding.proxy.model.vendor import (
-    VendorCapabilities,
-    VendorResponse,
     CapabilityLossReason,
     CopilotExchangeDiagnostics,
     CopilotMisdirectedRequest,
@@ -21,15 +23,12 @@ from coding.proxy.model.vendor import (
     NoCompatibleVendorError,
     RequestCapabilities,
     UsageInfo,
+    VendorCapabilities,
+    VendorResponse,
     decode_json_body,
     extract_error_message,
     sanitize_headers_for_synthetic_response,
 )
-from coding.proxy.model.constants import (
-    PROXY_SKIP_HEADERS,
-    RESPONSE_SANITIZE_SKIP_HEADERS,
-)
-
 
 # ═══════════════════════════════════════════════════════════════
 # 1. UsageInfo — 默认值 & 自定义构造
@@ -171,9 +170,14 @@ class TestRequestCapabilities:
     def test_all_enabled(self):
         """全量启用场景."""
         caps = RequestCapabilities(
-            has_tools=True, has_thinking=True, has_images=True, has_metadata=True,
+            has_tools=True,
+            has_thinking=True,
+            has_images=True,
+            has_metadata=True,
         )
-        assert all([caps.has_tools, caps.has_thinking, caps.has_images, caps.has_metadata])
+        assert all(
+            [caps.has_tools, caps.has_thinking, caps.has_images, caps.has_metadata]
+        )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -292,7 +296,9 @@ class TestNoCompatibleVendorError:
 
     def test_with_reasons(self):
         """带 reasons 列表构造: message 与 reasons 均可访问."""
-        err = NoCompatibleVendorError("no vendor available", reasons=["tools", "thinking"])
+        err = NoCompatibleVendorError(
+            "no vendor available", reasons=["tools", "thinking"]
+        )
         assert str(err) == "no vendor available"
         assert err.reasons == ["tools", "thinking"]
 
@@ -342,7 +348,11 @@ class TestCopilotMisdirectedRequest:
     def test_mutable(self):
         """非 frozen: 可修改字段."""
         diag = CopilotMisdirectedRequest(
-            base_url="", status_code=0, request=None, headers=None, body=b"",
+            base_url="",
+            status_code=0,
+            request=None,
+            headers=None,
+            body=b"",
         )
         diag.base_url = "https://new.example.com"
         diag.status_code = 502
@@ -385,7 +395,9 @@ class TestCopilotExchangeDiagnostics:
         assert "ttl_seconds" in result
         assert result["ttl_seconds"] <= 1800
         assert result["capabilities"] == {"models": ["gpt-4"]}
-        assert result["updated_at"] == now  # to_dict() 输出 updated_at 而非 updated_at_unix
+        assert (
+            result["updated_at"] == now
+        )  # to_dict() 输出 updated_at 而非 updated_at_unix
 
     def test_to_dict_ttl_seconds_non_negative(self):
         """ttl_seconds 始终 >= 0 (max(..., 0) 保护)."""
@@ -488,9 +500,17 @@ class TestConstants:
 
     def test_proxy_skip_headers_members(self):
         """包含 hop-by-hop 头部."""
-        assert PROXY_SKIP_HEADERS == frozenset({
-            "host", "content-length", "transfer-encoding", "connection",
-        })
+        assert (
+            frozenset(
+                {
+                    "host",
+                    "content-length",
+                    "transfer-encoding",
+                    "connection",
+                }
+            )
+            == PROXY_SKIP_HEADERS
+        )
 
     def test_response_sanitize_skip_headers_is_frozenset(self):
         """RESPONSE_SANITIZE_SKIP_HEADERS 类型为 frozenset."""
@@ -498,9 +518,16 @@ class TestConstants:
 
     def test_response_sanitize_skip_headers_members(self):
         """包含需移除的合成响应头部."""
-        assert RESPONSE_SANITIZE_SKIP_HEADERS == frozenset({
-            "content-encoding", "content-length", "transfer-encoding",
-        })
+        assert (
+            frozenset(
+                {
+                    "content-encoding",
+                    "content-length",
+                    "transfer-encoding",
+                }
+            )
+            == RESPONSE_SANITIZE_SKIP_HEADERS
+        )
 
     def test_frozenset_immutability(self):
         """frozenset 不可变: add 抛 AttributeError."""
@@ -518,13 +545,15 @@ class TestSanitizeHeadersForSyntheticResponse:
 
     def test_removes_content_encoding_and_length(self):
         """移除 content-encoding / content-length / transfer-encoding."""
-        raw = httpx.Headers({
-            "content-type": "application/json",
-            "content-encoding": "gzip",
-            "content-length": "123",
-            "transfer-encoding": "chunked",
-            "x-request-id": "abc",
-        })
+        raw = httpx.Headers(
+            {
+                "content-type": "application/json",
+                "content-encoding": "gzip",
+                "content-length": "123",
+                "transfer-encoding": "chunked",
+                "x-request-id": "abc",
+            }
+        )
         result = sanitize_headers_for_synthetic_response(raw)
         assert "content-type" in result
         assert "x-request-id" in result
@@ -534,11 +563,13 @@ class TestSanitizeHeadersForSyntheticResponse:
 
     def test_preserves_other_headers(self):
         """不匹配跳过集合的头部原样保留."""
-        raw = httpx.Headers({
-            "retry-after": "60",
-            "x-ratelimit-remaining": "0",
-            "content-type": "text/event-stream",
-        })
+        raw = httpx.Headers(
+            {
+                "retry-after": "60",
+                "x-ratelimit-remaining": "0",
+                "content-type": "text/event-stream",
+            }
+        )
         result = sanitize_headers_for_synthetic_response(raw)
         assert result["retry-after"] == "60"
         assert result["x-ratelimit-remaining"] == "0"
@@ -559,11 +590,13 @@ class TestSanitizeHeadersForSyntheticResponse:
 
     def test_case_insensitive_matching(self):
         """头部名匹配大小写不敏感 (httpx.Headers 内部统一小写)."""
-        raw = httpx.Headers({
-            "Content-Encoding": "gzip",
-            "Content-Length": "42",
-            "Transfer-Encoding": "chunked",
-        })
+        raw = httpx.Headers(
+            {
+                "Content-Encoding": "gzip",
+                "Content-Length": "42",
+                "Transfer-Encoding": "chunked",
+            }
+        )
         result = sanitize_headers_for_synthetic_response(raw)
         assert "content-encoding" not in result
         assert "content-length" not in result
@@ -571,10 +604,12 @@ class TestSanitizeHeadersForSyntheticResponse:
 
     def test_no_decompression_error_on_synthetic_response(self):
         """清洗后头部可用于构造 httpx.Response 且不触发解压错误."""
-        raw_headers = httpx.Headers({
-            "content-type": "application/json",
-            "content-encoding": "gzip",
-        })
+        raw_headers = httpx.Headers(
+            {
+                "content-type": "application/json",
+                "content-encoding": "gzip",
+            }
+        )
         clean = sanitize_headers_for_synthetic_response(raw_headers)
         resp = httpx.Response(
             429,
@@ -596,37 +631,53 @@ class TestDecodeJsonBody:
 
     def test_valid_json_with_json_content_type(self):
         """标准 JSON content-type + 合法 JSON → 解析成功."""
-        resp = httpx.Response(200, content=b'{"key":"value"}', headers={"content-type": "application/json"})
+        resp = httpx.Response(
+            200,
+            content=b'{"key":"value"}',
+            headers={"content-type": "application/json"},
+        )
         assert decode_json_body(resp) == {"key": "value"}
 
     def test_valid_json_array(self):
         """合法 JSON 数组 → 返回 list."""
-        resp = httpx.Response(200, content=b'[1,2,3]', headers={"content-type": "application/json"})
+        resp = httpx.Response(
+            200, content=b"[1,2,3]", headers={"content-type": "application/json"}
+        )
         assert decode_json_body(resp) == [1, 2, 3]
 
     def test_empty_content_returns_none(self):
         """空 body → None."""
-        resp = httpx.Response(200, content=b"", headers={"content-type": "application/json"})
+        resp = httpx.Response(
+            200, content=b"", headers={"content-type": "application/json"}
+        )
         assert decode_json_body(resp) is None
 
     def test_invalid_json_returns_none(self):
         """非法 JSON 内容 → None (安全降级)."""
-        resp = httpx.Response(200, content=b"{invalid json", headers={"content-type": "application/json"})
+        resp = httpx.Response(
+            200, content=b"{invalid json", headers={"content-type": "application/json"}
+        )
         assert decode_json_body(resp) is None
 
     def test_html_content_type_returns_none(self):
         """text/html content-type + HTML 内容 → 无法解析为 JSON → None."""
-        resp = httpx.Response(200, content=b"<html>not json</html>", headers={"content-type": "text/html"})
+        resp = httpx.Response(
+            200, content=b"<html>not json</html>", headers={"content-type": "text/html"}
+        )
         assert decode_json_body(resp) is None
 
     def test_non_json_content_type_with_valid_json_body(self):
         """text/plain 但内容是合法 JSON → 尝试解析并返回结果."""
-        resp = httpx.Response(200, content=b'{"ok":true}', headers={"content-type": "text/plain"})
+        resp = httpx.Response(
+            200, content=b'{"ok":true}', headers={"content-type": "text/plain"}
+        )
         assert decode_json_body(resp) == {"ok": True}
 
     def test_non_json_content_type_with_invalid_body(self):
         """text/plain + 非法内容 → None."""
-        resp = httpx.Response(200, content=b"just plain text", headers={"content-type": "text/plain"})
+        resp = httpx.Response(
+            200, content=b"just plain text", headers={"content-type": "text/plain"}
+        )
         assert decode_json_body(resp) is None
 
     def test_no_content_type_header_valid_json(self):
@@ -645,8 +696,12 @@ class TestExtractErrorMessage:
 
     def test_nested_error_dict(self):
         """{"error": {"message": "..."}} → 提取内层 message."""
-        resp = httpx.Response(401, content=b'{"error":{"type":"auth","message":"bad token"}}')
-        msg = extract_error_message(resp, {"error": {"type": "auth", "message": "bad token"}})
+        resp = httpx.Response(
+            401, content=b'{"error":{"type":"auth","message":"bad token"}}'
+        )
+        msg = extract_error_message(
+            resp, {"error": {"type": "auth", "message": "bad token"}}
+        )
         assert msg == "bad token"
 
     def test_error_string_value(self):
@@ -684,12 +739,16 @@ class TestExtractErrorMessage:
     def test_error_dict_without_message_key_returns_none(self):
         """error 是 dict 但无 message 键 → 返回 None (直接返回, 不回退到顶层 message 也不走 raw text)."""
         # 当 error 为 dict 时, 函数直接 return error.get("message"), 无 message 键则返回 None.
-        resp = httpx.Response(400, content=b'some raw error text')
+        resp = httpx.Response(400, content=b"some raw error text")
         msg = extract_error_message(resp, {"error": {"code": 123}})
         assert msg is None
 
     def test_error_dict_with_message_takes_priority(self):
         """优先级: error.message 最先匹配, 即使顶层也有 message 字段."""
-        resp = httpx.Response(400, content=b'{"error":{"message":"from_error"},"message":"from_top"}')
-        msg = extract_error_message(resp, {"error": {"message": "from_error"}, "message": "from_top"})
+        resp = httpx.Response(
+            400, content=b'{"error":{"message":"from_error"},"message":"from_top"}'
+        )
+        msg = extract_error_message(
+            resp, {"error": {"message": "from_error"}, "message": "from_top"}
+        )
         assert msg == "from_error"

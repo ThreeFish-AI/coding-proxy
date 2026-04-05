@@ -10,9 +10,13 @@ def _make_mapper(rules: list[ModelMappingRule] | None = None) -> ModelMapper:
     if rules is None:
         rules = [
             ModelMappingRule(pattern="claude-sonnet-4-20250514", target="glm-exact"),
-            ModelMappingRule(pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True),
+            ModelMappingRule(
+                pattern="claude-sonnet-.*", target="glm-5.1", is_regex=True
+            ),
             ModelMappingRule(pattern="claude-opus-.*", target="glm-5.1", is_regex=True),
-            ModelMappingRule(pattern="claude-haiku-.*", target="glm-4.5-air", is_regex=True),
+            ModelMappingRule(
+                pattern="claude-haiku-.*", target="glm-4.5-air", is_regex=True
+            ),
         ]
     return ModelMapper(rules)
 
@@ -57,32 +61,50 @@ def test_empty_rules_use_default():
 
 
 def test_vendor_scoped_mapping():
-    mapper = _make_mapper([
-        ModelMappingRule(pattern="claude-sonnet-*", target="claude-sonnet-4-6-thinking", vendors=["antigravity"]),
-        ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1", vendors=["fallback"]),
-    ])
-    assert mapper.map("claude-sonnet-4-20250514", vendor="antigravity") == "claude-sonnet-4-6-thinking"
+    mapper = _make_mapper(
+        [
+            ModelMappingRule(
+                pattern="claude-sonnet-*",
+                target="claude-sonnet-4-6-thinking",
+                vendors=["antigravity"],
+            ),
+            ModelMappingRule(
+                pattern="claude-sonnet-*", target="glm-5.1", vendors=["fallback"]
+            ),
+        ]
+    )
+    assert (
+        mapper.map("claude-sonnet-4-20250514", vendor="antigravity")
+        == "claude-sonnet-4-6-thinking"
+    )
     assert mapper.map("claude-sonnet-4-20250514", vendor="zhipu") == "glm-5.1"
 
 
 def test_legacy_rule_only_applies_to_fallback():
-    mapper = _make_mapper([
-        ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1"),
-    ])
+    mapper = _make_mapper(
+        [
+            ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1"),
+        ]
+    )
     assert mapper.map("claude-sonnet-4-20250514", vendor="fallback") == "glm-5.1"
-    assert mapper.map(
-        "claude-sonnet-4-20250514",
-        vendor="antigravity",
-        default="claude-sonnet-4-20250514",
-    ) == "claude-sonnet-4-20250514"
+    assert (
+        mapper.map(
+            "claude-sonnet-4-20250514",
+            vendor="antigravity",
+            default="claude-sonnet-4-20250514",
+        )
+        == "claude-sonnet-4-20250514"
+    )
 
 
 def test_zhipu_vendor_logs_with_original_name(caplog):
     """zhipu 供应商传入时，日志应显示 vendor=zhipu 而非 vendor=fallback."""
     caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.model_mapper")
-    mapper = _make_mapper([
-        ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1"),
-    ])
+    mapper = _make_mapper(
+        [
+            ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1"),
+        ]
+    )
     result = mapper.map("claude-sonnet-4-20250514", vendor="zhipu")
     assert result == "glm-5.1"
 

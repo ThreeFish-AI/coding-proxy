@@ -3,7 +3,7 @@
 import time
 from unittest.mock import patch
 
-from coding.proxy.routing.quota_guard import QuotaGuard, QuotaState
+from coding.proxy.routing.quota_guard import QuotaGuard
 
 
 def _make_guard(**overrides):

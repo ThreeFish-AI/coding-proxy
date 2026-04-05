@@ -9,34 +9,33 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from coding.proxy.vendors.base import (
-    BaseVendor,
-    VendorCapabilities,
-    VendorResponse,
-    NoCompatibleVendorError,
-    RequestCapabilities,
-    UsageInfo,
-)
-from coding.proxy.vendors.token_manager import TokenAcquireError
 from coding.proxy.compat.canonical import (
     CompatibilityDecision,
     CompatibilityStatus,
     build_canonical_request,
 )
 from coding.proxy.routing.executor import (
-    _RouteExecutor,
     _VENDOR_PROTOCOL_LABEL_MAP,
     _has_tool_results,
     _log_vendor_response_error,
+    _RouteExecutor,
 )
 from coding.proxy.routing.session_manager import RouteSessionManager
 from coding.proxy.routing.tier import VendorTier
 from coding.proxy.routing.usage_recorder import UsageRecorder
-
+from coding.proxy.vendors.base import (
+    BaseVendor,
+    NoCompatibleVendorError,
+    RequestCapabilities,
+    UsageInfo,
+    VendorCapabilities,
+    VendorResponse,
+)
+from coding.proxy.vendors.token_manager import TokenAcquireError
 
 # ── Mock 供应商工厂 ─────────────────────────────────────────
 
@@ -61,6 +60,7 @@ def _mock_vendor(name: str = "test", **caps_kwargs) -> BaseVendor:
     # supports_request 基于实际能力动态判断
     def _supports_request(request_caps: RequestCapabilities):
         from coding.proxy.vendors.base import CapabilityLossReason
+
         reasons: list[CapabilityLossReason] = []
         if request_caps.has_tools and not caps.supports_tools:
             reasons.append(CapabilityLossReason.TOOLS)
@@ -73,11 +73,13 @@ def _mock_vendor(name: str = "test", **caps_kwargs) -> BaseVendor:
         return len(reasons) == 0, reasons
 
     vendor.supports_request.side_effect = _supports_request
-    vendor.send_message = AsyncMock(return_value=VendorResponse(
-        status_code=200,
-        raw_body=b'{}',
-        usage=UsageInfo(input_tokens=10, output_tokens=5),
-    ))
+    vendor.send_message = AsyncMock(
+        return_value=VendorResponse(
+            status_code=200,
+            raw_body=b"{}",
+            usage=UsageInfo(input_tokens=10, output_tokens=5),
+        )
+    )
     vendor.send_message_stream = AsyncMock()
     vendor.check_health = AsyncMock(return_value=True)
     vendor.close = AsyncMock()
@@ -206,12 +208,17 @@ class TestTryGateTier:
         headers = {}
         caps = RequestCapabilities()
         req = build_canonical_request(body, headers)
-        session_record = await exec_inst._session_mgr.get_or_create_record(req.session_key, req.trace_id)
+        session_record = await exec_inst._session_mgr.get_or_create_record(
+            req.session_key, req.trace_id
+        )
         reasons: list[str] = []
 
         result = await exec_inst._try_gate_tier(
-            tier, is_last=True, request_caps=caps,
-            canonical_request=req, session_record=session_record,
+            tier,
+            is_last=True,
+            request_caps=caps,
+            canonical_request=req,
+            session_record=session_record,
             incompatible_reasons=reasons,
         )
         assert result == "eligible"
@@ -225,12 +232,17 @@ class TestTryGateTier:
         body = {"model": "test"}
         headers = {}
         req = build_canonical_request(body, headers)
-        session_record = await exec_inst._session_mgr.get_or_create_record(req.session_key, req.trace_id)
+        session_record = await exec_inst._session_mgr.get_or_create_record(
+            req.session_key, req.trace_id
+        )
         reasons: list[str] = []
 
         result = await exec_inst._try_gate_tier(
-            tier, is_last=False, request_caps=caps,
-            canonical_request=req, session_record=session_record,
+            tier,
+            is_last=False,
+            request_caps=caps,
+            canonical_request=req,
+            session_record=session_record,
             incompatible_reasons=reasons,
         )
         assert result == "skip"
@@ -249,12 +261,17 @@ class TestTryGateTier:
         body = {"model": "test", "thinking": {"type": "enabled"}}
         headers = {}
         req = build_canonical_request(body, headers)
-        session_record = await exec_inst._session_mgr.get_or_create_record(req.session_key, req.trace_id)
+        session_record = await exec_inst._session_mgr.get_or_create_record(
+            req.session_key, req.trace_id
+        )
         reasons: list[str] = []
 
         result = await exec_inst._try_gate_tier(
-            tier, is_last=False, request_caps=caps,
-            canonical_request=req, session_record=session_record,
+            tier,
+            is_last=False,
+            request_caps=caps,
+            canonical_request=req,
+            session_record=session_record,
             incompatible_reasons=reasons,
         )
         assert result == "skip"
@@ -285,15 +302,18 @@ class TestExecuteMessage:
 
         good_vendor = _mock_vendor("good")
         good_resp = VendorResponse(
-            status_code=200, raw_body=b'{}',
+            status_code=200,
+            raw_body=b"{}",
             usage=UsageInfo(input_tokens=5, output_tokens=2),
         )
         good_vendor.send_message = AsyncMock(return_value=good_resp)
 
-        exec_inst = _executor([
-            _make_tier(bad_vendor),
-            _make_tier(good_vendor),
-        ])
+        exec_inst = _executor(
+            [
+                _make_tier(bad_vendor),
+                _make_tier(good_vendor),
+            ]
+        )
 
         resp = await exec_inst.execute_message({"model": "test"}, {})
         assert resp.status_code == 200
@@ -307,7 +327,8 @@ class TestExecuteMessage:
 
         with pytest.raises(NoCompatibleVendorError):
             await exec_inst.execute_message(
-                {"model": "test", "tools": [{}]}, {},
+                {"model": "test", "tools": [{}]},
+                {},
             )
 
     @pytest.mark.asyncio
@@ -342,7 +363,8 @@ class TestExecuteMessage:
 
         good = _mock_vendor("good")
         good_resp = VendorResponse(
-            status_code=200, raw_body=b'{}',
+            status_code=200,
+            raw_body=b"{}",
             usage=UsageInfo(input_tokens=1, output_tokens=1),
         )
         good.send_message = AsyncMock(return_value=good_resp)
@@ -369,7 +391,8 @@ class TestExecuteMessage:
 
         good = _mock_vendor("good")
         good_resp = VendorResponse(
-            status_code=200, raw_body=b'{}',
+            status_code=200,
+            raw_body=b"{}",
             usage=UsageInfo(input_tokens=1, output_tokens=1),
         )
         good.send_message = AsyncMock(return_value=good_resp)
@@ -430,7 +453,9 @@ class TestExecuteStream:
 
         async def _raise_http(*a, **kw):
             raise httpx.HTTPStatusError(
-                "error", request=MagicMock(), response=MagicMock(status_code=500),
+                "error",
+                request=MagicMock(),
+                response=MagicMock(status_code=500),
             )
             yield  # noqa: PYS101
             return  # type: ignore[unreachable]
@@ -460,10 +485,12 @@ class TestExecuteStream:
 
         good_vendor.send_message_stream = _good_stream
 
-        exec_inst = _executor([
-            _make_tier(bad_vendor),
-            _make_tier(good_vendor),
-        ])
+        exec_inst = _executor(
+            [
+                _make_tier(bad_vendor),
+                _make_tier(good_vendor),
+            ]
+        )
 
         collected = []
         async for chunk, name in exec_inst.execute_stream({"model": "test"}, {}):
@@ -501,7 +528,10 @@ class TestHandleTokenError:
         exc = TokenAcquireError("expired")
 
         failed_name, last_exc = await exec_inst._handle_token_error(
-            tier, exc, is_last=True, failed_tier_name=None,
+            tier,
+            exc,
+            is_last=True,
+            failed_tier_name=None,
         )
         assert failed_name == "test"
         assert last_exc is exc
@@ -518,7 +548,10 @@ class TestHandleTokenError:
 
         exc = TokenAcquireError("expired", needs_reauth=True)
         await exec_inst._handle_token_error(
-            tier, exc, is_last=False, failed_tier_name=None,
+            tier,
+            exc,
+            is_last=False,
+            failed_tier_name=None,
         )
 
         reauth_mock.request_reauth.assert_called_once_with("github")
@@ -531,13 +564,15 @@ class TestUsageRecorderIntegration:
     """UsageRecorder 与 Executor 协作测试."""
 
     def test_build_usage_info_from_dict(self):
-        info = UsageRecorder.build_usage_info({
-            "input_tokens": 100,
-            "output_tokens": 50,
-            "cache_creation_tokens": 10,
-            "cache_read_tokens": 5,
-            "request_id": "req_123",
-        })
+        info = UsageRecorder.build_usage_info(
+            {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_tokens": 10,
+                "cache_read_tokens": 5,
+                "request_id": "req_123",
+            }
+        )
         assert info.input_tokens == 100
         assert info.output_tokens == 50
         assert info.cache_creation_tokens == 10
@@ -565,8 +600,10 @@ class TestUsageRecorderIntegration:
             vendor="copilot",
             model_served="gpt-4o",
             usage=UsageInfo(
-                input_tokens=25, output_tokens=10,
-                cache_creation_tokens=3, cache_read_tokens=7,
+                input_tokens=25,
+                output_tokens=10,
+                cache_creation_tokens=3,
+                cache_read_tokens=7,
                 request_id="msg_abc",
             ),
         )
@@ -583,8 +620,12 @@ class TestUsageRecorderIntegration:
         """无 token_logger 时 record 不报错."""
         recorder = UsageRecorder(token_logger=None)
         await recorder.record(
-            vendor="test", model_requested="m", model_served="m",
-            usage=UsageInfo(), duration_ms=100, success=True,
+            vendor="test",
+            model_requested="m",
+            model_served="m",
+            usage=UsageInfo(),
+            duration_ms=100,
+            success=True,
             failover=False,
         )
         # 不抛异常即通过
@@ -619,7 +660,12 @@ class TestHasToolResults:
     def test_detects_tool_result_in_messages(self):
         body = {
             "messages": [
-                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}
+                    ],
+                },
             ],
         }
         assert _has_tool_results(body) is True
@@ -646,7 +692,12 @@ class TestHasToolResults:
         """tool_use 块不应被误判为 tool_result."""
         body = {
             "messages": [
-                {"role": "assistant", "content": [{"type": "tool_use", "id": "tu_1", "name": "bash", "input": {}}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tu_1", "name": "bash", "input": {}}
+                    ],
+                },
             ],
         }
         assert _has_tool_results(body) is False
@@ -659,7 +710,11 @@ class TestHasToolResults:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": "before"},
-                        {"type": "tool_result", "tool_use_id": "tu_1", "content": "result"},
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": "result",
+                        },
                         {"type": "text", "text": "after"},
                     ],
                 },
@@ -716,7 +771,12 @@ class TestLogVendorResponseError:
             "model": "glm-5v-turbo",
             "tools": [{"name": "Bash"}],
             "messages": [
-                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}
+                    ],
+                },
             ],
         }
 
@@ -816,12 +876,14 @@ class TestExecuteMessageVendorErrorLogging:
         import logging as _logging
 
         vendor = _mock_vendor()
-        vendor.send_message = AsyncMock(return_value=VendorResponse(
-            status_code=500,
-            raw_body=b'{"error":{"code":"500","message":"internal error"}}',
-            error_type=None,
-            error_message="internal error",
-        ))
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=500,
+                raw_body=b'{"error":{"code":"500","message":"internal error"}}',
+                error_type=None,
+                error_message="internal error",
+            )
+        )
         exec_inst = _executor([_make_tier(vendor)])
 
         with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
@@ -840,17 +902,28 @@ class TestExecuteMessageVendorErrorLogging:
         import logging as _logging
 
         vendor = _mock_vendor()
-        vendor.send_message = AsyncMock(return_value=VendorResponse(
-            status_code=500,
-            raw_body=b'{"error":{"code":"500","message":"tool result id error"}}',
-        ))
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=500,
+                raw_body=b'{"error":{"code":"500","message":"tool result id error"}}',
+            )
+        )
         exec_inst = _executor([_make_tier(vendor)])
 
         body = {
             "model": "claude-opus-4-6",
             "tools": [{"name": "Bash"}],
             "messages": [
-                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "output"}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": "output",
+                        }
+                    ],
+                },
             ],
         }
 
@@ -858,6 +931,8 @@ class TestExecuteMessageVendorErrorLogging:
             resp = await exec_inst.execute_message(body, {})
 
         assert resp.status_code == 500
-        log_text = "\n".join(r.message for r in caplog.records if r.levelno == _logging.WARNING)
+        log_text = "\n".join(
+            r.message for r in caplog.records if r.levelno == _logging.WARNING
+        )
         assert "has_tool_results=True" in log_text
         assert "claude-opus-4-6" in log_text

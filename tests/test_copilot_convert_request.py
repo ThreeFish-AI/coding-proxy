@@ -2,7 +2,6 @@
 
 from coding.proxy.convert.anthropic_to_openai import convert_request
 
-
 # === Thinking / Extended Thinking 映射 ===
 
 
@@ -83,7 +82,11 @@ def test_system_with_cache_control_still_extracts_text():
     body = {
         "model": "claude-sonnet-4-20250514",
         "system": [
-            {"type": "text", "text": "You are helpful.", "cache_control": {"type": "ephemeral"}},
+            {
+                "type": "text",
+                "text": "You are helpful.",
+                "cache_control": {"type": "ephemeral"},
+            },
             {"type": "text", "text": "Be concise."},
         ],
         "messages": [{"role": "user", "content": "Hi"}],
@@ -123,13 +126,15 @@ def test_system_empty_list_produces_no_system_message():
 def test_assistant_thinking_block_separated_from_text():
     body = {
         "model": "claude-sonnet-4-20250514",
-        "messages": [{
-            "role": "assistant",
-            "content": [
-                {"type": "thinking", "thinking": "Let me analyze..."},
-                {"type": "text", "text": "The answer is 42."},
-            ],
-        }],
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Let me analyze..."},
+                    {"type": "text", "text": "The answer is 42."},
+                ],
+            }
+        ],
     }
     result = convert_request(body)
     assistant_msgs = [m for m in result["messages"] if m["role"] == "assistant"]
@@ -143,12 +148,14 @@ def test_assistant_thinking_block_separated_from_text():
 def test_assistant_only_thinking_becomes_content():
     body = {
         "model": "claude-sonnet-4-20250514",
-        "messages": [{
-            "role": "assistant",
-            "content": [
-                {"type": "thinking", "thinking": "Just thinking..."},
-            ],
-        }],
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Just thinking..."},
+                ],
+            }
+        ],
     }
     result = convert_request(body)
     assistant_msgs = [m for m in result["messages"] if m["role"] == "assistant"]
@@ -159,20 +166,29 @@ def test_assistant_thinking_with_tool_uses_drops_thinking():
     """有 tool_use 时 thinking 内容被丢弃（工具调用场景不需要历史思考过程）."""
     body = {
         "model": "claude-sonnet-4-20250514",
-        "messages": [{
-            "role": "assistant",
-            "content": [
-                {"type": "thinking", "thinking": "I should call a tool."},
-                {"type": "tool_use", "id": "toolu_123", "name": "get_weather", "input": {"city": "Tokyo"}},
-            ],
-        }],
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "I should call a tool."},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_123",
+                        "name": "get_weather",
+                        "input": {"city": "Tokyo"},
+                    },
+                ],
+            }
+        ],
     }
     result = convert_request(body)
     assistant_msgs = [m for m in result["messages"] if m["role"] == "assistant"]
     assert len(assistant_msgs) == 1
     assert "tool_calls" in assistant_msgs[0]
     # thinking 不应出现在 content 中
-    assert assistant_msgs[0]["content"] is None or "I should call a tool" not in (assistant_msgs[0]["content"] or "")
+    assert assistant_msgs[0]["content"] is None or "I should call a tool" not in (
+        assistant_msgs[0]["content"] or ""
+    )
 
 
 # === Tool Result is_error ===
@@ -181,15 +197,19 @@ def test_assistant_thinking_with_tool_uses_drops_thinking():
 def test_tool_result_is_error_injected_into_content():
     body = {
         "model": "claude-sonnet-4-20250514",
-        "messages": [{
-            "role": "user",
-            "content": [{
-                "type": "tool_result",
-                "tool_use_id": "toolu_123",
-                "content": "API rate limited",
-                "is_error": True,
-            }],
-        }],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_123",
+                        "content": "API rate limited",
+                        "is_error": True,
+                    }
+                ],
+            }
+        ],
     }
     result = convert_request(body)
     tool_msgs = [m for m in result["messages"] if m["role"] == "tool"]
@@ -202,14 +222,18 @@ def test_tool_result_is_error_injected_into_content():
 def test_tool_result_non_error_not_injected():
     body = {
         "model": "claude-sonnet-4-20250514",
-        "messages": [{
-            "role": "user",
-            "content": [{
-                "type": "tool_result",
-                "tool_use_id": "toolu_123",
-                "content": "Sunny, 25°C",
-            }],
-        }],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_123",
+                        "content": "Sunny, 25°C",
+                    }
+                ],
+            }
+        ],
     }
     result = convert_request(body)
     tool_msgs = [m for m in result["messages"] if m["role"] == "tool"]
@@ -313,11 +337,13 @@ def test_non_claude_model_passthrough():
 
 
 def test_simple_text_message_still_works():
-    result = convert_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [{"role": "user", "content": "Hello"}],
-        "max_tokens": 100,
-    })
+    result = convert_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 100,
+        }
+    )
     assert result["model"] == "claude-sonnet-4"
     assert len(result["messages"]) == 1
     assert result["messages"][0]["role"] == "user"
@@ -325,76 +351,94 @@ def test_simple_text_message_still_works():
 
 
 def test_tool_use_conversion_still_works():
-    result = convert_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [{"role": "user", "content": "Hi"}],
-        "tools": [
-            {"name": "get_weather", "description": "Get weather", "input_schema": {"type": "object"}},
-        ],
-    })
+    result = convert_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {"type": "object"},
+                },
+            ],
+        }
+    )
     assert "tools" in result
     assert result["tools"][0]["type"] == "function"
     assert result["tools"][0]["function"]["name"] == "get_weather"
 
 
 def test_tool_choice_auto_still_works():
-    result = convert_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [{"role": "user", "content": "Hi"}],
-        "tool_choice": {"type": "auto"},
-    })
+    result = convert_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tool_choice": {"type": "auto"},
+        }
+    )
     assert result["tool_choice"] == "auto"
 
 
 def test_tool_choice_specific_tool_still_works():
-    result = convert_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [{"role": "user", "content": "Hi"}],
-        "tool_choice": {"type": "tool", "name": "get_weather"},
-    })
+    result = convert_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tool_choice": {"type": "tool", "name": "get_weather"},
+        }
+    )
     assert result["tool_choice"]["type"] == "function"
     assert result["tool_choice"]["function"]["name"] == "get_weather"
 
 
 def test_stop_sequences_mapped_to_stop():
-    result = convert_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [{"role": "user", "content": "Hi"}],
-        "stop_sequences": ["END", "STOP"],
-    })
+    result = convert_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stop_sequences": ["END", "STOP"],
+        }
+    )
     assert result["stop"] == ["END", "STOP"]
 
 
 def test_temperature_and_top_p_still_works():
-    result = convert_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [{"role": "user", "content": "Hi"}],
-        "temperature": 0.7,
-        "top_p": 0.9,
-    })
+    result = convert_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "temperature": 0.7,
+            "top_p": 0.9,
+        }
+    )
     assert result["temperature"] == 0.7
     assert result["top_p"] == 0.9
 
 
 def test_stream_options_included_when_streaming():
-    result = convert_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [{"role": "user", "content": "Hi"}],
-        "stream": True,
-    })
+    result = convert_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": True,
+        }
+    )
     assert result["stream"] is True
     assert result["stream_options"] == {"include_usage": True}
 
 
 def test_multi_turn_conversation_still_works():
-    result = convert_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [
-            {"role": "user", "content": "What is 2+2?"},
-            {"role": "assistant", "content": "4"},
-            {"role": "user", "content": "And 3+3?"},
-        ],
-    })
+    result = convert_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [
+                {"role": "user", "content": "What is 2+2?"},
+                {"role": "assistant", "content": "4"},
+                {"role": "user", "content": "And 3+3?"},
+            ],
+        }
+    )
     assert len(result["messages"]) == 3
     assert result["messages"][0]["role"] == "user"
     assert result["messages"][1]["role"] == "assistant"
@@ -402,16 +446,27 @@ def test_multi_turn_conversation_still_works():
 
 
 def test_image_block_converted_to_image_url():
-    result = convert_request({
-        "model": "claude-sonnet-4-20250514",
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What is this?"},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc123"}},
+    result = convert_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is this?"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "abc123",
+                            },
+                        },
+                    ],
+                }
             ],
-        }],
-    })
+        }
+    )
     user_msg = [m for m in result["messages"] if m["role"] == "user"][0]
     assert isinstance(user_msg["content"], list)
     image_part = [p for p in user_msg["content"] if p.get("type") == "image_url"]

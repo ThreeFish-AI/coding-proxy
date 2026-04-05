@@ -9,10 +9,10 @@ from coding.proxy.model.token import (
     TokenManagerDiagnostics,
 )
 
-
 # ---------------------------------------------------------------------------
 # TokenErrorKind
 # ---------------------------------------------------------------------------
+
 
 class TestTokenErrorKind:
     """枚举值完整性验证."""
@@ -32,7 +32,10 @@ def test_enum_values():
     """各枚举成员的 value 应与声明一致."""
     assert TokenErrorKind.TEMPORARY.value == "temporary"
     assert TokenErrorKind.INVALID_CREDENTIALS.value == "invalid_credentials"
-    assert TokenErrorKind.PERMISSION_UPGRADE_REQUIRED.value == "permission_upgrade_required"
+    assert (
+        TokenErrorKind.PERMISSION_UPGRADE_REQUIRED.value
+        == "permission_upgrade_required"
+    )
     assert TokenErrorKind.INSUFFICIENT_SCOPE.value == "insufficient_scope"
 
 
@@ -45,6 +48,7 @@ def test_enum_from_string():
 # ---------------------------------------------------------------------------
 # TokenAcquireError
 # ---------------------------------------------------------------------------
+
 
 class TestTokenAcquireError:
     """异常构造与属性验证."""
@@ -98,6 +102,7 @@ def test_is_exception_subclass():
 # ---------------------------------------------------------------------------
 # TokenManagerDiagnostics
 # ---------------------------------------------------------------------------
+
 
 class TestTokenManagerDiagnostics:
     """诊断数据类验证."""

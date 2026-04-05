@@ -40,13 +40,17 @@ def _parse_events(raw_bytes_list: list[bytes]) -> list[dict]:
 @pytest.mark.asyncio
 async def test_single_chunk_with_finish():
     """单个包含文本和 finishReason 的 chunk."""
-    gemini_data = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{"text": "Hello!"}], "role": "model"},
-            "finishReason": "STOP",
-        }],
-        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2},
-    })
+    gemini_data = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "Hello!"}], "role": "model"},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2},
+        }
+    )
 
     collected = []
     async for chunk in adapt_sse_stream(
@@ -85,24 +89,36 @@ async def test_single_chunk_with_finish():
 @pytest.mark.asyncio
 async def test_multi_chunk_stream():
     """多个 chunk 的流式响应."""
-    chunk1 = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{"text": "Hello"}], "role": "model"},
-        }],
-        "usageMetadata": {"promptTokenCount": 10},
-    })
-    chunk2 = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{"text": " World"}], "role": "model"},
-        }],
-    })
-    chunk3 = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{"text": "!"}], "role": "model"},
-            "finishReason": "STOP",
-        }],
-        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 8},
-    })
+    chunk1 = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "Hello"}], "role": "model"},
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 10},
+        }
+    )
+    chunk2 = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": " World"}], "role": "model"},
+                }
+            ],
+        }
+    )
+    chunk3 = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "!"}], "role": "model"},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 8},
+        }
+    )
 
     collected = []
     async for chunk in adapt_sse_stream(
@@ -128,13 +144,17 @@ async def test_multi_chunk_stream():
 @pytest.mark.asyncio
 async def test_max_tokens_finish_reason():
     """MAX_TOKENS finishReason 映射为 max_tokens."""
-    gemini_data = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{"text": "partial..."}], "role": "model"},
-            "finishReason": "MAX_TOKENS",
-        }],
-        "usageMetadata": {"candidatesTokenCount": 100},
-    })
+    gemini_data = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "partial..."}], "role": "model"},
+                    "finishReason": "MAX_TOKENS",
+                }
+            ],
+            "usageMetadata": {"candidatesTokenCount": 100},
+        }
+    )
 
     collected = []
     async for chunk in adapt_sse_stream(
@@ -151,17 +171,25 @@ async def test_max_tokens_finish_reason():
 @pytest.mark.asyncio
 async def test_empty_text_chunk_skipped():
     """空文本 chunk 不产生 delta."""
-    chunk1 = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{"text": ""}], "role": "model"},
-        }],
-    })
-    chunk2 = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{"text": "Hi"}], "role": "model"},
-            "finishReason": "STOP",
-        }],
-    })
+    chunk1 = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": ""}], "role": "model"},
+                }
+            ],
+        }
+    )
+    chunk2 = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "Hi"}], "role": "model"},
+                    "finishReason": "STOP",
+                }
+            ],
+        }
+    )
 
     collected = []
     async for chunk in adapt_sse_stream(
@@ -180,11 +208,15 @@ async def test_empty_text_chunk_skipped():
 @pytest.mark.asyncio
 async def test_stream_without_finish_reason():
     """流正常结束但未收到 finishReason → 补发关闭事件."""
-    chunk = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{"text": "Hello"}], "role": "model"},
-        }],
-    })
+    chunk = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "Hello"}], "role": "model"},
+                }
+            ],
+        }
+    )
 
     collected = []
     async for c in adapt_sse_stream(_chunks_from([chunk]), model="test"):
@@ -206,13 +238,17 @@ async def test_stream_without_finish_reason():
 async def test_no_candidates_chunk_ignored():
     """无 candidates 的 chunk 被忽略."""
     chunk1 = json.dumps({"usageMetadata": {"promptTokenCount": 5}})
-    chunk2 = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{"text": "OK"}], "role": "model"},
-            "finishReason": "STOP",
-        }],
-        "usageMetadata": {"candidatesTokenCount": 1},
-    })
+    chunk2 = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "OK"}], "role": "model"},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {"candidatesTokenCount": 1},
+        }
+    )
 
     collected = []
     async for c in adapt_sse_stream(_chunks_from([chunk1, chunk2]), model="test"):
@@ -227,13 +263,17 @@ async def test_no_candidates_chunk_ignored():
 @pytest.mark.asyncio
 async def test_auto_generated_request_id():
     """未指定 request_id 时自动生成."""
-    chunk = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{"text": "Hi"}], "role": "model"},
-            "finishReason": "STOP",
-        }],
-        "usageMetadata": {},
-    })
+    chunk = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "Hi"}], "role": "model"},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {},
+        }
+    )
 
     collected = []
     async for c in adapt_sse_stream(_chunks_from([chunk]), model="test"):
@@ -246,18 +286,33 @@ async def test_auto_generated_request_id():
 
 @pytest.mark.asyncio
 async def test_stream_function_call_maps_to_tool_use():
-    gemini_data = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{
-                "functionCall": {"id": "fc_1", "name": "search_docs", "args": {"query": "gemini"}},
-            }], "role": "model"},
-            "finishReason": "STOP",
-        }],
-        "usageMetadata": {"candidatesTokenCount": 3},
-    })
+    gemini_data = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "id": "fc_1",
+                                    "name": "search_docs",
+                                    "args": {"query": "gemini"},
+                                },
+                            }
+                        ],
+                        "role": "model",
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {"candidatesTokenCount": 3},
+        }
+    )
 
     collected = []
-    async for chunk in adapt_sse_stream(_chunks_from([gemini_data]), model="claude-sonnet-4"):
+    async for chunk in adapt_sse_stream(
+        _chunks_from([gemini_data]), model="claude-sonnet-4"
+    ):
         collected.append(chunk)
 
     events = _parse_events(collected)
@@ -272,15 +327,24 @@ async def test_stream_function_call_maps_to_tool_use():
 
 @pytest.mark.asyncio
 async def test_stream_thought_part_maps_to_thinking_delta():
-    gemini_data = json.dumps({
-        "candidates": [{
-            "content": {"parts": [{"text": "先分析", "thought": True}], "role": "model"},
-            "finishReason": "STOP",
-        }],
-    })
+    gemini_data = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"text": "先分析", "thought": True}],
+                        "role": "model",
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+        }
+    )
 
     collected = []
-    async for chunk in adapt_sse_stream(_chunks_from([gemini_data]), model="claude-sonnet-4"):
+    async for chunk in adapt_sse_stream(
+        _chunks_from([gemini_data]), model="claude-sonnet-4"
+    ):
         collected.append(chunk)
 
     events = _parse_events(collected)
@@ -302,9 +366,16 @@ async def test_multi_block_text_then_thinking():
     c3 = _make_candidate([{"text": "done thinking", "thought": True}], finish="STOP")
 
     collected = []
-    async for c in adapt_sse_stream(_chunks_from([
-        _dump(c1), _dump(c2), _dump(c3),
-    ]), model="test"):
+    async for c in adapt_sse_stream(
+        _chunks_from(
+            [
+                _dump(c1),
+                _dump(c2),
+                _dump(c3),
+            ]
+        ),
+        model="test",
+    ):
         collected.append(c)
 
     events = _parse_events(collected)
@@ -319,14 +390,30 @@ async def test_complex_three_block_sequence():
     """思考 → 文本 → 工具调用的三块序列."""
     c1 = _make_candidate([{"text": "thinking...", "thought": True}])
     c2 = _make_candidate([{"text": "I'll call the tool."}])
-    c3 = _make_candidate([{
-        "functionCall": {"id": "fc_1", "name": "read_file", "args": {"path": "/tmp"}},
-    }], finish="STOP")
+    c3 = _make_candidate(
+        [
+            {
+                "functionCall": {
+                    "id": "fc_1",
+                    "name": "read_file",
+                    "args": {"path": "/tmp"},
+                },
+            }
+        ],
+        finish="STOP",
+    )
 
     collected = []
-    async for c in adapt_sse_stream(_chunks_from([
-        _dump(c1), _dump(c2), _dump(c3),
-    ]), model="test"):
+    async for c in adapt_sse_stream(
+        _chunks_from(
+            [
+                _dump(c1),
+                _dump(c2),
+                _dump(c3),
+            ]
+        ),
+        model="test",
+    ):
         collected.append(c)
 
     events = _parse_events(collected)
@@ -346,9 +433,16 @@ async def test_usage_across_multiple_chunks():
     c3 = _make_candidate([{"text": "C"}], finish="STOP", cand_tokens=5)
 
     collected = []
-    async for c in adapt_sse_stream(_chunks_from([
-        _dump(c1), _dump(c2), _dump(c3),
-    ]), model="test"):
+    async for c in adapt_sse_stream(
+        _chunks_from(
+            [
+                _dump(c1),
+                _dump(c2),
+                _dump(c3),
+            ]
+        ),
+        model="test",
+    ):
         collected.append(c)
 
     events = _parse_events(collected)
@@ -394,9 +488,16 @@ async def test_consecutive_text_chunks_merge():
     c3 = _make_candidate([{"text": "!"}], finish="STOP")
 
     collected = []
-    async for c in adapt_sse_stream(_chunks_from([
-        _dump(c1), _dump(c2), _dump(c3),
-    ]), model="test"):
+    async for c in adapt_sse_stream(
+        _chunks_from(
+            [
+                _dump(c1),
+                _dump(c2),
+                _dump(c3),
+            ]
+        ),
+        model="test",
+    ):
         collected.append(c)
 
     events = _parse_events(collected)
@@ -415,7 +516,8 @@ async def test_malformed_json_chunk_skipped():
 
     collected = []
     async for c in adapt_sse_stream(
-        _chunks_from(["{broken json}", _dump(good)]), model="test",
+        _chunks_from(["{broken json}", _dump(good)]),
+        model="test",
     ):
         collected.append(c)
 
@@ -441,13 +543,18 @@ async def test_empty_stream_emits_close_events():
 @pytest.mark.asyncio
 async def test_function_call_with_preexisting_id():
     """functionCall 带 id 时保留该 id 作为 tool_use id."""
-    data = _make_candidate([{
-        "functionCall": {
-            "id": "my_custom_id_42",
-            "name": "exec_cmd",
-            "args": {"cmd": "ls"},
-        }
-    }], finish="STOP")
+    data = _make_candidate(
+        [
+            {
+                "functionCall": {
+                    "id": "my_custom_id_42",
+                    "name": "exec_cmd",
+                    "args": {"cmd": "ls"},
+                }
+            }
+        ],
+        finish="STOP",
+    )
 
     collected = []
     async for c in adapt_sse_stream(_chunks_from([_dump(data)]), model="test"):

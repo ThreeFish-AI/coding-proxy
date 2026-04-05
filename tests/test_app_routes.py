@@ -6,13 +6,12 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
-import pytest
 from fastapi.testclient import TestClient
 
-from coding.proxy.vendors.token_manager import TokenAcquireError
-from coding.proxy.vendors.base import VendorResponse, UsageInfo
 from coding.proxy.config.schema import ProxyConfig
 from coding.proxy.server.app import create_app
+from coding.proxy.vendors.base import UsageInfo, VendorResponse
+from coding.proxy.vendors.token_manager import TokenAcquireError
 
 
 def _make_app(primary_enabled: bool = False) -> TestClient:
@@ -51,7 +50,10 @@ def test_count_tokens_no_anthropic_returns_404():
     with _make_app(primary_enabled=False) as client:
         resp = client.post(
             "/v1/messages/count_tokens",
-            json={"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "Hi"}]},
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
         )
         assert resp.status_code == 404
         data = resp.json()
@@ -65,10 +67,18 @@ def test_count_tokens_proxies_to_anthropic():
     mock_response.status_code = 200
 
     with _make_app(primary_enabled=True) as client:
-        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
             resp = client.post(
                 "/v1/messages/count_tokens?beta=true",
-                json={"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "Hi"}]},
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
                 headers={"authorization": "Bearer sk-test"},
             )
             assert resp.status_code == 200
@@ -77,29 +87,39 @@ def test_count_tokens_proxies_to_anthropic():
 
 def test_count_tokens_upstream_timeout_returns_502():
     """上游超时时 count_tokens 返回 502."""
-    with _make_app(primary_enabled=True) as client:
-        with patch.object(
-            httpx.AsyncClient, "post",
+    with (
+        _make_app(primary_enabled=True) as client,
+        patch.object(
+            httpx.AsyncClient,
+            "post",
             new_callable=AsyncMock,
             side_effect=httpx.TimeoutException("timeout"),
-        ):
-            resp = client.post(
-                "/v1/messages/count_tokens",
-                json={"model": "claude-sonnet-4-20250514", "messages": []},
-                headers={"authorization": "Bearer sk-test"},
-            )
-            assert resp.status_code == 502
-            assert "unreachable" in resp.json()["error"]["message"]
+        ),
+    ):
+        resp = client.post(
+            "/v1/messages/count_tokens",
+            json={"model": "claude-sonnet-4-20250514", "messages": []},
+            headers={"authorization": "Bearer sk-test"},
+        )
+        assert resp.status_code == 502
+        assert "unreachable" in resp.json()["error"]["message"]
 
 
 def test_count_tokens_upstream_error_passthrough():
     """上游返回 4xx/5xx 时原样透传."""
     mock_response = MagicMock()
-    mock_response.content = b'{"error":{"type":"rate_limit_error","message":"Too many requests"}}'
+    mock_response.content = (
+        b'{"error":{"type":"rate_limit_error","message":"Too many requests"}}'
+    )
     mock_response.status_code = 429
 
     with _make_app(primary_enabled=True) as client:
-        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
             resp = client.post(
                 "/v1/messages/count_tokens",
                 json={"model": "claude-sonnet-4-20250514", "messages": []},
@@ -165,11 +185,13 @@ def test_copilot_models_endpoint_returns_probe_data():
 
     for tier in app.state.router.tiers:
         if tier.name == "copilot":
-            tier.vendor.probe_models = AsyncMock(return_value={  # type: ignore[method-assign]
-                "probe_status": "ok",
-                "available_models": ["claude-opus-4.6"],
-                "has_claude_opus_4_6": True,
-            })
+            tier.vendor.probe_models = AsyncMock(
+                return_value={  # type: ignore[method-assign]
+                    "probe_status": "ok",
+                    "available_models": ["claude-opus-4.6"],
+                    "has_claude_opus_4_6": True,
+                }
+            )
             break
 
     with TestClient(app) as client:
@@ -199,32 +221,36 @@ def test_incompatible_request_returns_400():
         supports_images=True,
         supports_metadata=True,
     )
-    with patch.object(
-        type(app.state.router.tiers[0].vendor),
-        "get_capabilities",
-        return_value=restrictive_caps,
+    with (
+        patch.object(
+            type(app.state.router.tiers[0].vendor),
+            "get_capabilities",
+            return_value=restrictive_caps,
+        ),
+        TestClient(app) as client,
     ):
-        with TestClient(app) as client:
-            resp = client.post(
-                "/v1/messages",
-                json={
-                    "model": "claude-sonnet-4-20250514",
-                    "messages": [{"role": "user", "content": "Hi"}],
-                    "thinking": {"type": "enabled", "budget_tokens": 1000},
-                },
-            )
-            assert resp.status_code == 400
-            data = resp.json()
-            assert data["error"]["type"] == "invalid_request_error"
+        resp = client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "thinking": {"type": "enabled", "budget_tokens": 1000},
+            },
+        )
+        assert resp.status_code == 400
+        data = resp.json()
+        assert data["error"]["type"] == "invalid_request_error"
 
 
 def test_stream_http_status_error_returns_anthropic_sse_error():
     """流式上游 HTTP 错误应转换为 Anthropic SSE error，而不是抛出 ASGI 异常."""
-    app = create_app(ProxyConfig(
-        primary={"enabled": False},
-        fallback={"enabled": True},
-        database={"path": "/tmp/test-coding-proxy-routes.db"},
-    ))
+    app = create_app(
+        ProxyConfig(
+            primary={"enabled": False},
+            fallback={"enabled": True},
+            database={"path": "/tmp/test-coding-proxy-routes.db"},
+        )
+    )
 
     async def failing_route_stream(body, headers):
         request = httpx.Request("POST", "https://api.example.com/v1/messages")
@@ -234,13 +260,16 @@ def test_stream_http_status_error_returns_anthropic_sse_error():
             headers={"content-type": "application/json"},
             request=request,
         )
-        raise httpx.HTTPStatusError("anthropic API error: 429", request=request, response=response)
+        raise httpx.HTTPStatusError(
+            "anthropic API error: 429", request=request, response=response
+        )
         yield  # pragma: no cover
 
     app.state.router.route_stream = failing_route_stream
 
-    with TestClient(app) as client:
-        with client.stream(
+    with (
+        TestClient(app) as client,
+        client.stream(
             "POST",
             "/v1/messages",
             json={
@@ -248,8 +277,9 @@ def test_stream_http_status_error_returns_anthropic_sse_error():
                 "messages": [{"role": "user", "content": "Hi"}],
                 "stream": True,
             },
-        ) as resp:
-            body = b"".join(resp.iter_bytes()).decode()
+        ) as resp,
+    ):
+        body = b"".join(resp.iter_bytes()).decode()
 
     assert resp.status_code == 200
     assert "event: error" in body
@@ -259,11 +289,13 @@ def test_stream_http_status_error_returns_anthropic_sse_error():
 
 def test_stream_read_error_returns_anthropic_sse_error():
     """流式 ReadError 应收口为 Anthropic SSE error，不应冒泡为 500."""
-    app = create_app(ProxyConfig(
-        primary={"enabled": False},
-        fallback={"enabled": True},
-        database={"path": "/tmp/test-coding-proxy-routes.db"},
-    ))
+    app = create_app(
+        ProxyConfig(
+            primary={"enabled": False},
+            fallback={"enabled": True},
+            database={"path": "/tmp/test-coding-proxy-routes.db"},
+        )
+    )
 
     async def failing_route_stream(body, headers):
         raise httpx.ReadError("socket closed")
@@ -271,8 +303,9 @@ def test_stream_read_error_returns_anthropic_sse_error():
 
     app.state.router.route_stream = failing_route_stream
 
-    with TestClient(app) as client:
-        with client.stream(
+    with (
+        TestClient(app) as client,
+        client.stream(
             "POST",
             "/v1/messages",
             json={
@@ -280,8 +313,9 @@ def test_stream_read_error_returns_anthropic_sse_error():
                 "messages": [{"role": "user", "content": "Hi"}],
                 "stream": True,
             },
-        ) as resp:
-            body = b"".join(resp.iter_bytes()).decode()
+        ) as resp,
+    ):
+        body = b"".join(resp.iter_bytes()).decode()
 
     assert resp.status_code == 200
     assert "event: error" in body
@@ -291,11 +325,13 @@ def test_stream_read_error_returns_anthropic_sse_error():
 
 def test_message_read_error_returns_502():
     """非流式 ReadError 应返回 502，而不是框架级 500."""
-    app = create_app(ProxyConfig(
-        primary={"enabled": False},
-        fallback={"enabled": True},
-        database={"path": "/tmp/test-coding-proxy-routes.db"},
-    ))
+    app = create_app(
+        ProxyConfig(
+            primary={"enabled": False},
+            fallback={"enabled": True},
+            database={"path": "/tmp/test-coding-proxy-routes.db"},
+        )
+    )
 
     async def failing_route_message(body, headers):
         raise httpx.ReadError("socket closed")
@@ -323,11 +359,13 @@ def test_stream_unexpected_exception_returns_sse_error_not_500():
     验证 catch-all Exception 处理器将未知异常转换为结构化 SSE 错误事件，
     客户端可正常解析错误信息而非收到裸 HTTP 500。
     """
-    app = create_app(ProxyConfig(
-        primary={"enabled": False},
-        fallback={"enabled": True},
-        database={"path": "/tmp/test-coding-proxy-unexpected.db"},
-    ))
+    app = create_app(
+        ProxyConfig(
+            primary={"enabled": False},
+            fallback={"enabled": True},
+            database={"path": "/tmp/test-coding-proxy-unexpected.db"},
+        )
+    )
 
     async def failing_route_stream(body, headers):
         raise ValueError("unexpected parsing error")
@@ -335,8 +373,9 @@ def test_stream_unexpected_exception_returns_sse_error_not_500():
 
     app.state.router.route_stream = failing_route_stream
 
-    with TestClient(app) as client:
-        with client.stream(
+    with (
+        TestClient(app) as client,
+        client.stream(
             "POST",
             "/v1/messages",
             json={
@@ -344,8 +383,9 @@ def test_stream_unexpected_exception_returns_sse_error_not_500():
                 "messages": [{"role": "user", "content": "Hi"}],
                 "stream": True,
             },
-        ) as resp:
-            body = b"".join(resp.iter_bytes()).decode()
+        ) as resp,
+    ):
+        body = b"".join(resp.iter_bytes()).decode()
 
     # 关键断言：必须是 200（SSE 流正常关闭），不能是 500
     assert resp.status_code == 200
@@ -361,11 +401,13 @@ def test_non_stream_unexpected_exception_returns_500_json_not_raw_500():
     验证 catch-all Exception 处理器将未知异常转换为 JSON 格式的 api_error 响应，
     服务端日志记录完整堆栈（exc_info=True），客户端可从响应体获取错误类型。
     """
-    app = create_app(ProxyConfig(
-        primary={"enabled": False},
-        fallback={"enabled": True},
-        database={"path": "/tmp/test-coding-proxy-nonstream-unexpected.db"},
-    ))
+    app = create_app(
+        ProxyConfig(
+            primary={"enabled": False},
+            fallback={"enabled": True},
+            database={"path": "/tmp/test-coding-proxy-nonstream-unexpected.db"},
+        )
+    )
 
     async def failing_route_message(body, headers):
         raise RuntimeError("internal state corruption")
@@ -389,11 +431,13 @@ def test_non_stream_unexpected_exception_returns_500_json_not_raw_500():
 
 def test_messages_normalizes_vendor_tool_blocks_before_routing():
     """入口应先规范化 server_tool_use，再交给高优先级 tier."""
-    app = create_app(ProxyConfig(
-        primary={"enabled": True},
-        fallback={"enabled": True},
-        database={"path": "/tmp/test-coding-proxy-routes.db"},
-    ))
+    app = create_app(
+        ProxyConfig(
+            primary={"enabled": True},
+            fallback={"enabled": True},
+            database={"path": "/tmp/test-coding-proxy-routes.db"},
+        )
+    )
 
     captured_body = {}
 
@@ -446,7 +490,11 @@ def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
     """reset 只清状态，不改 tier 顺序；下一次请求仍先尝试首层."""
     config = ProxyConfig(
         tiers=[
-            {"vendor": "anthropic", "enabled": True, "circuit_breaker": {"failure_threshold": 3}},
+            {
+                "vendor": "anthropic",
+                "enabled": True,
+                "circuit_breaker": {"failure_threshold": 3},
+            },
             {"vendor": "zhipu", "enabled": True, "api_key": "sk-test"},
         ],
         database={"path": "/tmp/test-coding-proxy-routes.db"},
@@ -456,11 +504,15 @@ def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
 
     async def primary_route_message(body, headers):
         call_order.append("anthropic")
-        return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
+        return VendorResponse(
+            status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1)
+        )
 
     async def fallback_route_message(body, headers):
         call_order.append("zhipu")
-        return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1))
+        return VendorResponse(
+            status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1)
+        )
 
     app.state.router.tiers[0].vendor.send_message = primary_route_message
     app.state.router.tiers[1].vendor.send_message = fallback_route_message
@@ -470,7 +522,10 @@ def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
         assert reset_resp.status_code == 200
         resp = client.post(
             "/v1/messages",
-            json={"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "Hi"}]},
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
         )
 
     assert resp.status_code == 200
@@ -484,11 +539,13 @@ def test_normalization_adaptations_logged_at_debug_level(caplog):
     和 tool_result_tool_use_id_rewritten 适配不会出现在 INFO 级别日志中，
     但规范化功能本身仍正确工作（ID 被重写且配对一致）。
     """
-    app = create_app(ProxyConfig(
-        primary={"enabled": False},
-        fallback={"enabled": True},
-        database={"path": "/tmp/test-coding-proxy-normalization-log.db"},
-    ))
+    app = create_app(
+        ProxyConfig(
+            primary={"enabled": False},
+            fallback={"enabled": True},
+            database={"path": "/tmp/test-coding-proxy-normalization-log.db"},
+        )
+    )
 
     captured_body = {}
 
@@ -507,20 +564,24 @@ def test_normalization_adaptations_logged_at_debug_level(caplog):
                     "messages": [
                         {
                             "role": "assistant",
-                            "content": [{
-                                "type": "tool_use",
-                                "id": "zhipu_nonstandard_id_123",
-                                "name": "bash",
-                                "input": {"cmd": "pwd"},
-                            }],
+                            "content": [
+                                {
+                                    "type": "tool_use",
+                                    "id": "zhipu_nonstandard_id_123",
+                                    "name": "bash",
+                                    "input": {"cmd": "pwd"},
+                                }
+                            ],
                         },
                         {
                             "role": "user",
-                            "content": [{
-                                "type": "tool_result",
-                                "tool_use_id": "zhipu_nonstandard_id_123",
-                                "content": "ok",
-                            }],
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "zhipu_nonstandard_id_123",
+                                    "content": "ok",
+                                }
+                            ],
                         },
                     ],
                 },
@@ -543,11 +604,13 @@ def test_non_standard_error_format_logged_at_debug(caplog):
     模拟 Zhipu 返回 ``{"error":{"code":"500","message":"..."}}`` 格式，
     验证 routes.py 在透传前记录格式差异信息。
     """
-    app = create_app(ProxyConfig(
-        primary={"enabled": False},
-        fallback={"enabled": True},
-        database={"path": "/tmp/test-coding-proxy-nonstandard-error.db"},
-    ))
+    app = create_app(
+        ProxyConfig(
+            primary={"enabled": False},
+            fallback={"enabled": True},
+            database={"path": "/tmp/test-coding-proxy-nonstandard-error.db"},
+        )
+    )
 
     async def zhipu_500_response(body, headers):
         return VendorResponse(
@@ -580,11 +643,13 @@ def test_standard_error_format_no_debug_log(caplog):
 
     确保仅对 ``code`` 非 ``type`` 的异常格式触发诊断，避免误报。
     """
-    app = create_app(ProxyConfig(
-        primary={"enabled": False},
-        fallback={"enabled": True},
-        database={"path": "/tmp/test-coding-proxy-standard-error.db"},
-    ))
+    app = create_app(
+        ProxyConfig(
+            primary={"enabled": False},
+            fallback={"enabled": True},
+            database={"path": "/tmp/test-coding-proxy-standard-error.db"},
+        )
+    )
 
     async def standard_500_response(body, headers):
         return VendorResponse(
@@ -616,11 +681,13 @@ def test_vendor_500_passthrough_preserves_raw_body():
     验证最小化原则：proxy 不修改上游错误响应体，
     客户端收到的与 vendor 返回的完全一致。
     """
-    app = create_app(ProxyConfig(
-        primary={"enabled": False},
-        fallback={"enabled": True},
-        database={"path": "/tmp/test-coding-proxy-passthrough.db"},
-    ))
+    app = create_app(
+        ProxyConfig(
+            primary={"enabled": False},
+            fallback={"enabled": True},
+            database={"path": "/tmp/test-coding-proxy-passthrough.db"},
+        )
+    )
 
     original_body = b'{"error":{"code":"500","message":"test upstream error"}}'
 
@@ -636,7 +703,10 @@ def test_vendor_500_passthrough_preserves_raw_body():
     with TestClient(app) as client:
         resp = client.post(
             "/v1/messages",
-            json={"model": "claude-opus-4-6", "messages": [{"role": "user", "content": "hi"}]},
+            json={
+                "model": "claude-opus-4-6",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
         )
 
     assert resp.status_code == 500

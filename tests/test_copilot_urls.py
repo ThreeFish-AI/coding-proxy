@@ -8,23 +8,38 @@ from coding.proxy.vendors.copilot_urls import (
 
 
 def test_resolve_copilot_base_url_individual():
-    assert resolve_copilot_base_url("individual", "") == "https://api.individual.githubcopilot.com"
+    assert (
+        resolve_copilot_base_url("individual", "")
+        == "https://api.individual.githubcopilot.com"
+    )
 
 
 def test_resolve_copilot_base_url_business():
-    assert resolve_copilot_base_url("business", "") == "https://api.business.githubcopilot.com"
+    assert (
+        resolve_copilot_base_url("business", "")
+        == "https://api.business.githubcopilot.com"
+    )
 
 
 def test_resolve_copilot_base_url_enterprise():
-    assert resolve_copilot_base_url("enterprise", "") == "https://api.enterprise.githubcopilot.com"
+    assert (
+        resolve_copilot_base_url("enterprise", "")
+        == "https://api.enterprise.githubcopilot.com"
+    )
 
 
 def test_resolve_copilot_base_url_custom_overrides_default():
-    assert resolve_copilot_base_url("individual", "https://custom.example.com") == "https://custom.example.com"
+    assert (
+        resolve_copilot_base_url("individual", "https://custom.example.com")
+        == "https://custom.example.com"
+    )
 
 
 def test_resolve_copilot_base_url_trailing_slash_stripped():
-    assert resolve_copilot_base_url("individual", "https://custom.example.com/") == "https://custom.example.com"
+    assert (
+        resolve_copilot_base_url("individual", "https://custom.example.com/")
+        == "https://custom.example.com"
+    )
 
 
 def test_build_candidates_individual():
@@ -44,7 +59,9 @@ def test_build_candidates_business():
 
 
 def test_build_candidates_custom_url():
-    result = build_copilot_candidate_base_urls("individual", "https://custom.example.com/")
+    result = build_copilot_candidate_base_urls(
+        "individual", "https://custom.example.com/"
+    )
     assert result == ["https://custom.example.com"]
 
 
@@ -64,4 +81,6 @@ def test_normalize_base_url_removes_trailing_slash():
 
 def test_resolve_empty_account_type_falls_back_to_individual():
     """空 account_type 回退到 individual."""
-    assert resolve_copilot_base_url("", "") == "https://api.individual.githubcopilot.com"
+    assert (
+        resolve_copilot_base_url("", "") == "https://api.individual.githubcopilot.com"
+    )

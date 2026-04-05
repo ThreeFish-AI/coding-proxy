@@ -9,7 +9,6 @@ from coding.proxy.routing.rate_limit import (
     parse_rate_limit_headers,
 )
 
-
 # --- compute_rate_limit_deadline ---
 
 
@@ -69,9 +68,9 @@ def test_compute_deadline_takes_max_of_all_signals():
     """多信号并存时取最大值."""
     now = time.monotonic()
     info = RateLimitInfo(
-        retry_after_seconds=10.0,          # → now + 11
-        requests_reset_at=now + 200,       # → now + 220
-        tokens_reset_at=now + 100,         # → now + 110
+        retry_after_seconds=10.0,  # → now + 11
+        requests_reset_at=now + 200,  # → now + 220
+        tokens_reset_at=now + 100,  # → now + 110
     )
     deadline = compute_rate_limit_deadline(info)
     assert deadline is not None

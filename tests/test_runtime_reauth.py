@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -60,10 +60,13 @@ async def test_request_reauth_success():
 async def test_request_reauth_google():
     """Google 重认证使用 refresh_token 更新."""
     store = _make_store()
-    mock_provider = _make_mock_provider("google", ProviderTokens(
-        access_token="goog_access",
-        refresh_token="goog_refresh",
-    ))
+    mock_provider = _make_mock_provider(
+        "google",
+        ProviderTokens(
+            access_token="goog_access",
+            refresh_token="goog_refresh",
+        ),
+    )
     updater = MagicMock()
 
     coordinator = RuntimeReauthCoordinator(
@@ -104,7 +107,9 @@ async def test_request_reauth_unknown_provider():
     """未知 provider 不报错."""
     store = _make_store()
     coordinator = RuntimeReauthCoordinator(
-        token_store=store, providers={}, token_updaters={},
+        token_store=store,
+        providers={},
+        token_updaters={},
     )
     # 不应抛异常
     await coordinator.request_reauth("unknown")
