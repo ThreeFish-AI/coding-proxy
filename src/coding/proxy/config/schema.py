@@ -61,7 +61,7 @@ class ProxyConfig(BaseModel):
         ``circuit_breaker``, ``copilot_circuit_breaker``, ``antigravity_circuit_breaker``,
         ``quota_guard``, ``copilot_quota_guard``, ``antigravity_quota_guard``
 
-        新配置应使用 ``vendors`` 列表格式（参见 config.example.yaml）。
+        新配置应使用 ``vendors`` 列表格式（参见 config.default.yaml）。
         旧格式会在 ``_migrate_legacy_fields`` 中自动转换为 vendors。
     """
 
@@ -191,7 +191,7 @@ class ProxyConfig(BaseModel):
         if any(k in data for k in _legacy_keys):
             logger.info(
                 "检测到旧 flat 格式配置字段，已自动迁移至 vendors 列表格式。"
-                "建议迁移至 config.example.yaml 中的 vendors 新格式。",
+                "建议迁移至 config.default.yaml 中的 vendors 新格式。",
             )
 
         primary = data.get("primary") or {}

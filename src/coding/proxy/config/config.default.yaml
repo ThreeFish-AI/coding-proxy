@@ -1,5 +1,5 @@
-# coding-proxy 配置模板
-# 复制到 ./config.yaml（项目根目录）或 ~/.coding-proxy/config.yaml 并填入实际密钥
+# coding-proxy 默认配置（模板）
+# 复制到 ./config.yaml（项目根目录）或 ~/.coding-proxy/config.yaml 并修改自定义设置
 # 优先级：./config.yaml > ~/.coding-proxy/config.yaml
 
 server:
@@ -110,8 +110,8 @@ vendors:
 #
 # 示例 3：将 zhipu 提升为首选，anthropic 作为后备
 #   tiers: ["zhipu", "anthropic"]
-#
-# tiers: ["anthropic", "copilot", "antigravity", "zhipu"]
+
+tiers: ["anthropic", "copilot", "antigravity", "zhipu"]
 
 # === 故障转移触发条件 ===
 failover:

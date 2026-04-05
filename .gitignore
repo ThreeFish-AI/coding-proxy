@@ -21,3 +21,4 @@ junit.xml
 .temp/
 config.yaml
 .claude/.prompts.md
+.python-version
