@@ -77,11 +77,11 @@ claude
 
 `coding-proxy` comes equipped with a badass suite of CLI tools to help you boss around your proxy state.
 
-| Command  | Description                                                                                                                                         | Example Usage                                 |
-| :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------- |
-| `start`  | **Fire up the proxy server.** Supports custom ports and configuration paths.                                                                        | `coding-proxy start -p 8080 -c ~/config.yaml` |
-| `status` | **Check proxy health.** Shows circuit breaker states (OPEN/CLOSED) and quota status across all tiers.                                               | `coding-proxy status`                         |
-| `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/vendor/model dimensions.                | `coding-proxy usage -d 7 -b anthropic`        |
+| Command  | Description                                                                                                                                        | Example Usage                                 |
+| :------- | :------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------- |
+| `start`  | **Fire up the proxy server.** Supports custom ports and configuration paths.                                                                       | `coding-proxy start -p 8080 -c ~/config.yaml` |
+| `status` | **Check proxy health.** Shows circuit breaker states (OPEN/CLOSED) and quota status across all tiers.                                              | `coding-proxy status`                         |
+| `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/vendor/model dimensions.                | `coding-proxy usage -d 7 -v anthropic`        |
 | `reset`  | **The emergency flush button.** Force-reset all circuit breakers and quotas instantly when you've confirmed the main vendor is back from the dead. | `coding-proxy reset`                          |
 
 ---
@@ -91,53 +91,54 @@ claude
 When a request inevitably hits the fan, the `RequestRouter` slides gracefully down the N-tier tree, juggling circuit breakers and token quotas to decide the ultimate destination:
 
 ```mermaid
-graph TD
-    Client["Claude Code Client"]
-    Server["FastAPI Server<br/><code>server/app.py</code>"]
-    Router["RequestRouter<br/><code>routing/router.py</code>"]
+graph RL
+    %% 样式定义 (支持明暗双色模式的高对比色彩)
+    classDef client fill:#1E3A8A,stroke:#60A5FA,stroke-width:2px,color:#EFF6FF,rx:8,ry:8
+    classDef router fill:#4C1D95,stroke:#A78BFA,stroke-width:2px,color:#F5F3FF,rx:8,ry:8
+    classDef gateway fill:#7C2D12,stroke:#FB923C,stroke-width:2px,color:#FFF7ED
+    classDef api fill:#14532D,stroke:#4ADE80,stroke-width:2px,color:#F0FDF4
+    classDef fallback fill:#27272A,stroke:#A1A1AA,stroke-width:2px,color:#F4F4F5
 
-    Client -->|"POST /v1/messages"| Server
-    Server --> Router
+    Client["💻<br/>Client (Claude Code)"]:::client
 
-    Router --> T0
-    Router --> T1
-    Router --> T2
-    Router --> TN
+    subgraph CodingProxy["⚡ coding-proxy"]
+        direction RL
+        
+        Router["RequestRouter<br/><code>routing/router.py</code>"]:::router
 
-    subgraph T0["Tier 0: Claude Plans"]
-        direction LR
-        A_VE["AnthropicVendor"]
-        A_CB["CB (Circuit Breaker)"]
-        A_QG["QG (Quota Guard)"]
-    end
+        Router -->NTier
 
-    subgraph T1["Tier 1: GitHub Copilot"]
-        direction LR
-        C_VE["CopilotVendor"]
-        C_CB["CB (Circuit Breaker)"]
-        C_QG["QG (Quota Guard)"]
-    end
+        subgraph NTier["N-tier"]
+            direction TB
 
-    subgraph T2["Tier 2: Google Antigravity"]
-        direction LR
-        G_VE["AntigravityVendor"]
-        G_CB["CB (Circuit Breaker)"]
-        G_QG["QG (Quota Guard)"]
-    end
+            subgraph Tier0 ["Tier 0: Anthropic"]
+                direction RL
+                G0{"CB / Quota"}:::gateway -- "✅ Pass" --> API0(("Anthropic API")):::api
+            end
 
-    subgraph TN["Tier N: Zhipu (Safety Net)"]
-        Z_VE["ZhipuVendor"]
-    end
+            subgraph Tier1 ["Tier 1: GitHub Copilot"]
+                direction RL
+                G1{"CB / Quota"}:::gateway -- "✅ Pass" --> API1(("Copilot API")):::api
+            end
 
-    A_VE --> API_A["Anthropic API"]
-    C_VE --> API_C["GitHub Copilot API"]
-    G_VE --> API_G["Google Gemini API"]
-    Z_VE --> API_Z["Zhipu GLM API"]
+            subgraph Tier2 ["Tier 2: Google Antigravity"]
+                direction RL
+                G2{"CB / Quota"}:::gateway -- "✅ Pass" --> API2(("Gemini API")):::api
+            end
 
-    style T0 fill:#1a5276,color:#fff
-    style T1 fill:#1a5276,color:#fff
-    style T2 fill:#1a5276,color:#fff
-    style TN fill:#7b241c,color:#fff
+            subgraph TierN ["Tier N: Zhipu"]
+                direction RL
+                APIN(("GLM API")):::fallback
+            end
+
+            Tier0 -. "❌ Blocked / API Error" .-> Tier1
+            Tier1 -. "❌ Blocked / API Error" .-> Tier2
+            Tier2 -. "🆘 Safety Net Downgrade" .-> TierN
+        end
+
+    end    
+
+    Client -->|"POST /v1/messages"| CodingProxy
 ```
 
 *For a deep dive into the architecture and under-the-hood wizardry, consult [framework.md](./docs/framework.md) (Currently in Chinese).*

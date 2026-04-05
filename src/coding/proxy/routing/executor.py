@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any, AsyncIterator
@@ -39,6 +40,87 @@ NoCompatibleBackendError = NoCompatibleVendorError
 from ..compat.canonical import CompatibilityStatus, build_canonical_request
 
 logger = logging.getLogger(__name__)
+
+
+def _log_http_error_detail(tier_name: str, exc: Exception, *, is_stream: bool = False) -> None:
+    """记录 HTTP 错误的详细信息（状态码 / 响应体摘要 / 异常类型）.
+
+    替代原先单行 ``logger.warning("Tier %s stream failed: %s", ...)``，
+    在非 200 响应时输出更丰富的诊断上下文，便于跟踪上游故障根因。
+    """
+    detail_parts = [f"Tier {tier_name} {'stream' if is_stream else 'message'} failed:"]
+    detail_parts.append(f"  exc_type={type(exc).__name__}")
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        resp = exc.response
+        detail_parts.append(f"  status={resp.status_code}")
+        body_preview = (resp.text[:300] if resp.text else "(empty)") if resp.content else "(no content)"
+        detail_parts.append(f"  response_body={body_preview}")
+        # 尝试提取 error type / message
+        try:
+            payload = resp.json() if resp.content else None
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            err = payload.get("error", {})
+            if isinstance(err, dict):
+                detail_parts.append(f"  error_type={err.get('type', 'N/A')}")
+                detail_parts.append(f"  error_msg={err.get('message', 'N/A')[:200]}")
+    else:
+        detail_parts.append(f"  message={str(exc)[:300]}")
+    logger.warning("\n".join(detail_parts))
+
+
+def _has_tool_results(body: dict[str, Any]) -> bool:
+    """检测请求体是否包含 tool_result 内容块.
+
+    用于诊断日志中标记「当前请求是否处于工具执行循环」，
+    帮助快速定位 vendor 对 tool_result 处理不兼容的问题（如 Zhipu 500）.
+    """
+    for msg in body.get("messages", []):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            return True
+    return False
+
+
+def _log_vendor_response_error(
+    tier_name: str,
+    resp: VendorResponse,
+    body: dict[str, Any],
+    *,
+    is_stream: bool = False,
+) -> None:
+    """记录供应商返回的非 200 VendorResponse 详细信息.
+
+    补充 :func:`_log_http_error_detail` 的覆盖盲区：
+    当 ``send_message()`` 返回 ``VendorResponse(status_code>=400)``
+    而非抛出 httpx 异常时，该函数提供等价的诊断日志能力。
+
+    典型场景：Zhipu 等薄透传供应商将上游 500 原样包装为
+    VendorResponse 返回，executor 的异常捕获路径不会触发。
+    """
+    mode = "stream" if is_stream else "message"
+    detail_parts = [f"Tier {tier_name} {mode} vendor error response:"]
+    detail_parts.append(f"  status={resp.status_code}")
+    detail_parts.append(f"  error_type={resp.error_type or 'N/A'}")
+    detail_parts.append(f"  error_msg={(resp.error_message or 'N/A')[:300]}")
+    # 请求上下文（模型 / 工具 / 工具结果）
+    model = body.get("model", "unknown")
+    has_tools = bool(body.get("tools"))
+    has_tool_results = _has_tool_results(body)
+    detail_parts.append(f"  model={model}")
+    detail_parts.append(f"  has_tools={has_tools}")
+    detail_parts.append(f"  has_tool_results={has_tool_results}")
+    # 响应体摘要
+    if resp.raw_body:
+        try:
+            raw_text = resp.raw_body.decode("utf-8", errors="replace")[:500]
+        except (AttributeError, UnicodeDecodeError):
+            raw_text = f"(binary, {len(resp.raw_body)} bytes)"
+        detail_parts.append(f"  response_body_preview={raw_text}")
+    logger.warning("\n".join(detail_parts))
 
 # tier.name → 上游 Vendor 协议标签映射（用于 token 用量日志标注）
 _VENDOR_PROTOCOL_LABEL_MAP: dict[str, str] = {
@@ -143,12 +225,23 @@ class _RouteExecutor:
                     raise
 
             except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
-                logger.warning("Tier %s stream failed: %s", tier.name, exc)
+                _log_http_error_detail(tier.name, exc, is_stream=True)
                 should_continue, failed_tier_name, last_exc = await self._handle_http_error(tier, exc, is_last, failed_tier_name, last_exc, is_stream=True)
                 if should_continue:
                     continue
                 if is_last:
                     raise
+            except Exception as exc:
+                logger.error(
+                    "Tier %s stream unexpected error: %s: %s",
+                    tier.name, type(exc).__name__, exc,
+                    exc_info=True,
+                )
+                tier.record_failure()
+                failed_tier_name = tier.name
+                if not is_last:
+                    continue
+                raise
 
         if last_exc:
             raise last_exc
@@ -211,6 +304,7 @@ class _RouteExecutor:
                     continue
 
                 # 最后一层或不可 failover 的错误：记录并返回原始响应
+                _log_vendor_response_error(tier.name, resp, body, is_stream=False)
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = resp.model_served or tier.vendor.map_model(model)
@@ -229,12 +323,23 @@ class _RouteExecutor:
                 continue
 
             except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
-                logger.warning("Tier %s connection error: %s", tier.name, exc)
+                _log_http_error_detail(tier.name, exc, is_stream=False)
                 tier.record_failure()
                 failed_tier_name = tier.name
                 if is_last:
                     raise
                 continue
+            except Exception as exc:
+                logger.error(
+                    "Tier %s message unexpected error: %s: %s",
+                    tier.name, type(exc).__name__, exc,
+                    exc_info=True,
+                )
+                tier.record_failure()
+                failed_tier_name = tier.name
+                if not is_last:
+                    continue
+                raise
 
         if incompatible_reasons:
             raise NoCompatibleVendorError("当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商", reasons=incompatible_reasons)

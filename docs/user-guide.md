@@ -759,7 +759,7 @@ coding-proxy usage [OPTIONS]
 | 参数 | 缩写 | 说明 |
 |------|------|------|
 | `--days` | `-d` | 统计天数（默认 7） |
-| `--backend` | `-b` | 过滤供应商（`anthropic`、`copilot`、`antigravity`、`zhipu`） |
+| `--vendor` | `-v` | 过滤供应商（`anthropic`、`copilot`、`antigravity`、`zhipu`） |
 | `--model` | `-m` | 过滤请求模型（如 `claude-sonnet-4-*`） |
 | `--db` | — | 数据库文件路径 |
 
@@ -770,7 +770,7 @@ coding-proxy usage [OPTIONS]
 coding-proxy usage
 
 # 查看最近 30 天 Anthropic 供应商统计
-coding-proxy usage -d 30 -b anthropic
+coding-proxy usage -d 30 -v anthropic
 
 # 按请求模型过滤
 coding-proxy usage -m claude-sonnet-4-20250514
@@ -1150,10 +1150,10 @@ logging:
 coding-proxy usage
 
 # 查看最近 30 天，仅 Anthropic 供应商
-coding-proxy usage -d 30 -b anthropic
+coding-proxy usage -d 30 -v anthropic
 
 # 查看最近 30 天，仅智谱供应商
-coding-proxy usage -d 30 -b zhipu
+coding-proxy usage -d 30 -v zhipu
 
 # 按模型过滤
 coding-proxy usage -m claude-sonnet-4-*

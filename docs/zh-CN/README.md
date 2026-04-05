@@ -77,11 +77,11 @@ claude
 
 `coding-proxy` 附带了强大的 CLI 工具套件，帮助您全面掌控代理状态。
 
-| 指令     | 说明                                                                            | 示例用法                                      |
-| :------- | :------------------------------------------------------------------------------ | :-------------------------------------------- |
-| `start`  | **启动代理服务器**。支持自定义端口与配置路径。                                  | `coding-proxy start -p 8080 -c ~/config.yaml` |
-| `status` | **查看代理健康状态**。展示各层级熔断器（OPEN/CLOSED）与配额状态。               | `coding-proxy status`                         |
-| `usage`  | **Token 统计看板**。按天/供应商/模型维度追踪每一次的 Token 消耗、故障转移及耗时。 | `coding-proxy usage -d 7 -b anthropic`        |
+| 指令     | 说明                                                                              | 示例用法                                      |
+| :------- | :-------------------------------------------------------------------------------- | :-------------------------------------------- |
+| `start`  | **启动代理服务器**。支持自定义端口与配置路径。                                    | `coding-proxy start -p 8080 -c ~/config.yaml` |
+| `status` | **查看代理健康状态**。展示各层级熔断器（OPEN/CLOSED）与配额状态。                 | `coding-proxy status`                         |
+| `usage`  | **Token 统计看板**。按天/供应商/模型维度追踪每一次的 Token 消耗、故障转移及耗时。 | `coding-proxy usage -d 7 -v anthropic`        |
 | `reset`  | **强制一键重置**。人工确认主供应商恢复可用后，立刻初始化所有熔断器和配额状态。    | `coding-proxy reset`                          |
 
 ---
@@ -91,53 +91,54 @@ claude
 当请求到达时，`RequestRouter` 会顺着 N-tier 树形层级，结合熔断与计算配额，决定发往哪一具体通道：
 
 ```mermaid
-graph TD
-    Client["Claude Code 客户端"]
-    Server["FastAPI Server<br/><code>server/app.py</code>"]
-    Router["RequestRouter<br/><code>routing/router.py</code>"]
+graph RL
+    %% 样式定义 (支持明暗双色模式的高对比色彩)
+    classDef client fill:#1E3A8A,stroke:#60A5FA,stroke-width:2px,color:#EFF6FF,rx:8,ry:8
+    classDef router fill:#4C1D95,stroke:#A78BFA,stroke-width:2px,color:#F5F3FF,rx:8,ry:8
+    classDef gateway fill:#7C2D12,stroke:#FB923C,stroke-width:2px,color:#FFF7ED
+    classDef api fill:#14532D,stroke:#4ADE80,stroke-width:2px,color:#F0FDF4
+    classDef fallback fill:#27272A,stroke:#A1A1AA,stroke-width:2px,color:#F4F4F5
 
-    Client -->|"POST /v1/messages"| Server
-    Server --> Router
+    Client["💻<br/>Client (Claude Code)"]:::client
 
-    Router --> T0
-    Router --> T1
-    Router --> T2
-    Router --> TN
+    subgraph CodingProxy["⚡ coding-proxy"]
+        direction RL
+        
+        Router["RequestRouter<br/><code>routing/router.py</code>"]:::router
 
-    subgraph T0["Tier 0: Claude Plans"]
-        direction LR
-        A_VE["AnthropicVendor"]
-        A_CB["CB (熔断器)"]
-        A_QG["QG (配额守卫)"]
-    end
+        Router -->NTier
 
-    subgraph T1["Tier 1: GitHub Copilot"]
-        direction LR
-        C_VE["CopilotVendor"]
-        C_CB["CB (熔断器)"]
-        C_QG["QG (配额守卫)"]
-    end
+        subgraph NTier["N-tier"]
+            direction TB
 
-    subgraph T2["Tier 2: Google Antigravity"]
-        direction LR
-        G_VE["AntigravityVendor"]
-        G_CB["CB (熔断器)"]
-        G_QG["QG (配额守卫)"]
-    end
+            subgraph Tier0 ["Tier 0: Anthropic"]
+                direction RL
+                G0{"CB / Quota"}:::gateway -- "✅ Pass" --> API0(("Anthropic API")):::api
+            end
 
-    subgraph TN["Tier N: Zhipu（兜底）"]
-        Z_VE["ZhipuVendor"]
-    end
+            subgraph Tier1 ["Tier 1: GitHub Copilot"]
+                direction RL
+                G1{"CB / Quota"}:::gateway -- "✅ Pass" --> API1(("Copilot API")):::api
+            end
 
-    A_VE --> API_A["Anthropic API"]
-    C_VE --> API_C["GitHub Copilot API"]
-    G_VE --> API_G["Google Gemini API"]
-    Z_VE --> API_Z["智谱 GLM API"]
+            subgraph Tier2 ["Tier 2: Google Antigravity"]
+                direction RL
+                G2{"CB / Quota"}:::gateway -- "✅ Pass" --> API2(("Gemini API")):::api
+            end
 
-    style T0 fill:#1a5276,color:#fff
-    style T1 fill:#1a5276,color:#fff
-    style T2 fill:#1a5276,color:#fff
-    style TN fill:#7b241c,color:#fff
+            subgraph TierN ["Tier N: Zhipu"]
+                direction RL
+                APIN(("GLM API")):::fallback
+            end
+
+            Tier0 -. "❌ Blocked / API Error" .-> Tier1
+            Tier1 -. "❌ Blocked / API Error" .-> Tier2
+            Tier2 -. "🆘 Safety Net Downgrade" .-> TierN
+        end
+
+    end    
+
+    Client -->|"POST /v1/messages"| CodingProxy
 ```
 
 *详细架构设计与机制，请深入阅读 [framework.md](../framework.md)*

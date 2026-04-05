@@ -317,6 +317,76 @@ def test_message_read_error_returns_502():
     assert "socket closed" in data["error"]["message"]
 
 
+def test_stream_unexpected_exception_returns_sse_error_not_500():
+    """流式路径的未预期异常应返回 SSE error event（HTTP 200 + event: error），而非框架级 500.
+
+    验证 catch-all Exception 处理器将未知异常转换为结构化 SSE 错误事件，
+    客户端可正常解析错误信息而非收到裸 HTTP 500。
+    """
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-unexpected.db"},
+    ))
+
+    async def failing_route_stream(body, headers):
+        raise ValueError("unexpected parsing error")
+        yield  # pragma: no cover
+
+    app.state.router.route_stream = failing_route_stream
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": True,
+            },
+        ) as resp:
+            body = b"".join(resp.iter_bytes()).decode()
+
+    # 关键断言：必须是 200（SSE 流正常关闭），不能是 500
+    assert resp.status_code == 200
+    assert "event: error" in body
+    assert '"type": "api_error"' in body
+    # 确认包含异常类型信息，便于调试定位
+    assert "ValueError" in body or "unexpected" in body.lower()
+
+
+def test_non_stream_unexpected_exception_returns_500_json_not_raw_500():
+    """非流式路径的未预期异常应返回结构化 JSON 错误（含异常类型），而非框架级原始 500.
+
+    验证 catch-all Exception 处理器将未知异常转换为 JSON 格式的 api_error 响应，
+    服务端日志记录完整堆栈（exc_info=True），客户端可从响应体获取错误类型。
+    """
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-nonstream-unexpected.db"},
+    ))
+
+    async def failing_route_message(body, headers):
+        raise RuntimeError("internal state corruption")
+
+    app.state.router.route_message = failing_route_message
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+        )
+
+    assert resp.status_code == 500
+    data = resp.json()
+    assert data["error"]["type"] == "api_error"
+    assert "RuntimeError" in data["error"]["message"]
+
+
 def test_messages_normalizes_vendor_tool_blocks_before_routing():
     """入口应先规范化 server_tool_use，再交给高优先级 tier."""
     app = create_app(ProxyConfig(
@@ -465,3 +535,109 @@ def test_normalization_adaptations_logged_at_debug_level(caplog):
     user_block = captured_body["body"]["messages"][1]["content"][0]
     assert assistant_block["id"].startswith("toolu_normalized_")
     assert user_block["tool_use_id"] == assistant_block["id"]
+
+
+def test_non_standard_error_format_logged_at_debug(caplog):
+    """上游返回含 code（非 type）的非标准错误格式时，应输出 DEBUG 级别诊断日志.
+
+    模拟 Zhipu 返回 ``{"error":{"code":"500","message":"..."}}`` 格式，
+    验证 routes.py 在透传前记录格式差异信息。
+    """
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-nonstandard-error.db"},
+    ))
+
+    async def zhipu_500_response(body, headers):
+        return VendorResponse(
+            status_code=500,
+            raw_body=b'{"error":{"code":"500","message":"\'ClaudeContentBlockToolResult\' object has no attribute \'id\'"}}',
+            response_headers={"content-type": "application/json"},
+        )
+
+    app.state.router.route_message = zhipu_500_response
+
+    with caplog.at_level(logging.DEBUG, logger="coding.proxy.server.routes"):
+        with TestClient(app) as client:
+            resp = client.post(
+                "/v1/messages",
+                json={
+                    "model": "claude-opus-4-6",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            )
+
+    # 响应原样透传
+    assert resp.status_code == 500
+    # DEBUG 日志应包含非标准格式标记
+    debug_messages = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any("非标准上游错误格式" in m for m in debug_messages)
+
+
+def test_standard_error_format_no_debug_log(caplog):
+    """上游返回标准 Anthropic 错误格式（含 type）时，不应输出非标准格式日志.
+
+    确保仅对 ``code`` 非 ``type`` 的异常格式触发诊断，避免误报。
+    """
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-standard-error.db"},
+    ))
+
+    async def standard_500_response(body, headers):
+        return VendorResponse(
+            status_code=500,
+            raw_body=b'{"error":{"type":"api_error","message":"internal error"}}',
+            response_headers={"content-type": "application/json"},
+        )
+
+    app.state.router.route_message = standard_500_response
+
+    with caplog.at_level(logging.DEBUG, logger="coding.proxy.server.routes"):
+        with TestClient(app) as client:
+            resp = client.post(
+                "/v1/messages",
+                json={
+                    "model": "claude-opus-4-6",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            )
+
+    assert resp.status_code == 500
+    debug_messages = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
+    assert not any("非标准上游错误格式" in m for m in debug_messages)
+
+
+def test_vendor_500_passthrough_preserves_raw_body():
+    """VendorResponse 500 应原样透传 raw_body，不做格式转换.
+
+    验证最小化原则：proxy 不修改上游错误响应体，
+    客户端收到的与 vendor 返回的完全一致。
+    """
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-passthrough.db"},
+    ))
+
+    original_body = b'{"error":{"code":"500","message":"test upstream error"}}'
+
+    async def upstream_500(body, headers):
+        return VendorResponse(
+            status_code=500,
+            raw_body=original_body,
+            response_headers={"content-type": "application/json"},
+        )
+
+    app.state.router.route_message = upstream_500
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/messages",
+            json={"model": "claude-opus-4-6", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert resp.status_code == 500
+    assert resp.content == original_body
