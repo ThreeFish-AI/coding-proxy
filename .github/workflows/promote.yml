@@ -42,6 +42,9 @@ on:
 permissions:
   contents: read # validate job 仅需读取 release 信息；promote job 有独立的 job-level permissions 覆写
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: promote-${{ inputs.tag_name }}
   cancel-in-progress: false
