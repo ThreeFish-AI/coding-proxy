@@ -1,0 +1,89 @@
+# =============================================================================
+# coding-proxy: Test Coverage Reporting
+# =============================================================================
+# Trigger:
+#   - Pull Request (生成覆盖率报告)
+#   - Push to master (主分支更新时记录基线)
+#
+# Purpose:
+#   - 生成 HTML 覆盖率报告供下载查看
+#   - 在 Actions Summary 中展示覆盖率摘要
+#   - 设置最低覆盖率门槛（初始为 0，后续可逐步提高）
+#
+# References:
+#   [1] https://pytest-cov.readthedocs.io/
+#   [2] https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/adding-a-job-summary
+# =============================================================================
+
+name: Coverage
+
+on:
+  pull_request:
+    branches: [master, "feature/*"]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Generate coverage report
+        run: |
+          uv run pytest \
+            --cov=src/coding \
+            --cov-report=term-missing \
+            --cov-report=html:htmlcov \
+            --cov-report=xml:coverage.xml \
+            --cov-fail-under=0 \
+            --junitxml=junit.xml
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-report
+          path: htmlcov/
+          retention-days: 14
+
+      - name: Upload coverage XML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 14
+
+      - name: Display coverage summary in job summary
+        run: |
+          echo "## 📊 测试覆盖率摘要" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          uv run pytest --cov=src/coding --cov-report=term-missing --no-header -q || true

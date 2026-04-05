@@ -1,0 +1,137 @@
+# =============================================================================
+# coding-proxy: Continuous Integration Pipeline
+# =============================================================================
+# Trigger:
+#   - Pull Request (所有 PR)
+#   - Push to master / feature/* 分支
+#   - Push of version tags (v*) — 确保 release 前通过质量检查
+#
+# Architecture: Parallel Quality Gates
+#   Job 1 (lint):   Ruff 静态分析
+#   Job 2 (format): Ruff format 格式校验
+#   Job 3 (test):   pytest 单元/集成测试
+#   → 三者完全并行，最大化效率
+#
+# References:
+#   [1] https://docs.astral.sh/ruff/integrations/#github-actions
+#   [2] https://docs.pytest.org/en/stable/how-to/continuous_integration.html
+# =============================================================================
+
+name: CI
+
+on:
+  pull_request:
+    branches: [master, "feature/*"]
+  push:
+    branches: [master, "feature/*"]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ===========================================================================
+  # Job 1: LINT — Ruff static analysis
+  # ===========================================================================
+  lint:
+    name: Lint (Ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run Ruff linter
+        run: uv run ruff check .
+
+  # ===========================================================================
+  # Job 2: FORMAT — Ruff format verification
+  # ===========================================================================
+  format:
+    name: Format Check (Ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+  # ===========================================================================
+  # Job 3: TEST — Unit & integration tests
+  # ===========================================================================
+  test:
+    name: Test (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run tests with coverage data collection
+        run: uv run pytest --cov=src/coding --cov-report=term-missing --cov-report=xml:coverage.xml --junitxml=junit.xml
+
+      - name: Upload coverage artifact
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data
+          path: coverage.xml
+          retention-days: 7
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-py${{ matrix.python-version }}
+          path: junit.xml
+          retention-days: 7
