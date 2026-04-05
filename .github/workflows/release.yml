@@ -119,6 +119,8 @@ jobs:
           password: ${{ secrets.TEST_PYPI_API_TOKEN }}
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
+          attestations: false    # TestPyPI 不支持 attestations，必须显式禁用
+          verbose: true         # 启用详细日志以获取 400 错误响应体
 
   # ===========================================================================
   # Job 3: PUBLISH TO PYPI -- Production releases only
