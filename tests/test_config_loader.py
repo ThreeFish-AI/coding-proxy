@@ -4,7 +4,7 @@ from pathlib import Path
 
 from coding.proxy.config.loader import (
     _deep_merge,
-    _get_example_config_path,
+    _get_default_config_path,
     load_config,
 )
 
@@ -371,20 +371,20 @@ def test_deep_merge_scalar_replaces_dict():
 # ====================================================================
 
 
-def test_get_example_config_path_returns_path():
-    """正常定位 config.example.yaml — 返回有效 Path 对象."""
-    path = _get_example_config_path()
+def test_get_default_config_path_returns_path():
+    """正常定位 config.default.yaml — 返回有效 Path 对象."""
+    path = _get_default_config_path()
     assert path is not None
     assert path.is_file()
-    assert path.name == "config.example.yaml"
+    assert path.name == "config.default.yaml"
 
 
-def test_get_example_config_path_missing_returns_none(monkeypatch):
-    """_get_example_config_path 被mock为返回None时正确降级."""
+def test_get_default_config_path_missing_returns_none(monkeypatch):
+    """_get_default_config_path 被mock为返回None时正确降级."""
     import coding.proxy.config.loader as loader_module
 
-    monkeypatch.setattr(loader_module, "_get_example_config_path", lambda: None)
-    assert loader_module._get_example_config_path() is None
+    monkeypatch.setattr(loader_module, "_get_default_config_path", lambda: None)
+    assert loader_module._get_default_config_path() is None
 
 
 # ====================================================================
@@ -393,10 +393,10 @@ def test_get_example_config_path_missing_returns_none(monkeypatch):
 
 
 def test_load_config_no_user_file_uses_example_defaults(tmp_path: Path, monkeypatch):
-    """无任何用户配置时，返回基于 config.example.yaml 的完整配置.
+    """无任何用户配置时，返回基于 config.default.yaml 的完整配置.
 
-    验证 example 默认值被正确加载：vendors 非空、pricing 非空、
-    model_mapping 使用 example 中的新格式规则.
+    验证默认值被正确加载：vendors 非空、pricing 非空、
+    model_mapping 使用 default 中的新格式规则.
     """
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
@@ -470,12 +470,12 @@ def test_env_var_expansion_after_merge(tmp_path: Path, monkeypatch):
 
 
 def test_load_config_fallback_when_example_missing(monkeypatch):
-    """config.example.yaml 不存在时降级为 ProxyConfig() 默认值.
+    """config.default.yaml 不存在时降级为 ProxyConfig() 默认值.
 
-    通过 mock _get_example_config_path 返回 None 来模拟 example 缺失场景.
+    通过 mock _get_default_config_path 返回 None 来模拟 default 缺失场景.
     """
     monkeypatch.setattr(
-        "coding.proxy.config.loader._get_example_config_path",
+        "coding.proxy.config.loader._get_default_config_path",
         lambda: None,
     )
     cfg = load_config(Path("/nonexistent/path"))
@@ -485,9 +485,9 @@ def test_load_config_fallback_when_example_missing(monkeypatch):
 
 
 def test_legacy_flat_format_still_migrates_with_example_base(tmp_path: Path):
-    """旧 flat 格式配置在 example base 上仍然触发 legacy 迁移器.
+    """旧 flat 格式配置在 default base 上仍然触发 legacy 迁移器.
 
-    当用户配置包含 legacy 字段时，example 的 vendors 被移除，
+    当用户配置包含 legacy 字段时，default 的 vendors 被移除，
     _migrate_legacy_fields 迁移器从 legacy 字段重建 vendors.
     """
     cfg_file = tmp_path / "config.yaml"
@@ -513,3 +513,74 @@ def test_legacy_flat_format_still_migrates_with_example_base(tmp_path: Path):
     # anthropic vendor 应使用 legacy 中的 base_url
     anthropic_vendor = next(v for v in cfg.vendors if v.vendor == "anthropic")
     assert anthropic_vendor.base_url == "https://custom.anthropic.com"
+
+
+# ====================================================================
+# D 组：config.default.yaml 可用性与默认值完整性测试
+# ====================================================================
+
+
+class TestDefaultConfigAvailability:
+    """确保 config.default.yaml 在各种安装方式下均可被找到."""
+
+    def test_default_config_found_by_getter(self):
+        """_get_default_config_path() 应始终能找到文件."""
+        path = _get_default_config_path()
+        assert path is not None, "config.default.yaml 未找到，默认值将丢失"
+        assert path.is_file()
+
+    def test_pricing_populated_from_default(self, monkeypatch):
+        """无用户配置时，pricing 应包含 default 中的完整定价记录."""
+        import tempfile
+
+        empty_dir = tempfile.mkdtemp()
+        monkeypatch.chdir(empty_dir)
+        monkeypatch.setenv("HOME", "/nonexistent")
+
+        cfg = load_config()
+        assert len(cfg.pricing) >= 10, (
+            f"pricing 应有 ≥10 条默认值，实际 {len(cfg.pricing)} 条。"
+            "可能 config.default.yaml 未被正确加载。"
+        )
+
+    def test_zhipu_pricing_available(self, monkeypatch):
+        """zhipu 供应商的关键模型定价必须可用（用户报告的场景）."""
+        import tempfile
+
+        empty_dir = tempfile.mkdtemp()
+        monkeypatch.chdir(empty_dir)
+        monkeypatch.setenv("HOME", "/nonexistent")
+
+        cfg = load_config()
+        zhipu_models = {p.model for p in cfg.pricing if p.vendor == "zhipu"}
+        assert "glm-4.5-air" in zhipu_models, "缺少 glm-4.5-air 定价"
+        assert "glm-5v-turbo" in zhipu_models, "缺少 glm-5v-turbo 定价"
+
+    def test_vendors_override_does_not_clear_pricing(self, tmp_path: Path):
+        """用户仅配置 vendors 时，pricing 不应被清空."""
+        (tmp_path / "config.yaml").write_text(
+            "vendors:\n  - vendor: zhipu\n    api_key: sk-test\n"
+        )
+        cfg = load_config(tmp_path / "config.yaml")
+        assert len(cfg.vendors) == 1, "vendors 应被用户配置覆盖"
+        assert len(cfg.pricing) >= 10, (
+            f"pricing 应保留 default 默认值（≥10条），实际 {len(cfg.pricing)} 条"
+        )
+
+    def test_model_mapping_uses_default_format(self, monkeypatch):
+        """model_mapping 应来自 default 而非 Pydantic 旧默认值."""
+        import tempfile
+
+        empty_dir = tempfile.mkdtemp()
+        monkeypatch.chdir(empty_dir)
+        monkeypatch.setenv("HOME", "/nonexistent")
+
+        cfg = load_config()
+        # default 中的 model_mapping 包含 vendors 字段（新格式特征）
+        has_new_format = any(
+            getattr(m, "vendors", None) for m in cfg.model_mapping
+        )
+        assert has_new_format, (
+            "model_mapping 应使用 default 中的新格式（含 vendors 字段），"
+            "而非 Pydantic 的旧格式默认值"
+        )

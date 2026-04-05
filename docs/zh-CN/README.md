@@ -52,7 +52,7 @@ uv sync
 
 ### 3. 配置密钥 (以智谱 GLM 兜底为例)
 ```bash
-cp config.example.yaml config.yaml
+cp config.default.yaml config.yaml
 # 使用环境变量注入保护你的密钥
 export ZHIPU_API_KEY="your-api-key-here"
 ```
