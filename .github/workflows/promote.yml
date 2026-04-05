@@ -54,6 +54,9 @@ jobs:
     name: Validate prerelease status
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      release_id: ${{ steps.check-release.outputs.release_id }}
+      tag_name: ${{ steps.check-release.outputs.tag_name }}
 
     steps:
       - name: Check release exists and is a prerelease
