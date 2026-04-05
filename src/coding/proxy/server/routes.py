@@ -43,6 +43,16 @@ async def _stream_proxy(router: Any, body: dict, headers: dict) -> Any:
     except httpx.HTTPStatusError as exc:
         error_type, message = extract_stream_http_error(exc)
         yield stream_error_event(error_type, message)
+    except Exception as exc:
+        logger.error(
+            "_stream_proxy 未预期异常: %s: %s",
+            type(exc).__name__, exc,
+            exc_info=True,
+        )
+        yield stream_error_event(
+            "api_error",
+            f"内部错误: {type(exc).__name__}: {exc}",
+        )
 
 
 def register_core_routes(app: Any, router: Any) -> None:
@@ -76,6 +86,13 @@ def register_core_routes(app: Any, router: Any) -> None:
             return json_error_response(503, error_type="authentication_error", message=str(exc))
         except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
             return json_error_response(502, error_type="api_error", message=f"上游不可达: {exc}")
+        except Exception as exc:
+            logger.error(
+                "messages() 非流式路径未预期异常: %s: %s",
+                type(exc).__name__, exc,
+                exc_info=True,
+            )
+            return json_error_response(500, error_type="api_error", message=f"内部错误: {type(exc).__name__}")
         return Response(content=resp.raw_body or b"{}", status_code=resp.status_code, media_type="application/json")
 
     @app.post("/v1/messages/count_tokens")

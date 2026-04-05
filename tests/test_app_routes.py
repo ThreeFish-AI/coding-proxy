@@ -317,6 +317,76 @@ def test_message_read_error_returns_502():
     assert "socket closed" in data["error"]["message"]
 
 
+def test_stream_unexpected_exception_returns_sse_error_not_500():
+    """流式路径的未预期异常应返回 SSE error event（HTTP 200 + event: error），而非框架级 500.
+
+    验证 catch-all Exception 处理器将未知异常转换为结构化 SSE 错误事件，
+    客户端可正常解析错误信息而非收到裸 HTTP 500。
+    """
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-unexpected.db"},
+    ))
+
+    async def failing_route_stream(body, headers):
+        raise ValueError("unexpected parsing error")
+        yield  # pragma: no cover
+
+    app.state.router.route_stream = failing_route_stream
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": True,
+            },
+        ) as resp:
+            body = b"".join(resp.iter_bytes()).decode()
+
+    # 关键断言：必须是 200（SSE 流正常关闭），不能是 500
+    assert resp.status_code == 200
+    assert "event: error" in body
+    assert '"type": "api_error"' in body
+    # 确认包含异常类型信息，便于调试定位
+    assert "ValueError" in body or "unexpected" in body.lower()
+
+
+def test_non_stream_unexpected_exception_returns_500_json_not_raw_500():
+    """非流式路径的未预期异常应返回结构化 JSON 错误（含异常类型），而非框架级原始 500.
+
+    验证 catch-all Exception 处理器将未知异常转换为 JSON 格式的 api_error 响应，
+    服务端日志记录完整堆栈（exc_info=True），客户端可从响应体获取错误类型。
+    """
+    app = create_app(ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-nonstream-unexpected.db"},
+    ))
+
+    async def failing_route_message(body, headers):
+        raise RuntimeError("internal state corruption")
+
+    app.state.router.route_message = failing_route_message
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+        )
+
+    assert resp.status_code == 500
+    data = resp.json()
+    assert data["error"]["type"] == "api_error"
+    assert "RuntimeError" in data["error"]["message"]
+
+
 def test_messages_normalizes_vendor_tool_blocks_before_routing():
     """入口应先规范化 server_tool_use，再交给高优先级 tier."""
     app = create_app(ProxyConfig(
