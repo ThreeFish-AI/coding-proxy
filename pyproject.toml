@@ -2,6 +2,7 @@
 name = "coding-proxy"
 version = "0.1.0"
 description = "Claude Code 多后端智能代理 — 自动故障转移与 Token 用量追踪"
+readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.135",
