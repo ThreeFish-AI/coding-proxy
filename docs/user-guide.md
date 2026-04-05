@@ -126,7 +126,7 @@ flowchart TD
 
 ### 2.1 环境要求
 
-- **Python** >= 3.13
+- **Python** >= 3.12
 - **UV** 包管理器（推荐）或 pip
 - **智谱 API Key**：从 [open.bigmodel.cn](https://open.bigmodel.cn) 获取
 - **Claude Code** 已安装并可用
@@ -1300,7 +1300,7 @@ port: 8046
 
 ```bash
 python --version
-# 需要 Python >= 3.13
+# 需要 Python >= 3.12
 ```
 
 ### 9.2 Claude Code 无法连接代理
