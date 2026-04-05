@@ -117,6 +117,42 @@ def _get_default_config_path() -> Path | None:
     return None
 
 
+def _ensure_user_config() -> Path | None:
+    """确保 ~/.coding-proxy/config.yaml 存在（不存在则从 default 复制）.
+
+    首次运行时自动将 config.default.yaml 拷贝到用户目录，
+    作为用户可编辑的配置基础。幂等、非破坏性、优雅降级。
+
+    Returns:
+        创建/已存在的配置文件路径，失败时返回 None。
+    """
+    import shutil
+
+    _home_config = Path("~/.coding-proxy/config.yaml").expanduser()
+    _cwd_config = Path("config.yaml")
+
+    # 已有配置 → 直接返回（不覆盖）
+    if _cwd_config.exists():
+        return _cwd_config
+    if _home_config.exists():
+        return _home_config
+
+    # 无配置 → 从 default 复制
+    default_path = _get_default_config_path()
+    if default_path is None:
+        logger.warning("无法定位 config.default.yaml，跳过用户配置初始化。")
+        return None
+
+    try:
+        _home_config.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(default_path, _home_config)
+        logger.info("已初始化用户配置文件: %s", _home_config)
+        return _home_config
+    except OSError as exc:
+        logger.warning("无法创建用户配置文件 %s: %s", _home_config, exc)
+        return None
+
+
 def _log_merge_diagnostics(defaults: dict, user_raw: dict, merged: dict) -> None:
     """记录合并诊断信息，帮助排查配置缺失问题."""
     critical_fields = {
@@ -147,6 +183,11 @@ def load_config(path: Path | None = None) -> ProxyConfig:
 
     环境变量展开（${VAR}）在深度合并之后执行，确保用户可通过环境变量覆盖任意字段。
     """
+    # ── 第 0 步：首次运行自动初始化用户配置文件 ─────────────
+    # 仅在未指定显式路径时触发（用户通过 -c 显式指定时不干预）
+    if path is None:
+        _ensure_user_config()
+
     # ── 第 1 步：确定并加载用户配置 ─────────────────────────────
     user_raw: dict = {}
     if path is None:
