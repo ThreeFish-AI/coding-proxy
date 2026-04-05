@@ -14,13 +14,15 @@ from typing import Any, Awaitable, Callable, Protocol
 
 import httpx
 
-# ── Copilot URL / 版本常量（原 copilot_urls.py） ────────────
+# ── Copilot URL / 版本常量（SSOT: model/constants.py）──────
 
-_COPILOT_VERSION = "0.26.7"
-_EDITOR_VERSION = "vscode/1.98.0"
-_EDITOR_PLUGIN_VERSION = f"copilot-chat/{_COPILOT_VERSION}"
-_USER_AGENT = f"GitHubCopilotChat/{_COPILOT_VERSION}"
-_GITHUB_API_VERSION = "2025-04-01"
+from ..model.constants import (
+    _COPILOT_VERSION,
+    _EDITOR_VERSION,
+    _EDITOR_PLUGIN_VERSION,
+    _GITHUB_API_VERSION,
+    _USER_AGENT,
+)
 
 
 def _normalize_base_url(url: str) -> str:
