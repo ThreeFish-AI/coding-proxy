@@ -1,15 +1,22 @@
 # =============================================================================
-# coding-proxy: PyPI Publishing Workflow
+# coding-proxy: PyPI Publishing Workflow (Initial Release)
 # =============================================================================
 # Trigger: GitHub Release publication event
 # Architecture: Build-Publish Separation (PyPA security best practice)
+#   Paired with: promote.yml (prerelease → stable promotion gate)
 #   - Job 1 (build): Low privileges, produces sdist+wheel artifacts
-#   - Job 2 (publish-testpypi): OIDC Trusted Publishing -> TestPyPI (prereleases)
-#   - Job 3 (publish-pypi): OIDC Trusted Publishing -> PyPI (production releases)
+#   - Job 2 (publish-testpypi): Publish to TestPyPI (prereleases only)
+#   - Job 3 (publish-pypi): Publish to PyPI (stable releases / hotfixes)
 #
 # Routing Logic:
 #   - prerelease == true  --> TestPyPI (with skip-existing tolerance)
-#   - prerelease == false --> PyPI production (fail loudly on duplicates)
+#                          --> THEN use promote.yml to promote to PyPI after validation
+#   - prerelease == false --> PyPI production (direct stable release, e.g. hotfixes)
+#
+# Promotion Flow (see promote.yml):
+#   1. Create release with prerelease: true  --> builds + publishes to TestPyPI
+#   2. Human validates package on TestPyPI
+#   3. Run promote.yml (workflow_dispatch)  --> promotes to PyPI production
 #
 # Pre-requisites (choose ONE authentication method):
 #
@@ -81,7 +88,7 @@ jobs:
         with:
           name: dist
           path: dist/
-          retention-days: 5
+          retention-days: 14
 
   # ===========================================================================
   # Job 2: PUBLISH TO TESTPYPI -- Prerelease / staging releases only
