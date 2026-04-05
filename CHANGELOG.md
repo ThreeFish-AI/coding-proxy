@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-## [v0.1.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.1.0) — 2026-04-05
+## [v0.1.1](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.1.1) — 2026-04-05
 
 > [!IMPORTANT]
 > 
