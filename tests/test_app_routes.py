@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import httpx
 from fastapi.testclient import TestClient
@@ -45,19 +45,26 @@ def test_get_root_returns_200():
 # ── count_tokens 透传 ────────────────────────────────────────
 
 
-def test_count_tokens_no_anthropic_returns_404():
-    """Anthropic 供应商未启用时 count_tokens 返回 404"""
-    with _make_app(primary_enabled=False) as client:
-        resp = client.post(
-            "/v1/messages/count_tokens",
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "messages": [{"role": "user", "content": "Hi"}],
-            },
-        )
-        assert resp.status_code == 404
-        data = resp.json()
-        assert data["error"]["type"] == "not_found"
+def test_count_tokens_no_vendor_returns_501():
+    """无可用供应商时 count_tokens 返回 501 Not Implemented"""
+    with _make_app(primary_enabled=True) as client:
+        # Mock tiers 属性返回空列表（防御性编程覆盖）
+        with patch.object(
+            type(client.app.state.router),
+            "tiers",
+            new_callable=PropertyMock,
+            return_value=[],
+        ):
+            resp = client.post(
+                "/v1/messages/count_tokens",
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+            assert resp.status_code == 501
+            data = resp.json()
+            assert data["error"]["type"] == "not_implemented"
 
 
 def test_count_tokens_proxies_to_anthropic():
@@ -127,6 +134,72 @@ def test_count_tokens_upstream_error_passthrough():
             )
             assert resp.status_code == 429
             assert resp.json()["error"]["type"] == "rate_limit_error"
+
+
+def test_count_tokens_with_zhipu_primary():
+    """zhipu 作为主供应商时，count_tokens 使用 ZhipuVendor 转发."""
+    config = ProxyConfig(
+        tiers=[
+            {"vendor": "zhipu", "enabled": True, "api_key": "sk-zhipu-test"},
+        ],
+        database={"path": "/tmp/test-count-tokens-zhipu.db"},
+    )
+    app = create_app(config)
+
+    mock_response = MagicMock()
+    mock_response.content = b'{"input_tokens": 128}'
+    mock_response.status_code = 200
+
+    with TestClient(app) as client:
+        with patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            resp = client.post(
+                "/v1/messages/count_tokens?beta=true",
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.json()["input_tokens"] == 128
+
+
+def test_count_tokens_zhipu_upstream_error_passthrough():
+    """zhipu 作为主供应商时，上游错误原样透传."""
+    config = ProxyConfig(
+        tiers=[
+            {"vendor": "zhipu", "enabled": True, "api_key": "sk-zhipu-test"},
+        ],
+        database={"path": "/tmp/test-count-tokens-zhipu-error.db"},
+    )
+    app = create_app(config)
+
+    mock_response = MagicMock()
+    mock_response.content = (
+        b'{"error":{"type":"authentication_error","message":"invalid api key"}}'
+    )
+    mock_response.status_code = 403
+
+    with TestClient(app) as client:
+        with patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            resp = client.post(
+                "/v1/messages/count_tokens?beta=true",
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            )
+            assert resp.status_code == 403
+            assert resp.json()["error"]["type"] == "authentication_error"
 
 
 def test_status_exposes_vendor_diagnostics():

@@ -51,6 +51,19 @@ def _find_anthropic_vendor(router: Any) -> AnthropicVendor | None:
     return None
 
 
+def _find_count_tokens_vendor(router: Any) -> BaseVendor | None:
+    """查找适合处理 count_tokens 请求的供应商.
+
+    使用路由链中的首个供应商（主供应商），
+    支持所有提供 Anthropic 兼容端点的 vendor（anthropic, zhipu 等）。
+    """
+    from ..vendors.base import BaseVendor
+
+    if router.tiers:
+        return router.tiers[0].vendor
+    return None
+
+
 def _find_copilot_vendor(router: Any) -> CopilotVendor | None:
     """从路由链中查找 Copilot 供应商实例（用于诊断与模型探测）."""
     for tier in router.tiers:
