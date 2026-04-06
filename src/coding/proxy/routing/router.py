@@ -40,7 +40,9 @@ class RequestRouter:
         if not tiers:
             raise ValueError("至少需要一个供应商层级")
         self._tiers = tiers
-        self._active_vendor_name: str | None = None  # 当前活跃供应商名称（由 Executor 成功时写入）
+        self._active_vendor_name: str | None = (
+            None  # 当前活跃供应商名称（由 Executor 成功时写入）
+        )
 
         # 正交分解的子组件
         self._recorder = UsageRecorder(token_logger=token_logger)

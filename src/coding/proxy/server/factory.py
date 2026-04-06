@@ -34,6 +34,7 @@ from ..routing.quota_guard import QuotaGuard
 from ..routing.tier import VendorTier
 from ..vendors.anthropic import AnthropicVendor
 from ..vendors.antigravity import AntigravityVendor
+from ..vendors.base import BaseVendor
 from ..vendors.copilot import CopilotVendor
 from ..vendors.zhipu import ZhipuVendor
 
@@ -58,8 +59,6 @@ def _find_count_tokens_vendor(router: Any) -> BaseVendor | None:
     按名称匹配返回对应的 vendor 对象。
     无活跃记录时回退到 tiers[0]（冷启动场景）。
     """
-    from ..vendors.base import BaseVendor
-
     if not router.tiers:
         return None
 
