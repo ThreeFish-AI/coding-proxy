@@ -10,18 +10,15 @@
 >
 > **🔓 count_tokens 终于不再"偏心" Anthropic 了！**
 >
-> 当 Zhipu GLM 作为主供应商时，Token 计数接口终于告别 403 报错，全面拥抱多供应商泛化透传。配合全局活跃状态追踪机制，count_tokens 能智能跟随当前实际在用的供应商，熔断降级？无缝切换，零感知！
+> 全面拥抱多供应商泛化透传。配合全局活跃 Vendor 状态追踪机制，智能跟随 Vendor 当前移位，熔断降级？无缝切换，零感知！
 
 ### ✨ 核心亮点
 
-- **count_tokens 多供应商泛化透传**：🎯 告别硬编码 Anthropic 独占！引入 `_find_count_tokens_vendor()` 全局活跃状态感知函数，优先读取 Executor 成功响应时写入的当前活跃供应商名称，冷启动时优雅回退到 `tiers[0]`。Zhipu / Anthropic 及所有兼容 Anthropic 协议的供应商均可正确承接 Token 计数请求，上游错误原样透传，无可用供应商时返回语义清晰的 `501 Not Implemented`（替代原先不准确的 `404`）；
-- **全局活跃供应商状态追踪**：🧠 Router 新增 `_active_vendor_name` 属性，Executor 在每次流式/非流式请求成功后自动写入当前活跃供应商名称。这意味着 count_tokens 不再盲目猜测，而是精准锁定"此刻谁在干活"，完美适配熔断降级等动态切换场景；
+- **全局活跃 Vendor 状态追踪**：🧠 Router 新增活跃 Vendor 属性，Executor 在每次流式/非流式请求成功后自动写入当前活跃供应商名称。精准锁定"此刻谁在干活"，完美适配熔断降级等动态切换场景；
 
 ### 🔧 更多特性
 
-- 📐 **配置文件逻辑分组优化**：将 `logging` 和 `tiers` 配置项从文件末尾提至顶部（server 配置之后、vendors 定义之前），形成「全局配置 → 降级策略 → 供应商定义 → 故障转移 → 其他」的清晰层次结构，配置值完全不变，阅读体验大幅提升；
-- 🧪 **count_tokens 测试矩阵扩容**：新增 5 个测试用例覆盖泛化功能全链路 —— 无可用供应商返回 501、Zhipu 主供应商转发成功、Zhipu 上游错误透传、全局活跃状态跟随（模拟熔断降级场景）、冷启动回退到 tiers[0]，信心拉满；
-- 🔧 **CI 三合一修复**：一次性根治 ruff lint 的 F821/F401 导入幽灵、formatter 行长规范对齐、以及 `_executor` 辅助函数缺少 router 必需参数导致的 TypeError，CI 绿灯常亮！
+- 🔧 **CI 三合一修复**：一次性根治 ruff lint 的 F821/F401 导入幽灵、formatter 行长规范对齐，CI 绿灯常亮！
 
 ## [v0.1.1](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.1.1) — 2026-04-05
 
