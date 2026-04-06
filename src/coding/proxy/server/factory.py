@@ -54,14 +54,27 @@ def _find_anthropic_vendor(router: Any) -> AnthropicVendor | None:
 def _find_count_tokens_vendor(router: Any) -> BaseVendor | None:
     """查找适合处理 count_tokens 请求的供应商.
 
-    使用路由链中的首个供应商（主供应商），
-    支持所有提供 Anthropic 兼容端点的 vendor（anthropic, zhipu 等）。
+    按优先级遍历路由链，选择第一个通过基础门控（熔断器 + 配额守卫）的供应商.
+    此策略与 Executor 的终端层门控逻辑对齐，确保 count_tokens 不会路由到
+    已熔断或配额超限的供应商上。
+
+    设计决策：
+    - 仅检查 can_execute()（同步），不执行异步健康检查（count_tokens 是轻量旁路操作）
+    - 跳过能力和兼容性门控（count_tokens 请求不含 tools/thinking 等特殊语义）
+    - 若所有 tier 均不可用，回退到 tiers[-1]（与 executor 终端保障行为一致）
     """
     from ..vendors.base import BaseVendor
 
-    if router.tiers:
-        return router.tiers[0].vendor
-    return None
+    if not router.tiers:
+        return None
+
+    # 遍历 tiers，找到第一个通过基础门控的
+    for tier in router.tiers:
+        if tier.can_execute():
+            return tier.vendor
+
+    # 所有 tier 均不可用时回退到最后一层（终端保障）
+    return router.tiers[-1].vendor
 
 
 def _find_copilot_vendor(router: Any) -> CopilotVendor | None:
