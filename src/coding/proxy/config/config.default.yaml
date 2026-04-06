@@ -6,6 +6,28 @@ server:
   host: "127.0.0.1"
   port: 8046
 
+logging:
+  level: "INFO"
+
+# === 降级链路优先级（可选） ===
+#
+# 显式指定故障转移时的供应商尝试顺序。
+# 未配置时回退到 vendors 列表的原始顺序。
+#
+# 引用的 vendor 名称必须在上方 vendors 中定义且 enabled=true。
+# 可用于在不改变 vendors 定义顺序的情况下灵活调整降级策略。
+#
+# 示例 1：完整四层降级链路（默认行为等效）
+#   tiers: ["anthropic", "copilot", "antigravity", "zhipu"]
+#
+# 示例 2：跳过中间层，仅保留首尾两级
+#   tiers: ["anthropic", "zhipu"]
+#
+# 示例 3：将 zhipu 提升为首选，anthropic 作为后备
+#   tiers: ["zhipu", "anthropic"]
+
+tiers: ["anthropic", "copilot", "antigravity", "zhipu"]
+
 # === 供应商定义（vendors 列表） ===
 #
 # 每个 vendor 通过 vendor 字段指定供应商类型：
@@ -93,25 +115,6 @@ vendors:
       window_hours: 24.0
       threshold_percent: 95.0
       probe_interval_seconds: 300
-
-# === 降级链路优先级（可选） ===
-#
-# 显式指定故障转移时的供应商尝试顺序。
-# 未配置时回退到 vendors 列表的原始顺序。
-#
-# 引用的 vendor 名称必须在上方 vendors 中定义且 enabled=true。
-# 可用于在不改变 vendors 定义顺序的情况下灵活调整降级策略。
-#
-# 示例 1：完整四层降级链路（默认行为等效）
-#   tiers: ["anthropic", "copilot", "antigravity", "zhipu"]
-#
-# 示例 2：跳过中间层，仅保留首尾两级
-#   tiers: ["anthropic", "zhipu"]
-#
-# 示例 3：将 zhipu 提升为首选，anthropic 作为后备
-#   tiers: ["zhipu", "anthropic"]
-
-tiers: ["anthropic", "copilot", "antigravity", "zhipu"]
 
 # === 故障转移触发条件 ===
 failover:
@@ -278,6 +281,3 @@ auth:
   # google_client_id: ""
   # google_client_secret: ""
   token_store_path: "~/.coding-proxy/tokens.json"
-
-logging:
-  level: "INFO"
