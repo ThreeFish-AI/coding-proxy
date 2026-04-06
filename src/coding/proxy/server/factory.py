@@ -34,6 +34,7 @@ from ..routing.quota_guard import QuotaGuard
 from ..routing.tier import VendorTier
 from ..vendors.anthropic import AnthropicVendor
 from ..vendors.antigravity import AntigravityVendor
+from ..vendors.base import BaseVendor
 from ..vendors.copilot import CopilotVendor
 from ..vendors.zhipu import ZhipuVendor
 
@@ -49,6 +50,27 @@ def _find_anthropic_vendor(router: Any) -> AnthropicVendor | None:
         if isinstance(tier.vendor, AnthropicVendor):
             return tier.vendor
     return None
+
+
+def _find_count_tokens_vendor(router: Any) -> BaseVendor | None:
+    """查找当前实际在用的供应商（通过全局活跃状态）.
+
+    读取 Executor 在成功响应时写入的活跃供应商名称，
+    按名称匹配返回对应的 vendor 对象。
+    无活跃记录时回退到 tiers[0]（冷启动场景）。
+    """
+    if not router.tiers:
+        return None
+
+    # 优先使用全局活跃状态
+    active_name = router.active_vendor_name
+    if active_name:
+        for tier in router.tiers:
+            if tier.name == active_name:
+                return tier.vendor
+
+    # 冷启动（无任何成功请求）：回退到首个供应商
+    return router.tiers[0].vendor
 
 
 def _find_copilot_vendor(router: Any) -> CopilotVendor | None:

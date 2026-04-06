@@ -154,11 +154,13 @@ class _RouteExecutor:
 
     def __init__(
         self,
+        router: Any,  # RequestRouter 引用，用于写入活跃供应商状态
         tiers: list[VendorTier],
         usage_recorder: UsageRecorder,
         session_manager: RouteSessionManager,
         reauth_coordinator: Any | None = None,
     ) -> None:
+        self._router = router
         self._tiers = tiers
         self._recorder = usage_recorder
         self._session_mgr = session_manager
@@ -256,6 +258,7 @@ class _RouteExecutor:
                         request_id=info.request_id,
                     ),
                 )
+                self._router._active_vendor_name = tier.name  # 更新活跃供应商
                 return
 
             except TokenAcquireError as exc:
@@ -367,6 +370,7 @@ class _RouteExecutor:
                             usage=resp.usage,
                         ),
                     )
+                    self._router._active_vendor_name = tier.name  # 更新活跃供应商
                     return resp
 
                 # 非流式的 semantic rejection 和 failover 判断（从响应对象而非异常中提取）

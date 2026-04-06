@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import httpx
 from fastapi.testclient import TestClient
@@ -45,19 +45,26 @@ def test_get_root_returns_200():
 # ── count_tokens 透传 ────────────────────────────────────────
 
 
-def test_count_tokens_no_anthropic_returns_404():
-    """Anthropic 供应商未启用时 count_tokens 返回 404"""
-    with _make_app(primary_enabled=False) as client:
-        resp = client.post(
-            "/v1/messages/count_tokens",
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "messages": [{"role": "user", "content": "Hi"}],
-            },
-        )
-        assert resp.status_code == 404
-        data = resp.json()
-        assert data["error"]["type"] == "not_found"
+def test_count_tokens_no_vendor_returns_501():
+    """无可用供应商时 count_tokens 返回 501 Not Implemented"""
+    with _make_app(primary_enabled=True) as client:
+        # Mock tiers 属性返回空列表（防御性编程覆盖）
+        with patch.object(
+            type(client.app.state.router),
+            "tiers",
+            new_callable=PropertyMock,
+            return_value=[],
+        ):
+            resp = client.post(
+                "/v1/messages/count_tokens",
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+            assert resp.status_code == 501
+            data = resp.json()
+            assert data["error"]["type"] == "not_implemented"
 
 
 def test_count_tokens_proxies_to_anthropic():
@@ -127,6 +134,156 @@ def test_count_tokens_upstream_error_passthrough():
             )
             assert resp.status_code == 429
             assert resp.json()["error"]["type"] == "rate_limit_error"
+
+
+def test_count_tokens_with_zhipu_primary():
+    """zhipu 作为主供应商时，count_tokens 使用 ZhipuVendor 转发."""
+    config = ProxyConfig(
+        tiers=[
+            {"vendor": "zhipu", "enabled": True, "api_key": "sk-zhipu-test"},
+        ],
+        database={"path": "/tmp/test-count-tokens-zhipu.db"},
+    )
+    app = create_app(config)
+
+    mock_response = MagicMock()
+    mock_response.content = b'{"input_tokens": 128}'
+    mock_response.status_code = 200
+
+    with TestClient(app) as client:
+        with patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            resp = client.post(
+                "/v1/messages/count_tokens?beta=true",
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.json()["input_tokens"] == 128
+
+
+def test_count_tokens_zhipu_upstream_error_passthrough():
+    """zhipu 作为主供应商时，上游错误原样透传."""
+    config = ProxyConfig(
+        tiers=[
+            {"vendor": "zhipu", "enabled": True, "api_key": "sk-zhipu-test"},
+        ],
+        database={"path": "/tmp/test-count-tokens-zhipu-error.db"},
+    )
+    app = create_app(config)
+
+    mock_response = MagicMock()
+    mock_response.content = (
+        b'{"error":{"type":"authentication_error","message":"invalid api key"}}'
+    )
+    mock_response.status_code = 403
+
+    with TestClient(app) as client:
+        with patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            resp = client.post(
+                "/v1/messages/count_tokens?beta=true",
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            )
+            assert resp.status_code == 403
+            assert resp.json()["error"]["type"] == "authentication_error"
+
+
+def test_count_tokens_uses_active_vendor_from_global_state():
+    """count_tokens 使用全局活跃状态标记的供应商（而非 tiers[0] 或门控判断）.
+
+    模拟场景：zhipu 因熔断器开启降级到 anthropic，
+    Executor 成功后将 active_vendor_name 设为 "anthropic"，
+    count_tokens 应跟随使用 anthropic。
+    """
+    config = ProxyConfig(
+        tiers=[
+            {
+                "vendor": "zhipu",
+                "enabled": True,
+                "api_key": "sk-zhipu-test",
+                "circuit_breaker": {"failure_threshold": 3},
+            },
+            {"vendor": "anthropic", "enabled": True, "api_key": "sk-ant-test"},
+        ],
+        database={"path": "/tmp/test-count-tokens-active-vendor.db"},
+    )
+    app = create_app(config)
+
+    # 模拟 Executor 已将活跃供应商切换为 anthropic（如 zhipu CB OPEN 后降级）
+    app.state.router._active_vendor_name = "anthropic"
+
+    mock_response = MagicMock()
+    mock_response.content = b'{"input_tokens": 55}'
+    mock_response.status_code = 200
+
+    with TestClient(app) as client:
+        with patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_post:
+            resp = client.post(
+                "/v1/messages/count_tokens",
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.json()["input_tokens"] == 55
+            # 验证 httpx.post 被调用（使用了 anthropic vendor 的 client）
+            assert mock_post.called
+
+
+def test_count_tokens_falls_back_to_tiers0_on_cold_start():
+    """冷启动（无任何成功请求）时，count_tokens 回退到 tiers[0]."""
+    config = ProxyConfig(
+        tiers=[
+            {"vendor": "zhipu", "enabled": True, "api_key": "sk-zhipu-test"},
+            {"vendor": "anthropic", "enabled": True, "api_key": "sk-ant-test"},
+        ],
+        database={"path": "/tmp/test-count-tokens-cold-start.db"},
+    )
+    app = create_app(config)
+
+    # 确认无活跃供应商记录（冷启动）
+    assert app.state.router.active_vendor_name is None
+
+    mock_response = MagicMock()
+    mock_response.content = b'{"input_tokens": 88}'
+    mock_response.status_code = 200
+
+    with TestClient(app) as client:
+        with patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            resp = client.post(
+                "/v1/messages/count_tokens",
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.json()["input_tokens"] == 88
 
 
 def test_status_exposes_vendor_diagnostics():
