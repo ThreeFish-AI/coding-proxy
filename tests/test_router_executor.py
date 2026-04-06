@@ -107,7 +107,9 @@ def _executor(tiers: list[VendorTier] | None = None, **kwargs) -> _RouteExecutor
         tiers = [_make_tier()]
     recorder = kwargs.pop("recorder", UsageRecorder())
     session_mgr = kwargs.pop("session_mgr", RouteSessionManager())
+    router = kwargs.pop("router", MagicMock())
     return _RouteExecutor(
+        router=router,
         tiers=tiers,
         usage_recorder=recorder,
         session_manager=session_mgr,
