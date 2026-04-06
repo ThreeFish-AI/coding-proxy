@@ -40,11 +40,13 @@ class RequestRouter:
         if not tiers:
             raise ValueError("至少需要一个供应商层级")
         self._tiers = tiers
+        self._active_vendor_name: str | None = None  # 当前活跃供应商名称（由 Executor 成功时写入）
 
         # 正交分解的子组件
         self._recorder = UsageRecorder(token_logger=token_logger)
         self._session_mgr = RouteSessionManager(compat_session_store)
         self._executor = _RouteExecutor(
+            router=self,  # 传入 router 引用，用于写入活跃供应商状态
             tiers=tiers,
             usage_recorder=self._recorder,
             session_manager=self._session_mgr,
@@ -58,6 +60,11 @@ class RequestRouter:
     @property
     def tiers(self) -> list[VendorTier]:
         return self._tiers
+
+    @property
+    def active_vendor_name(self) -> str | None:
+        """当前活跃供应商名称（由 Executor 在成功响应时写入）."""
+        return self._active_vendor_name
 
     # ── 公开路由接口（委托给 _RouteExecutor）───────────────
 

@@ -202,8 +202,13 @@ def test_count_tokens_zhipu_upstream_error_passthrough():
             assert resp.json()["error"]["type"] == "authentication_error"
 
 
-def test_count_tokens_skips_circuit_open_primary():
-    """主供应商熔断器开启时，count_tokens 自动跳过并使用次级供应商."""
+def test_count_tokens_uses_active_vendor_from_global_state():
+    """count_tokens 使用全局活跃状态标记的供应商（而非 tiers[0] 或门控判断）.
+
+    模拟场景：zhipu 因熔断器开启降级到 anthropic，
+    Executor 成功后将 active_vendor_name 设为 "anthropic"，
+    count_tokens 应跟随使用 anthropic。
+    """
     config = ProxyConfig(
         tiers=[
             {
@@ -214,18 +219,15 @@ def test_count_tokens_skips_circuit_open_primary():
             },
             {"vendor": "anthropic", "enabled": True, "api_key": "sk-ant-test"},
         ],
-        database={"path": "/tmp/test-count-tokens-cb-skip.db"},
+        database={"path": "/tmp/test-count-tokens-active-vendor.db"},
     )
     app = create_app(config)
 
-    # 将 zhipu tier 的熔断器设为 OPEN 状态
-    zhipu_tier = app.state.router.tiers[0]
-    assert zhipu_tier.circuit_breaker is not None
-    for _ in range(3):  # 默认 failure_threshold=3
-        zhipu_tier.circuit_breaker.record_failure()
+    # 模拟 Executor 已将活跃供应商切换为 anthropic（如 zhipu CB OPEN 后降级）
+    app.state.router._active_vendor_name = "anthropic"
 
     mock_response = MagicMock()
-    mock_response.content = b'{"input_tokens": 42}'
+    mock_response.content = b'{"input_tokens": 55}'
     mock_response.status_code = 200
 
     with TestClient(app) as client:
@@ -243,74 +245,27 @@ def test_count_tokens_skips_circuit_open_primary():
                 },
             )
             assert resp.status_code == 200
-            # 验证使用的是 anthropic vendor 的 client（base_url 含 anthropic）
-            call_args = mock_post.call_args
-            assert call_args is not None
+            assert resp.json()["input_tokens"] == 55
+            # 验证 httpx.post 被调用（使用了 anthropic vendor 的 client）
+            assert mock_post.called
 
 
-def test_count_tokens_fallback_when_all_blocked():
-    """所有 tier 均不可用时，count_tokens 回退到最后一层（终端保障）."""
-    config = ProxyConfig(
-        tiers=[
-            {
-                "vendor": "zhipu",
-                "enabled": True,
-                "api_key": "sk-zhipu-test",
-                "circuit_breaker": {"failure_threshold": 2},
-            },
-            {
-                "vendor": "anthropic",
-                "enabled": True,
-                "api_key": "sk-ant-test",
-                "circuit_breaker": {"failure_threshold": 2},
-            },
-        ],
-        database={"path": "/tmp/test-count-tokens-fallback.db"},
-    )
-    app = create_app(config)
-
-    # 将两个 tier 的熔断器都设为 OPEN
-    for tier in app.state.router.tiers:
-        if tier.circuit_breaker:
-            for _ in range(2):  # 配置的 failure_threshold=2
-                tier.circuit_breaker.record_failure()
-
-    mock_response = MagicMock()
-    mock_response.content = b'{"input_tokens": 99}'
-    mock_response.status_code = 200
-
-    with TestClient(app) as client:
-        with patch.object(
-            httpx.AsyncClient,
-            "post",
-            new_callable=AsyncMock,
-            return_value=mock_response,
-        ):
-            resp = client.post(
-                "/v1/messages/count_tokens",
-                json={
-                    "model": "claude-sonnet-4-20250514",
-                    "messages": [{"role": "user", "content": "Hi"}],
-                },
-            )
-            # 回退到最后一层（anthropic），仍能正常响应
-            assert resp.status_code == 200
-            assert resp.json()["input_tokens"] == 99
-
-
-def test_count_tokens_uses_first_when_healthy():
-    """所有 tier 健康时，count_tokens 使用首个供应商（向后兼容）."""
+def test_count_tokens_falls_back_to_tiers0_on_cold_start():
+    """冷启动（无任何成功请求）时，count_tokens 回退到 tiers[0]."""
     config = ProxyConfig(
         tiers=[
             {"vendor": "zhipu", "enabled": True, "api_key": "sk-zhipu-test"},
             {"vendor": "anthropic", "enabled": True, "api_key": "sk-ant-test"},
         ],
-        database={"path": "/tmp/test-count-tokens-first-healthy.db"},
+        database={"path": "/tmp/test-count-tokens-cold-start.db"},
     )
     app = create_app(config)
 
+    # 确认无活跃供应商记录（冷启动）
+    assert app.state.router.active_vendor_name is None
+
     mock_response = MagicMock()
-    mock_response.content = b'{"input_tokens": 77}'
+    mock_response.content = b'{"input_tokens": 88}'
     mock_response.status_code = 200
 
     with TestClient(app) as client:
@@ -328,7 +283,7 @@ def test_count_tokens_uses_first_when_healthy():
                 },
             )
             assert resp.status_code == 200
-            assert resp.json()["input_tokens"] == 77
+            assert resp.json()["input_tokens"] == 88
 
 
 def test_status_exposes_vendor_diagnostics():
