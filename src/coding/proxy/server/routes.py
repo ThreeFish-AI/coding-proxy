@@ -133,27 +133,27 @@ def register_core_routes(app: Any, router: Any) -> None:
 
     @app.post("/v1/messages/count_tokens")
     async def count_tokens(request: Request) -> Response:
-        """Token 计数 API 透传 — 旁路直通 Anthropic，不经过路由链.
+        """Token 计数 API 透传 — 使用主供应商转发.
 
-        仅当 Anthropic 主供应商启用时可用；其他供应商不支持此协议。
+        支持所有提供 Anthropic 兼容端点的供应商（anthropic, zhipu 等）。
         """
-        from .factory import _find_anthropic_vendor
+        from .factory import _find_count_tokens_vendor
 
-        anthropic_vendor = _find_anthropic_vendor(router)
-        if anthropic_vendor is None:
+        target_vendor = _find_count_tokens_vendor(router)
+        if target_vendor is None:
             return Response(
-                content=b'{"error":{"type":"not_found","message":"count_tokens requires anthropic vendor"}}',
-                status_code=404,
+                content=b'{"error":{"type":"not_implemented","message":"no available vendor for count_tokens"}}',
+                status_code=501,
                 media_type="application/json",
             )
 
         body = await request.json()
         headers = dict(request.headers)
-        prepared_body, prepared_headers = await anthropic_vendor._prepare_request(
+        prepared_body, prepared_headers = await target_vendor._prepare_request(
             body, headers
         )
 
-        client = anthropic_vendor._get_client()
+        client = target_vendor._get_client()
         url = "/v1/messages/count_tokens"
         if request.query_params:
             url = f"{url}?{request.query_params}"
