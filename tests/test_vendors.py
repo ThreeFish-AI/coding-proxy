@@ -184,6 +184,79 @@ async def test_anthropic_prepare_request_handles_string_content():
 
 
 @pytest.mark.asyncio
+async def test_anthropic_prepare_request_thinking_only_gets_placeholder():
+    """assistant message 仅含 thinking blocks 时，剥离后应插入占位 text block."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Let me think...",
+                        "signature": "zhipu-sig",
+                    },
+                ],
+            },
+            {"role": "user", "content": "follow up"},
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    content = prepared_body["messages"][1]["content"]
+    assert len(content) == 1
+    assert content[0]["type"] == "text"
+    assert content[0]["text"] == "[thinking]"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_prepare_request_thinking_only_with_tool_result_context():
+    """多轮对话：thinking-only assistant + 后续 user tool_result 不应触发结构错误."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "thought 1",
+                        "signature": "sig-1",
+                    },
+                    {"type": "redacted_thinking", "data": "base64data"},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_123",
+                        "content": "result data",
+                    },
+                ],
+            },
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    # assistant message 应包含占位 text block
+    content = prepared_body["messages"][1]["content"]
+    assert len(content) == 1
+    assert content[0]["type"] == "text"
+    assert content[0]["text"] == "[thinking]"
+
+    # user message 的 tool_result 应完整保留
+    user_content = prepared_body["messages"][2]["content"]
+    assert user_content[0]["type"] == "tool_result"
+
+
+@pytest.mark.asyncio
 async def test_anthropic_prepare_request_multi_turn_strips_all_thinking():
     """多轮对话中所有 assistant thinking blocks 均应被剥离."""
     vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
