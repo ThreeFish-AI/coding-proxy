@@ -61,6 +61,7 @@ def start(
     import uvicorn
 
     from ..server.app import create_app
+    from .banner import print_banner
 
     cfg_path = _resolve_config_path(config)
     cfg = load_config(cfg_path)
@@ -76,6 +77,10 @@ def start(
     from ..logging import build_log_config
 
     fastapi_app = create_app(cfg)
+
+    # 打印启动品牌横幅
+    print_banner(console, host=cfg.server.host, port=cfg.server.port)
+
     uvicorn.run(
         fastapi_app,
         host=cfg.server.host,
