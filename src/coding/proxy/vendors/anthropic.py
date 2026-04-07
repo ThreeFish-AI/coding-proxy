@@ -2,10 +2,55 @@
 
 from __future__ import annotations
 
+import copy
+import logging
 from typing import Any
 
 from ..config.schema import AnthropicConfig, FailoverConfig
 from .base import PROXY_SKIP_HEADERS, BaseVendor
+
+logger = logging.getLogger(__name__)
+
+# 需要从 assistant messages 中剥离的 thinking block 类型
+_THINKING_BLOCK_TYPES = {"thinking", "redacted_thinking"}
+
+
+def _strip_thinking_blocks(body: dict[str, Any]) -> int:
+    """从 assistant messages 中移除 thinking / redacted_thinking blocks.
+
+    Anthropic API 要求 thinking blocks 的 ``signature`` 必须是其签发的有效签名。
+    跨供应商迁移（如 Zhipu → Anthropic）后，conversation history 中可能包含
+    非 Anthropic 签发的 signature，导致 400 ``invalid_request_error``。
+    根据 Anthropic 官方文档，thinking blocks 可以被安全省略，不影响模型行为。
+
+    Returns:
+        被移除的 thinking block 数量。
+    """
+    stripped = 0
+    for message in body.get("messages", []):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        original_len = len(content)
+        new_content = [
+            block
+            for block in content
+            if not (
+                isinstance(block, dict) and block.get("type") in _THINKING_BLOCK_TYPES
+            )
+        ]
+        removed = original_len - len(new_content)
+        if removed and not new_content:
+            logger.warning(
+                "anthropic: assistant message content became empty after "
+                "stripping %d thinking block(s); this may cause API errors",
+                removed,
+            )
+        message["content"] = new_content
+        stripped += removed
+    return stripped
 
 
 class AnthropicVendor(BaseVendor):
@@ -37,11 +82,23 @@ class AnthropicVendor(BaseVendor):
         request_body: dict[str, Any],
         headers: dict[str, str],
     ) -> tuple[dict[str, Any], dict[str, str]]:
-        """透传请求体，过滤无关请求头."""
+        """深拷贝请求体、剥离历史 thinking blocks，过滤无关请求头.
+
+        深拷贝确保 Anthropic 的请求体修改不会污染后续 tier 的输入。
+        剥离 thinking blocks 防止跨供应商 signature 不兼容导致 400 错误。
+        """
+        body = copy.deepcopy(request_body)
+        stripped = _strip_thinking_blocks(body)
+        if stripped:
+            logger.debug(
+                "anthropic: stripped %d thinking block(s) from conversation history",
+                stripped,
+            )
+
         filtered = {
             k: v for k, v in headers.items() if k.lower() not in PROXY_SKIP_HEADERS
         }
-        return request_body, filtered
+        return body, filtered
 
 
 # 向后兼容别名
