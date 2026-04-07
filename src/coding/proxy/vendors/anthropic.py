@@ -38,8 +38,7 @@ def _strip_thinking_blocks(body: dict[str, Any]) -> int:
             block
             for block in content
             if not (
-                isinstance(block, dict)
-                and block.get("type") in _THINKING_BLOCK_TYPES
+                isinstance(block, dict) and block.get("type") in _THINKING_BLOCK_TYPES
             )
         ]
         removed = original_len - len(new_content)
