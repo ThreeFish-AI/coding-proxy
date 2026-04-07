@@ -2,11 +2,9 @@
 
 from unittest.mock import MagicMock
 
-import pytest
 from rich.panel import Panel
 
 from coding.proxy.cli.banner import build_banner, print_banner
-
 
 # ── build_banner() 测试 ────────────────────────────────────────
 
