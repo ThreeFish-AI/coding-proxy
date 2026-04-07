@@ -43,9 +43,13 @@ def _strip_thinking_blocks(body: dict[str, Any]) -> int:
         ]
         removed = original_len - len(new_content)
         if removed and not new_content:
-            logger.warning(
-                "anthropic: assistant message content became empty after "
-                "stripping %d thinking block(s); this may cause API errors",
+            # 剥离所有 thinking blocks 后 content 为空 ——
+            # Anthropic API 要求非末尾 assistant message 的 content 必须非空。
+            # 插入最小占位 text block 以保持消息结构合法性。
+            new_content = [{"type": "text", "text": "[thinking]"}]
+            logger.info(
+                "anthropic: inserted placeholder text block after stripping "
+                "%d thinking block(s) to avoid empty assistant content",
                 removed,
             )
         message["content"] = new_content
