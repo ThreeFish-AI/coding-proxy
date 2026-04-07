@@ -355,3 +355,70 @@ def test_record_failure_non_cap_no_weekly_qg_notify():
     tier = VendorTier(vendor=_make_vendor(), weekly_quota_guard=wqg)
     tier.record_failure(is_cap_error=False)
     assert wqg.can_use_primary()
+
+
+# ── 429 → CB immediate open 集成测试 ───────────────────────────
+
+
+def test_record_failure_with_retry_after_forces_cb_open():
+    """提供 retry_after_seconds 时，CB 应立即进入 OPEN（单次即可，无需累积至阈值）.
+
+    模拟 executor 解析 429 响应头后调用 tier.record_failure(retry_after_seconds=...)
+    的完整链路.
+    """
+    cb = CircuitBreaker(failure_threshold=3)  # 默认阈值 3
+    tier = VendorTier(vendor=_make_vendor(), circuit_breaker=cb)
+
+    # 模拟 429 响应：单次 record_failure 即应打开 CB
+    tier.record_failure(
+        retry_after_seconds=60.0,
+        rate_limit_deadline=time.monotonic() + 66,
+    )
+
+    assert cb.state == CircuitState.OPEN  # 核心断言：单次即 OPEN
+    assert tier.is_rate_limited  # deadline 也应设置
+
+
+def test_record_failure_without_retry_after_preserves_threshold():
+    """不提供 retry_after_seconds 时，CB 保持原有累积行为（非 429 场景）.
+
+    如连接超时、5xx 等不携带 retry-after 的错误，仍需累积至 failure_threshold.
+    """
+    cb = CircuitBreaker(failure_threshold=3)
+    tier = VendorTier(vendor=_make_vendor(), circuit_breaker=cb)
+
+    tier.record_failure()  # count=1
+    assert cb.state == CircuitState.CLOSED  # 未达阈值
+
+    tier.record_failure()  # count=2
+    assert cb.state == CircuitState.CLOSED  # 未达阈值
+
+    tier.record_failure()  # count=3 → OPEN
+    assert cb.state == CircuitState.OPEN
+
+
+def test_record_failure_429_cb_open_and_rl_deadline_consistent():
+    """429 场景下 CB state 与 rate_limit_deadline 语义一致.
+
+    验证修复前的核心矛盾已解决：
+    - 修复前：CB=closed（误导）但 rate_limited=true（实际拦截）
+    - 修复后：CB=open（一致）且 rate_limited=true（双重保护）
+    """
+    cb = CircuitBreaker(failure_threshold=3)
+    tier = VendorTier(vendor=_make_vendor("anthropic"), circuit_breaker=cb)
+
+    future = time.monotonic() + 66
+    tier.record_failure(
+        is_cap_error=False,
+        retry_after_seconds=60.0,
+        rate_limit_deadline=future,
+    )
+
+    # CB 应为 OPEN（而非 CLOSED）
+    assert cb.state == CircuitState.OPEN
+    # can_execute 应返回 False（CB + RL deadline 双重保护）
+    assert not tier.can_execute()
+    # rate limit 信息也应反映限制状态
+    rl_info = tier.get_rate_limit_info()
+    assert rl_info["is_rate_limited"] is True
+    assert rl_info["remaining_seconds"] > 59

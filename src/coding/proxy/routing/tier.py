@@ -85,7 +85,10 @@ class VendorTier:
             rate_limit_deadline: 精确的 rate limit 截止 monotonic 时间戳
         """
         if self.circuit_breaker:
-            self.circuit_breaker.record_failure(retry_after_seconds=retry_after_seconds)
+            self.circuit_breaker.record_failure(
+                retry_after_seconds=retry_after_seconds,
+                force_open=(retry_after_seconds is not None),
+            )
         if self.quota_guard and is_cap_error:
             self.quota_guard.notify_cap_error(retry_after_seconds=retry_after_seconds)
         if self.weekly_quota_guard and is_cap_error:

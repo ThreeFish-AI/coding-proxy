@@ -70,12 +70,20 @@ class CircuitBreaker:
                 # 正常状态下成功，无需操作
                 pass
 
-    def record_failure(self, retry_after_seconds: float | None = None) -> None:
+    def record_failure(
+        self,
+        retry_after_seconds: float | None = None,
+        *,
+        force_open: bool = False,
+    ) -> None:
         """记录一次失败调用.
 
         Args:
             retry_after_seconds: 从响应头解析出的建议恢复时间（秒）。
                 若提供且大于当前指数退避值，将覆盖以避免过早探测。
+            force_open: 是否忽略 failure_threshold，立即将熔断器转为 OPEN。
+                用于 429/rate limit 等具有明确恢复窗口的错误，
+                此类错误无需多次采样即可确定供应商不可用。
         """
         with self._lock:
             self._failure_count += 1
@@ -90,9 +98,16 @@ class CircuitBreaker:
                     self._current_recovery,
                 )
             elif self._state == CircuitState.CLOSED:
-                if self._failure_count >= self._failure_threshold:
+                if force_open or self._failure_count >= self._failure_threshold:
                     self._transition_to(CircuitState.OPEN)
-                    if (
+                    # force_open 场景下，retry-after 是权威信号（如 429 Retry-After），
+                    # 即使不超过当前退避值也应采用；非 force_open 时仅在有优势时覆盖。
+                    if force_open and retry_after_seconds is not None:
+                        self._current_recovery = min(
+                            retry_after_seconds,
+                            self._max_recovery,
+                        )
+                    elif (
                         retry_after_seconds
                         and retry_after_seconds > self._current_recovery
                     ):
@@ -100,11 +115,19 @@ class CircuitBreaker:
                             retry_after_seconds,
                             self._max_recovery,
                         )
-                    logger.warning(
-                        "Circuit breaker: CLOSED → OPEN (%d consecutive failures, next retry in %ds)",
-                        self._failure_count,
-                        self._current_recovery,
-                    )
+                    if force_open:
+                        logger.warning(
+                            "Circuit breaker: CLOSED → OPEN "
+                            "(forced, rate-limited, next retry in %ds)",
+                            self._current_recovery,
+                        )
+                    else:
+                        logger.warning(
+                            "Circuit breaker: CLOSED → OPEN "
+                            "(%d consecutive failures, next retry in %ds)",
+                            self._failure_count,
+                            self._current_recovery,
+                        )
 
     def reset(self) -> None:
         """手动重置熔断器为 CLOSED 状态."""
