@@ -9,6 +9,21 @@ import httpx
 
 from ..vendors.base import RequestCapabilities
 
+# ── 结构性验证错误标记 ──────────────────────────────────────
+# 这些标记指示的是消息结构不合规（如 tool_result 角色错位、消息交替违规），
+# 而非模型无法处理的语义内容。结构性错误不应触发级联故障转移，
+# 因为将同样的畸形请求转发到下一层供应商只会重复失败。
+_STRUCTURAL_ERROR_MARKERS: frozenset[str] = frozenset(
+    {
+        "tool_result blocks can only be",
+        "tool_use blocks can only be",
+        "messages must alternate",
+        "messages with role",
+        "thinking blocks can only be",
+        "content blocks can only be",
+    }
+)
+
 
 def extract_error_payload_from_http_status(
     exc: httpx.HTTPStatusError,
@@ -23,6 +38,26 @@ def extract_error_payload_from_http_status(
     return payload if isinstance(payload, dict) else None
 
 
+def is_structural_validation_error(
+    *,
+    status_code: int,
+    error_message: str | None = None,
+) -> bool:
+    """检测是否为结构性验证错误（不应触发故障转移）.
+
+    结构性错误指示请求的消息格式不合规（如 tool_result 角色错位），
+    将同样的畸形请求转发到下一层供应商不会解决问题。
+    与语义拒绝（模型无法处理某些内容）不同，结构性错误应直接返回客户端。
+
+    Returns:
+        True 如果是结构性验证错误。
+    """
+    if status_code != 400:
+        return False
+    normalized_message = (error_message or "").lower()
+    return any(marker.lower() in normalized_message for marker in _STRUCTURAL_ERROR_MARKERS)
+
+
 def is_semantic_rejection(
     *,
     status_code: int,
@@ -31,6 +66,13 @@ def is_semantic_rejection(
 ) -> bool:
     if status_code != 400:
         return False
+
+    # 结构性验证错误不应被视为语义拒绝
+    if is_structural_validation_error(
+        status_code=status_code, error_message=error_message
+    ):
+        return False
+
     normalized_type = (error_type or "").strip().lower()
     if normalized_type == "invalid_request_error":
         return True

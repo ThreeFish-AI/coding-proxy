@@ -23,6 +23,7 @@ from .error_classifier import (
     build_request_capabilities,
     extract_error_payload_from_http_status,
     is_semantic_rejection,
+    is_structural_validation_error,
 )
 from .rate_limit import (
     compute_effective_retry_seconds,
@@ -317,6 +318,20 @@ class _RouteExecutor:
                     continue
                 if is_last:
                     raise
+                # 结构性验证错误（如 tool_result 角色错位）不应级联到下一层：
+                # 同样的畸形请求转发到其他供应商只会重复失败。
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+                    if is_structural_validation_error(
+                        status_code=exc.response.status_code,
+                        error_message=self._extract_error_message_from_http_status(
+                            exc
+                        ),
+                    ):
+                        logger.info(
+                            "Tier %s structural validation error, stopping failover",
+                            tier.name,
+                        )
+                        raise
             except Exception as exc:
                 logger.error(
                     "Tier %s stream unexpected error: %s: %s",
@@ -676,3 +691,21 @@ class _RouteExecutor:
             return False
         msg = (resp.error_message or "").lower()
         return any(p in msg for p in ("usage cap", "quota", "limit exceeded"))
+
+    @staticmethod
+    def _extract_error_message_from_http_status(
+        exc: httpx.HTTPStatusError,
+    ) -> str | None:
+        """从 HTTPStatusError 中提取错误消息文本."""
+        if exc.response is None or not exc.response.content:
+            return None
+        try:
+            payload = exc.response.json()
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        error = payload.get("error", {})
+        if isinstance(error, dict):
+            return error.get("message")
+        return None
