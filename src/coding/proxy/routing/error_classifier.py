@@ -55,7 +55,9 @@ def is_structural_validation_error(
     if status_code != 400:
         return False
     normalized_message = (error_message or "").lower()
-    return any(marker.lower() in normalized_message for marker in _STRUCTURAL_ERROR_MARKERS)
+    return any(
+        marker.lower() in normalized_message for marker in _STRUCTURAL_ERROR_MARKERS
+    )
 
 
 def is_semantic_rejection(

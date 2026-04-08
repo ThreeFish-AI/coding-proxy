@@ -163,9 +163,7 @@ def usage(
     period, count = _resolve_period(days=days, week=week, month=month, total=total)
     cfg = load_config(Path(db_path) if db_path else None)
     token_logger = TokenLogger(cfg.db_path)
-    asyncio.run(
-        _run_usage(token_logger, period, count, vendor, model, cfg)
-    )
+    asyncio.run(_run_usage(token_logger, period, count, vendor, model, cfg))
 
 
 async def _run_usage(

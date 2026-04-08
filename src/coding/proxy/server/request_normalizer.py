@@ -182,7 +182,8 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
 
 
 def _relocate_misplaced_tool_results(
-    body: dict[str, Any], adaptations: list[str],
+    body: dict[str, Any],
+    adaptations: list[str],
 ) -> int:
     """检测并将非 user 消息中的 tool_result 块迁移到合法位置.
 
@@ -237,10 +238,13 @@ def _relocate_misplaced_tool_results(
 
     if target_msg_idx is None:
         # 无前置 user 消息：在消息列表头部插入一个新的 user 消息
-        messages.insert(0, {
-            "role": "user",
-            "content": [block for _, block in displaced_results],
-        })
+        messages.insert(
+            0,
+            {
+                "role": "user",
+                "content": [block for _, block in displaced_results],
+            },
+        )
         logger.info(
             "已创建新 user 消息（索引 0）以容纳 %d 个错位 tool_result 块",
             len(displaced_results),
@@ -263,7 +267,8 @@ def _relocate_misplaced_tool_results(
 
 
 def _find_nearest_user_message(
-    messages: list[dict[str, Any]], from_index: int,
+    messages: list[dict[str, Any]],
+    from_index: int,
 ) -> int | None:
     """查找离指定索引最近的前置 user 消息.
 
