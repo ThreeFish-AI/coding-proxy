@@ -255,7 +255,9 @@ class TokenLogger:
             return []
         days = max(1, days)
         start_iso = _days_start_utc_iso(days)
-        sql = """SELECT local_date(ts) AS date, vendor, model_requested, model_served,
+        sql = """SELECT local_date(ts) AS date, vendor,
+                   GROUP_CONCAT(DISTINCT model_requested) AS model_requested,
+                   model_served,
                    COUNT(*) AS total_requests,
                    SUM(input_tokens) AS total_input,
                    SUM(output_tokens) AS total_output,
@@ -272,8 +274,8 @@ class TokenLogger:
             sql += " AND model_requested = ?"
             params.append(model)
         sql += (
-            " GROUP BY local_date(ts), vendor, model_requested, model_served"
-            " ORDER BY local_date(ts) DESC, vendor, model_requested, model_served"
+            " GROUP BY local_date(ts), vendor, model_served"
+            " ORDER BY local_date(ts) DESC, vendor, model_served"
         )
         cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()

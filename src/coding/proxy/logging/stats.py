@@ -101,7 +101,7 @@ async def show_usage(
         table.add_row(
             str(row.get("date", "")),
             vendor_name,
-            str(row.get("model_requested", "")),
+            _format_model_display(row.get("model_requested")),
             model_served,
             str(row.get("total_requests", 0)),
             _format_tokens(total_input),
