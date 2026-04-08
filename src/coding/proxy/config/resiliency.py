@@ -30,7 +30,7 @@ class FailoverConfig(BaseModel):
         default=["rate_limit_error", "overloaded_error", "api_error"],
     )
     error_message_patterns: list[str] = Field(
-        default=["quota", "limit exceeded", "usage cap", "capacity"],
+        default=["quota", "limit exceeded", "usage cap", "capacity", "internal network failure"],
     )
 
 

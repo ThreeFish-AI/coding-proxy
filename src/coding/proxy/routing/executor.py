@@ -451,13 +451,10 @@ class _RouteExecutor:
                     failed_tier_name = tier.name
                     continue
 
-                if not is_last and tier.vendor.should_trigger_failover(
+                if tier.vendor.should_trigger_failover(
                     resp.status_code,
                     {"error": {"type": resp.error_type, "message": resp.error_message}},
                 ):
-                    logger.warning(
-                        "Tier %s error %d, failing over", tier.name, resp.status_code
-                    )
                     rl_info = parse_rate_limit_headers(
                         resp.response_headers, resp.status_code, resp.error_message
                     )
@@ -466,8 +463,14 @@ class _RouteExecutor:
                         retry_after_seconds=compute_effective_retry_seconds(rl_info),
                         rate_limit_deadline=compute_rate_limit_deadline(rl_info),
                     )
-                    failed_tier_name = tier.name
-                    continue
+                    if not is_last:
+                        logger.warning(
+                            "Tier %s error %d, failing over",
+                            tier.name,
+                            resp.status_code,
+                        )
+                        failed_tier_name = tier.name
+                        continue
 
                 # 最后一层或不可 failover 的错误：记录并返回原始响应
                 _log_vendor_response_error(tier.name, resp, body, is_stream=False)

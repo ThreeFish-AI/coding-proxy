@@ -1356,3 +1356,149 @@ class TestExecuteMessageFormatIncompatibilityFailover:
 
         # 无 tool_result 的 400 直接返回给客户端（不是最后一层但无下一层可降级）
         assert resp.status_code == 400
+
+
+# ── execute_message 最后一层 500 降级记录测试 ─────────────────
+
+
+class TestExecuteMessageLastTier500RecordsFailure:
+    """非流式路径下终端层（最后一层）vendor 返回 500 时应记录降级状态.
+
+    覆盖核心修复场景：zhipu 作为终端层返回 500 "Internal Network Failure"，
+    即使无法故障转移到下一层，仍需调用 record_failure() 维护降级状态
+    （与流式路径 _handle_http_error 的行为对称）。
+    """
+
+    @pytest.mark.asyncio
+    async def test_last_tier_500_with_failover_records_failure(self):
+        """最后一层 vendor 返回 500 且 should_trigger_failover=True 时，record_failure 应被调用."""
+        from coding.proxy.routing.circuit_breaker import CircuitBreaker
+
+        vendor = _mock_vendor("zhipu")
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=500,
+                raw_body=b'{"error":{"type":"api_error","message":"Internal Network Failure"}}',
+                error_type="api_error",
+                error_message="Internal Network Failure",
+            )
+        )
+        vendor.should_trigger_failover.return_value = True
+
+        cb = CircuitBreaker(failure_threshold=3)
+        tier = _make_tier(vendor, circuit_breaker=cb)
+        exec_inst = _executor([tier])
+
+        resp = await exec_inst.execute_message({"model": "claude-haiku-4-5-20251001"}, {})
+
+        assert resp.status_code == 500
+        assert resp.error_message == "Internal Network Failure"
+        # 验证 record_failure 被调用：CircuitBreaker 的 failure_count 应增加
+        assert cb.get_info()["failure_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_last_tier_500_without_failover_no_failure_recorded(self):
+        """最后一层 vendor 返回 500 但 should_trigger_failover=False 时，不记录降级."""
+        from coding.proxy.routing.circuit_breaker import CircuitBreaker
+
+        vendor = _mock_vendor("zhipu")
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=500,
+                raw_body=b'{"error":{"type":"server_error","message":"unknown"}}',
+                error_type="server_error",
+                error_message="unknown",
+            )
+        )
+        vendor.should_trigger_failover.return_value = False
+
+        cb = CircuitBreaker(failure_threshold=3)
+        tier = _make_tier(vendor, circuit_breaker=cb)
+        exec_inst = _executor([tier])
+
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 500
+        # should_trigger_failover=False 时，failure 不应被记录
+        assert cb.get_info()["failure_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_last_tier_500_still_returns_response_to_client(self):
+        """修复后，最后一层 500 仍应正确返回原始错误响应给客户端."""
+        vendor = _mock_vendor("zhipu")
+        error_body = b'{"error":{"type":"api_error","message":"Internal Network Failure"}}'
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=500,
+                raw_body=error_body,
+                error_type="api_error",
+                error_message="Internal Network Failure",
+            )
+        )
+        vendor.should_trigger_failover.return_value = True
+
+        exec_inst = _executor([_make_tier(vendor)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 500
+        assert resp.raw_body == error_body
+        assert resp.error_message == "Internal Network Failure"
+
+    @pytest.mark.asyncio
+    async def test_last_tier_500_with_retry_after_updates_rate_limit(self):
+        """最后一层 500 含 Retry-After 头时，应更新 tier 的 rate limit deadline."""
+        import time
+
+        from coding.proxy.routing.circuit_breaker import CircuitBreaker
+
+        vendor = _mock_vendor("zhipu")
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"type":"rate_limit_error","message":"rate limited"}}',
+                error_type="rate_limit_error",
+                error_message="rate limited",
+                response_headers={"retry-after": "60"},
+            )
+        )
+        vendor.should_trigger_failover.return_value = True
+
+        tier = _make_tier(vendor, circuit_breaker=CircuitBreaker())
+        exec_inst = _executor([tier])
+
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 429
+        # 验证 rate limit deadline 被更新
+        rl_info = tier.get_rate_limit_info()
+        assert rl_info["is_rate_limited"] is True
+        assert rl_info["remaining_seconds"] > 0
+
+    @pytest.mark.asyncio
+    async def test_non_last_tier_500_still_failovers(self):
+        """修复后，非最后一层 500 仍应正常触发故障转移到下一层."""
+        bad = _mock_vendor("zhipu")
+        bad.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=500,
+                raw_body=b'{"error":{"type":"api_error","message":"Internal Network Failure"}}',
+                error_type="api_error",
+                error_message="Internal Network Failure",
+            )
+        )
+        bad.should_trigger_failover.return_value = True
+
+        good = _mock_vendor("copilot")
+        good.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b'{"content":"ok"}',
+                usage=UsageInfo(input_tokens=1, output_tokens=1),
+            )
+        )
+
+        exec_inst = _executor([_make_tier(bad), _make_tier(good)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 200
+        assert good.send_message.called
