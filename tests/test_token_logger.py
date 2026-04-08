@@ -491,3 +491,127 @@ async def test_query_daily_clamps_zero_days(logger):
     # days=0 不应报错，行为等同 days=1
     rows = await logger.query_daily(days=0)
     assert len(rows) >= 1
+
+
+# ---------------------------------------------------------------------------
+# 按 model_served 聚合测试（同日/同供应商/同实际模型 → 合并为一行）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_query_daily_aggregates_by_model_served(logger):
+    """核心场景：同日/同供应商/同 model_served 但不同 model_requested 应聚为一行."""
+    await logger.log(
+        vendor="anthropic",
+        model_requested="claude-opus-4-6",
+        model_served="claude-sonnet-4-6",
+        input_tokens=100,
+        output_tokens=50,
+    )
+    await logger.log(
+        vendor="anthropic",
+        model_requested="claude-sonnet-4-6",
+        model_served="claude-sonnet-4-6",
+        input_tokens=200,
+        output_tokens=80,
+    )
+    rows = await logger.query_daily(days=7)
+    # 同一 model_served → 聚为一行
+    assert len(rows) == 1
+    row = rows[0]
+    # model_requested 应包含两个值，逗号分隔
+    requested_models = set(row["model_requested"].split(","))
+    assert requested_models == {"claude-opus-4-6", "claude-sonnet-4-6"}
+    # Token 统计应正确求和
+    assert row["total_requests"] == 2
+    assert row["total_input"] == 300
+    assert row["total_output"] == 130
+
+
+@pytest.mark.asyncio
+async def test_query_daily_single_model_no_comma(logger):
+    """边界：仅一个 model_requested 时不应出现多余逗号."""
+    await logger.log(
+        vendor="anthropic",
+        model_requested="claude-sonnet-4-6",
+        model_served="claude-sonnet-4-6",
+        input_tokens=100,
+        output_tokens=50,
+    )
+    rows = await logger.query_daily(days=7)
+    assert len(rows) == 1
+    # 单值时应为纯字符串，不含逗号
+    assert rows[0]["model_requested"] == "claude-sonnet-4-6"
+    assert "," not in rows[0]["model_requested"]
+
+
+@pytest.mark.asyncio
+async def test_query_daily_distinct_deduplication(logger):
+    """DISTINCT 应去重相同的 model_requested."""
+    await logger.log(
+        vendor="anthropic",
+        model_requested="claude-sonnet-4-6",
+        model_served="claude-sonnet-4-6",
+        input_tokens=100,
+        output_tokens=50,
+    )
+    await logger.log(
+        vendor="anthropic",
+        model_requested="claude-sonnet-4-6",  # 相同的 model_requested
+        model_served="claude-sonnet-4-6",
+        input_tokens=200,
+        output_tokens=80,
+    )
+    rows = await logger.query_daily(days=7)
+    assert len(rows) == 1
+    # 去重后不应重复出现
+    assert rows[0]["model_requested"] == "claude-sonnet-4-6"
+    assert rows[0]["model_requested"].count(",") == 0
+
+
+@pytest.mark.asyncio
+async def test_query_daily_model_filter_still_works(logger):
+    """--model/-m 过滤在聚合前执行，行为不变."""
+    await logger.log(
+        vendor="anthropic",
+        model_requested="claude-opus-4-6",
+        model_served="claude-sonnet-4-6",
+        input_tokens=100,
+        output_tokens=50,
+    )
+    await logger.log(
+        vendor="anthropic",
+        model_requested="claude-sonnet-4-6",
+        model_served="claude-sonnet-4-6",
+        input_tokens=200,
+        output_tokens=80,
+    )
+    # 按 model_requested 过滤，仅保留 opus 的记录
+    rows = await logger.query_daily(days=7, model="claude-opus-4-6")
+    assert len(rows) == 1
+    assert rows[0]["total_requests"] == 1
+    assert rows[0]["total_input"] == 100
+
+
+@pytest.mark.asyncio
+async def test_query_daily_different_vendors_not_merged(logger):
+    """不同供应商即使 model_served 相同也不应合并."""
+    await logger.log(
+        vendor="anthropic",
+        model_requested="claude-sonnet-4-6",
+        model_served="claude-sonnet-4-6",
+        input_tokens=100,
+        output_tokens=50,
+    )
+    await logger.log(
+        vendor="zhipu",
+        model_requested="claude-sonnet-4-6",
+        model_served="claude-sonnet-4-6",  # 同一 model_served
+        input_tokens=200,
+        output_tokens=80,
+    )
+    rows = await logger.query_daily(days=7)
+    # 不同供应商，应为两行
+    assert len(rows) == 2
+    vendors = {r["vendor"] for r in rows}
+    assert vendors == {"anthropic", "zhipu"}
