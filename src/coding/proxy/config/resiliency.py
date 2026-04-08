@@ -24,7 +24,7 @@ class RetryConfig(BaseModel):
 
 class FailoverConfig(BaseModel):
     status_codes: list[int] = Field(
-        default=[429, 403, 503, 500],
+        default=[429, 403, 503, 500, 529],
     )
     error_types: list[str] = Field(
         default=["rate_limit_error", "overloaded_error", "api_error"],

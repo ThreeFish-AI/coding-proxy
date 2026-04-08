@@ -650,6 +650,31 @@ def test_base_failover_without_config_returns_false():
     assert not zhipu_vendor.should_trigger_failover(503, None)
 
 
+# --- 529 overloaded_error 降级测试 ---
+
+
+def test_529_overloaded_triggers_failover():
+    """529 + overloaded_error 应触发降级（FailoverConfig 默认包含 529）."""
+    anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+
+    assert anthropic_vendor.should_trigger_failover(
+        529, {"error": {"type": "overloaded_error", "message": "Overloaded"}}
+    )
+
+
+def test_529_without_body_triggers_failover():
+    """529 无 body 也应触发降级（备用安全网逻辑）."""
+    anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+
+    assert anthropic_vendor.should_trigger_failover(529, None)
+
+
+def test_529_in_failover_config_default():
+    """验证 FailoverConfig 默认 status_codes 包含 529."""
+    config = FailoverConfig()
+    assert 529 in config.status_codes
+
+
 # --- _sanitize_headers_for_synthetic_response ---
 
 
