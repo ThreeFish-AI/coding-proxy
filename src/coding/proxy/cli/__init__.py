@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import typer
 
@@ -116,20 +116,47 @@ def status(
         console.print("[red]代理服务未运行[/red]")
 
 
+def _resolve_days(
+    days: int,
+    week: bool,
+    month: bool,
+    total: bool,
+) -> int | None:
+    """将互斥的时间维度标志解析为统一的 ``days`` 参数.
+
+    优先级: ``-t`` > ``-m`` > ``-w`` > ``-d``（显式值）。
+    返回 ``None`` 表示全量查询（``-t``）。
+    """
+    if total:
+        return None
+    if month:
+        return 30
+    if week:
+        return 7
+    return days
+
+
 @app.command()
 def usage(
-    days: int = typer.Option(7, "--days", "-d", help="统计天数（与 -w/-m/-t 互斥）"),
-    week: bool = typer.Option(False, "--week", "-w", help="统计本周（周一至今）"),
-    month: bool = typer.Option(False, "--month", "-m", help="统计本月（1 日至今）"),
-    total: bool = typer.Option(False, "--total", "-t", help="统计全部记录"),
+    days: int = typer.Option(7, "--days", "-d", help="统计天数"),
+    week: bool = typer.Option(False, "--week", "-w", help="最近 7 天（等价 -d 7）"),
+    month: bool = typer.Option(False, "--month", "-m", help="最近 30 天"),
+    total: bool = typer.Option(False, "--total", "-t", help="全部历史记录"),
     vendor: str | None = typer.Option(None, "--vendor", "-v", help="过滤供应商"),
     model: str | None = typer.Option(None, "--model", help="过滤请求模型"),
     db_path: str | None = typer.Option(None, "--db", help="数据库路径"),
 ) -> None:
-    """查看 Token 使用统计."""
-    from ..logging.stats import resolve_time_range
+    """查看 Token 使用统计.
 
-    resolved_days = resolve_time_range(days=days, week=week, month=month, total=total)
+    时间维度快捷标志（互斥，优先级 -t > -m > -w > -d）：
+
+      -w / --week   最近 7 天
+
+      -m / --month  最近 30 天
+
+      -t / --total  全部历史
+    """
+    resolved_days = _resolve_days(days, week, month, total)
     cfg = load_config(Path(db_path) if db_path else None)
     token_logger = TokenLogger(cfg.db_path)
     asyncio.run(_run_usage(token_logger, resolved_days, vendor, model, cfg))
@@ -137,7 +164,7 @@ def usage(
 
 async def _run_usage(
     token_logger: TokenLogger,
-    days: int,
+    days: int | None,
     vendor: str | None,
     model: str | None,
     cfg: ProxyConfig,
