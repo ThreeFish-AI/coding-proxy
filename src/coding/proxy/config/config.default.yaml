@@ -122,9 +122,11 @@ failover:
   error_types:
     - "rate_limit_error"
     - "overloaded_error"
+    - "api_error"
   error_message_patterns:
     - "quota"
     - "usage cap"
+    - "internal network failure"
 
 # === 模型映射 ===
 model_mapping:
