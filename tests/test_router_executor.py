@@ -21,6 +21,7 @@ from coding.proxy.compat.canonical import (
 from coding.proxy.routing.executor import (
     _VENDOR_PROTOCOL_LABEL_MAP,
     _has_tool_results,
+    _is_likely_request_format_error,
     _log_vendor_response_error,
     _RouteExecutor,
 )
@@ -1115,3 +1116,243 @@ class TestExecuteMessageFailoverOn429:
         log_text = "\n".join(r.message for r in warnings)
         assert "failing over" in log_text
         assert "zhipu" in log_text
+
+
+# ── _is_likely_request_format_error 测试 ──────────────────────
+
+
+class TestIsLikelyRequestFormatError:
+    """:func:`_is_likely_request_format_error` 测试 — 覆盖 Copilot 400
+    ``Bad Request`` 不应计入熔断器的核心修复场景.
+    """
+
+    def _body_with_tool_results(self) -> dict[str, Any]:
+        return {
+            "model": "claude-opus-4-6",
+            "tools": [{"name": "Bash"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}
+                    ],
+                },
+            ],
+        }
+
+    def test_returns_true_for_400_bad_request_with_tool_results(self):
+        """400 + 'Bad Request' + 有 tool_result → 格式不兼容."""
+        assert _is_likely_request_format_error(
+            status_code=400,
+            error_body_text="Bad Request\n",
+            body=self._body_with_tool_results(),
+        ) is True
+
+    def test_returns_true_for_400_empty_body_with_tool_results(self):
+        """400 + 空错误体 + 有 tool_result → 格式不兼容."""
+        assert _is_likely_request_format_error(
+            status_code=400,
+            error_body_text="",
+            body=self._body_with_tool_results(),
+        ) is True
+
+    def test_returns_true_for_400_short_non_json_with_tool_results(self):
+        """400 + 短非 JSON 错误体 + tool_result → 格式不兼容."""
+        assert _is_likely_request_format_error(
+            status_code=400,
+            error_body_text="invalid payload",
+            body=self._body_with_tool_results(),
+        ) is True
+
+    def test_returns_false_for_non_400_status(self):
+        """非 400 状态码即使有 tool_result 也不应匹配."""
+        assert _is_likely_request_format_error(
+            status_code=500,
+            error_body_text="Bad Request\n",
+            body=self._body_with_tool_results(),
+        ) is False
+
+    def test_returns_false_when_no_tool_results(self):
+        """无 tool_result 时不应匹配（即使是 400 Bad Request）."""
+        body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
+        assert _is_likely_request_format_error(
+            status_code=400,
+            error_body_text="Bad Request\n",
+            body=body,
+        ) is False
+
+    def test_returns_false_for_structured_json_error_body(self):
+        """结构化 JSON 错误体（以 { 开头且较长）不应触发此启发式判断."""
+        json_body = '{"error":{"type":"invalid_request_error","message":"something wrong"}}'
+        assert _is_likely_request_format_error(
+            status_code=400,
+            error_body_text=json_body,
+            body=self._body_with_tool_results(),
+        ) is False
+
+    def test_returns_false_for_empty_body(self):
+        """空请求体不应触发."""
+        assert _is_likely_request_format_error(
+            status_code=400, error_body_text="Bad Request\n", body={}
+        ) is False
+
+
+# ── TokenAcquireError 永久性凭证错误测试 ────────────────────
+
+
+class TestHandleTokenErrorPermanentCredential:
+    """TokenAcquireError 中 INSUFFICIENT_SCOPE / INVALID_CREDENTIALS 的特殊处理.
+
+    验证永久性凭证问题不计入熔断器，避免级联 OPEN 阻塞恢复。
+    """
+
+    @pytest.mark.asyncio
+    async def test_insufficient_scope_does_not_record_failure(self):
+        """INSUFFICIENT_SCOPE 不应调用 tier.record_failure()."""
+        from coding.proxy.vendors.token_manager import TokenErrorKind
+
+        tier = _make_tier()
+        exec_inst = _executor([tier])
+        initial_count = (
+            tier.circuit_breaker._failure_count if tier.circuit_breaker else 0
+        )
+
+        exc = TokenAcquireError.with_kind(
+            "scope insufficient",
+            kind=TokenErrorKind.INSUFFICIENT_SCOPE,
+            needs_reauth=True,
+        )
+        await exec_inst._handle_token_error(tier, exc, is_last=False, failed_tier_name=None)
+
+        # 失败计数不应增加
+        if tier.circuit_breaker:
+            assert tier.circuit_breaker._failure_count == initial_count
+
+    @pytest.mark.asyncio
+    async def test_invalid_credentials_does_not_record_failure(self):
+        """INVALID_CREDENTIALS 不应调用 tier.record_failure()."""
+        from coding.proxy.vendors.token_manager import TokenErrorKind
+
+        tier = _make_tier()
+        exec_inst = _executor([tier])
+        initial_count = (
+            tier.circuit_breaker._failure_count if tier.circuit_breaker else 0
+        )
+
+        exc = TokenAcquireError.with_kind(
+            "invalid grant",
+            kind=TokenErrorKind.INVALID_CREDENTIALS,
+            needs_reauth=True,
+        )
+        await exec_inst._handle_token_error(tier, exc, is_last=False, failed_tier_name=None)
+
+        if tier.circuit_breaker:
+            assert tier.circuit_breaker._failure_count == initial_count
+
+    @pytest.mark.asyncio
+    async def test_temporary_error_still_records_failure(self):
+        """临时性 Token 错误（如 TEMPORARY）仍应正常计入熔断器."""
+        from coding.proxy.vendors.token_manager import TokenErrorKind
+
+        tier = _make_tier()
+        exec_inst = _executor([tier])
+
+        exc = TokenAcquireError.with_kind(
+            "network timeout",
+            kind=TokenErrorKind.TEMPORARY,
+            needs_reauth=False,
+        )
+        await exec_inst._handle_token_error(tier, exc, is_last=False, failed_tier_name=None)
+
+        # 临时错误应记录失败
+        if tier.circuit_breaker:
+            assert tier.circuit_breaker._failure_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_still_triggers_reauth_for_permanent_error(self):
+        """永久性凭证错误仍应触发 reauth 协调."""
+        from coding.proxy.vendors.token_manager import TokenErrorKind
+
+        tier = _make_tier(vendor=_mock_vendor("antigravity"))
+        reauth_mock = MagicMock()
+        reauth_mock.request_reauth = AsyncMock()
+        exec_inst = _executor([tier], reauth_coordinator=reauth_mock)
+
+        exc = TokenAcquireError.with_kind(
+            "scope issue",
+            kind=TokenErrorKind.INSUFFICIENT_SCOPE,
+            needs_reauth=True,
+        )
+        await exec_inst._handle_token_error(tier, exc, is_last=False, failed_tier_name=None)
+
+        reauth_mock.request_reauth.assert_called_once_with("google")
+
+
+# ── execute_message 400 格式不兼容降级测试 ───────────────────
+
+
+class TestExecuteMessageFormatIncompatibilityFailover:
+    """非流式路径下 vendor 返回 400 且含 tool_result 时应视为语义拒绝.
+
+    覆盖 Copilot 返回 ``Bad Request``（非结构化 400）时的降级修复场景。
+    """
+
+    @pytest.mark.asyncio
+    async def test_copilot_400_bad_request_with_tool_results_fails_over(self):
+        """Copilot 返回 400 Bad Request + 请求含 tool_result → 应降级到下一层."""
+        copilot = _mock_vendor("copilot")
+        copilot.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=400,
+                raw_body=b"Bad Request\n",
+                error_type=None,
+                error_message="Bad Request",
+            )
+        )
+
+        good = _mock_vendor("anthropic")
+        good.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b'{"content":"ok"}',
+                usage=UsageInfo(input_tokens=1, output_tokens=1),
+            )
+        )
+
+        exec_inst = _executor([_make_tier(copilot), _make_tier(good)])
+        body = {
+            "model": "claude-opus-4-6",
+            "tools": [{"name": "Bash"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tu_1", "content": "result"}
+                    ],
+                },
+            ],
+        }
+        resp = await exec_inst.execute_message(body, {})
+
+        assert resp.status_code == 200
+        assert good.send_message.called
+
+    @pytest.mark.asyncio
+    async def test_400_without_tool_results_does_not_format_failover(self):
+        """400 但无 tool_result 时，不应触发格式不兼容的特殊处理."""
+        bad = _mock_vendor("bad")
+        bad.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=400,
+                raw_body=b"Bad Request\n",
+                error_type=None,
+                error_message="Bad Request",
+            )
+        )
+
+        exec_inst = _executor([_make_tier(bad)])
+        body = {"model": "test", "messages": [{"role": "user", "content": "hello"}]}
+        resp = await exec_inst.execute_message(body, {})
+
+        # 无 tool_result 的 400 直接返回给客户端（不是最后一层但无下一层可降级）
+        assert resp.status_code == 400

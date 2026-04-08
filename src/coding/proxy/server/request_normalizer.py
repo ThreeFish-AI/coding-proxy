@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import copy
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _ANTHROPIC_TOOL_USE_ID_RE = re.compile(r"^toolu_[A-Za-z0-9_]+$")
 _ANTHROPIC_SERVER_TOOL_USE_ID_RE = re.compile(r"^srvtoolu_[A-Za-z0-9_]+$")
@@ -28,7 +31,16 @@ class NormalizationResult:
 
 
 def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
-    """清洗供应商私有块，尽量恢复为合法 Anthropic Messages 请求."""
+    """清洗供应商私有块，尽量恢复为合法 Anthropic Messages 请求.
+
+    处理策略：
+    1. 移除供应商私有块（如 server_tool_use_delta）
+    2. 重写无效/非标准的 tool_use / tool_result ID
+    3. **迁移错位的 tool_result 块**：Anthropic API 要求 ``tool_result`` 只能出现在
+       ``user`` 消息中。当检测到非 user 消息中存在 ``tool_result`` 时，
+       自动将其提取并挂载到最近的前置 user 消息（或创建新的 user 消息），
+       防止上游返回 ``400 invalid_request_error`` 导致全链路降级失败。
+    """
     normalized = copy.deepcopy(body)
     adaptations: list[str] = []
     fatal_reasons: list[str] = []
@@ -136,8 +148,117 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
                 new_content.append(normalized_block)
         message["content"] = new_content
 
+    # ── 后处理：迁移错位的 tool_result 块 ──────────────────────
+    # Anthropic API 强制要求 tool_result 仅存在于 user 消息中。
+    # 多 vendor 场景下（尤其是降级恢复后的对话历史），可能出现
+    # tool_result 残留在 assistant / system 等非 user 消息中的情况，
+    # 导致 Anthropic 返回 400 invalid_request_error 并触发全链路降级。
+    relocated = _relocate_misplaced_tool_results(normalized, adaptations)
+    if relocated > 0:
+        adaptations.append(f"tool_result_relocated_from_non_user_messages({relocated})")
+
     return NormalizationResult(
         body=normalized,
         adaptations=sorted(set(adaptations)),
         fatal_reasons=fatal_reasons,
     )
+
+
+def _relocate_misplaced_tool_results(
+    body: dict[str, Any], adaptations: list[str],
+) -> int:
+    """检测并将非 user 消息中的 tool_result 块迁移到合法位置.
+
+    策略：
+    1. 扫描所有消息，识别非 user 消息中的 tool_result 块
+    2. 将这些块从原消息中移除
+    3. 将它们挂载到最近的前置 user 消息末尾（或创建新 user 消息）
+
+    Returns:
+        被迁移的 tool_result 块数量。
+    """
+    messages = body.get("messages", [])
+    if not messages:
+        return 0
+
+    displaced_results: list[tuple[int, dict[str, Any]]] = []  # (msg_idx, block)
+
+    for msg_idx, message in enumerate(messages):
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role == "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+
+        cleaned_content: list[Any] = []
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_result"
+                and block.get("tool_use_id")
+            ):
+                displaced_results.append((msg_idx, dict(block)))
+                logger.debug(
+                    "发现错位 tool_result: messages[%d], tool_use_id=%s, "
+                    "将迁移至最近的 user 消息",
+                    msg_idx,
+                    block.get("tool_use_id", ""),
+                )
+            else:
+                cleaned_content.append(block)
+        message["content"] = cleaned_content
+
+    if not displaced_results:
+        return 0
+
+    # 查找或创建目标 user 消息：优先选择离错位块最近的前置 user 消息
+    first_displaced_idx = displaced_results[0][0]
+    target_msg_idx = _find_nearest_user_message(messages, first_displaced_idx)
+
+    if target_msg_idx is None:
+        # 无前置 user 消息：在消息列表头部插入一个新的 user 消息
+        messages.insert(0, {
+            "role": "user",
+            "content": [block for _, block in displaced_results],
+        })
+        logger.info(
+            "已创建新 user 消息（索引 0）以容纳 %d 个错位 tool_result 块",
+            len(displaced_results),
+        )
+    else:
+        target_msg = messages[target_msg_idx]
+        target_content = target_msg.get("content")
+        if not isinstance(target_content, list):
+            target_content = []
+            target_msg["content"] = target_content
+        for _, block in displaced_results:
+            target_content.append(block)
+        logger.info(
+            "已将 %d 个错位 tool_result 块迁移至 messages[%d] (role=user)",
+            len(displaced_results),
+            target_msg_idx,
+        )
+
+    return len(displaced_results)
+
+
+def _find_nearest_user_message(
+    messages: list[dict[str, Any]], from_index: int,
+) -> int | None:
+    """查找离指定索引最近的前置 user 消息.
+
+    Args:
+        messages: 消息列表
+        from_index: 起始搜索位置（不包含此位置）
+
+    Returns:
+        最近的前置 user 消息索引，若无则返回 None。
+    """
+    for idx in range(from_index - 1, -1, -1):
+        msg = messages[idx]
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            return idx
+    return None

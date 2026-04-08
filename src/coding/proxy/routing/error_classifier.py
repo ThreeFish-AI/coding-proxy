@@ -43,6 +43,9 @@ def is_semantic_rejection(
             "validation",
             "tool_use_id",
             "server_tool_use",
+            "tool_result",
+            "can only be in",
+            "bad request",  # 覆盖 Copilot 等返回纯文本 "Bad Request" 的场景
         )
     )
 
