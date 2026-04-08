@@ -938,3 +938,178 @@ class TestExecuteMessageVendorErrorLogging:
         )
         assert "has_tool_results=True" in log_text
         assert "claude-opus-4-6" in log_text
+
+
+# ── execute_message 429 降级测试 ─────────────────────────────
+
+
+class TestExecuteMessageFailoverOn429:
+    """非流式路径下 vendor 返回 429 时应触发 tier 降级.
+
+    覆盖核心修复场景：ZhipuVendor 未注入 FailoverConfig 导致
+    should_trigger_failover() 永远返回 False，429 无法降级到下一层。
+    """
+
+    @pytest.mark.asyncio
+    async def test_429_with_failover_config_triggers_failover(self):
+        """非 terminal 层 vendor 有 failover_config 时，429 应触发降级到下一层."""
+        # 模拟 zhipu 层返回 429（有 failover_config → should_trigger_failover 返回 True）
+        zhipu = _mock_vendor("zhipu")
+        zhipu.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body='{"error":{"code":"1305","message":"\u8be5\u6a21\u578b\u5f53\u524d\u8bbf\u95ee\u91cf\u8fc7\u5927"}}'.encode(),
+                error_type=None,
+                error_message="该模型当前访问量过大，请您稍后再试",
+            )
+        )
+        zhipu.should_trigger_failover.return_value = True
+
+        # copilot 层正常响应
+        copilot = _mock_vendor("copilot")
+        copilot.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b'{"content":"ok"}',
+                usage=UsageInfo(input_tokens=1, output_tokens=1),
+            )
+        )
+
+        zhipu_tier = _make_tier(zhipu)
+        exec_inst = _executor([zhipu_tier, _make_tier(copilot)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 200
+        assert copilot.send_message.called
+        # record_failure 在 VendorTier 上（非 vendor），通过 circuit_breaker 调用链验证
+        if zhipu_tier.circuit_breaker:
+            assert zhipu_tier.circuit_breaker.failure_count > 0
+
+    @pytest.mark.asyncio
+    async def test_429_without_failover_config_no_failover(self):
+        """非 terminal 层 vendor 无 failover_config 时，429 不应触发降级（原始行为）."""
+        bad = _mock_vendor("bad")
+        bad.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"message":"rate limited"}}',
+                error_type=None,
+                error_message="rate limited",
+            )
+        )
+        # 显式设为 False：模拟无 failover_config 时 should_trigger_failover 的行为
+        bad.should_trigger_failover.return_value = False
+
+        good = _mock_vendor("good")
+        good_resp = VendorResponse(
+            status_code=200,
+            raw_body=b"{}",
+            usage=UsageInfo(input_tokens=1, output_tokens=1),
+        )
+        good.send_message = AsyncMock(return_value=good_resp)
+
+        exec_inst = _executor([_make_tier(bad), _make_tier(good)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        # 无 failover_config 时直接返回 429，不降级
+        assert resp.status_code == 429
+        assert not good.send_message.called
+
+    @pytest.mark.asyncio
+    async def test_multi_tier_429_cascade(self):
+        """多层降级链路：anthropic→zhipu(429)→copilot(success)."""
+        anthropic = _mock_vendor("anthropic")
+        anthropic.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"type":"rate_limit_error","message":"quota exceeded"}}',
+                error_type="rate_limit_error",
+                error_message="quota exceeded",
+            )
+        )
+        anthropic.should_trigger_failover.return_value = True
+
+        zhipu = _mock_vendor("zhipu")
+        zhipu.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"code":"1305","message":"model overloaded"}}',
+                error_type=None,
+                error_message="模型过载",
+            )
+        )
+        zhipu.should_trigger_failover.return_value = True
+
+        copilot = _mock_vendor("copilot")
+        copilot.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b'{"content":"fallback success"}',
+                usage=UsageInfo(input_tokens=10, output_tokens=5),
+            )
+        )
+
+        exec_inst = _executor([
+            _make_tier(anthropic),
+            _make_tier(zhipu),
+            _make_tier(copilot),
+        ])
+        resp = await exec_inst.execute_message({"model": "claude-opus-4-6"}, {})
+
+        assert resp.status_code == 200
+        assert anthropic.send_message.called
+        assert zhipu.send_message.called
+        assert copilot.send_message.called
+
+    @pytest.mark.asyncio
+    async def test_last_tier_429_returns_directly(self):
+        """最后一层 vendor 返回 429 时应直接返回给客户端."""
+        vendor = _mock_vendor()
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"message":"too many requests"}}',
+                error_type=None,
+                error_message="too many requests",
+            )
+        )
+
+        exec_inst = _executor([_make_tier(vendor)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_429_failover_logs_warning(self, caplog):
+        """429 触发降级时应输出 'failing over' 日志."""
+        import logging as _logging
+
+        bad = _mock_vendor("zhipu")
+        bad.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"message":"overloaded"}}',
+                error_type=None,
+                error_message="overloaded",
+            )
+        )
+        bad.should_trigger_failover.return_value = True
+
+        good = _mock_vendor("copilot")
+        good.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b"{}",
+                usage=UsageInfo(),
+            )
+        )
+
+        exec_inst = _executor([_make_tier(bad), _make_tier(good)])
+
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            await exec_inst.execute_message({"model": "test"}, {})
+
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        log_text = "\n".join(r.message for r in warnings)
+        assert "failing over" in log_text
+        assert "zhipu" in log_text

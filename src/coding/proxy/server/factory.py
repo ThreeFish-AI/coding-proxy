@@ -150,7 +150,7 @@ def _create_vendor_from_config(
                 api_key=vendor_cfg.api_key,
                 timeout_ms=vendor_cfg.timeout_ms,
             )
-            return ZhipuVendor(cfg, mapper)
+            return ZhipuVendor(cfg, mapper, failover_cfg)
         case _:
             raise ValueError(f"未知的 vendor 类型: {vendor_cfg.vendor!r}")
 

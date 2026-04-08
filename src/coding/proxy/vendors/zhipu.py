@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from ..config.schema import ZhipuConfig
+from ..config.schema import FailoverConfig, ZhipuConfig
 from ..routing.model_mapper import ModelMapper
 from .base import (
     PROXY_SKIP_HEADERS,
@@ -42,8 +42,11 @@ class ZhipuVendor(BaseVendor):
         self,
         config: ZhipuConfig,
         model_mapper: ModelMapper,
+        failover_config: FailoverConfig | None = None,
     ) -> None:
-        super().__init__(config.base_url, config.timeout_ms)
+        super().__init__(
+            config.base_url, config.timeout_ms, failover_config=failover_config
+        )
         self._api_key = config.api_key
         self._model_mapper = model_mapper
 
