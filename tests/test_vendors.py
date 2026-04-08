@@ -675,6 +675,43 @@ def test_529_in_failover_config_default():
     assert 529 in config.status_codes
 
 
+# --- 500 Internal Network Failure 降级测试 ---
+
+
+def test_500_api_error_triggers_failover():
+    """500 + api_error 应触发降级（FailoverConfig 默认包含 api_error）."""
+    anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+
+    assert anthropic_vendor.should_trigger_failover(
+        500, {"error": {"type": "api_error", "message": "Internal Network Failure"}}
+    )
+
+
+def test_500_internal_network_failure_pattern_triggers_failover():
+    """500 + 'internal network failure' 消息应触发降级（默认 patterns 包含该模式）."""
+    anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+
+    assert anthropic_vendor.should_trigger_failover(
+        500, {"error": {"type": "unknown", "message": "Internal Network Failure"}}
+    )
+
+
+def test_500_without_body_triggers_failover():
+    """500 无 body 也应触发降级（备用安全网逻辑）."""
+    anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+
+    assert anthropic_vendor.should_trigger_failover(500, None)
+
+
+def test_500_in_failover_config_default():
+    """验证 FailoverConfig 默认 status_codes 和 error_message_patterns 覆盖 zhipu 500 场景."""
+    config = FailoverConfig()
+    assert 500 in config.status_codes
+    assert "internal network failure" in [
+        p.lower() for p in config.error_message_patterns
+    ]
+
+
 # --- _sanitize_headers_for_synthetic_response ---
 
 
