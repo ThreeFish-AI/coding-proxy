@@ -7,10 +7,31 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.table import Table
 
-from .db import TokenLogger
+from .db import TimePeriod, TokenLogger
 
 if TYPE_CHECKING:
     from ..pricing import PricingTable
+
+
+# ── 时间维度 → 表格标题 ──────────────────────────────────────
+
+_PERIOD_TITLES: dict[TimePeriod, str] = {
+    TimePeriod.DAY: "日",
+    TimePeriod.WEEK: "周",
+    TimePeriod.MONTH: "月",
+    TimePeriod.TOTAL: "全部",
+}
+
+
+def _build_title(period: TimePeriod, count: int) -> str:
+    """根据时间维度构建表格标题."""
+    if period is TimePeriod.TOTAL:
+        return "Token 使用统计（全部）"
+    label = _PERIOD_TITLES[period]
+    return f"Token 使用统计（最近 {count} {label}）"
+
+
+# ── 格式化工具 ───────────────────────────────────────────────
 
 
 def _format_model_display(model_value: str | None) -> str:
@@ -31,37 +52,41 @@ def _format_tokens(n: int) -> str:
     return str(n)
 
 
-def _detect_model_variants(failover_stats: list[dict]) -> bool:
-    """检测是否存在模型差异，用于决定是否建议详细模式."""
-    if not failover_stats or "model_requested" not in failover_stats[0]:
-        return False
+# ── 日期列名 ─────────────────────────────────────────────────
 
-    # 计算唯一的模型对
-    model_pairs = {
-        (stat.get("model_requested", ""), stat.get("model_served", ""))
-        for stat in failover_stats
-    }
-    # 检查是否存在模型映射（请求模型与实际模型不同）
-    return any(pair[0] != pair[1] for pair in model_pairs if pair[0] and pair[1])
+_PERIOD_DATE_LABELS: dict[TimePeriod, str] = {
+    TimePeriod.DAY: "日期",
+    TimePeriod.WEEK: "周",
+    TimePeriod.MONTH: "月",
+    TimePeriod.TOTAL: "维度",
+}
+
+
+# ── 主展示函数 ───────────────────────────────────────────────
 
 
 async def show_usage(
     logger: TokenLogger,
-    days: int = 7,
+    *,
     vendor: str | None = None,
     model: str | None = None,
     pricing_table: PricingTable | None = None,
+    period: TimePeriod = TimePeriod.DAY,
+    count: int = 7,
 ) -> None:
     """展示 Token 使用统计."""
     console = Console()
-    rows = await logger.query_daily(days=days, vendor=vendor, model=model)
+    rows = await logger.query_usage(
+        period=period, count=count, vendor=vendor, model=model
+    )
 
     if not rows:
         console.print("[yellow]暂无使用记录[/yellow]")
         return
 
-    table = Table(title=f"Token 使用统计（最近 {days} 天）")
-    table.add_column("日期", style="cyan")
+    table = Table(title=_build_title(period, count))
+    date_label = _PERIOD_DATE_LABELS[period]
+    table.add_column(date_label, style="cyan")
     table.add_column("供应商", style="green")
     table.add_column("请求模型", style="magenta")
     table.add_column("实际模型", style="yellow")
@@ -98,8 +123,9 @@ async def show_usage(
         else:
             cost_str = "-"
 
+        date_value = row.get("date") or ""
         table.add_row(
-            str(row.get("date", "")),
+            str(date_value),
             vendor_name,
             _format_model_display(row.get("model_requested")),
             model_served,
@@ -115,8 +141,9 @@ async def show_usage(
 
     console.print(table)
 
-    # 故障转移来源汇总
-    failover_stats = await logger.query_failover_stats(days=days)
+    # 故障转移来源汇总（使用与主查询相同的时间范围）
+    failover_days = _period_to_days(period, count)
+    failover_stats = await logger.query_failover_stats(days=failover_days)
     if failover_stats:
         console.print()
         ft_table = Table(title="故障转移来源明细")
@@ -126,6 +153,21 @@ async def show_usage(
         for stat in failover_stats:
             source = stat.get("failover_from") or "unknown"
             target = stat.get("vendor", "")
-            count = stat.get("count", 0)
-            ft_table.add_row(source, target, str(count))
+            count_val = stat.get("count", 0)
+            ft_table.add_row(source, target, str(count_val))
         console.print(ft_table)
+
+
+def _period_to_days(period: TimePeriod, count: int) -> int | None:
+    """将 TimePeriod + count 近似转换为天数（供 query_failover_stats 使用）.
+
+    Returns:
+        天数，或 ``None`` 表示全量查询。
+    """
+    if period is TimePeriod.TOTAL:
+        return None
+    if period is TimePeriod.MONTH:
+        return count * 31  # 粗略近似，保证覆盖范围
+    if period is TimePeriod.WEEK:
+        return count * 7
+    return max(1, count)  # DAY

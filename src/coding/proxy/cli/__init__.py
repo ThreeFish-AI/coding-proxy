@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import typer
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 from rich.console import Console
 
 from ..config.loader import load_config
-from ..logging.db import TokenLogger
+from ..logging.db import TimePeriod, TokenLogger
 from ..logging.stats import show_usage
 from .auth_commands import app as auth_app
 from .auth_commands import auto_login_if_needed as _auto_login_if_needed
@@ -46,6 +46,30 @@ def _build_token_store(cfg_path: Path | None = None):
         "OAuth token store loaded from config path: %s", cfg.auth.token_store_path
     )
     return cfg, store
+
+
+def _resolve_period(
+    *,
+    days: int = 7,
+    week: bool = False,
+    month: bool = False,
+    total: bool = False,
+) -> tuple[TimePeriod, int]:
+    """将互斥的时间维度标志解析为 (TimePeriod, count) 元组.
+
+    优先级: ``-t`` > ``-m`` > ``-w`` > ``-d``。
+
+    Returns:
+        ``(period, count)`` 元组。``count`` 仅在 ``DAY`` 维度下有实际意义；
+        ``WEEK`` / ``MONTH`` / ``TOTAL`` 维度始终使用 count=1。
+    """
+    if total:
+        return TimePeriod.TOTAL, 1
+    if month:
+        return TimePeriod.MONTH, 1
+    if week:
+        return TimePeriod.WEEK, 1
+    return TimePeriod.DAY, max(1, days)
 
 
 # ── 主命令 ─────────────────────────────────────────────────────
@@ -118,20 +142,36 @@ def status(
 
 @app.command()
 def usage(
-    days: int = typer.Option(7, "--days", "-d", help="统计天数"),
+    days: int = typer.Option(7, "--days", "-d", help="统计天数（与 -w/-m/-t 互斥）"),
+    week: bool = typer.Option(False, "--week", "-w", help="统计本周（按周聚合）"),
+    month: bool = typer.Option(False, "--month", "-m", help="统计本月（按月聚合）"),
+    total: bool = typer.Option(False, "--total", "-t", help="统计全部历史记录"),
     vendor: str | None = typer.Option(None, "--vendor", "-v", help="过滤供应商"),
-    model: str | None = typer.Option(None, "--model", "-m", help="过滤请求模型"),
+    model: str | None = typer.Option(None, "--model", help="过滤请求模型"),
     db_path: str | None = typer.Option(None, "--db", help="数据库路径"),
 ) -> None:
-    """查看 Token 使用统计."""
+    """查看 Token 使用统计.
+
+    时间维度（互斥，优先级 -t > -m > -w > -d）：
+
+      \b
+      -d 7         最近 7 天（默认，按日聚合）
+      -w           本周（按周聚合）
+      -m           本月（按月聚合）
+      -t           全部历史（按供应商+模型聚合）
+    """
+    period, count = _resolve_period(days=days, week=week, month=month, total=total)
     cfg = load_config(Path(db_path) if db_path else None)
     token_logger = TokenLogger(cfg.db_path)
-    asyncio.run(_run_usage(token_logger, days, vendor, model, cfg))
+    asyncio.run(
+        _run_usage(token_logger, period, count, vendor, model, cfg)
+    )
 
 
 async def _run_usage(
     token_logger: TokenLogger,
-    days: int,
+    period: TimePeriod,
+    count: int,
     vendor: str | None,
     model: str | None,
     cfg: ProxyConfig,
@@ -140,7 +180,14 @@ async def _run_usage(
 
     await token_logger.init()
     pricing_table = PricingTable(cfg.pricing)
-    await show_usage(token_logger, days, vendor, model, pricing_table)
+    await show_usage(
+        token_logger,
+        vendor=vendor,
+        model=model,
+        pricing_table=pricing_table,
+        period=period,
+        count=count,
+    )
     await token_logger.close()
 
 
