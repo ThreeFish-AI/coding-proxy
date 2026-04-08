@@ -102,30 +102,47 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
                 return None
             return normalized_block
 
-        if message_role == "user" and block_type == "tool_result":
-            normalized_block = dict(block)
-            tool_use_id = normalized_block.get("tool_use_id")
-            if isinstance(tool_use_id, str) and tool_use_id in tool_id_map:
-                normalized_block["tool_use_id"] = tool_id_map[tool_use_id]
-                adaptations.append("tool_result_tool_use_id_rewritten")
-            elif isinstance(tool_use_id, str) and (
-                _ANTHROPIC_TOOL_USE_ID_RE.match(tool_use_id)
-                or _ANTHROPIC_SERVER_TOOL_USE_ID_RE.match(tool_use_id)
-            ):
-                # 保持原样。对 server_tool_use_id 的用户结果，若未在当前请求体中出现，
-                # 交由上游决定是否接受，避免错误猜测跨轮次关联。
+        if block_type == "tool_result":
+            if message_role == "user":
+                normalized_block = dict(block)
+                tool_use_id = normalized_block.get("tool_use_id")
+                if isinstance(tool_use_id, str) and tool_use_id in tool_id_map:
+                    normalized_block["tool_use_id"] = tool_id_map[tool_use_id]
+                    adaptations.append("tool_result_tool_use_id_rewritten")
+                elif isinstance(tool_use_id, str) and (
+                    _ANTHROPIC_TOOL_USE_ID_RE.match(tool_use_id)
+                    or _ANTHROPIC_SERVER_TOOL_USE_ID_RE.match(tool_use_id)
+                ):
+                    # 保持原样。对 server_tool_use_id 的用户结果，若未在当前请求体中出现，
+                    # 交由上游决定是否接受，避免错误猜测跨轮次关联。
+                    return normalized_block
+                elif isinstance(tool_use_id, str) and tool_use_id:
+                    fatal_reasons.append(
+                        f"messages.{message_index}.content.{block_index}: tool_result references unknown tool_use_id"
+                    )
+                    return None
+                else:
+                    fatal_reasons.append(
+                        f"messages.{message_index}.content.{block_index}: tool_result missing tool_use_id"
+                    )
+                    return None
                 return normalized_block
-            elif isinstance(tool_use_id, str) and tool_use_id:
-                fatal_reasons.append(
-                    f"messages.{message_index}.content.{block_index}: tool_result references unknown tool_use_id"
-                )
-                return None
-            else:
-                fatal_reasons.append(
-                    f"messages.{message_index}.content.{block_index}: tool_result missing tool_use_id"
-                )
-                return None
-            return normalized_block
+
+            # tool_result 出现在非 user 消息中（如 assistant）—— 剥离。
+            # 典型触发场景：跨供应商迁移时（如 Zhipu GLM → Anthropic），
+            # GLM-5 可能在 assistant 响应中同时包含 tool_use 和 tool_result 内容块，
+            # Claude Code 将此响应当作对话历史存储后，tool_result 出现在 assistant 角色消息中。
+            # Anthropic API 严格要求 tool_result 只能出现在 user 消息中，因此必须剥离。
+            adaptations.append("misplaced_tool_result_stripped")
+            logger.warning(
+                "Stripping misplaced tool_result from %s message at "
+                "messages.%d.content.%d (tool_use_id=%s)",
+                message_role,
+                message_index,
+                block_index,
+                block.get("tool_use_id", "N/A"),
+            )
+            return None
 
         return dict(block)
 

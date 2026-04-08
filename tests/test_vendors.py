@@ -751,6 +751,152 @@ async def test_anthropic_check_health_returns_true():
     assert result is True
 
 
+# --- 纵深防御：misplaced tool_result 剥离 ---
+
+
+@pytest.mark.asyncio
+async def test_anthropic_strips_tool_result_from_assistant_message():
+    """Anthropic vendor 应剥离 assistant 消息中错位的 tool_result blocks（纵深防御）."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {
+                "role": "user",
+                "content": "run ls",
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_123",
+                        "name": "Bash",
+                        "input": {"command": "ls"},
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_123",
+                        "content": "file1.txt\nfile2.txt",
+                    },
+                ],
+            },
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    # assistant 消息中 tool_result 被剥离，仅保留 tool_use
+    assistant_content = prepared_body["messages"][1]["content"]
+    assert len(assistant_content) == 1
+    assert assistant_content[0]["type"] == "tool_use"
+    # 原始 body 未被修改
+    assert len(body["messages"][1]["content"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_anthropic_preserves_tool_result_in_user_message():
+    """Anthropic vendor 保留 user 消息中的 tool_result."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_456",
+                        "name": "Bash",
+                        "input": {"command": "echo hi"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_456",
+                        "content": "hi",
+                    },
+                ],
+            },
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    # user 消息中 tool_result 保留
+    user_content = prepared_body["messages"][1]["content"]
+    assert len(user_content) == 1
+    assert user_content[0]["type"] == "tool_result"
+    assert user_content[0]["content"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_strips_both_thinking_and_misplaced_tool_result():
+    """Anthropic vendor 应同时剥离 thinking 和错位的 tool_result."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "planning",
+                        "signature": "non-anthropic-sig",
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_789",
+                        "name": "Bash",
+                        "input": {"command": "ls"},
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_789",
+                        "content": "output",
+                    },
+                ],
+            },
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    # thinking 和 misplaced tool_result 都被剥离
+    assistant_content = prepared_body["messages"][0]["content"]
+    assert len(assistant_content) == 1
+    assert assistant_content[0]["type"] == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_empty_assistant_after_stripping_tool_result():
+    """剥离 tool_result 后 assistant 消息为空时应插入占位 text block."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_only_result",
+                        "content": "only content",
+                    },
+                ],
+            },
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    # 全部剥离后应插入占位 text block
+    assistant_content = prepared_body["messages"][0]["content"]
+    assert len(assistant_content) == 1
+    assert assistant_content[0]["type"] == "text"
+
+
 @pytest.mark.asyncio
 async def test_antigravity_check_health_token_success():
     """Antigravity 健康检查：token 刷新成功 → True."""
