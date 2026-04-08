@@ -118,15 +118,21 @@ def status(
 
 @app.command()
 def usage(
-    days: int = typer.Option(7, "--days", "-d", help="统计天数"),
+    days: int = typer.Option(7, "--days", "-d", help="统计天数（与 -w/-m/-t 互斥）"),
+    week: bool = typer.Option(False, "--week", "-w", help="统计本周（周一至今）"),
+    month: bool = typer.Option(False, "--month", "-m", help="统计本月（1 日至今）"),
+    total: bool = typer.Option(False, "--total", "-t", help="统计全部记录"),
     vendor: str | None = typer.Option(None, "--vendor", "-v", help="过滤供应商"),
-    model: str | None = typer.Option(None, "--model", "-m", help="过滤请求模型"),
+    model: str | None = typer.Option(None, "--model", help="过滤请求模型"),
     db_path: str | None = typer.Option(None, "--db", help="数据库路径"),
 ) -> None:
     """查看 Token 使用统计."""
+    from ..logging.stats import resolve_time_range
+
+    resolved_days = resolve_time_range(days=days, week=week, month=month, total=total)
     cfg = load_config(Path(db_path) if db_path else None)
     token_logger = TokenLogger(cfg.db_path)
-    asyncio.run(_run_usage(token_logger, days, vendor, model, cfg))
+    asyncio.run(_run_usage(token_logger, resolved_days, vendor, model, cfg))
 
 
 async def _run_usage(
