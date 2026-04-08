@@ -2,15 +2,49 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from rich.console import Console
 from rich.table import Table
 
-from .db import TokenLogger
+from .db import TokenLogger, _local_tz
 
 if TYPE_CHECKING:
     from ..pricing import PricingTable
+
+
+# ── 时间范围解析（正交分离：机制 vs 策略） ────────────────────
+
+#: 全量查询的逻辑天数上限（~10 年，语义等价于"不限"）
+_TOTAL_SENTINEL_DAYS = 3650
+
+
+def resolve_time_range(
+    *,
+    days: int = 7,
+    week: bool = False,
+    month: bool = False,
+    total: bool = False,
+) -> int:
+    """将 -w/-m/-t 快捷选项解析为等价的天数值.
+
+    互斥规则（优先级：total > month > week > days）：
+    - ``-t``: 返回 :data:`_TOTAL_SENTINEL_DAYS` 覆盖全量
+    - ``-m``: 本月 1 日至今的自然天数
+    - ``-w``: 本周一至今的自然天数
+    - 均未指定时回退到 ``days`` 参数（默认 7）
+    """
+    if total:
+        return _TOTAL_SENTINEL_DAYS
+    tz = _local_tz()
+    today = datetime.now(tz).date()
+    if month:
+        return (today - today.replace(day=1)).days + 1
+    if week:
+        # weekday(): Monday=0 … Sunday=6
+        return today.weekday() + 1
+    return max(1, days)
 
 
 def _format_model_display(model_value: str | None) -> str:
@@ -45,6 +79,13 @@ def _detect_model_variants(failover_stats: list[dict]) -> bool:
     return any(pair[0] != pair[1] for pair in model_pairs if pair[0] and pair[1])
 
 
+def _build_title(days: int) -> str:
+    """根据时间维度构建表格标题."""
+    if days >= _TOTAL_SENTINEL_DAYS:
+        return "Token 使用统计（全部）"
+    return f"Token 使用统计（最近 {days} 天）"
+
+
 async def show_usage(
     logger: TokenLogger,
     days: int = 7,
@@ -60,7 +101,7 @@ async def show_usage(
         console.print("[yellow]暂无使用记录[/yellow]")
         return
 
-    table = Table(title=f"Token 使用统计（最近 {days} 天）")
+    table = Table(title=_build_title(days))
     table.add_column("日期", style="cyan")
     table.add_column("供应商", style="green")
     table.add_column("请求模型", style="magenta")
