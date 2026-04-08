@@ -268,8 +268,8 @@ class BaseVendor(ABC):
             for pattern in self._failover_config.error_message_patterns:
                 if pattern.lower() in error_message:
                     return True
-        # 429/503 即使无法解析 body 也触发故障转移
-        return status_code in (429, 503)
+        # 429/503/529 即使无法解析 body 也触发故障转移
+        return status_code in (429, 503, 529)
 
     async def check_health(self) -> bool:
         """检查供应商健康状态（轻量级探测）.

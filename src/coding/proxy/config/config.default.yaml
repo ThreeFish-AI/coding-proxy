@@ -118,7 +118,7 @@ vendors:
 
 # === 故障转移触发条件 ===
 failover:
-  status_codes: [429, 403, 503, 500]
+  status_codes: [429, 403, 503, 500, 529]
   error_types:
     - "rate_limit_error"
     - "overloaded_error"
