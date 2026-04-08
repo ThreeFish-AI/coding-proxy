@@ -48,6 +48,30 @@ def _build_token_store(cfg_path: Path | None = None):
     return cfg, store
 
 
+def _resolve_period(
+    *,
+    days: int = 7,
+    week: int | None = None,
+    month: int | None = None,
+    total: bool = False,
+) -> tuple[TimePeriod, int]:
+    """将互斥的时间维度标志解析为 (TimePeriod, count) 元组.
+
+    优先级: ``-t`` > ``-m`` > ``-w`` > ``-d``。
+
+    Returns:
+        ``(period, count)`` 元组。``count`` 仅在 ``DAY``/``WEEK``/``MONTH``
+        维度下有实际意义；``TOTAL`` 维度忽略此值。
+    """
+    if total:
+        return TimePeriod.TOTAL, 1
+    if month is not None:
+        return TimePeriod.MONTH, max(1, month)
+    if week is not None:
+        return TimePeriod.WEEK, max(1, week)
+    return TimePeriod.DAY, max(1, days)
+
+
 # ── 主命令 ─────────────────────────────────────────────────────
 
 
@@ -116,41 +140,16 @@ def status(
         console.print("[red]代理服务未运行[/red]")
 
 
-# ── 时间维度快捷标志默认数量 ─────────────────────────────────
-
-_WEEK_DEFAULT_COUNT = 4  # 最近 4 周
-_MONTH_DEFAULT_COUNT = 3  # 最近 3 月
-
-
-def _resolve_period(
-    days: int,
-    week: bool,
-    month: bool,
-    total: bool,
-) -> tuple[TimePeriod, int]:
-    """将互斥的时间维度标志解析为 ``TimePeriod`` + 数量.
-
-    优先级: ``-t`` > ``-m`` > ``-w`` > ``-d``。
-    """
-    if total:
-        return TimePeriod.TOTAL, 0
-    if month:
-        return TimePeriod.MONTH, _MONTH_DEFAULT_COUNT
-    if week:
-        return TimePeriod.WEEK, _WEEK_DEFAULT_COUNT
-    return TimePeriod.DAY, days
-
-
 @app.command()
 def usage(
-    days: int = typer.Option(7, "--days", "-d", help="统计天数（按日聚合）"),
-    week: bool = typer.Option(
-        False, "--week", "-w", help="按周聚合（最近 4 周）"
+    days: int = typer.Option(7, "--days", "-d", help="统计天数（与 -w/-m/-t 互斥）"),
+    week: int | None = typer.Option(
+        None, "--week", "-w", help="按周聚合，可指定周数（如 -w 4）"
     ),
-    month: bool = typer.Option(
-        False, "--month", "-m", help="按月聚合（最近 3 月）"
+    month: int | None = typer.Option(
+        None, "--month", "-m", help="按月聚合，可指定月数（如 -m 3）"
     ),
-    total: bool = typer.Option(False, "--total", "-t", help="全部历史聚合"),
+    total: bool = typer.Option(False, "--total", "-t", help="统计全部历史记录"),
     vendor: str | None = typer.Option(None, "--vendor", "-v", help="过滤供应商"),
     model: str | None = typer.Option(None, "--model", help="过滤请求模型"),
     db_path: str | None = typer.Option(None, "--db", help="数据库路径"),
@@ -160,12 +159,12 @@ def usage(
     时间维度（互斥，优先级 -t > -m > -w > -d）：
 
       \b
-      -d 7       最近 7 天（默认，按日聚合）
-      -w         最近 4 周（按周聚合）
-      -m         最近 3 月（按月聚合）
-      -t         全部历史（按供应商+模型聚合）
+      -d 7         最近 7 天（默认，按日聚合）
+      -w           本周（按周聚合），-w 4 则最近 4 周
+      -m           本月（按月聚合），-m 3 则最近 3 月
+      -t           全部历史（按供应商+模型聚合）
     """
-    period, count = _resolve_period(days, week, month, total)
+    period, count = _resolve_period(days=days, week=week, month=month, total=total)
     cfg = load_config(Path(db_path) if db_path else None)
     token_logger = TokenLogger(cfg.db_path)
     asyncio.run(

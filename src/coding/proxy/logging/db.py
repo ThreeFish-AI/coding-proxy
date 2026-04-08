@@ -82,8 +82,10 @@ def _period_start_iso(period: TimePeriod, count: int) -> str | None:
     """根据时间维度和数量计算起始 UTC ISO 字符串.
 
     Returns:
-        ISO 字符串，或 ``None``（TOTAL 维度不限时间范围）。
+        ISO 字符串，或 ``None``（``count == 0`` 或 TOTAL 维度时不限时间范围）。
     """
+    if count == 0:
+        return None  # count=0 语义：不限时间
     if period is TimePeriod.DAY:
         return _days_start_utc_iso(count)
     if period is TimePeriod.WEEK:
