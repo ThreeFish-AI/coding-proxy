@@ -1049,11 +1049,13 @@ class TestExecuteMessageFailoverOn429:
             )
         )
 
-        exec_inst = _executor([
-            _make_tier(anthropic),
-            _make_tier(zhipu),
-            _make_tier(copilot),
-        ])
+        exec_inst = _executor(
+            [
+                _make_tier(anthropic),
+                _make_tier(zhipu),
+                _make_tier(copilot),
+            ]
+        )
         resp = await exec_inst.execute_message({"model": "claude-opus-4-6"}, {})
 
         assert resp.status_code == 200
