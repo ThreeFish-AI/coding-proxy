@@ -474,6 +474,18 @@ class _RouteExecutor:
 
                 # 最后一层或不可 failover 的错误：记录并返回原始响应
                 _log_vendor_response_error(tier.name, resp, body, is_stream=False)
+                # 即使不可 failover 也需通知弹性设施追踪上游故障频率
+                rl_info_fallback = parse_rate_limit_headers(
+                    resp.response_headers, resp.status_code, resp.error_message
+                )
+                tier.record_failure(
+                    is_cap_error=self._is_cap_error(resp)
+                    or rl_info_fallback.is_cap_error,
+                    retry_after_seconds=compute_effective_retry_seconds(
+                        rl_info_fallback
+                    ),
+                    rate_limit_deadline=compute_rate_limit_deadline(rl_info_fallback),
+                )
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = resp.model_served or tier.vendor.map_model(model)
