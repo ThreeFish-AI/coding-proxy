@@ -436,12 +436,10 @@ class TokenLogger:
             vendor: 过滤供应商。
             model: 过滤请求模型。
         """
-        if days is None:
-            return await self.query_usage(
-                period=TimePeriod.DAY, count=1, vendor=vendor, model=model
-            )
+        # days=None → count=0 → _period_start_iso 返回 None → 不限时间
+        count = 0 if days is None else days
         return await self.query_usage(
-            period=TimePeriod.DAY, count=days, vendor=vendor, model=model
+            period=TimePeriod.DAY, count=count, vendor=vendor, model=model
         )
 
     async def query_failover_stats(
