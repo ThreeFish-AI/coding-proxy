@@ -249,12 +249,20 @@ class TokenLogger:
         return [dict(row) for row in rows]
 
     async def query_daily(
-        self, days: int = 7, vendor: str | None = None, model: str | None = None
+        self,
+        days: int | None = 7,
+        vendor: str | None = None,
+        model: str | None = None,
     ) -> list[dict]:
+        """按日聚合 Token 使用统计.
+
+        Args:
+            days: 查询天数。``None`` 表示不限时间（全量查询）。
+            vendor: 过滤供应商。
+            model: 过滤请求模型。
+        """
         if not self._db:
             return []
-        days = max(1, days)
-        start_iso = _days_start_utc_iso(days)
         sql = """SELECT local_date(ts) AS date, vendor,
                    GROUP_CONCAT(DISTINCT model_requested) AS model_requested,
                    model_served,
@@ -265,8 +273,13 @@ class TokenLogger:
                    SUM(cache_read_tokens) AS total_cache_read,
                    SUM(CASE WHEN failover THEN 1 ELSE 0 END) AS total_failovers,
                    AVG(duration_ms) AS avg_duration_ms
-               FROM usage_log WHERE ts >= ?"""
-        params: list = [start_iso]
+               FROM usage_log WHERE 1=1"""
+        params: list = []
+        if days is not None:
+            days = max(1, days)
+            start_iso = _days_start_utc_iso(days)
+            sql += " AND ts >= ?"
+            params.append(start_iso)
         if vendor:
             sql += " AND vendor = ?"
             params.append(vendor)
@@ -282,39 +295,43 @@ class TokenLogger:
         return [dict(row) for row in rows]
 
     async def query_failover_stats(
-        self, days: int = 7, include_model_info: bool = False
+        self, days: int | None = 7, include_model_info: bool = False
     ) -> list[dict]:
-        """
-        按 failover_from → vendor 聚合故障转移次数.
+        """按 failover_from → vendor 聚合故障转移次数.
 
         Args:
-            days: 查询天数
+            days: 查询天数。``None`` 表示不限时间（全量查询）。
             include_model_info: 是否在聚合中包含模型信息
                               - False: 按 (failover_from, vendor) 聚合 (默认,向后兼容)
                               - True: 按 (failover_from, vendor, model_requested, model_served) 聚合
         """
         if not self._db:
             return []
-        days = max(1, days)
-        start_iso = _days_start_utc_iso(days)
+
+        time_clause = ""
+        params: list = []
+        if days is not None:
+            days = max(1, days)
+            start_iso = _days_start_utc_iso(days)
+            time_clause = " AND ts >= ?"
+            params.append(start_iso)
 
         if include_model_info:
-            sql = """SELECT failover_from, vendor, model_requested, model_served,
+            sql = f"""SELECT failover_from, vendor, model_requested, model_served,
                        COUNT(*) AS count
                    FROM usage_log
-                   WHERE failover = 1 AND ts >= ?
+                   WHERE failover = 1{time_clause}
                    GROUP BY failover_from, vendor, model_requested, model_served
                    ORDER BY count DESC"""
         else:
-            # 保持原有的聚合逻辑确保向后兼容
-            sql = """SELECT failover_from, vendor,
+            sql = f"""SELECT failover_from, vendor,
                        COUNT(*) AS count
                    FROM usage_log
-                   WHERE failover = 1 AND ts >= ?
+                   WHERE failover = 1{time_clause}
                    GROUP BY failover_from, vendor
                    ORDER BY count DESC"""
 
-        cursor = await self._db.execute(sql, [start_iso])
+        cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
