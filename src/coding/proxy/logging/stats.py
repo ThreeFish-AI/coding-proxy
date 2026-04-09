@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -23,12 +24,36 @@ _PERIOD_TITLES: dict[TimePeriod, str] = {
 }
 
 
+def _week_date_range(count: int) -> str:
+    """计算最近第 count 周的周一～周日日期范围字符串.
+
+    count=1 表示本周，count=2 表示上周，以此类推。
+
+    Returns:
+        格式为 ``YYYY-MM-DD ～ YYYY-MM-DD`` 的日期范围字符串。
+    """
+    today = datetime.now().date()
+    # 本周周一
+    this_monday = today - timedelta(days=today.weekday())
+    # 目标周的周一
+    target_monday = this_monday - timedelta(weeks=count - 1)
+    target_sunday = target_monday + timedelta(days=6)
+    return f"{target_monday.strftime('%Y-%m-%d')} ～ {target_sunday.strftime('%Y-%m-%d')}"
+
+
 def _build_title(period: TimePeriod, count: int) -> str:
-    """根据时间维度构建表格标题."""
+    """根据时间维度构建表格标题.
+
+    WEEK 维度会附加具体日期范围（如 ``2026-04-07 ～ 2026-04-13``），
+    其他维度仅显示统计周期标签。
+    """
     if period is TimePeriod.TOTAL:
         return "Token 使用统计（全部）"
     label = _PERIOD_TITLES[period]
-    return f"Token 使用统计（最近 {count} {label}）"
+    base = f"Token 使用统计（最近 {count} {label}"
+    if period is TimePeriod.WEEK:
+        base += f"：{_week_date_range(count)}"
+    return base + "）"
 
 
 # ── 格式化工具 ───────────────────────────────────────────────
