@@ -231,3 +231,55 @@ class TestTimeDimensionFlags:
         assert result.exit_code == 0
         kw = _kwargs(mock_show)
         assert kw["period"] == TimePeriod.MONTH
+
+
+# ── F 组：多 vendor 过滤 ─────────────────────────────────────
+
+
+class TestMultiVendorFilter:
+    """验证 -v 参数支持逗号分隔的多 vendor 过滤."""
+
+    def test_single_vendor_remains_string(self, _isolate_cli_deps):
+        """单个 vendor 应保持字符串类型（向后兼容）."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage", "-v", "anthropic"])
+        assert result.exit_code == 0
+        assert _kwargs(mock_show)["vendor"] == "anthropic"
+
+    def test_multi_vendor_parsed_as_list(self, _isolate_cli_deps):
+        """'-v anthropic,zhipu' 应将 vendor 解析为 list 传递."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage", "-v", "anthropic,zhipu"])
+        assert result.exit_code == 0
+        assert _kwargs(mock_show)["vendor"] == ["anthropic", "zhipu"]
+
+    def test_multi_vendor_three_values(self, _isolate_cli_deps):
+        """三个 vendor 同样解析为 list."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage", "-v", "anthropic,zhipu,copilot"])
+        assert result.exit_code == 0
+        assert _kwargs(mock_show)["vendor"] == ["anthropic", "zhipu", "copilot"]
+
+    def test_multi_vendor_with_spaces(self, _isolate_cli_deps):
+        """逗号周围的空格应被正确去除."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage", "-v", "anthropic , zhipu"])
+        assert result.exit_code == 0
+        assert _kwargs(mock_show)["vendor"] == ["anthropic", "zhipu"]
+
+    def test_multi_vendor_combined_with_time_dim(self, _isolate_cli_deps):
+        """多 vendor 过滤可与时间维度参数组合使用."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage", "-w", "2", "-v", "anthropic,copilot"])
+        assert result.exit_code == 0
+        kw = _kwargs(mock_show)
+        assert kw["period"] == TimePeriod.WEEK
+        assert kw["count"] == 2
+        assert kw["vendor"] == ["anthropic", "copilot"]
+
+    def test_no_vendor_passes_none(self, _isolate_cli_deps):
+        """不传 -v 时 vendor 应为 None（不过滤）."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage"])
+        assert result.exit_code == 0
+        assert _kwargs(mock_show)["vendor"] is None

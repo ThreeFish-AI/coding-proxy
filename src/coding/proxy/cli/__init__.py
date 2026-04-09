@@ -166,14 +166,19 @@ def usage(
     period, count = _resolve_period(days=days, week=week, month=month, total=total)
     cfg = load_config(Path(db_path) if db_path else None)
     token_logger = TokenLogger(cfg.db_path)
-    asyncio.run(_run_usage(token_logger, period, count, vendor, model, cfg))
+    # 解析逗号分隔的多 vendor（如 "anthropic,zhipu" → ["anthropic", "zhipu"]）
+    vendor_filter: str | list[str] | None = None
+    if vendor:
+        parts = [v.strip() for v in vendor.split(",") if v.strip()]
+        vendor_filter = parts[0] if len(parts) == 1 else parts
+    asyncio.run(_run_usage(token_logger, period, count, vendor_filter, model, cfg))
 
 
 async def _run_usage(
     token_logger: TokenLogger,
     period: TimePeriod,
     count: int,
-    vendor: str | None,
+    vendor: str | list[str] | None,
     model: str | None,
     cfg: ProxyConfig,
 ) -> None:
