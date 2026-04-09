@@ -167,7 +167,9 @@ async def show_usage(
         sum_output += total_output
         sum_cache_creation += total_cache_creation
         sum_cache_read += total_cache_read
-        weighted_duration_sum += (row.get("avg_duration_ms", 0) or 0) * total_requests_row
+        weighted_duration_sum += (
+            row.get("avg_duration_ms", 0) or 0
+        ) * total_requests_row
         if cost_value is not None:
             cur = cost_value.currency
             cost_totals[cur] = cost_totals.get(cur, 0.0) + cost_value.amount

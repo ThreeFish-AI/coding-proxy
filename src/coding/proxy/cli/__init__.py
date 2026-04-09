@@ -178,7 +178,9 @@ def usage(
     if model:
         parts = [m.strip() for m in model.split(",") if m.strip()]
         model_filter = parts[0] if len(parts) == 1 else parts
-    asyncio.run(_run_usage(token_logger, period, count, vendor_filter, model_filter, cfg))
+    asyncio.run(
+        _run_usage(token_logger, period, count, vendor_filter, model_filter, cfg)
+    )
 
 
 async def _run_usage(
