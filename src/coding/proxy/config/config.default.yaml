@@ -101,6 +101,7 @@ vendors:
 
   # Vendor 3: 智谱 GLM（终端兜底，无 circuit_breaker）
   - vendor: zhipu
+    enabled: true
     base_url: "https://open.bigmodel.cn/api/anthropic"
     api_key: "${ZHIPU_API_KEY}"
     timeout_ms: 3000000
@@ -127,7 +128,7 @@ vendors:
       recovery_timeout_seconds: 300
       success_threshold: 2
     quota_guard:
-      enabled: true
+      enabled: false
       token_budget: 1000000000
       window_hours: 24.0
       threshold_percent: 95.0
@@ -144,7 +145,7 @@ vendors:
       recovery_timeout_seconds: 300
       success_threshold: 2
     quota_guard:
-      enabled: true
+      enabled: false
       token_budget: 1000000000
       window_hours: 24.0
       threshold_percent: 95.0
@@ -161,7 +162,7 @@ vendors:
       recovery_timeout_seconds: 300
       success_threshold: 2
     quota_guard:
-      enabled: true
+      enabled: false
       token_budget: 1000000000
       window_hours: 24.0
       threshold_percent: 95.0
@@ -178,7 +179,7 @@ vendors:
       recovery_timeout_seconds: 300
       success_threshold: 2
     quota_guard:
-      enabled: true
+      enabled: false
       token_budget: 1000000000
       window_hours: 24.0
       threshold_percent: 95.0
@@ -195,7 +196,7 @@ vendors:
       recovery_timeout_seconds: 300
       success_threshold: 2
     quota_guard:
-      enabled: true
+      enabled: false
       token_budget: 1000000000
       window_hours: 24.0
       threshold_percent: 95.0
