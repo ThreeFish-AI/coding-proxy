@@ -35,7 +35,16 @@ def test_zhipu_fields_set():
 
 
 def test_vendor_exclusive_fields_mapping_complete():
-    assert set(_VENDOR_EXCLUSIVE_FIELDS.keys()) == {"copilot", "antigravity", "zhipu"}
+    assert set(_VENDOR_EXCLUSIVE_FIELDS.keys()) == {
+        "copilot",
+        "antigravity",
+        "zhipu",
+        "minimax",
+        "kimi",
+        "doubao",
+        "xiaomi",
+        "alibaba",
+    }
 
 
 # ── VendorConfig 字段描述标注 ─────────────────────────────────
@@ -60,9 +69,9 @@ def test_vendorconfig_antigravity_fields_have_description():
 
 
 def test_vendorconfig_zhipu_field_has_description():
-    """Zhipu 专属字段应包含 [zhipu] 前缀的 description."""
+    """Zhipu/原生 Anthropic 兼容供应商专属字段应包含 [zhipu/...] 前缀的 description."""
     field_info = VendorConfig.model_fields["api_key"]
-    assert "[zhipu]" in field_info.description
+    assert "[zhipu/" in field_info.description
 
 
 def test_vendorconfig_common_fields_have_description():

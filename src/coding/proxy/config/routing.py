@@ -59,19 +59,36 @@ _ANTIGRAVITY_FIELDS: frozenset[str] = frozenset(
         "model_endpoint",
     }
 )
-_ZHIPU_FIELDS: frozenset[str] = frozenset(
+_NATIVE_ANTHROPIC_FIELDS: frozenset[str] = frozenset(
     {
         "api_key",
     }
 )
+# 向后兼容别名
+_ZHIPU_FIELDS = _NATIVE_ANTHROPIC_FIELDS
 
 _VENDOR_EXCLUSIVE_FIELDS: dict[str, frozenset[str]] = {
     "copilot": _COPILOT_FIELDS,
     "antigravity": _ANTIGRAVITY_FIELDS,
-    "zhipu": _ZHIPU_FIELDS,
+    "zhipu": _NATIVE_ANTHROPIC_FIELDS,
+    "minimax": _NATIVE_ANTHROPIC_FIELDS,
+    "kimi": _NATIVE_ANTHROPIC_FIELDS,
+    "doubao": _NATIVE_ANTHROPIC_FIELDS,
+    "xiaomi": _NATIVE_ANTHROPIC_FIELDS,
+    "alibaba": _NATIVE_ANTHROPIC_FIELDS,
 }
 
-VendorType = Literal["anthropic", "copilot", "antigravity", "zhipu"]
+VendorType = Literal[
+    "anthropic",
+    "copilot",
+    "antigravity",
+    "zhipu",
+    "minimax",
+    "kimi",
+    "doubao",
+    "xiaomi",
+    "alibaba",
+]
 
 
 class ModelMappingRule(BaseModel):
@@ -253,10 +270,10 @@ class VendorConfig(BaseModel):
         description="[antigravity] Antigravity 模型端点路径",
     )
 
-    # ── Zhipu 专属字段 ────────────────────────────────────────────
+    # ── 原生 Anthropic 兼容供应商共用字段 ────────────────────────────
     api_key: str = Field(
         default="",
-        description="[zhipu] 智谱 GLM API Key",
+        description="[zhipu/minimax/kimi/doubao/xiaomi/alibaba] 原生 Anthropic 兼容端点 API Key",
     )
 
     # ── 弹性配置 ──────────────────────────────────────────────
@@ -307,6 +324,7 @@ __all__ = [
     "_COPILOT_FIELDS",
     "_ANTIGRAVITY_FIELDS",
     "_ZHIPU_FIELDS",
+    "_NATIVE_ANTHROPIC_FIELDS",
     "_VENDOR_EXCLUSIVE_FIELDS",
     "_BACKEND_EXCLUSIVE_FIELDS",
 ]

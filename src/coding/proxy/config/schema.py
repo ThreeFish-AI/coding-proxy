@@ -30,6 +30,7 @@ from .routing import (  # noqa: F401
     _ANTIGRAVITY_FIELDS,
     _BACKEND_EXCLUSIVE_FIELDS,  # 向后兼容别名
     _COPILOT_FIELDS,
+    _NATIVE_ANTHROPIC_FIELDS,
     _VENDOR_EXCLUSIVE_FIELDS,
     _ZHIPU_FIELDS,
     BackendType,  # 向后兼容别名
@@ -43,9 +44,14 @@ from .routing import (  # noqa: F401
 # ── 子模块 re-export ────────────────────────────────────────────
 from .server import DatabaseConfig, LoggingConfig, ServerConfig  # noqa: F401
 from .vendors import (  # noqa: F401
+    AlibabaConfig,
     AnthropicConfig,
     AntigravityConfig,
     CopilotConfig,
+    DoubaoConfig,
+    KimiConfig,
+    MinimaxConfig,
+    XiaomiConfig,
     ZhipuConfig,
 )
 
@@ -303,8 +309,15 @@ __all__ = [
     "_COPILOT_FIELDS",
     "_ANTIGRAVITY_FIELDS",
     "_ZHIPU_FIELDS",
+    "_NATIVE_ANTHROPIC_FIELDS",
     "_VENDOR_EXCLUSIVE_FIELDS",
     "_BACKEND_EXCLUSIVE_FIELDS",
     # auth
     "AuthConfig",
+    # new native anthropic vendor configs
+    "MinimaxConfig",
+    "KimiConfig",
+    "DoubaoConfig",
+    "XiaomiConfig",
+    "AlibabaConfig",
 ]

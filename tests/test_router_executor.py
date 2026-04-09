@@ -125,7 +125,17 @@ class TestVendorProtocolLabelMap:
     """供应商协议标签映射测试."""
 
     def test_all_expected_keys_present(self):
-        expected = {"anthropic", "zhipu", "copilot", "antigravity"}
+        expected = {
+            "anthropic",
+            "zhipu",
+            "copilot",
+            "antigravity",
+            "minimax",
+            "kimi",
+            "doubao",
+            "xiaomi",
+            "alibaba",
+        }
         assert set(_VENDOR_PROTOCOL_LABEL_MAP.keys()) == expected
 
     def test_anthropics_map_to_anthropic_label(self):
