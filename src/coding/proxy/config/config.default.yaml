@@ -254,15 +254,15 @@ model_mapping:
   # MiniMax 模型映射（原生 Anthropic 兼容端点）
   - pattern: "claude-sonnet-.*"
     vendors: ["minimax"]
-    target: "MiniMax-M2.7"
+    target: "minimax-m2.7"
     is_regex: true
   - pattern: "claude-opus-.*"
     vendors: ["minimax"]
-    target: "MiniMax-M2.7"
+    target: "minimax-m2.7"
     is_regex: true
   - pattern: "claude-haiku-.*"
     vendors: ["minimax"]
-    target: "MiniMax-M2.7"
+    target: "minimax-m2.7"
     is_regex: true
   # Kimi 模型映射（原生 Anthropic 兼容端点）
   - pattern: "claude-sonnet-.*"
@@ -423,37 +423,62 @@ pricing:
     cache_read_cost_per_mtok: ¥1.00
   # ── MiniMax ──
   - vendor: minimax
-    model: MiniMax-M2.7
-    input_cost_per_mtok: ¥0.00 # 待填充实际价格
-    output_cost_per_mtok: ¥0.00
+    model: minimax-m2.7
+    input_cost_per_mtok: ¥2.10
+    output_cost_per_mtok: ¥8.40
+    cache_write_cost_per_mtok: ¥2.625
+    cache_read_cost_per_mtok: ¥0.42
+  - vendor: minimax
+    model: minimax-m2.5
+    input_cost_per_mtok: ¥2.10
+    output_cost_per_mtok: ¥8.40
+    cache_write_cost_per_mtok: ¥2.625
+    cache_read_cost_per_mtok: ¥0.21
   # ── Kimi ──
   - vendor: kimi
     model: kimi-k2.5
-    input_cost_per_mtok: ¥0.00 # 待填充实际价格
-    output_cost_per_mtok: ¥0.00
+    input_cost_per_mtok: $0.60
+    output_cost_per_mtok: $3.00
   # ── 豆包 Doubao ──
   - vendor: doubao
     model: doubao-seed-2.0-code
-    input_cost_per_mtok: ¥0.00 # 待填充实际价格
-    output_cost_per_mtok: ¥0.00
+    input_cost_per_mtok: ¥3.20
+    output_cost_per_mtok: ¥16.00
+    cache_write_cost_per_mtok: ¥0.64
+    cache_read_cost_per_mtok: ¥0.017
   - vendor: doubao
     model: doubao-seed-2.0-pro
-    input_cost_per_mtok: ¥0.00 # 待填充实际价格
-    output_cost_per_mtok: ¥0.00
+    input_cost_per_mtok: ¥3.20
+    output_cost_per_mtok: ¥16.00
+    cache_write_cost_per_mtok: ¥0.64
+    cache_read_cost_per_mtok: ¥0.017
   - vendor: doubao
     model: doubao-seed-2.0-lite
-    input_cost_per_mtok: ¥0.00 # 待填充实际价格
-    output_cost_per_mtok: ¥0.00
+    input_cost_per_mtok: ¥0.60
+    output_cost_per_mtok: ¥3.60
+    cache_write_cost_per_mtok: ¥0.12
+    cache_read_cost_per_mtok: ¥0.017
   # ── 小米 MiMo ──
   - vendor: xiaomi
     model: mimo-v2-pro
-    input_cost_per_mtok: ¥0.00 # 待填充实际价格
-    output_cost_per_mtok: ¥0.00
+    input_cost_per_mtok: ¥7.00
+    output_cost_per_mtok: ¥21.00
+    cache_read_cost_per_mtok: ¥1.40
+  - vendor: xiaomi
+    model: mimo-v2-omni
+    input_cost_per_mtok: ¥2.80
+    output_cost_per_mtok: ¥14.00
+    cache_read_cost_per_mtok: ¥0.56
+  - vendor: xiaomi
+    model: mimo-v2-flash
+    input_cost_per_mtok: ¥0.70
+    output_cost_per_mtok: ¥2.10
+    cache_read_cost_per_mtok: ¥0.07
   # ── 阿里 Qwen ──
   - vendor: alibaba
     model: qwen3.6-plus
-    input_cost_per_mtok: ¥0.00 # 待填充实际价格
-    output_cost_per_mtok: ¥0.00
+    input_cost_per_mtok: $0.276
+    output_cost_per_mtok: $1.651
 
 database:
   path: "~/.coding-proxy/usage.db"
