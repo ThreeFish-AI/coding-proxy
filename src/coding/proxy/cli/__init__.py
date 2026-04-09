@@ -150,7 +150,9 @@ def usage(
     ),
     total: bool = typer.Option(False, "--total", "-t", help="统计全部历史记录"),
     vendor: str | None = typer.Option(None, "--vendor", "-v", help="过滤供应商"),
-    model: str | None = typer.Option(None, "--model", help="过滤请求模型"),
+    model: str | None = typer.Option(
+        None, "--model", help="过滤实际服务模型（model_served），逗号分隔可指定多个"
+    ),
     db_path: str | None = typer.Option(None, "--db", help="数据库路径"),
 ) -> None:
     """查看 Token 使用统计.
@@ -171,7 +173,12 @@ def usage(
     if vendor:
         parts = [v.strip() for v in vendor.split(",") if v.strip()]
         vendor_filter = parts[0] if len(parts) == 1 else parts
-    asyncio.run(_run_usage(token_logger, period, count, vendor_filter, model, cfg))
+    # 解析逗号分隔的多 model（如 "glm-5,glm-5.1" → ["glm-5", "glm-5.1"]）
+    model_filter: str | list[str] | None = None
+    if model:
+        parts = [m.strip() for m in model.split(",") if m.strip()]
+        model_filter = parts[0] if len(parts) == 1 else parts
+    asyncio.run(_run_usage(token_logger, period, count, vendor_filter, model_filter, cfg))
 
 
 async def _run_usage(
@@ -179,7 +186,7 @@ async def _run_usage(
     period: TimePeriod,
     count: int,
     vendor: str | list[str] | None,
-    model: str | None,
+    model: str | list[str] | None,
     cfg: ProxyConfig,
 ) -> None:
     from ..pricing import PricingTable

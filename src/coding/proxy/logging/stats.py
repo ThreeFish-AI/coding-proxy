@@ -96,7 +96,7 @@ async def show_usage(
     logger: TokenLogger,
     *,
     vendor: str | list[str] | None = None,
-    model: str | None = None,
+    model: str | list[str] | None = None,
     pricing_table: PricingTable | None = None,
     period: TimePeriod = TimePeriod.DAY,
     count: int = 7,

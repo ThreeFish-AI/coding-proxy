@@ -375,7 +375,7 @@ class TokenLogger:
         period: TimePeriod = TimePeriod.DAY,
         count: int = 7,
         vendor: str | list[str] | None = None,
-        model: str | None = None,
+        model: str | list[str] | None = None,
     ) -> list[dict]:
         """按指定时间维度聚合 Token 使用统计.
 
@@ -384,7 +384,7 @@ class TokenLogger:
             count: ``period`` 的数量。仅用于计算起始时间边界，
                    ``TOTAL`` 维度下忽略此参数。
             vendor: 过滤供应商，支持单个字符串或字符串列表（多 vendor 过滤）。
-            model: 过滤请求模型。
+            model: 过滤实际服务模型（model_served），支持单个字符串或字符串列表。
         """
         if not self._db:
             return []
@@ -416,8 +416,10 @@ class TokenLogger:
             sql += f" AND vendor IN ({placeholders})"
             params.extend(vendors)
         if model:
-            sql += " AND model_requested = ?"
-            params.append(model)
+            models = [model] if isinstance(model, str) else model
+            placeholders = ",".join("?" * len(models))
+            sql += f" AND model_served IN ({placeholders})"
+            params.extend(models)
 
         sql += f" GROUP BY {group_clause} ORDER BY {order_clause}"
 

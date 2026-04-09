@@ -571,11 +571,11 @@ async def test_query_daily_distinct_deduplication(logger):
 
 @pytest.mark.asyncio
 async def test_query_daily_model_filter_still_works(logger):
-    """--model/-m 过滤在聚合前执行，行为不变."""
+    """--model 过滤按 model_served 执行，仅返回实际服务模型匹配的记录."""
     await logger.log(
         vendor="anthropic",
         model_requested="claude-opus-4-6",
-        model_served="claude-sonnet-4-6",
+        model_served="claude-opus-4-6",
         input_tokens=100,
         output_tokens=50,
     )
@@ -586,7 +586,7 @@ async def test_query_daily_model_filter_still_works(logger):
         input_tokens=200,
         output_tokens=80,
     )
-    # 按 model_requested 过滤，仅保留 opus 的记录
+    # 按 model_served 过滤，仅保留 model_served=opus 的记录
     rows = await logger.query_daily(days=7, model="claude-opus-4-6")
     assert len(rows) == 1
     assert rows[0]["total_requests"] == 1

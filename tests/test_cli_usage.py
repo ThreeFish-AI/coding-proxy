@@ -283,3 +283,56 @@ class TestMultiVendorFilter:
         result = runner.invoke(app, ["usage"])
         assert result.exit_code == 0
         assert _kwargs(mock_show)["vendor"] is None
+
+
+# ── G 组：多 model 过滤 ─────────────────────────────────────
+
+
+class TestMultiModelFilter:
+    """验证 --model 参数支持逗号分隔的多 model_served 过滤."""
+
+    def test_single_model_remains_string(self, _isolate_cli_deps):
+        """单个 model 应保持字符串类型（向后兼容）."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage", "--model", "glm-5"])
+        assert result.exit_code == 0
+        assert _kwargs(mock_show)["model"] == "glm-5"
+
+    def test_multi_model_parsed_as_list(self, _isolate_cli_deps):
+        """'--model glm-5,glm-5.1' 应将 model 解析为 list 传递."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage", "--model", "glm-5,glm-5.1"])
+        assert result.exit_code == 0
+        assert _kwargs(mock_show)["model"] == ["glm-5", "glm-5.1"]
+
+    def test_multi_model_three_values(self, _isolate_cli_deps):
+        """三个 model 同样解析为 list."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage", "--model", "glm-5,glm-5.1,glm-4"])
+        assert result.exit_code == 0
+        assert _kwargs(mock_show)["model"] == ["glm-5", "glm-5.1", "glm-4"]
+
+    def test_multi_model_with_spaces(self, _isolate_cli_deps):
+        """逗号周围的空格应被正确去除."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage", "--model", "glm-5 , glm-5.1"])
+        assert result.exit_code == 0
+        assert _kwargs(mock_show)["model"] == ["glm-5", "glm-5.1"]
+
+    def test_multi_model_combined_with_vendor(self, _isolate_cli_deps):
+        """多 model 过滤可与 -v 供应商参数组合使用."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(
+            app, ["usage", "-v", "zhipu", "--model", "glm-5,glm-5.1"]
+        )
+        assert result.exit_code == 0
+        kw = _kwargs(mock_show)
+        assert kw["vendor"] == "zhipu"
+        assert kw["model"] == ["glm-5", "glm-5.1"]
+
+    def test_no_model_passes_none(self, _isolate_cli_deps):
+        """不传 --model 时 model 应为 None（不过滤）."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage"])
+        assert result.exit_code == 0
+        assert _kwargs(mock_show)["model"] is None
