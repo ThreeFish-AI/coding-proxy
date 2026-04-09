@@ -84,9 +84,7 @@ def _strip_misplaced_tool_results(body: dict[str, Any]) -> int:
         new_content = [
             block
             for block in content
-            if not (
-                isinstance(block, dict) and block.get("type") == "tool_result"
-            )
+            if not (isinstance(block, dict) and block.get("type") == "tool_result")
         ]
         removed = original_len - len(new_content)
         if removed:

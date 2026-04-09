@@ -71,8 +71,7 @@ class TestIsStructuralValidationError:
 
     def test_none_message_safe(self):
         assert (
-            is_structural_validation_error(status_code=400, error_message=None)
-            is False
+            is_structural_validation_error(status_code=400, error_message=None) is False
         )
 
 

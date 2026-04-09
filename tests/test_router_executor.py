@@ -1126,7 +1126,7 @@ class TestIsLikelyRequestFormatError:
     ``Bad Request`` 不应计入熔断器的核心修复场景.
     """
 
-    def _body_with_tool_results(self) -> dict[str, Any]:
+    def _body_with_tool_results(self) -> dict:
         return {
             "model": "claude-opus-4-6",
             "tools": [{"name": "Bash"}],
@@ -1142,59 +1142,82 @@ class TestIsLikelyRequestFormatError:
 
     def test_returns_true_for_400_bad_request_with_tool_results(self):
         """400 + 'Bad Request' + 有 tool_result → 格式不兼容."""
-        assert _is_likely_request_format_error(
-            status_code=400,
-            error_body_text="Bad Request\n",
-            body=self._body_with_tool_results(),
-        ) is True
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text="Bad Request\n",
+                body=self._body_with_tool_results(),
+            )
+            is True
+        )
 
     def test_returns_true_for_400_empty_body_with_tool_results(self):
         """400 + 空错误体 + 有 tool_result → 格式不兼容."""
-        assert _is_likely_request_format_error(
-            status_code=400,
-            error_body_text="",
-            body=self._body_with_tool_results(),
-        ) is True
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text="",
+                body=self._body_with_tool_results(),
+            )
+            is True
+        )
 
     def test_returns_true_for_400_short_non_json_with_tool_results(self):
         """400 + 短非 JSON 错误体 + tool_result → 格式不兼容."""
-        assert _is_likely_request_format_error(
-            status_code=400,
-            error_body_text="invalid payload",
-            body=self._body_with_tool_results(),
-        ) is True
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text="invalid payload",
+                body=self._body_with_tool_results(),
+            )
+            is True
+        )
 
     def test_returns_false_for_non_400_status(self):
         """非 400 状态码即使有 tool_result 也不应匹配."""
-        assert _is_likely_request_format_error(
-            status_code=500,
-            error_body_text="Bad Request\n",
-            body=self._body_with_tool_results(),
-        ) is False
+        assert (
+            _is_likely_request_format_error(
+                status_code=500,
+                error_body_text="Bad Request\n",
+                body=self._body_with_tool_results(),
+            )
+            is False
+        )
 
     def test_returns_false_when_no_tool_results(self):
         """无 tool_result 时不应匹配（即使是 400 Bad Request）."""
         body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
-        assert _is_likely_request_format_error(
-            status_code=400,
-            error_body_text="Bad Request\n",
-            body=body,
-        ) is False
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text="Bad Request\n",
+                body=body,
+            )
+            is False
+        )
 
     def test_returns_false_for_structured_json_error_body(self):
         """结构化 JSON 错误体（以 { 开头且较长）不应触发此启发式判断."""
-        json_body = '{"error":{"type":"invalid_request_error","message":"something wrong"}}'
-        assert _is_likely_request_format_error(
-            status_code=400,
-            error_body_text=json_body,
-            body=self._body_with_tool_results(),
-        ) is False
+        json_body = (
+            '{"error":{"type":"invalid_request_error","message":"something wrong"}}'
+        )
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text=json_body,
+                body=self._body_with_tool_results(),
+            )
+            is False
+        )
 
     def test_returns_false_for_empty_body(self):
         """空请求体不应触发."""
-        assert _is_likely_request_format_error(
-            status_code=400, error_body_text="Bad Request\n", body={}
-        ) is False
+        assert (
+            _is_likely_request_format_error(
+                status_code=400, error_body_text="Bad Request\n", body={}
+            )
+            is False
+        )
 
 
 # ── TokenAcquireError 永久性凭证错误测试 ────────────────────
@@ -1222,7 +1245,9 @@ class TestHandleTokenErrorPermanentCredential:
             kind=TokenErrorKind.INSUFFICIENT_SCOPE,
             needs_reauth=True,
         )
-        await exec_inst._handle_token_error(tier, exc, is_last=False, failed_tier_name=None)
+        await exec_inst._handle_token_error(
+            tier, exc, is_last=False, failed_tier_name=None
+        )
 
         # 失败计数不应增加
         if tier.circuit_breaker:
@@ -1244,7 +1269,9 @@ class TestHandleTokenErrorPermanentCredential:
             kind=TokenErrorKind.INVALID_CREDENTIALS,
             needs_reauth=True,
         )
-        await exec_inst._handle_token_error(tier, exc, is_last=False, failed_tier_name=None)
+        await exec_inst._handle_token_error(
+            tier, exc, is_last=False, failed_tier_name=None
+        )
 
         if tier.circuit_breaker:
             assert tier.circuit_breaker._failure_count == initial_count
@@ -1262,7 +1289,9 @@ class TestHandleTokenErrorPermanentCredential:
             kind=TokenErrorKind.TEMPORARY,
             needs_reauth=False,
         )
-        await exec_inst._handle_token_error(tier, exc, is_last=False, failed_tier_name=None)
+        await exec_inst._handle_token_error(
+            tier, exc, is_last=False, failed_tier_name=None
+        )
 
         # 临时错误应记录失败
         if tier.circuit_breaker:
@@ -1283,7 +1312,9 @@ class TestHandleTokenErrorPermanentCredential:
             kind=TokenErrorKind.INSUFFICIENT_SCOPE,
             needs_reauth=True,
         )
-        await exec_inst._handle_token_error(tier, exc, is_last=False, failed_tier_name=None)
+        await exec_inst._handle_token_error(
+            tier, exc, is_last=False, failed_tier_name=None
+        )
 
         reauth_mock.request_reauth.assert_called_once_with("google")
 
@@ -1327,7 +1358,11 @@ class TestExecuteMessageFormatIncompatibilityFailover:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "tool_result", "tool_use_id": "tu_1", "content": "result"}
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": "result",
+                        }
                     ],
                 },
             ],
@@ -1389,7 +1424,9 @@ class TestExecuteMessageLastTier500RecordsFailure:
         tier = _make_tier(vendor, circuit_breaker=cb)
         exec_inst = _executor([tier])
 
-        resp = await exec_inst.execute_message({"model": "claude-haiku-4-5-20251001"}, {})
+        resp = await exec_inst.execute_message(
+            {"model": "claude-haiku-4-5-20251001"}, {}
+        )
 
         assert resp.status_code == 500
         assert resp.error_message == "Internal Network Failure"
@@ -1426,7 +1463,9 @@ class TestExecuteMessageLastTier500RecordsFailure:
     async def test_last_tier_500_still_returns_response_to_client(self):
         """修复后，最后一层 500 仍应正确返回原始错误响应给客户端."""
         vendor = _mock_vendor("zhipu")
-        error_body = b'{"error":{"type":"api_error","message":"Internal Network Failure"}}'
+        error_body = (
+            b'{"error":{"type":"api_error","message":"Internal Network Failure"}}'
+        )
         vendor.send_message = AsyncMock(
             return_value=VendorResponse(
                 status_code=500,
@@ -1447,7 +1486,6 @@ class TestExecuteMessageLastTier500RecordsFailure:
     @pytest.mark.asyncio
     async def test_last_tier_500_with_retry_after_updates_rate_limit(self):
         """最后一层 500 含 Retry-After 头时，应更新 tier 的 rate limit deadline."""
-        import time
 
         from coding.proxy.routing.circuit_breaker import CircuitBreaker
 

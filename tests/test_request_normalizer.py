@@ -267,33 +267,39 @@ class TestMisplacedToolResultStripping:
         messages = []
         for i in range(104):
             role = "user" if i % 2 == 0 else "assistant"
-            messages.append({
-                "role": role,
-                "content": f"message {i}",
-            })
+            messages.append(
+                {
+                    "role": role,
+                    "content": f"message {i}",
+                }
+            )
 
         # 在消息 104（assistant）中放置 tool_use + tool_result
-        messages.append({
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": "toolu_deep_1",
-                    "name": "Bash",
-                    "input": {"command": "find / -name '*.log'"},
-                },
-                {
-                    "type": "tool_result",
-                    "tool_use_id": "toolu_deep_1",
-                    "content": "/var/log/system.log",
-                },
-            ],
-        })
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_deep_1",
+                        "name": "Bash",
+                        "input": {"command": "find / -name '*.log'"},
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_deep_1",
+                        "content": "/var/log/system.log",
+                    },
+                ],
+            }
+        )
         # 消息 105（user）
-        messages.append({
-            "role": "user",
-            "content": "thanks",
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": "thanks",
+            }
+        )
 
         result = normalize_anthropic_request({"messages": messages})
 

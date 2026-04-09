@@ -311,8 +311,13 @@ class _RouteExecutor:
                     failed_tier_name,
                     last_exc,
                 ) = await self._handle_http_error(
-                    tier, exc, is_last, failed_tier_name, last_exc,
-                    is_stream=True, request_body=body,
+                    tier,
+                    exc,
+                    is_last,
+                    failed_tier_name,
+                    last_exc,
+                    is_stream=True,
+                    request_body=body,
                 )
                 if should_continue:
                     continue
@@ -323,9 +328,7 @@ class _RouteExecutor:
                 if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
                     if is_structural_validation_error(
                         status_code=exc.response.status_code,
-                        error_message=self._extract_error_message_from_http_status(
-                            exc
-                        ),
+                        error_message=self._extract_error_message_from_http_status(exc),
                     ):
                         logger.info(
                             "Tier %s structural validation error, stopping failover",
@@ -427,13 +430,10 @@ class _RouteExecutor:
                 )
                 # 补充检测：400 + 有 tool_result + 无结构化错误体 → 格式不兼容
                 # （覆盖 Copilot 等返回纯文本 "Bad Request" 的场景）
-                if (
-                    not is_semantic
-                    and _is_likely_request_format_error(
-                        status_code=resp.status_code,
-                        error_body_text=(resp.error_message or "")[:500],
-                        body=body,
-                    )
+                if not is_semantic and _is_likely_request_format_error(
+                    status_code=resp.status_code,
+                    error_body_text=(resp.error_message or "")[:500],
+                    body=body,
                 ):
                     is_semantic = True
                     logger.warning(
@@ -658,7 +658,9 @@ class _RouteExecutor:
                 and request_body is not None
                 and _is_likely_request_format_error(
                     status_code=exc.response.status_code,
-                    error_body_text=exc.response.text[:500] if exc.response.text else None,
+                    error_body_text=exc.response.text[:500]
+                    if exc.response.text
+                    else None,
                     body=request_body,
                 )
             ):
