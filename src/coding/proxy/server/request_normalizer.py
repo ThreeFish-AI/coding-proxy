@@ -10,6 +10,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# ── 跨请求日志去重：记录已报告过的 misplaced tool_use_id ──────────
+# 同一 tool_use_id 仅首次输出 WARNING（含完整因果上下文），
+# 后续在同一会话中重复出现时降级为 DEBUG，避免日志噪声。
+_LOGGED_MISPLACED_TOOL_IDS: set[str] = set()
+_LOGGED_MISPLACED_TOOL_IDS_MAX = 500
+
 _ANTHROPIC_TOOL_USE_ID_RE = re.compile(r"^toolu_[A-Za-z0-9_]+$")
 _ANTHROPIC_SERVER_TOOL_USE_ID_RE = re.compile(r"^srvtoolu_[A-Za-z0-9_]+$")
 _VENDOR_TOOL_BLOCK_TYPES = {
@@ -51,6 +57,9 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
         nonlocal normalized_counter
         normalized_counter += 1
         return f"toolu_normalized_{normalized_counter}"
+
+    # 收集本轮被剥离的 misplaced tool_result 信息（用于汇总日志）
+    stripped_misplaced: list[tuple[str, int, int, str]] = []  # (role, msg_idx, blk_idx, tool_use_id)
 
     def normalize_content_block(
         block: Any,
@@ -128,19 +137,14 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
                     return None
                 return normalized_block
 
-            # tool_result 出现在非 user 消息中（如 assistant）—— 剥离。
-            # 典型触发场景：跨供应商迁移时（如 Zhipu GLM → Anthropic），
-            # GLM-5 可能在 assistant 响应中同时包含 tool_use 和 tool_result 内容块，
+            # tool_result 出现在非 user 消息中（如 assistant）—— 收集信息，稍后汇总日志。
+            # 典型触发场景：跨供应商降级时（如 Zhipu GLM → Anthropic），
+            # GLM-5 在 assistant 响应中同时包含 tool_use 和 tool_result 内容块，
             # Claude Code 将此响应当作对话历史存储后，tool_result 出现在 assistant 角色消息中。
             # Anthropic API 严格要求 tool_result 只能出现在 user 消息中，因此必须剥离。
             adaptations.append("misplaced_tool_result_stripped")
-            logger.warning(
-                "Stripping misplaced tool_result from %s message at "
-                "messages.%d.content.%d (tool_use_id=%s)",
-                message_role,
-                message_index,
-                block_index,
-                block.get("tool_use_id", "N/A"),
+            stripped_misplaced.append(
+                (message_role, message_index, block_index, block.get("tool_use_id", "N/A"))
             )
             return None
 
@@ -165,6 +169,12 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
                 new_content.append(normalized_block)
         message["content"] = new_content
 
+    # ── 汇总日志：misplaced tool_result 剥离 ──────────────────
+    # 将逐块的 WARNING 合并为单条日志，并对同一 tool_use_id 跨请求去重：
+    # 首次出现 → WARNING（含因果上下文），后续 → DEBUG。
+    if stripped_misplaced:
+        _emit_misplaced_tool_result_summary(stripped_misplaced)
+
     # ── 后处理：迁移错位的 tool_result 块 ──────────────────────
     # Anthropic API 强制要求 tool_result 仅存在于 user 消息中。
     # 多 vendor 场景下（尤其是降级恢复后的对话历史），可能出现
@@ -179,6 +189,66 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
         adaptations=sorted(set(adaptations)),
         fatal_reasons=fatal_reasons,
     )
+
+
+def _emit_misplaced_tool_result_summary(
+    stripped: list[tuple[str, int, int, str]],
+) -> None:
+    """为被剥离的 misplaced tool_result 输出汇总日志.
+
+    策略：
+    - 将同一次请求中的多个剥离事件合并为单条日志
+    - 首次出现的 tool_use_id → WARNING（含完整因果上下文）
+    - 同一 tool_use_id 在后续请求中再次出现 → DEBUG（避免日志噪声）
+
+    注意：此函数运行在 asyncio 事件循环的主线程中，set 操作无需加锁。
+
+    Args:
+        stripped: 每个元素为 (message_role, message_index, block_index, tool_use_id)
+    """
+    # 提取去重后的 tool_use_id 集合
+    unique_tool_ids = {tid for _, _, _, tid in stripped}
+
+    # 区分首次出现 vs 已报告过的
+    new_id_set = unique_tool_ids - _LOGGED_MISPLACED_TOOL_IDS
+    known_id_set = unique_tool_ids & _LOGGED_MISPLACED_TOOL_IDS
+
+    # 更新已报告集合（防止无限增长：保留最近一半条目）
+    _LOGGED_MISPLACED_TOOL_IDS.update(unique_tool_ids)
+    if len(_LOGGED_MISPLACED_TOOL_IDS) > _LOGGED_MISPLACED_TOOL_IDS_MAX:
+        to_keep = sorted(_LOGGED_MISPLACED_TOOL_IDS)[_LOGGED_MISPLACED_TOOL_IDS_MAX // 2:]
+        _LOGGED_MISPLACED_TOOL_IDS.clear()
+        _LOGGED_MISPLACED_TOOL_IDS.update(to_keep)
+
+    if new_id_set:
+        # 首次出现：WARNING + 完整因果上下文
+        positions = ", ".join(
+            f"messages.{mi}.content.{bi} (role={r}, tool_use_id={tid})"
+            for r, mi, bi, tid in stripped
+            if tid in new_id_set
+        )
+        new_count = sum(1 for _, _, _, tid in stripped if tid in new_id_set)
+        logger.warning(
+            "Vendor degradation adaptation: stripped %d misplaced tool_result block(s) "
+            "from non-user message(s). Cause: cross-vendor conversation history contains "
+            "tool_result blocks in assistant messages (typical when GLM-5 includes tool "
+            "results inline in responses). Anthropic API strictly requires tool_result "
+            "only in user messages, so these blocks are stripped to prevent 400 "
+            "invalid_request_error. Affected: %s. Subsequent occurrences of these "
+            "tool_use_ids will be logged at DEBUG level.",
+            new_count,
+            positions,
+        )
+
+    if known_id_set:
+        # 已报告过的：DEBUG
+        known_count = sum(1 for _, _, _, tid in stripped if tid in known_id_set)
+        logger.debug(
+            "Normalization: stripped %d previously reported misplaced tool_result "
+            "block(s) (tool_use_ids: %s)",
+            known_count,
+            ", ".join(sorted(known_id_set)),
+        )
 
 
 def _relocate_misplaced_tool_results(
