@@ -3,8 +3,6 @@
 import re
 from datetime import datetime, timedelta
 
-import pytest
-
 from coding.proxy.logging.db import TimePeriod
 from coding.proxy.logging.stats import (
     _build_title,
