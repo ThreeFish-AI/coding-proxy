@@ -49,9 +49,59 @@ class ZhipuConfig(BaseModel):
     timeout_ms: int = 3000000
 
 
+class MinimaxConfig(BaseModel):
+    """MiniMax 供应商配置（原生 Anthropic 兼容端点）."""
+
+    enabled: bool = True
+    base_url: str = "https://api.minimaxi.com/anthropic"
+    api_key: str = ""
+    timeout_ms: int = 3000000
+
+
+class KimiConfig(BaseModel):
+    """Kimi 供应商配置（原生 Anthropic 兼容端点）."""
+
+    enabled: bool = True
+    base_url: str = "https://api.kimi.com/coding/"
+    api_key: str = ""
+    timeout_ms: int = 3000000
+
+
+class DoubaoConfig(BaseModel):
+    """豆包 Doubao 供应商配置（原生 Anthropic 兼容端点）."""
+
+    enabled: bool = True
+    base_url: str = "https://ark.cn-beijing.volces.com/api/coding"
+    api_key: str = ""
+    timeout_ms: int = 3000000
+
+
+class XiaomiConfig(BaseModel):
+    """小米 MiMo 供应商配置（原生 Anthropic 兼容端点）."""
+
+    enabled: bool = True
+    base_url: str = "https://token-plan-cn.xiaomimimo.com/anthropic"
+    api_key: str = ""
+    timeout_ms: int = 3000000
+
+
+class AlibabaConfig(BaseModel):
+    """阿里 Qwen 供应商配置（原生 Anthropic 兼容端点）."""
+
+    enabled: bool = True
+    base_url: str = "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic"
+    api_key: str = ""
+    timeout_ms: int = 3000000
+
+
 __all__ = [
     "AnthropicConfig",
     "CopilotConfig",
     "AntigravityConfig",
     "ZhipuConfig",
+    "MinimaxConfig",
+    "KimiConfig",
+    "DoubaoConfig",
+    "XiaomiConfig",
+    "AlibabaConfig",
 ]

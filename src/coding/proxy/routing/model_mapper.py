@@ -16,6 +16,11 @@ _VENDOR_ALIASES = {
     "fallback": "fallback",
     "antigravity": "antigravity",
     "copilot": "copilot",
+    "minimax": "minimax",
+    "kimi": "kimi",
+    "doubao": "doubao",
+    "xiaomi": "xiaomi",
+    "alibaba": "alibaba",
 }
 
 

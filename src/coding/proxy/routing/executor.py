@@ -168,6 +168,11 @@ def _log_vendor_response_error(
 _VENDOR_PROTOCOL_LABEL_MAP: dict[str, str] = {
     "anthropic": "Anthropic",
     "zhipu": "Anthropic",
+    "minimax": "Anthropic",
+    "kimi": "Anthropic",
+    "doubao": "Anthropic",
+    "xiaomi": "Anthropic",
+    "alibaba": "Anthropic",
     "copilot": "OpenAI",
     "antigravity": "Gemini",
 }
