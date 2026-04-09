@@ -59,7 +59,9 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
         return f"toolu_normalized_{normalized_counter}"
 
     # 收集本轮被剥离的 misplaced tool_result 信息（用于汇总日志）
-    stripped_misplaced: list[tuple[str, int, int, str]] = []  # (role, msg_idx, blk_idx, tool_use_id)
+    stripped_misplaced: list[
+        tuple[str, int, int, str]
+    ] = []  # (role, msg_idx, blk_idx, tool_use_id)
 
     def normalize_content_block(
         block: Any,
@@ -144,7 +146,12 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
             # Anthropic API 严格要求 tool_result 只能出现在 user 消息中，因此必须剥离。
             adaptations.append("misplaced_tool_result_stripped")
             stripped_misplaced.append(
-                (message_role, message_index, block_index, block.get("tool_use_id", "N/A"))
+                (
+                    message_role,
+                    message_index,
+                    block_index,
+                    block.get("tool_use_id", "N/A"),
+                )
             )
             return None
 
@@ -216,7 +223,9 @@ def _emit_misplaced_tool_result_summary(
     # 更新已报告集合（防止无限增长：保留最近一半条目）
     _LOGGED_MISPLACED_TOOL_IDS.update(unique_tool_ids)
     if len(_LOGGED_MISPLACED_TOOL_IDS) > _LOGGED_MISPLACED_TOOL_IDS_MAX:
-        to_keep = sorted(_LOGGED_MISPLACED_TOOL_IDS)[_LOGGED_MISPLACED_TOOL_IDS_MAX // 2:]
+        to_keep = sorted(_LOGGED_MISPLACED_TOOL_IDS)[
+            _LOGGED_MISPLACED_TOOL_IDS_MAX // 2 :
+        ]
         _LOGGED_MISPLACED_TOOL_IDS.clear()
         _LOGGED_MISPLACED_TOOL_IDS.update(to_keep)
 
