@@ -95,8 +95,8 @@ _PERIOD_DATE_LABELS: dict[TimePeriod, str] = {
 async def show_usage(
     logger: TokenLogger,
     *,
-    vendor: str | None = None,
-    model: str | None = None,
+    vendor: str | list[str] | None = None,
+    model: str | list[str] | None = None,
     pricing_table: PricingTable | None = None,
     period: TimePeriod = TimePeriod.DAY,
     count: int = 7,
@@ -126,6 +126,15 @@ async def show_usage(
     table.add_column("Cost", justify="right", style="bold green")
     table.add_column("平均耗时(ms)", justify="right")
 
+    # ── 汇总累计变量 ──────────────────────────────────────────
+    sum_requests = 0
+    sum_input = 0
+    sum_output = 0
+    sum_cache_creation = 0
+    sum_cache_read = 0
+    weighted_duration_sum = 0.0  # Σ(avg_duration_ms × total_requests)
+    cost_totals: dict = {}  # currency → float
+
     for row in rows:
         total_input = row.get("total_input", 0) or 0
         total_output = row.get("total_output", 0) or 0
@@ -137,6 +146,7 @@ async def show_usage(
 
         vendor_name = str(row.get("vendor", ""))
         model_served = str(row.get("model_served", ""))
+        cost_value = None
         if pricing_table is not None:
             cost_value = pricing_table.compute_cost(
                 vendor_name,
@@ -150,13 +160,25 @@ async def show_usage(
         else:
             cost_str = "-"
 
+        # 累加汇总
+        total_requests_row = row.get("total_requests", 0) or 0
+        sum_requests += total_requests_row
+        sum_input += total_input
+        sum_output += total_output
+        sum_cache_creation += total_cache_creation
+        sum_cache_read += total_cache_read
+        weighted_duration_sum += (row.get("avg_duration_ms", 0) or 0) * total_requests_row
+        if cost_value is not None:
+            cur = cost_value.currency
+            cost_totals[cur] = cost_totals.get(cur, 0.0) + cost_value.amount
+
         date_value = row.get("date") or ""
         table.add_row(
             str(date_value),
             vendor_name,
             _format_model_display(row.get("model_requested")),
             model_served,
-            str(row.get("total_requests", 0)),
+            str(total_requests_row),
             _format_tokens(total_input),
             _format_tokens(total_output),
             _format_tokens(total_cache_creation),
@@ -165,6 +187,34 @@ async def show_usage(
             cost_str,
             str(int(row.get("avg_duration_ms", 0) or 0)),
         )
+
+    # ── 汇总行 ───────────────────────────────────────────────
+    table.add_section()
+
+    sum_tokens = sum_input + sum_output + sum_cache_creation + sum_cache_read
+    avg_duration = int(weighted_duration_sum / sum_requests) if sum_requests else 0
+
+    if cost_totals:
+        total_cost_str = " + ".join(
+            f"{cur.symbol}{amt:.4f}" for cur, amt in cost_totals.items()
+        )
+    else:
+        total_cost_str = "-"
+
+    table.add_row(
+        "[bold]总计[/bold]",
+        "",
+        "",
+        "",
+        f"[bold]{sum_requests}[/bold]",
+        f"[bold]{_format_tokens(sum_input)}[/bold]",
+        f"[bold]{_format_tokens(sum_output)}[/bold]",
+        f"[bold]{_format_tokens(sum_cache_creation)}[/bold]",
+        f"[bold]{_format_tokens(sum_cache_read)}[/bold]",
+        f"[bold]{_format_tokens(sum_tokens)}[/bold]",
+        f"[bold]{total_cost_str}[/bold]",
+        f"[bold]{avg_duration}[/bold]",
+    )
 
     console.print(table)
 
