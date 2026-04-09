@@ -60,17 +60,14 @@ async def lifespan(app: FastAPI):
                 tier.quota_guard.window_hours,
                 vendor=tier.name,
             )
-            tier.quota_guard.load_baseline(total)
+            tier.quota_guard.load_baseline(total, vendor=tier.name)
         if tier.weekly_quota_guard and tier.weekly_quota_guard.enabled:
             total = await token_logger.query_window_total(
                 tier.weekly_quota_guard.window_hours,
                 vendor=tier.name,
             )
-            tier.weekly_quota_guard.load_baseline(total)
+            tier.weekly_quota_guard.load_baseline(total, vendor=tier.name)
 
-    logger.info(
-        "coding-proxy started: host=%s port=%d", config.server.host, config.server.port
-    )
     yield
     await router.close()
     await compat_session_store.close()

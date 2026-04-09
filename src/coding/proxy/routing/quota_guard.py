@@ -129,7 +129,7 @@ class QuotaGuard:
                 int(self._effective_probe_interval),
             )
 
-    def load_baseline(self, total_tokens: int) -> None:
+    def load_baseline(self, total_tokens: int, vendor: str | None = None) -> None:
         """从数据库加载窗口历史用量基线."""
         if not self._enabled or total_tokens <= 0:
             return
@@ -137,7 +137,14 @@ class QuotaGuard:
             midpoint = time.monotonic() - self._window / 2
             self._entries.append((midpoint, total_tokens))
             self._total += total_tokens
-            logger.info("Quota guard: loaded baseline %d tokens", total_tokens)
+            if vendor:
+                logger.info(
+                    "Quota guard [%s]: loaded baseline %d tokens",
+                    vendor,
+                    total_tokens,
+                )
+            else:
+                logger.info("Quota guard: loaded baseline %d tokens", total_tokens)
 
     def reset(self) -> None:
         """手动重置为 WITHIN_QUOTA 状态."""
