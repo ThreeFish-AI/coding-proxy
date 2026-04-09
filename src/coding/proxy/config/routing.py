@@ -295,6 +295,8 @@ class VendorConfig(BaseModel):
             if vendor_type == self.vendor:
                 continue
             for field_name in fields:
+                if field_name in exclusive:
+                    continue
                 value = getattr(self, field_name, None)
                 if value and value != getattr(
                     VendorConfig.model_fields[field_name], "default", None
