@@ -26,12 +26,12 @@ logging:
 # 示例 3：将 zhipu 提升为首选，anthropic 作为后备
 #   tiers: ["zhipu", "anthropic"]
 
-tiers: ["anthropic", "copilot", "antigravity", "zhipu"]
+tiers: ["zhipu", "anthropic", "copilot", "antigravity"]
 
 # === 供应商定义（vendors 列表） ===
 #
 # 每个 vendor 通过 vendor 字段指定供应商类型：
-#   anthropic | copilot | antigravity | zhipu | minimax | kimi | doubao | xiaomi | alibaba
+#   anthropic | zhipu | minimax | alibaba | xiaomi | kimi | doubao | copilot | antigravity
 #
 # 优先级规则：
 #   - 若配置了 tiers，以其指定的顺序为准
@@ -133,11 +133,11 @@ vendors:
       threshold_percent: 95.0
       probe_interval_seconds: 300
 
-  # Vendor 5: Kimi（默认禁用）
-  - vendor: kimi
+  # Vendor 5: 阿里 Qwen（默认禁用）
+  - vendor: alibaba
     enabled: false
-    base_url: "https://api.kimi.com/coding/"
-    api_key: "${KIMI_API_KEY}"
+    base_url: "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic"
+    api_key: "${ALIBABA_API_KEY}"
     timeout_ms: 3000000
     circuit_breaker:
       failure_threshold: 3
@@ -150,24 +150,7 @@ vendors:
       threshold_percent: 95.0
       probe_interval_seconds: 300
 
-  # Vendor 6: 豆包 Doubao（默认禁用）
-  - vendor: doubao
-    enabled: false
-    base_url: "https://ark.cn-beijing.volces.com/api/coding"
-    api_key: "${ARK_API_KEY}"
-    timeout_ms: 3000000
-    circuit_breaker:
-      failure_threshold: 3
-      recovery_timeout_seconds: 300
-      success_threshold: 2
-    quota_guard:
-      enabled: true
-      token_budget: 1000000000
-      window_hours: 24.0
-      threshold_percent: 95.0
-      probe_interval_seconds: 300
-
-  # Vendor 7: 小米 MiMo（默认禁用）
+  # Vendor 6: 小米 MiMo（默认禁用）
   - vendor: xiaomi
     enabled: false
     base_url: "https://token-plan-cn.xiaomimimo.com/anthropic"
@@ -184,11 +167,28 @@ vendors:
       threshold_percent: 95.0
       probe_interval_seconds: 300
 
-  # Vendor 8: 阿里 Qwen（默认禁用）
-  - vendor: alibaba
+  # Vendor 7: Kimi（默认禁用）
+  - vendor: kimi
     enabled: false
-    base_url: "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic"
-    api_key: "${ALIBABA_API_KEY}"
+    base_url: "https://api.kimi.com/coding/"
+    api_key: "${KIMI_API_KEY}"
+    timeout_ms: 3000000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: true
+      token_budget: 1000000000
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+  # Vendor 8: 豆包 Doubao（默认禁用）
+  - vendor: doubao
+    enabled: false
+    base_url: "https://ark.cn-beijing.volces.com/api/coding"
+    api_key: "${ARK_API_KEY}"
     timeout_ms: 3000000
     circuit_breaker:
       failure_threshold: 3
@@ -264,6 +264,32 @@ model_mapping:
     vendors: ["minimax"]
     target: "minimax-m2.7"
     is_regex: true
+  # 阿里 Qwen 模型映射（原生 Anthropic 兼容端点）
+  - pattern: "claude-sonnet-.*"
+    vendors: ["alibaba"]
+    target: "qwen3.6-plus"
+    is_regex: true
+  - pattern: "claude-opus-.*"
+    vendors: ["alibaba"]
+    target: "qwen3.6-plus"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["alibaba"]
+    target: "qwen3.6-plus"
+    is_regex: true
+  # 小米 MiMo 模型映射（原生 Anthropic 兼容端点）
+  - pattern: "claude-sonnet-.*"
+    vendors: ["xiaomi"]
+    target: "mimo-v2-pro"
+    is_regex: true
+  - pattern: "claude-opus-.*"
+    vendors: ["xiaomi"]
+    target: "mimo-v2-pro"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["xiaomi"]
+    target: "mimo-v2-pro"
+    is_regex: true
   # Kimi 模型映射（原生 Anthropic 兼容端点）
   - pattern: "claude-sonnet-.*"
     vendors: ["kimi"]
@@ -289,32 +315,6 @@ model_mapping:
   - pattern: "claude-haiku-.*"
     vendors: ["doubao"]
     target: "doubao-seed-2.0-lite"
-    is_regex: true
-  # 小米 MiMo 模型映射（原生 Anthropic 兼容端点）
-  - pattern: "claude-sonnet-.*"
-    vendors: ["xiaomi"]
-    target: "mimo-v2-pro"
-    is_regex: true
-  - pattern: "claude-opus-.*"
-    vendors: ["xiaomi"]
-    target: "mimo-v2-pro"
-    is_regex: true
-  - pattern: "claude-haiku-.*"
-    vendors: ["xiaomi"]
-    target: "mimo-v2-pro"
-    is_regex: true
-  # 阿里 Qwen 模型映射（原生 Anthropic 兼容端点）
-  - pattern: "claude-sonnet-.*"
-    vendors: ["alibaba"]
-    target: "qwen3.6-plus"
-    is_regex: true
-  - pattern: "claude-opus-.*"
-    vendors: ["alibaba"]
-    target: "qwen3.6-plus"
-    is_regex: true
-  - pattern: "claude-haiku-.*"
-    vendors: ["alibaba"]
-    target: "qwen3.6-plus"
     is_regex: true
 
 # === 模型定价（USD / 1M tokens） ===
@@ -434,6 +434,27 @@ pricing:
     output_cost_per_mtok: ¥8.40
     cache_write_cost_per_mtok: ¥2.625
     cache_read_cost_per_mtok: ¥0.21
+  # ── 阿里 Qwen ──
+  - vendor: alibaba
+    model: qwen3.6-plus
+    input_cost_per_mtok: $0.276
+    output_cost_per_mtok: $1.651
+  # ── 小米 MiMo ──
+  - vendor: xiaomi
+    model: mimo-v2-pro
+    input_cost_per_mtok: ¥7.00
+    output_cost_per_mtok: ¥21.00
+    cache_read_cost_per_mtok: ¥1.40
+  - vendor: xiaomi
+    model: mimo-v2-omni
+    input_cost_per_mtok: ¥2.80
+    output_cost_per_mtok: ¥14.00
+    cache_read_cost_per_mtok: ¥0.56
+  - vendor: xiaomi
+    model: mimo-v2-flash
+    input_cost_per_mtok: ¥0.70
+    output_cost_per_mtok: ¥2.10
+    cache_read_cost_per_mtok: ¥0.07
   # ── Kimi ──
   - vendor: kimi
     model: kimi-k2.5
@@ -458,27 +479,6 @@ pricing:
     output_cost_per_mtok: ¥3.60
     cache_write_cost_per_mtok: ¥0.12
     cache_read_cost_per_mtok: ¥0.017
-  # ── 小米 MiMo ──
-  - vendor: xiaomi
-    model: mimo-v2-pro
-    input_cost_per_mtok: ¥7.00
-    output_cost_per_mtok: ¥21.00
-    cache_read_cost_per_mtok: ¥1.40
-  - vendor: xiaomi
-    model: mimo-v2-omni
-    input_cost_per_mtok: ¥2.80
-    output_cost_per_mtok: ¥14.00
-    cache_read_cost_per_mtok: ¥0.56
-  - vendor: xiaomi
-    model: mimo-v2-flash
-    input_cost_per_mtok: ¥0.70
-    output_cost_per_mtok: ¥2.10
-    cache_read_cost_per_mtok: ¥0.07
-  # ── 阿里 Qwen ──
-  - vendor: alibaba
-    model: qwen3.6-plus
-    input_cost_per_mtok: $0.276
-    output_cost_per_mtok: $1.651
 
 database:
   path: "~/.coding-proxy/usage.db"
