@@ -38,7 +38,9 @@ def _week_date_range(count: int) -> str:
     # 目标周的周一
     target_monday = this_monday - timedelta(weeks=count - 1)
     target_sunday = target_monday + timedelta(days=6)
-    return f"{target_monday.strftime('%Y-%m-%d')} ～ {target_sunday.strftime('%Y-%m-%d')}"
+    return (
+        f"{target_monday.strftime('%Y-%m-%d')} ～ {target_sunday.strftime('%Y-%m-%d')}"
+    )
 
 
 def _build_title(period: TimePeriod, count: int) -> str:

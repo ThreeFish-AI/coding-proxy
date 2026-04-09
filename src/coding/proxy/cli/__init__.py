@@ -142,8 +142,12 @@ def status(
 @app.command()
 def usage(
     days: int = typer.Option(7, "--days", "-d", help="统计天数（与 -w/-m/-t 互斥）"),
-    week: int | None = typer.Option(None, "--week", "-w", help="最近第 N 周统计（按周聚合，默认 1）"),
-    month: int | None = typer.Option(None, "--month", "-m", help="最近第 N 月统计（按月聚合，默认 1）"),
+    week: int | None = typer.Option(
+        None, "--week", "-w", help="最近第 N 周统计（按周聚合，默认 1）"
+    ),
+    month: int | None = typer.Option(
+        None, "--month", "-m", help="最近第 N 月统计（按月聚合，默认 1）"
+    ),
     total: bool = typer.Option(False, "--total", "-t", help="统计全部历史记录"),
     vendor: str | None = typer.Option(None, "--vendor", "-v", help="过滤供应商"),
     model: str | None = typer.Option(None, "--model", help="过滤请求模型"),
