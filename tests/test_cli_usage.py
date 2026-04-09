@@ -160,19 +160,37 @@ class TestTimeDimensionFlags:
 
     def test_week_flag(self, _isolate_cli_deps):
         mock_show = _isolate_cli_deps
-        result = runner.invoke(app, ["usage", "-w"])
+        result = runner.invoke(app, ["usage", "-w", "1"])
         assert result.exit_code == 0
         kw = _kwargs(mock_show)
         assert kw["period"] == TimePeriod.WEEK
         assert kw["count"] == 1
 
+    def test_week_flag_count(self, _isolate_cli_deps):
+        """``-w 3`` 应查询最近 3 周."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage", "-w", "3"])
+        assert result.exit_code == 0
+        kw = _kwargs(mock_show)
+        assert kw["period"] == TimePeriod.WEEK
+        assert kw["count"] == 3
+
     def test_month_flag(self, _isolate_cli_deps):
         mock_show = _isolate_cli_deps
-        result = runner.invoke(app, ["usage", "-m"])
+        result = runner.invoke(app, ["usage", "-m", "1"])
         assert result.exit_code == 0
         kw = _kwargs(mock_show)
         assert kw["period"] == TimePeriod.MONTH
         assert kw["count"] == 1
+
+    def test_month_flag_count(self, _isolate_cli_deps):
+        """``-m 2`` 应查询最近 2 月."""
+        mock_show = _isolate_cli_deps
+        result = runner.invoke(app, ["usage", "-m", "2"])
+        assert result.exit_code == 0
+        kw = _kwargs(mock_show)
+        assert kw["period"] == TimePeriod.MONTH
+        assert kw["count"] == 2
 
     def test_total_flag(self, _isolate_cli_deps):
         mock_show = _isolate_cli_deps
@@ -192,7 +210,7 @@ class TestTimeDimensionFlags:
     def test_week_with_vendor(self, _isolate_cli_deps):
         """时间维度可与 --vendor 组合使用."""
         mock_show = _isolate_cli_deps
-        result = runner.invoke(app, ["usage", "-w", "-v", "anthropic"])
+        result = runner.invoke(app, ["usage", "-w", "1", "-v", "anthropic"])
         assert result.exit_code == 0
         kw = _kwargs(mock_show)
         assert kw["period"] == TimePeriod.WEEK
@@ -209,7 +227,7 @@ class TestTimeDimensionFlags:
     def test_month_overrides_week(self, _isolate_cli_deps):
         """-m 优先级高于 -w."""
         mock_show = _isolate_cli_deps
-        result = runner.invoke(app, ["usage", "-w", "-m"])
+        result = runner.invoke(app, ["usage", "-w", "1", "-m", "1"])
         assert result.exit_code == 0
         kw = _kwargs(mock_show)
         assert kw["period"] == TimePeriod.MONTH
