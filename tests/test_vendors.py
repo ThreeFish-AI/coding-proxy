@@ -184,6 +184,79 @@ async def test_anthropic_prepare_request_handles_string_content():
 
 
 @pytest.mark.asyncio
+async def test_anthropic_prepare_request_thinking_only_gets_placeholder():
+    """assistant message 仅含 thinking blocks 时，剥离后应插入占位 text block."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Let me think...",
+                        "signature": "zhipu-sig",
+                    },
+                ],
+            },
+            {"role": "user", "content": "follow up"},
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    content = prepared_body["messages"][1]["content"]
+    assert len(content) == 1
+    assert content[0]["type"] == "text"
+    assert content[0]["text"] == "[thinking]"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_prepare_request_thinking_only_with_tool_result_context():
+    """多轮对话：thinking-only assistant + 后续 user tool_result 不应触发结构错误."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "thought 1",
+                        "signature": "sig-1",
+                    },
+                    {"type": "redacted_thinking", "data": "base64data"},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_123",
+                        "content": "result data",
+                    },
+                ],
+            },
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    # assistant message 应包含占位 text block
+    content = prepared_body["messages"][1]["content"]
+    assert len(content) == 1
+    assert content[0]["type"] == "text"
+    assert content[0]["text"] == "[thinking]"
+
+    # user message 的 tool_result 应完整保留
+    user_content = prepared_body["messages"][2]["content"]
+    assert user_content[0]["type"] == "tool_result"
+
+
+@pytest.mark.asyncio
 async def test_anthropic_prepare_request_multi_turn_strips_all_thinking():
     """多轮对话中所有 assistant thinking blocks 均应被剥离."""
     vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
@@ -577,6 +650,68 @@ def test_base_failover_without_config_returns_false():
     assert not zhipu_vendor.should_trigger_failover(503, None)
 
 
+# --- 529 overloaded_error 降级测试 ---
+
+
+def test_529_overloaded_triggers_failover():
+    """529 + overloaded_error 应触发降级（FailoverConfig 默认包含 529）."""
+    anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+
+    assert anthropic_vendor.should_trigger_failover(
+        529, {"error": {"type": "overloaded_error", "message": "Overloaded"}}
+    )
+
+
+def test_529_without_body_triggers_failover():
+    """529 无 body 也应触发降级（备用安全网逻辑）."""
+    anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+
+    assert anthropic_vendor.should_trigger_failover(529, None)
+
+
+def test_529_in_failover_config_default():
+    """验证 FailoverConfig 默认 status_codes 包含 529."""
+    config = FailoverConfig()
+    assert 529 in config.status_codes
+
+
+# --- 500 Internal Network Failure 降级测试 ---
+
+
+def test_500_api_error_triggers_failover():
+    """500 + api_error 应触发降级（FailoverConfig 默认包含 api_error）."""
+    anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+
+    assert anthropic_vendor.should_trigger_failover(
+        500, {"error": {"type": "api_error", "message": "Internal Network Failure"}}
+    )
+
+
+def test_500_internal_network_failure_pattern_triggers_failover():
+    """500 + 'internal network failure' 消息应触发降级（默认 patterns 包含该模式）."""
+    anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+
+    assert anthropic_vendor.should_trigger_failover(
+        500, {"error": {"type": "unknown", "message": "Internal Network Failure"}}
+    )
+
+
+def test_500_without_body_triggers_failover():
+    """500 无 body 也应触发降级（备用安全网逻辑）."""
+    anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+
+    assert anthropic_vendor.should_trigger_failover(500, None)
+
+
+def test_500_in_failover_config_default():
+    """验证 FailoverConfig 默认 status_codes 和 error_message_patterns 覆盖 zhipu 500 场景."""
+    config = FailoverConfig()
+    assert 500 in config.status_codes
+    assert "internal network failure" in [
+        p.lower() for p in config.error_message_patterns
+    ]
+
+
 # --- _sanitize_headers_for_synthetic_response ---
 
 
@@ -651,6 +786,152 @@ async def test_anthropic_check_health_returns_true():
     anthropic_vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
     result = await anthropic_vendor.check_health()
     assert result is True
+
+
+# --- 纵深防御：misplaced tool_result 剥离 ---
+
+
+@pytest.mark.asyncio
+async def test_anthropic_strips_tool_result_from_assistant_message():
+    """Anthropic vendor 应剥离 assistant 消息中错位的 tool_result blocks（纵深防御）."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {
+                "role": "user",
+                "content": "run ls",
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_123",
+                        "name": "Bash",
+                        "input": {"command": "ls"},
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_123",
+                        "content": "file1.txt\nfile2.txt",
+                    },
+                ],
+            },
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    # assistant 消息中 tool_result 被剥离，仅保留 tool_use
+    assistant_content = prepared_body["messages"][1]["content"]
+    assert len(assistant_content) == 1
+    assert assistant_content[0]["type"] == "tool_use"
+    # 原始 body 未被修改
+    assert len(body["messages"][1]["content"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_anthropic_preserves_tool_result_in_user_message():
+    """Anthropic vendor 保留 user 消息中的 tool_result."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_456",
+                        "name": "Bash",
+                        "input": {"command": "echo hi"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_456",
+                        "content": "hi",
+                    },
+                ],
+            },
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    # user 消息中 tool_result 保留
+    user_content = prepared_body["messages"][1]["content"]
+    assert len(user_content) == 1
+    assert user_content[0]["type"] == "tool_result"
+    assert user_content[0]["content"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_strips_both_thinking_and_misplaced_tool_result():
+    """Anthropic vendor 应同时剥离 thinking 和错位的 tool_result."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "planning",
+                        "signature": "non-anthropic-sig",
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_789",
+                        "name": "Bash",
+                        "input": {"command": "ls"},
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_789",
+                        "content": "output",
+                    },
+                ],
+            },
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    # thinking 和 misplaced tool_result 都被剥离
+    assistant_content = prepared_body["messages"][0]["content"]
+    assert len(assistant_content) == 1
+    assert assistant_content[0]["type"] == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_empty_assistant_after_stripping_tool_result():
+    """剥离 tool_result 后 assistant 消息为空时应插入占位 text block."""
+    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
+    body = {
+        "model": "claude-opus-4-6",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_only_result",
+                        "content": "only content",
+                    },
+                ],
+            },
+        ],
+    }
+    prepared_body, _ = await vendor._prepare_request(body, {})
+
+    # 全部剥离后应插入占位 text block
+    assistant_content = prepared_body["messages"][0]["content"]
+    assert len(assistant_content) == 1
+    assert assistant_content[0]["type"] == "text"
 
 
 @pytest.mark.asyncio

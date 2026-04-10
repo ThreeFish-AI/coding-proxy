@@ -21,6 +21,7 @@ from coding.proxy.compat.canonical import (
 from coding.proxy.routing.executor import (
     _VENDOR_PROTOCOL_LABEL_MAP,
     _has_tool_results,
+    _is_likely_request_format_error,
     _log_vendor_response_error,
     _RouteExecutor,
 )
@@ -124,7 +125,17 @@ class TestVendorProtocolLabelMap:
     """供应商协议标签映射测试."""
 
     def test_all_expected_keys_present(self):
-        expected = {"anthropic", "zhipu", "copilot", "antigravity"}
+        expected = {
+            "anthropic",
+            "zhipu",
+            "copilot",
+            "antigravity",
+            "minimax",
+            "kimi",
+            "doubao",
+            "xiaomi",
+            "alibaba",
+        }
         assert set(_VENDOR_PROTOCOL_LABEL_MAP.keys()) == expected
 
     def test_anthropics_map_to_anthropic_label(self):
@@ -938,3 +949,604 @@ class TestExecuteMessageVendorErrorLogging:
         )
         assert "has_tool_results=True" in log_text
         assert "claude-opus-4-6" in log_text
+
+
+# ── execute_message 429 降级测试 ─────────────────────────────
+
+
+class TestExecuteMessageFailoverOn429:
+    """非流式路径下 vendor 返回 429 时应触发 tier 降级.
+
+    覆盖核心修复场景：ZhipuVendor 未注入 FailoverConfig 导致
+    should_trigger_failover() 永远返回 False，429 无法降级到下一层。
+    """
+
+    @pytest.mark.asyncio
+    async def test_429_with_failover_config_triggers_failover(self):
+        """非 terminal 层 vendor 有 failover_config 时，429 应触发降级到下一层."""
+        # 模拟 zhipu 层返回 429（有 failover_config → should_trigger_failover 返回 True）
+        zhipu = _mock_vendor("zhipu")
+        zhipu.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body='{"error":{"code":"1305","message":"\u8be5\u6a21\u578b\u5f53\u524d\u8bbf\u95ee\u91cf\u8fc7\u5927"}}'.encode(),
+                error_type=None,
+                error_message="该模型当前访问量过大，请您稍后再试",
+            )
+        )
+        zhipu.should_trigger_failover.return_value = True
+
+        # copilot 层正常响应
+        copilot = _mock_vendor("copilot")
+        copilot.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b'{"content":"ok"}',
+                usage=UsageInfo(input_tokens=1, output_tokens=1),
+            )
+        )
+
+        zhipu_tier = _make_tier(zhipu)
+        exec_inst = _executor([zhipu_tier, _make_tier(copilot)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 200
+        assert copilot.send_message.called
+        # record_failure 在 VendorTier 上（非 vendor），通过 circuit_breaker 调用链验证
+        if zhipu_tier.circuit_breaker:
+            assert zhipu_tier.circuit_breaker.failure_count > 0
+
+    @pytest.mark.asyncio
+    async def test_429_without_failover_config_no_failover(self):
+        """非 terminal 层 vendor 无 failover_config 时，429 不应触发降级（原始行为）."""
+        bad = _mock_vendor("bad")
+        bad.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"message":"rate limited"}}',
+                error_type=None,
+                error_message="rate limited",
+            )
+        )
+        # 显式设为 False：模拟无 failover_config 时 should_trigger_failover 的行为
+        bad.should_trigger_failover.return_value = False
+
+        good = _mock_vendor("good")
+        good_resp = VendorResponse(
+            status_code=200,
+            raw_body=b"{}",
+            usage=UsageInfo(input_tokens=1, output_tokens=1),
+        )
+        good.send_message = AsyncMock(return_value=good_resp)
+
+        exec_inst = _executor([_make_tier(bad), _make_tier(good)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        # 无 failover_config 时直接返回 429，不降级
+        assert resp.status_code == 429
+        assert not good.send_message.called
+
+    @pytest.mark.asyncio
+    async def test_multi_tier_429_cascade(self):
+        """多层降级链路：anthropic→zhipu(429)→copilot(success)."""
+        anthropic = _mock_vendor("anthropic")
+        anthropic.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"type":"rate_limit_error","message":"quota exceeded"}}',
+                error_type="rate_limit_error",
+                error_message="quota exceeded",
+            )
+        )
+        anthropic.should_trigger_failover.return_value = True
+
+        zhipu = _mock_vendor("zhipu")
+        zhipu.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"code":"1305","message":"model overloaded"}}',
+                error_type=None,
+                error_message="模型过载",
+            )
+        )
+        zhipu.should_trigger_failover.return_value = True
+
+        copilot = _mock_vendor("copilot")
+        copilot.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b'{"content":"fallback success"}',
+                usage=UsageInfo(input_tokens=10, output_tokens=5),
+            )
+        )
+
+        exec_inst = _executor(
+            [
+                _make_tier(anthropic),
+                _make_tier(zhipu),
+                _make_tier(copilot),
+            ]
+        )
+        resp = await exec_inst.execute_message({"model": "claude-opus-4-6"}, {})
+
+        assert resp.status_code == 200
+        assert anthropic.send_message.called
+        assert zhipu.send_message.called
+        assert copilot.send_message.called
+
+    @pytest.mark.asyncio
+    async def test_last_tier_429_returns_directly(self):
+        """最后一层 vendor 返回 429 时应直接返回给客户端."""
+        vendor = _mock_vendor()
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"message":"too many requests"}}',
+                error_type=None,
+                error_message="too many requests",
+            )
+        )
+
+        exec_inst = _executor([_make_tier(vendor)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_429_failover_logs_warning(self, caplog):
+        """429 触发降级时应输出 'failing over' 日志."""
+        import logging as _logging
+
+        bad = _mock_vendor("zhipu")
+        bad.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"message":"overloaded"}}',
+                error_type=None,
+                error_message="overloaded",
+            )
+        )
+        bad.should_trigger_failover.return_value = True
+
+        good = _mock_vendor("copilot")
+        good.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b"{}",
+                usage=UsageInfo(),
+            )
+        )
+
+        exec_inst = _executor([_make_tier(bad), _make_tier(good)])
+
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            await exec_inst.execute_message({"model": "test"}, {})
+
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        log_text = "\n".join(r.message for r in warnings)
+        assert "failing over" in log_text
+        assert "zhipu" in log_text
+
+
+# ── _is_likely_request_format_error 测试 ──────────────────────
+
+
+class TestIsLikelyRequestFormatError:
+    """:func:`_is_likely_request_format_error` 测试 — 覆盖 Copilot 400
+    ``Bad Request`` 不应计入熔断器的核心修复场景.
+    """
+
+    def _body_with_tool_results(self) -> dict:
+        return {
+            "model": "claude-opus-4-6",
+            "tools": [{"name": "Bash"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}
+                    ],
+                },
+            ],
+        }
+
+    def test_returns_true_for_400_bad_request_with_tool_results(self):
+        """400 + 'Bad Request' + 有 tool_result → 格式不兼容."""
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text="Bad Request\n",
+                body=self._body_with_tool_results(),
+            )
+            is True
+        )
+
+    def test_returns_true_for_400_empty_body_with_tool_results(self):
+        """400 + 空错误体 + 有 tool_result → 格式不兼容."""
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text="",
+                body=self._body_with_tool_results(),
+            )
+            is True
+        )
+
+    def test_returns_true_for_400_short_non_json_with_tool_results(self):
+        """400 + 短非 JSON 错误体 + tool_result → 格式不兼容."""
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text="invalid payload",
+                body=self._body_with_tool_results(),
+            )
+            is True
+        )
+
+    def test_returns_false_for_non_400_status(self):
+        """非 400 状态码即使有 tool_result 也不应匹配."""
+        assert (
+            _is_likely_request_format_error(
+                status_code=500,
+                error_body_text="Bad Request\n",
+                body=self._body_with_tool_results(),
+            )
+            is False
+        )
+
+    def test_returns_false_when_no_tool_results(self):
+        """无 tool_result 时不应匹配（即使是 400 Bad Request）."""
+        body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text="Bad Request\n",
+                body=body,
+            )
+            is False
+        )
+
+    def test_returns_false_for_structured_json_error_body(self):
+        """结构化 JSON 错误体（以 { 开头且较长）不应触发此启发式判断."""
+        json_body = (
+            '{"error":{"type":"invalid_request_error","message":"something wrong"}}'
+        )
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text=json_body,
+                body=self._body_with_tool_results(),
+            )
+            is False
+        )
+
+    def test_returns_false_for_empty_body(self):
+        """空请求体不应触发."""
+        assert (
+            _is_likely_request_format_error(
+                status_code=400, error_body_text="Bad Request\n", body={}
+            )
+            is False
+        )
+
+
+# ── TokenAcquireError 永久性凭证错误测试 ────────────────────
+
+
+class TestHandleTokenErrorPermanentCredential:
+    """TokenAcquireError 中 INSUFFICIENT_SCOPE / INVALID_CREDENTIALS 的特殊处理.
+
+    验证永久性凭证问题不计入熔断器，避免级联 OPEN 阻塞恢复。
+    """
+
+    @pytest.mark.asyncio
+    async def test_insufficient_scope_does_not_record_failure(self):
+        """INSUFFICIENT_SCOPE 不应调用 tier.record_failure()."""
+        from coding.proxy.vendors.token_manager import TokenErrorKind
+
+        tier = _make_tier()
+        exec_inst = _executor([tier])
+        initial_count = (
+            tier.circuit_breaker._failure_count if tier.circuit_breaker else 0
+        )
+
+        exc = TokenAcquireError.with_kind(
+            "scope insufficient",
+            kind=TokenErrorKind.INSUFFICIENT_SCOPE,
+            needs_reauth=True,
+        )
+        await exec_inst._handle_token_error(
+            tier, exc, is_last=False, failed_tier_name=None
+        )
+
+        # 失败计数不应增加
+        if tier.circuit_breaker:
+            assert tier.circuit_breaker._failure_count == initial_count
+
+    @pytest.mark.asyncio
+    async def test_invalid_credentials_does_not_record_failure(self):
+        """INVALID_CREDENTIALS 不应调用 tier.record_failure()."""
+        from coding.proxy.vendors.token_manager import TokenErrorKind
+
+        tier = _make_tier()
+        exec_inst = _executor([tier])
+        initial_count = (
+            tier.circuit_breaker._failure_count if tier.circuit_breaker else 0
+        )
+
+        exc = TokenAcquireError.with_kind(
+            "invalid grant",
+            kind=TokenErrorKind.INVALID_CREDENTIALS,
+            needs_reauth=True,
+        )
+        await exec_inst._handle_token_error(
+            tier, exc, is_last=False, failed_tier_name=None
+        )
+
+        if tier.circuit_breaker:
+            assert tier.circuit_breaker._failure_count == initial_count
+
+    @pytest.mark.asyncio
+    async def test_temporary_error_still_records_failure(self):
+        """临时性 Token 错误（如 TEMPORARY）仍应正常计入熔断器."""
+        from coding.proxy.vendors.token_manager import TokenErrorKind
+
+        tier = _make_tier()
+        exec_inst = _executor([tier])
+
+        exc = TokenAcquireError.with_kind(
+            "network timeout",
+            kind=TokenErrorKind.TEMPORARY,
+            needs_reauth=False,
+        )
+        await exec_inst._handle_token_error(
+            tier, exc, is_last=False, failed_tier_name=None
+        )
+
+        # 临时错误应记录失败
+        if tier.circuit_breaker:
+            assert tier.circuit_breaker._failure_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_still_triggers_reauth_for_permanent_error(self):
+        """永久性凭证错误仍应触发 reauth 协调."""
+        from coding.proxy.vendors.token_manager import TokenErrorKind
+
+        tier = _make_tier(vendor=_mock_vendor("antigravity"))
+        reauth_mock = MagicMock()
+        reauth_mock.request_reauth = AsyncMock()
+        exec_inst = _executor([tier], reauth_coordinator=reauth_mock)
+
+        exc = TokenAcquireError.with_kind(
+            "scope issue",
+            kind=TokenErrorKind.INSUFFICIENT_SCOPE,
+            needs_reauth=True,
+        )
+        await exec_inst._handle_token_error(
+            tier, exc, is_last=False, failed_tier_name=None
+        )
+
+        reauth_mock.request_reauth.assert_called_once_with("google")
+
+
+# ── execute_message 400 格式不兼容降级测试 ───────────────────
+
+
+class TestExecuteMessageFormatIncompatibilityFailover:
+    """非流式路径下 vendor 返回 400 且含 tool_result 时应视为语义拒绝.
+
+    覆盖 Copilot 返回 ``Bad Request``（非结构化 400）时的降级修复场景。
+    """
+
+    @pytest.mark.asyncio
+    async def test_copilot_400_bad_request_with_tool_results_fails_over(self):
+        """Copilot 返回 400 Bad Request + 请求含 tool_result → 应降级到下一层."""
+        copilot = _mock_vendor("copilot")
+        copilot.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=400,
+                raw_body=b"Bad Request\n",
+                error_type=None,
+                error_message="Bad Request",
+            )
+        )
+
+        good = _mock_vendor("anthropic")
+        good.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b'{"content":"ok"}',
+                usage=UsageInfo(input_tokens=1, output_tokens=1),
+            )
+        )
+
+        exec_inst = _executor([_make_tier(copilot), _make_tier(good)])
+        body = {
+            "model": "claude-opus-4-6",
+            "tools": [{"name": "Bash"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": "result",
+                        }
+                    ],
+                },
+            ],
+        }
+        resp = await exec_inst.execute_message(body, {})
+
+        assert resp.status_code == 200
+        assert good.send_message.called
+
+    @pytest.mark.asyncio
+    async def test_400_without_tool_results_does_not_format_failover(self):
+        """400 但无 tool_result 时，不应触发格式不兼容的特殊处理."""
+        bad = _mock_vendor("bad")
+        bad.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=400,
+                raw_body=b"Bad Request\n",
+                error_type=None,
+                error_message="Bad Request",
+            )
+        )
+
+        exec_inst = _executor([_make_tier(bad)])
+        body = {"model": "test", "messages": [{"role": "user", "content": "hello"}]}
+        resp = await exec_inst.execute_message(body, {})
+
+        # 无 tool_result 的 400 直接返回给客户端（不是最后一层但无下一层可降级）
+        assert resp.status_code == 400
+
+
+# ── execute_message 最后一层 500 降级记录测试 ─────────────────
+
+
+class TestExecuteMessageLastTier500RecordsFailure:
+    """非流式路径下终端层（最后一层）vendor 返回 500 时应记录降级状态.
+
+    覆盖核心修复场景：zhipu 作为终端层返回 500 "Internal Network Failure"，
+    即使无法故障转移到下一层，仍需调用 record_failure() 维护降级状态
+    （与流式路径 _handle_http_error 的行为对称）。
+    """
+
+    @pytest.mark.asyncio
+    async def test_last_tier_500_with_failover_records_failure(self):
+        """最后一层 vendor 返回 500 且 should_trigger_failover=True 时，record_failure 应被调用."""
+        from coding.proxy.routing.circuit_breaker import CircuitBreaker
+
+        vendor = _mock_vendor("zhipu")
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=500,
+                raw_body=b'{"error":{"type":"api_error","message":"Internal Network Failure"}}',
+                error_type="api_error",
+                error_message="Internal Network Failure",
+            )
+        )
+        vendor.should_trigger_failover.return_value = True
+
+        cb = CircuitBreaker(failure_threshold=3)
+        tier = _make_tier(vendor, circuit_breaker=cb)
+        exec_inst = _executor([tier])
+
+        resp = await exec_inst.execute_message(
+            {"model": "claude-haiku-4-5-20251001"}, {}
+        )
+
+        assert resp.status_code == 500
+        assert resp.error_message == "Internal Network Failure"
+        # 验证 record_failure 被调用：CircuitBreaker 的 failure_count 应增加
+        assert cb.get_info()["failure_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_last_tier_500_without_failover_no_failure_recorded(self):
+        """最后一层 vendor 返回 500 但 should_trigger_failover=False 时，不记录降级."""
+        from coding.proxy.routing.circuit_breaker import CircuitBreaker
+
+        vendor = _mock_vendor("zhipu")
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=500,
+                raw_body=b'{"error":{"type":"server_error","message":"unknown"}}',
+                error_type="server_error",
+                error_message="unknown",
+            )
+        )
+        vendor.should_trigger_failover.return_value = False
+
+        cb = CircuitBreaker(failure_threshold=3)
+        tier = _make_tier(vendor, circuit_breaker=cb)
+        exec_inst = _executor([tier])
+
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 500
+        # should_trigger_failover=False 时，failure 不应被记录
+        assert cb.get_info()["failure_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_last_tier_500_still_returns_response_to_client(self):
+        """修复后，最后一层 500 仍应正确返回原始错误响应给客户端."""
+        vendor = _mock_vendor("zhipu")
+        error_body = (
+            b'{"error":{"type":"api_error","message":"Internal Network Failure"}}'
+        )
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=500,
+                raw_body=error_body,
+                error_type="api_error",
+                error_message="Internal Network Failure",
+            )
+        )
+        vendor.should_trigger_failover.return_value = True
+
+        exec_inst = _executor([_make_tier(vendor)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 500
+        assert resp.raw_body == error_body
+        assert resp.error_message == "Internal Network Failure"
+
+    @pytest.mark.asyncio
+    async def test_last_tier_500_with_retry_after_updates_rate_limit(self):
+        """最后一层 500 含 Retry-After 头时，应更新 tier 的 rate limit deadline."""
+
+        from coding.proxy.routing.circuit_breaker import CircuitBreaker
+
+        vendor = _mock_vendor("zhipu")
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=429,
+                raw_body=b'{"error":{"type":"rate_limit_error","message":"rate limited"}}',
+                error_type="rate_limit_error",
+                error_message="rate limited",
+                response_headers={"retry-after": "60"},
+            )
+        )
+        vendor.should_trigger_failover.return_value = True
+
+        tier = _make_tier(vendor, circuit_breaker=CircuitBreaker())
+        exec_inst = _executor([tier])
+
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 429
+        # 验证 rate limit deadline 被更新
+        rl_info = tier.get_rate_limit_info()
+        assert rl_info["is_rate_limited"] is True
+        assert rl_info["remaining_seconds"] > 0
+
+    @pytest.mark.asyncio
+    async def test_non_last_tier_500_still_failovers(self):
+        """修复后，非最后一层 500 仍应正常触发故障转移到下一层."""
+        bad = _mock_vendor("zhipu")
+        bad.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=500,
+                raw_body=b'{"error":{"type":"api_error","message":"Internal Network Failure"}}',
+                error_type="api_error",
+                error_message="Internal Network Failure",
+            )
+        )
+        bad.should_trigger_failover.return_value = True
+
+        good = _mock_vendor("copilot")
+        good.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b'{"content":"ok"}',
+                usage=UsageInfo(input_tokens=1, output_tokens=1),
+            )
+        )
+
+        exec_inst = _executor([_make_tier(bad), _make_tier(good)])
+        resp = await exec_inst.execute_message({"model": "test"}, {})
+
+        assert resp.status_code == 200
+        assert good.send_message.called

@@ -6,7 +6,74 @@ from coding.proxy.routing.error_classifier import (
     build_request_capabilities,
     extract_error_payload_from_http_status,
     is_semantic_rejection,
+    is_structural_validation_error,
 )
+
+# --- is_structural_validation_error 测试 ---
+
+
+class TestIsStructuralValidationError:
+    """结构性验证错误判定测试."""
+
+    def test_tool_result_role_error(self):
+        assert (
+            is_structural_validation_error(
+                status_code=400,
+                error_message="messages.105: tool_result blocks can only be in user messages",
+            )
+            is True
+        )
+
+    def test_tool_use_role_error(self):
+        assert (
+            is_structural_validation_error(
+                status_code=400,
+                error_message="tool_use blocks can only be in assistant messages",
+            )
+            is True
+        )
+
+    def test_message_alternation_error(self):
+        assert (
+            is_structural_validation_error(
+                status_code=400,
+                error_message="messages must alternate between user and assistant",
+            )
+            is True
+        )
+
+    def test_thinking_block_error(self):
+        assert (
+            is_structural_validation_error(
+                status_code=400,
+                error_message="thinking blocks can only be in assistant messages",
+            )
+            is True
+        )
+
+    def test_non_400_not_structural(self):
+        assert (
+            is_structural_validation_error(
+                status_code=429,
+                error_message="tool_result blocks can only be in user messages",
+            )
+            is False
+        )
+
+    def test_generic_400_not_structural(self):
+        assert (
+            is_structural_validation_error(
+                status_code=400,
+                error_message="something went wrong",
+            )
+            is False
+        )
+
+    def test_none_message_safe(self):
+        assert (
+            is_structural_validation_error(status_code=400, error_message=None) is False
+        )
+
 
 # --- is_semantic_rejection 测试 ---
 
@@ -73,6 +140,39 @@ class TestIsSemanticRejection:
                 error_message="VALIDATION failed for field x",
             )
             is True
+        )
+
+    def test_structural_tool_result_error_not_semantic(self):
+        """tool_result 角色错位是结构性错误，不应视为语义拒绝."""
+        assert (
+            is_semantic_rejection(
+                status_code=400,
+                error_type="invalid_request_error",
+                error_message="messages.105: tool_result blocks can only be in user messages",
+            )
+            is False
+        )
+
+    def test_structural_alternation_error_not_semantic(self):
+        """消息交替违规是结构性错误，不应视为语义拒绝."""
+        assert (
+            is_semantic_rejection(
+                status_code=400,
+                error_type="invalid_request_error",
+                error_message="messages must alternate between user and assistant",
+            )
+            is False
+        )
+
+    def test_structural_tool_use_error_not_semantic(self):
+        """tool_use 角色错位是结构性错误，不应视为语义拒绝."""
+        assert (
+            is_semantic_rejection(
+                status_code=400,
+                error_type="invalid_request_error",
+                error_message="tool_use blocks can only be in assistant messages",
+            )
+            is False
         )
 
 

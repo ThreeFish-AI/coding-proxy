@@ -19,23 +19,33 @@ from ..auth.providers.google import (
 )
 from ..auth.store import TokenStoreManager
 from ..config.schema import (
+    AlibabaConfig,
     AnthropicConfig,
     AntigravityConfig,
     CircuitBreakerConfig,
     CopilotConfig,
+    DoubaoConfig,
     FailoverConfig,
+    KimiConfig,
+    MinimaxConfig,
     QuotaGuardConfig,
     TierConfig,
+    XiaomiConfig,
     ZhipuConfig,
 )
 from ..routing.circuit_breaker import CircuitBreaker
 from ..routing.model_mapper import ModelMapper
 from ..routing.quota_guard import QuotaGuard
 from ..routing.tier import VendorTier
+from ..vendors.alibaba import AlibabaVendor
 from ..vendors.anthropic import AnthropicVendor
 from ..vendors.antigravity import AntigravityVendor
 from ..vendors.base import BaseVendor
 from ..vendors.copilot import CopilotVendor
+from ..vendors.doubao import DoubaoVendor
+from ..vendors.kimi import KimiVendor
+from ..vendors.minimax import MinimaxVendor
+from ..vendors.xiaomi import XiaomiVendor
 from ..vendors.zhipu import ZhipuVendor
 
 # 向后兼容别名
@@ -150,7 +160,50 @@ def _create_vendor_from_config(
                 api_key=vendor_cfg.api_key,
                 timeout_ms=vendor_cfg.timeout_ms,
             )
-            return ZhipuVendor(cfg, mapper)
+            return ZhipuVendor(cfg, mapper, failover_cfg)
+        case "minimax":
+            cfg = MinimaxConfig(
+                enabled=vendor_cfg.enabled,
+                base_url=vendor_cfg.base_url or "https://api.minimaxi.com/anthropic",
+                api_key=vendor_cfg.api_key,
+                timeout_ms=vendor_cfg.timeout_ms,
+            )
+            return MinimaxVendor(cfg, mapper, failover_cfg)
+        case "kimi":
+            cfg = KimiConfig(
+                enabled=vendor_cfg.enabled,
+                base_url=vendor_cfg.base_url or "https://api.kimi.com/coding/",
+                api_key=vendor_cfg.api_key,
+                timeout_ms=vendor_cfg.timeout_ms,
+            )
+            return KimiVendor(cfg, mapper, failover_cfg)
+        case "doubao":
+            cfg = DoubaoConfig(
+                enabled=vendor_cfg.enabled,
+                base_url=vendor_cfg.base_url
+                or "https://ark.cn-beijing.volces.com/api/coding",
+                api_key=vendor_cfg.api_key,
+                timeout_ms=vendor_cfg.timeout_ms,
+            )
+            return DoubaoVendor(cfg, mapper, failover_cfg)
+        case "xiaomi":
+            cfg = XiaomiConfig(
+                enabled=vendor_cfg.enabled,
+                base_url=vendor_cfg.base_url
+                or "https://token-plan-cn.xiaomimimo.com/anthropic",
+                api_key=vendor_cfg.api_key,
+                timeout_ms=vendor_cfg.timeout_ms,
+            )
+            return XiaomiVendor(cfg, mapper, failover_cfg)
+        case "alibaba":
+            cfg = AlibabaConfig(
+                enabled=vendor_cfg.enabled,
+                base_url=vendor_cfg.base_url
+                or "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic",
+                api_key=vendor_cfg.api_key,
+                timeout_ms=vendor_cfg.timeout_ms,
+            )
+            return AlibabaVendor(cfg, mapper, failover_cfg)
         case _:
             raise ValueError(f"未知的 vendor 类型: {vendor_cfg.vendor!r}")
 

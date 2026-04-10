@@ -4,12 +4,28 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import aiosqlite
 
 logger = logging.getLogger(__name__)
+
+
+# ── 时间维度枚举 ──────────────────────────────────────────────
+
+
+class TimePeriod(StrEnum):
+    """用量查询时间维度."""
+
+    DAY = "day"
+    WEEK = "week"
+    MONTH = "month"
+    TOTAL = "total"
+
+
+# ── 时区工具函数 ──────────────────────────────────────────────
 
 
 def _local_tz() -> ZoneInfo:
@@ -40,6 +56,48 @@ def _hours_ago_utc_iso(hours: float) -> str:
     return cutoff.strftime("%Y-%m-%dT%H:%M:%f+00:00")
 
 
+def _weeks_start_utc_iso(weeks: int) -> str:
+    """计算本地时区下 weeks 周前的周一 00:00 对应的 UTC ISO 字符串."""
+    tz = _local_tz()
+    now = datetime.now(tz)
+    monday = now.date() - timedelta(days=now.weekday(), weeks=max(1, weeks) - 1)
+    start_dt = datetime(monday.year, monday.month, monday.day, tzinfo=tz)
+    return start_dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%f+00:00")
+
+
+def _months_start_utc_iso(months: int) -> str:
+    """计算本地时区下 months 个月前的 1 日 00:00 对应的 UTC ISO 字符串."""
+    tz = _local_tz()
+    now = datetime.now(tz)
+    y, m = now.year, now.month
+    m -= max(1, months) - 1
+    while m <= 0:
+        m += 12
+        y -= 1
+    start_dt = datetime(y, m, 1, tzinfo=tz)
+    return start_dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%f+00:00")
+
+
+def _period_start_iso(period: TimePeriod, count: int) -> str | None:
+    """根据时间维度和数量计算起始 UTC ISO 字符串.
+
+    Returns:
+        ISO 字符串，或 ``None``（``count == 0`` 或 TOTAL 维度时不限时间范围）。
+    """
+    if count == 0:
+        return None  # count=0 语义：不限时间
+    if period is TimePeriod.DAY:
+        return _days_start_utc_iso(count)
+    if period is TimePeriod.WEEK:
+        return _weeks_start_utc_iso(count)
+    if period is TimePeriod.MONTH:
+        return _months_start_utc_iso(count)
+    return None  # TOTAL: 全量查询
+
+
+# ── SQLite UDF ────────────────────────────────────────────────
+
+
 def _local_date_udf(ts_str: str) -> str:
     """
     SQLite UDF：将 UTC ISO 时间戳转为本地日期字符串.
@@ -62,6 +120,36 @@ def _local_date_udf(ts_str: str) -> str:
             return ts_str[:10]
         return ""
 
+
+def _local_week_udf(ts_str: str) -> str:
+    """SQLite UDF：将 UTC ISO 时间戳转为本地 ISO 周标识 (YYYY-WNN)."""
+    try:
+        tz = _local_tz()
+        return (
+            datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            .astimezone(tz)
+            .strftime("%G-W%V")
+        )
+    except (ValueError, TypeError, AttributeError):
+        return ""
+
+
+def _local_month_udf(ts_str: str) -> str:
+    """SQLite UDF：将 UTC ISO 时间戳转为本地年月标识 (YYYY-MM)."""
+    try:
+        tz = _local_tz()
+        return (
+            datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            .astimezone(tz)
+            .strftime("%Y-%m")
+        )
+    except (ValueError, TypeError, AttributeError):
+        if isinstance(ts_str, str) and len(ts_str) >= 7:
+            return ts_str[:7]
+        return ""
+
+
+# ── DDL ───────────────────────────────────────────────────────
 
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS usage_log (
@@ -104,6 +192,35 @@ CREATE INDEX IF NOT EXISTS idx_usage_evidence_request_id ON usage_evidence(reque
 CREATE INDEX IF NOT EXISTS idx_usage_evidence_vendor ON usage_evidence(vendor);
 """
 
+# ── 时间维度 → SQL 片段映射 ───────────────────────────────────
+
+_PERIOD_SQL: dict[TimePeriod, tuple[str, str, str]] = {
+    # (date_expr, group_by, order_by_expr)
+    TimePeriod.DAY: (
+        "local_date(ts) AS date",
+        "local_date(ts), vendor, model_served",
+        "local_date(ts) DESC, vendor, model_served",
+    ),
+    TimePeriod.WEEK: (
+        "local_week(ts) AS date",
+        "local_week(ts), vendor, model_served",
+        "local_week(ts) DESC, vendor, model_served",
+    ),
+    TimePeriod.MONTH: (
+        "local_month(ts) AS date",
+        "local_month(ts), vendor, model_served",
+        "local_month(ts) DESC, vendor, model_served",
+    ),
+    TimePeriod.TOTAL: (
+        "NULL AS date",
+        "vendor, model_served",
+        "vendor, model_served",
+    ),
+}
+
+
+# ── TokenLogger ───────────────────────────────────────────────
+
 
 class TokenLogger:
     def __init__(self, db_path: Path) -> None:
@@ -120,8 +237,10 @@ class TokenLogger:
         await self._migrate_rename_backend_to_vendor()
         await self._migrate_add_failover_from()
         await self._db.executescript(_CREATE_INDEXES)
-        # 注册时区感知的日期函数：将 UTC 时间戳转为本地日期
+        # 注册时区感知的日期函数：将 UTC 时间戳转为本地时间维度
         await self._db.create_function("local_date", 1, _local_date_udf)
+        await self._db.create_function("local_week", 1, _local_week_udf)
+        await self._db.create_function("local_month", 1, _local_month_udf)
         await self._db.commit()
 
     async def _migrate_add_failover_from(self) -> None:
@@ -248,14 +367,33 @@ class TokenLogger:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
-    async def query_daily(
-        self, days: int = 7, vendor: str | None = None, model: str | None = None
+    # ── 核心查询方法 ──────────────────────────────────────────
+
+    async def query_usage(
+        self,
+        *,
+        period: TimePeriod = TimePeriod.DAY,
+        count: int = 7,
+        vendor: str | list[str] | None = None,
+        model: str | list[str] | None = None,
     ) -> list[dict]:
+        """按指定时间维度聚合 Token 使用统计.
+
+        Args:
+            period: 时间维度（日/周/月/全量）。
+            count: ``period`` 的数量。仅用于计算起始时间边界，
+                   ``TOTAL`` 维度下忽略此参数。
+            vendor: 过滤供应商，支持单个字符串或字符串列表（多 vendor 过滤）。
+            model: 过滤实际服务模型（model_served），支持单个字符串或字符串列表。
+        """
         if not self._db:
             return []
-        days = max(1, days)
-        start_iso = _days_start_utc_iso(days)
-        sql = """SELECT local_date(ts) AS date, vendor, model_requested, model_served,
+
+        date_expr, group_clause, order_clause = _PERIOD_SQL[period]
+
+        sql = f"""SELECT {date_expr}, vendor,
+                   GROUP_CONCAT(DISTINCT model_requested) AS model_requested,
+                   model_served,
                    COUNT(*) AS total_requests,
                    SUM(input_tokens) AS total_input,
                    SUM(output_tokens) AS total_output,
@@ -263,56 +401,89 @@ class TokenLogger:
                    SUM(cache_read_tokens) AS total_cache_read,
                    SUM(CASE WHEN failover THEN 1 ELSE 0 END) AS total_failovers,
                    AVG(duration_ms) AS avg_duration_ms
-               FROM usage_log WHERE ts >= ?"""
-        params: list = [start_iso]
+               FROM usage_log WHERE 1=1"""
+
+        params: list = []
+
+        start_iso = _period_start_iso(period, count)
+        if start_iso is not None:
+            sql += " AND ts >= ?"
+            params.append(start_iso)
+
         if vendor:
-            sql += " AND vendor = ?"
-            params.append(vendor)
+            vendors = [vendor] if isinstance(vendor, str) else vendor
+            placeholders = ",".join("?" * len(vendors))
+            sql += f" AND vendor IN ({placeholders})"
+            params.extend(vendors)
         if model:
-            sql += " AND model_requested = ?"
-            params.append(model)
-        sql += (
-            " GROUP BY local_date(ts), vendor, model_requested, model_served"
-            " ORDER BY local_date(ts) DESC, vendor, model_requested, model_served"
-        )
+            models = [model] if isinstance(model, str) else model
+            placeholders = ",".join("?" * len(models))
+            sql += f" AND model_served IN ({placeholders})"
+            params.extend(models)
+
+        sql += f" GROUP BY {group_clause} ORDER BY {order_clause}"
+
         cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
-    async def query_failover_stats(
-        self, days: int = 7, include_model_info: bool = False
+    async def query_daily(
+        self,
+        days: int | None = 7,
+        vendor: str | None = None,
+        model: str | None = None,
     ) -> list[dict]:
-        """
-        按 failover_from → vendor 聚合故障转移次数.
+        """按日聚合 Token 使用统计.
 
         Args:
-            days: 查询天数
+            days: 查询天数。``None`` 表示不限时间（全量查询）。
+            vendor: 过滤供应商。
+            model: 过滤请求模型。
+        """
+        # days=None → count=0 → _period_start_iso 返回 None → 不限时间
+        count = 0 if days is None else days
+        return await self.query_usage(
+            period=TimePeriod.DAY, count=count, vendor=vendor, model=model
+        )
+
+    async def query_failover_stats(
+        self, days: int | None = 7, include_model_info: bool = False
+    ) -> list[dict]:
+        """按 failover_from → vendor 聚合故障转移次数.
+
+        Args:
+            days: 查询天数。``None`` 表示不限时间（全量查询）。
             include_model_info: 是否在聚合中包含模型信息
                               - False: 按 (failover_from, vendor) 聚合 (默认,向后兼容)
                               - True: 按 (failover_from, vendor, model_requested, model_served) 聚合
         """
         if not self._db:
             return []
-        days = max(1, days)
-        start_iso = _days_start_utc_iso(days)
+
+        time_clause = ""
+        params: list = []
+        if days is not None:
+            days = max(1, days)
+            start_iso = _days_start_utc_iso(days)
+            time_clause = " AND ts >= ?"
+            params.append(start_iso)
 
         if include_model_info:
-            sql = """SELECT failover_from, vendor, model_requested, model_served,
+            sql = f"""SELECT failover_from, vendor, model_requested, model_served,
                        COUNT(*) AS count
                    FROM usage_log
-                   WHERE failover = 1 AND ts >= ?
+                   WHERE failover = 1{time_clause}
                    GROUP BY failover_from, vendor, model_requested, model_served
                    ORDER BY count DESC"""
         else:
-            # 保持原有的聚合逻辑确保向后兼容
-            sql = """SELECT failover_from, vendor,
+            sql = f"""SELECT failover_from, vendor,
                        COUNT(*) AS count
                    FROM usage_log
-                   WHERE failover = 1 AND ts >= ?
+                   WHERE failover = 1{time_clause}
                    GROUP BY failover_from, vendor
                    ORDER BY count DESC"""
 
-        cursor = await self._db.execute(sql, [start_iso])
+        cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 

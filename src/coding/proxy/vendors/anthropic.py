@@ -43,13 +43,62 @@ def _strip_thinking_blocks(body: dict[str, Any]) -> int:
         ]
         removed = original_len - len(new_content)
         if removed and not new_content:
-            logger.warning(
-                "anthropic: assistant message content became empty after "
-                "stripping %d thinking block(s); this may cause API errors",
+            # 剥离所有 thinking blocks 后 content 为空 ——
+            # Anthropic API 要求非末尾 assistant message 的 content 必须非空。
+            # 插入最小占位 text block 以保持消息结构合法性。
+            new_content = [{"type": "text", "text": "[thinking]"}]
+            logger.info(
+                "anthropic: inserted placeholder text block after stripping "
+                "%d thinking block(s) to avoid empty assistant content",
                 removed,
             )
         message["content"] = new_content
         stripped += removed
+    return stripped
+
+
+def _strip_misplaced_tool_results(body: dict[str, Any]) -> int:
+    """从非 user 角色的消息中剥离 tool_result blocks（纵深防御）.
+
+    Anthropic API 严格要求 ``tool_result`` blocks 只能出现在 ``user`` messages 中。
+    跨供应商迁移场景（如 Zhipu GLM → Anthropic），GLM-5 可能在 assistant 响应中
+    同时包含 ``tool_use`` 和 ``tool_result`` 内容块，导致 Claude Code 将其存入
+    conversation history 后，后续请求的 assistant message 中包含 ``tool_result``。
+
+    请求规范化层（``request_normalizer.py``）已处理此场景，本函数提供纵深防御。
+
+    Returns:
+        被移除的 tool_result block 数量。
+    """
+    stripped = 0
+    for message in body.get("messages", []):
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role == "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        original_len = len(content)
+        new_content = [
+            block
+            for block in content
+            if not (isinstance(block, dict) and block.get("type") == "tool_result")
+        ]
+        removed = original_len - len(new_content)
+        if removed:
+            if not new_content:
+                # 剥离所有 tool_result 后 content 为空，插入占位 text block
+                new_content = [{"type": "text", "text": ""}]
+                logger.info(
+                    "anthropic: inserted empty text placeholder after stripping "
+                    "%d misplaced tool_result block(s) from %s message",
+                    removed,
+                    role,
+                )
+            message["content"] = new_content
+            stripped += removed
     return stripped
 
 
@@ -82,17 +131,26 @@ class AnthropicVendor(BaseVendor):
         request_body: dict[str, Any],
         headers: dict[str, str],
     ) -> tuple[dict[str, Any], dict[str, str]]:
-        """深拷贝请求体、剥离历史 thinking blocks，过滤无关请求头.
+        """深拷贝请求体、剥离历史 thinking blocks 和错位的 tool_result blocks，过滤无关请求头.
 
         深拷贝确保 Anthropic 的请求体修改不会污染后续 tier 的输入。
         剥离 thinking blocks 防止跨供应商 signature 不兼容导致 400 错误。
+        剥离错位的 tool_result blocks 防止跨供应商 tool_result 放置位置不合规导致 400 错误。
         """
         body = copy.deepcopy(request_body)
-        stripped = _strip_thinking_blocks(body)
-        if stripped:
+        stripped_thinking = _strip_thinking_blocks(body)
+        if stripped_thinking:
             logger.debug(
                 "anthropic: stripped %d thinking block(s) from conversation history",
-                stripped,
+                stripped_thinking,
+            )
+
+        stripped_tool_results = _strip_misplaced_tool_results(body)
+        if stripped_tool_results:
+            logger.info(
+                "anthropic: stripped %d misplaced tool_result block(s) from "
+                "conversation history (defense-in-depth)",
+                stripped_tool_results,
             )
 
         filtered = {

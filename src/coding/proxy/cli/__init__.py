@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import typer
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 from rich.console import Console
 
 from ..config.loader import load_config
-from ..logging.db import TokenLogger
+from ..logging.db import TimePeriod, TokenLogger
 from ..logging.stats import show_usage
 from .auth_commands import app as auth_app
 from .auth_commands import auto_login_if_needed as _auto_login_if_needed
@@ -48,6 +48,29 @@ def _build_token_store(cfg_path: Path | None = None):
     return cfg, store
 
 
+def _resolve_period(
+    *,
+    days: int = 7,
+    week: int | None = None,
+    month: int | None = None,
+    total: bool = False,
+) -> tuple[TimePeriod, int]:
+    """将互斥的时间维度标志解析为 (TimePeriod, count) 元组.
+
+    优先级: ``-t`` > ``-m`` > ``-w`` > ``-d``。
+
+    Returns:
+        ``(period, count)`` 元组。``count`` 表示查询最近第 N 个周期的数据。
+    """
+    if total:
+        return TimePeriod.TOTAL, 1
+    if month is not None:
+        return TimePeriod.MONTH, max(1, month)
+    if week is not None:
+        return TimePeriod.WEEK, max(1, week)
+    return TimePeriod.DAY, max(1, days)
+
+
 # ── 主命令 ─────────────────────────────────────────────────────
 
 
@@ -61,6 +84,7 @@ def start(
     import uvicorn
 
     from ..server.app import create_app
+    from .banner import print_banner
 
     cfg_path = _resolve_config_path(config)
     cfg = load_config(cfg_path)
@@ -76,6 +100,10 @@ def start(
     from ..logging import build_log_config
 
     fastapi_app = create_app(cfg)
+
+    # 打印启动品牌横幅
+    print_banner(console, host=cfg.server.host, port=cfg.server.port)
+
     uvicorn.run(
         fastapi_app,
         host=cfg.server.host,
@@ -113,29 +141,68 @@ def status(
 
 @app.command()
 def usage(
-    days: int = typer.Option(7, "--days", "-d", help="统计天数"),
+    days: int = typer.Option(7, "--days", "-d", help="统计天数（与 -w/-m/-t 互斥）"),
+    week: int | None = typer.Option(
+        None, "--week", "-w", help="最近第 N 周统计（按周聚合，默认 1）"
+    ),
+    month: int | None = typer.Option(
+        None, "--month", "-m", help="最近第 N 月统计（按月聚合，默认 1）"
+    ),
+    total: bool = typer.Option(False, "--total", "-t", help="统计全部历史记录"),
     vendor: str | None = typer.Option(None, "--vendor", "-v", help="过滤供应商"),
-    model: str | None = typer.Option(None, "--model", "-m", help="过滤请求模型"),
+    model: str | None = typer.Option(
+        None, "--model", help="过滤实际服务模型（model_served），逗号分隔可指定多个"
+    ),
     db_path: str | None = typer.Option(None, "--db", help="数据库路径"),
 ) -> None:
-    """查看 Token 使用统计."""
+    """查看 Token 使用统计.
+
+    时间维度（互斥，优先级 -t > -m > -w > -d）：
+
+      \b
+      -d 7         最近 7 天（默认，按日聚合）
+      -w [N]       最近第 N 周（按周聚合，默认 1＝本周）
+      -m [N]       最近第 N 月（按月聚合，默认 1＝本月）
+      -t           全部历史（按供应商+模型聚合）
+    """
+    period, count = _resolve_period(days=days, week=week, month=month, total=total)
     cfg = load_config(Path(db_path) if db_path else None)
     token_logger = TokenLogger(cfg.db_path)
-    asyncio.run(_run_usage(token_logger, days, vendor, model, cfg))
+    # 解析逗号分隔的多 vendor（如 "anthropic,zhipu" → ["anthropic", "zhipu"]）
+    vendor_filter: str | list[str] | None = None
+    if vendor:
+        parts = [v.strip() for v in vendor.split(",") if v.strip()]
+        vendor_filter = parts[0] if len(parts) == 1 else parts
+    # 解析逗号分隔的多 model（如 "glm-5,glm-5.1" → ["glm-5", "glm-5.1"]）
+    model_filter: str | list[str] | None = None
+    if model:
+        parts = [m.strip() for m in model.split(",") if m.strip()]
+        model_filter = parts[0] if len(parts) == 1 else parts
+    asyncio.run(
+        _run_usage(token_logger, period, count, vendor_filter, model_filter, cfg)
+    )
 
 
 async def _run_usage(
     token_logger: TokenLogger,
-    days: int,
-    vendor: str | None,
-    model: str | None,
+    period: TimePeriod,
+    count: int,
+    vendor: str | list[str] | None,
+    model: str | list[str] | None,
     cfg: ProxyConfig,
 ) -> None:
     from ..pricing import PricingTable
 
     await token_logger.init()
     pricing_table = PricingTable(cfg.pricing)
-    await show_usage(token_logger, days, vendor, model, pricing_table)
+    await show_usage(
+        token_logger,
+        vendor=vendor,
+        model=model,
+        pricing_table=pricing_table,
+        period=period,
+        count=count,
+    )
     await token_logger.close()
 
 

@@ -39,6 +39,11 @@ class RouteSessionManager:
             "copilot": "openai_chat_completions",
             "antigravity": "gemini_generate_content",
             "zhipu": "anthropic_messages",
+            "minimax": "anthropic_messages",
+            "kimi": "anthropic_messages",
+            "doubao": "anthropic_messages",
+            "xiaomi": "anthropic_messages",
+            "alibaba": "anthropic_messages",
             "anthropic": "anthropic_messages",
         }.get(tier.name, "unknown")
         compat_trace = CompatibilityTrace(

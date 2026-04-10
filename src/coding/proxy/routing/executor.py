@@ -18,11 +18,12 @@ from ..vendors.base import (
     RequestCapabilities,
     VendorResponse,
 )
-from ..vendors.token_manager import TokenAcquireError
+from ..vendors.token_manager import TokenAcquireError, TokenErrorKind
 from .error_classifier import (
     build_request_capabilities,
     extract_error_payload_from_http_status,
     is_semantic_rejection,
+    is_structural_validation_error,
 )
 from .rate_limit import (
     compute_effective_retry_seconds,
@@ -95,6 +96,36 @@ def _has_tool_results(body: dict[str, Any]) -> bool:
     return False
 
 
+def _is_likely_request_format_error(
+    status_code: int,
+    error_body_text: str | None,
+    body: dict[str, Any],
+) -> bool:
+    """判断 HTTP 错误是否可能由请求格式不兼容导致（而非供应商故障）.
+
+    当请求包含 tool_result 且供应商返回 400 时，极大概率是消息格式转换
+    问题（如 tool_result 错位、字段缺失等），此类错误不应计入熔断器，
+    因为重试同一格式的请求必然再次失败。
+
+    此函数是 :func:`is_semantic_rejection` 的补充——后者依赖结构化 error body
+    （JSON），而部分供应商（如 Copilot）的 400 响应可能是纯文本 ``Bad Request``。
+    """
+    if status_code != 400:
+        return False
+    if not _has_tool_results(body):
+        return False
+    # 400 + 有 tool_result + 无法解析为结构化错误 → 高概率格式问题
+    if error_body_text is not None:
+        trimmed = error_body_text.strip().lower()
+        # 纯文本 400 响应（Copilot 等）或无意义的错误体
+        if trimmed in ("bad request", "bad request\n", ""):
+            return True
+        # 非结构化响应体（非 JSON）
+        if not trimmed.startswith("{") and len(trimmed) < 200:
+            return True
+    return False
+
+
 def _log_vendor_response_error(
     tier_name: str,
     resp: VendorResponse,
@@ -137,6 +168,11 @@ def _log_vendor_response_error(
 _VENDOR_PROTOCOL_LABEL_MAP: dict[str, str] = {
     "anthropic": "Anthropic",
     "zhipu": "Anthropic",
+    "minimax": "Anthropic",
+    "kimi": "Anthropic",
+    "doubao": "Anthropic",
+    "xiaomi": "Anthropic",
+    "alibaba": "Anthropic",
     "copilot": "OpenAI",
     "antigravity": "Gemini",
 }
@@ -280,12 +316,30 @@ class _RouteExecutor:
                     failed_tier_name,
                     last_exc,
                 ) = await self._handle_http_error(
-                    tier, exc, is_last, failed_tier_name, last_exc, is_stream=True
+                    tier,
+                    exc,
+                    is_last,
+                    failed_tier_name,
+                    last_exc,
+                    is_stream=True,
+                    request_body=body,
                 )
                 if should_continue:
                     continue
                 if is_last:
                     raise
+                # 结构性验证错误（如 tool_result 角色错位）不应级联到下一层：
+                # 同样的畸形请求转发到其他供应商只会重复失败。
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+                    if is_structural_validation_error(
+                        status_code=exc.response.status_code,
+                        error_message=self._extract_error_message_from_http_status(exc),
+                    ):
+                        logger.info(
+                            "Tier %s structural validation error, stopping failover",
+                            tier.name,
+                        )
+                        raise
             except Exception as exc:
                 logger.error(
                     "Tier %s stream unexpected error: %s: %s",
@@ -374,11 +428,26 @@ class _RouteExecutor:
                     return resp
 
                 # 非流式的 semantic rejection 和 failover 判断（从响应对象而非异常中提取）
-                if not is_last and is_semantic_rejection(
+                is_semantic = is_semantic_rejection(
                     status_code=resp.status_code,
                     error_type=resp.error_type,
                     error_message=resp.error_message,
+                )
+                # 补充检测：400 + 有 tool_result + 无结构化错误体 → 格式不兼容
+                # （覆盖 Copilot 等返回纯文本 "Bad Request" 的场景）
+                if not is_semantic and _is_likely_request_format_error(
+                    status_code=resp.status_code,
+                    error_body_text=(resp.error_message or "")[:500],
+                    body=body,
                 ):
+                    is_semantic = True
+                    logger.warning(
+                        "Tier %s likely format incompatibility (400 + tool_results), "
+                        "trying next tier without recording failure",
+                        tier.name,
+                    )
+
+                if not is_last and is_semantic:
                     logger.warning(
                         "Tier %s semantic rejection (%s), trying next tier without recording failure",
                         tier.name,
@@ -387,13 +456,10 @@ class _RouteExecutor:
                     failed_tier_name = tier.name
                     continue
 
-                if not is_last and tier.vendor.should_trigger_failover(
+                if tier.vendor.should_trigger_failover(
                     resp.status_code,
                     {"error": {"type": resp.error_type, "message": resp.error_message}},
                 ):
-                    logger.warning(
-                        "Tier %s error %d, failing over", tier.name, resp.status_code
-                    )
                     rl_info = parse_rate_limit_headers(
                         resp.response_headers, resp.status_code, resp.error_message
                     )
@@ -402,8 +468,14 @@ class _RouteExecutor:
                         retry_after_seconds=compute_effective_retry_seconds(rl_info),
                         rate_limit_deadline=compute_rate_limit_deadline(rl_info),
                     )
-                    failed_tier_name = tier.name
-                    continue
+                    if not is_last:
+                        logger.warning(
+                            "Tier %s error %d, failing over",
+                            tier.name,
+                            resp.status_code,
+                        )
+                        failed_tier_name = tier.name
+                        continue
 
                 # 最后一层或不可 failover 的错误：记录并返回原始响应
                 _log_vendor_response_error(tier.name, resp, body, is_stream=False)
@@ -530,9 +602,27 @@ class _RouteExecutor:
         is_last: bool,
         failed_tier_name: str | None,
     ) -> tuple[str | None, Exception]:
-        """处理 TokenAcquireError 的共享逻辑."""
-        logger.warning("Tier %s credential expired: %s", tier.name, exc)
-        tier.record_failure()
+        """处理 TokenAcquireError 的共享逻辑.
+
+        特殊处理：
+        - ``INSUFFICIENT_SCOPE`` / ``INVALID_CREDENTIALS`` 属于永久性凭证问题，
+          重试无意义，因此**不记录熔断器失败**，避免级联 OPEN 阻塞恢复。
+        - 其他临时性错误（网络超时等）正常计入熔断器。
+        """
+        logger.warning("Tier %s credential error: %s", tier.name, exc)
+        is_permanent = exc.kind in (
+            TokenErrorKind.INSUFFICIENT_SCOPE,
+            TokenErrorKind.INVALID_CREDENTIALS,
+        )
+        if not is_permanent:
+            tier.record_failure()
+        else:
+            logger.info(
+                "Tier %s permanent credential issue (%s), "
+                "skipping circuit breaker failure recording",
+                tier.name,
+                exc.kind.value,
+            )
         if exc.needs_reauth and self._reauth_coordinator:
             provider = self._tier_provider_map.get(tier.name)
             if provider:
@@ -548,6 +638,7 @@ class _RouteExecutor:
         last_exc: Exception | None,
         *,
         is_stream: bool = False,
+        request_body: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None, Exception | None]:
         """处理 HTTP 错误的共享逻辑（流式路径）.
 
@@ -563,11 +654,29 @@ class _RouteExecutor:
                 error_type=error.get("type") if isinstance(error, dict) else None,
                 error_message=error.get("message") if isinstance(error, dict) else None,
             )
-            if semantic_rejection and not is_last:
+
+            # 补充检测：400 + 有 tool_result + 非结构化错误体 → 格式不兼容
+            # （如 Copilot 返回纯文本 "Bad Request\n"）
+            # 此类错误不应计入熔断器，因为重试同一请求必然再次失败。
+            if (
+                not semantic_rejection
+                and request_body is not None
+                and _is_likely_request_format_error(
+                    status_code=exc.response.status_code,
+                    error_body_text=exc.response.text[:500]
+                    if exc.response.text
+                    else None,
+                    body=request_body,
+                )
+            ):
+                semantic_rejection = True
                 logger.warning(
-                    "Tier %s semantic rejection, trying next tier without recording failure",
+                    "Tier %s likely format incompatibility (400 + tool_results), "
+                    "trying next tier without recording failure",
                     tier.name,
                 )
+
+            if semantic_rejection and not is_last:
                 return True, tier.name, exc
 
             rl_info = parse_rate_limit_headers(
@@ -592,3 +701,21 @@ class _RouteExecutor:
             return False
         msg = (resp.error_message or "").lower()
         return any(p in msg for p in ("usage cap", "quota", "limit exceeded"))
+
+    @staticmethod
+    def _extract_error_message_from_http_status(
+        exc: httpx.HTTPStatusError,
+    ) -> str | None:
+        """从 HTTPStatusError 中提取错误消息文本."""
+        if exc.response is None or not exc.response.content:
+            return None
+        try:
+            payload = exc.response.json()
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        error = payload.get("error", {})
+        if isinstance(error, dict):
+            return error.get("message")
+        return None

@@ -26,12 +26,12 @@ logging:
 # 示例 3：将 zhipu 提升为首选，anthropic 作为后备
 #   tiers: ["zhipu", "anthropic"]
 
-tiers: ["anthropic", "copilot", "antigravity", "zhipu"]
+tiers: ["zhipu", "anthropic", "copilot", "antigravity"]
 
 # === 供应商定义（vendors 列表） ===
 #
 # 每个 vendor 通过 vendor 字段指定供应商类型：
-#   anthropic | copilot | antigravity | zhipu
+#   anthropic | zhipu | minimax | alibaba | xiaomi | kimi | doubao | copilot | antigravity
 #
 # 优先级规则：
 #   - 若配置了 tiers，以其指定的顺序为准
@@ -101,6 +101,7 @@ vendors:
 
   # Vendor 3: 智谱 GLM（终端兜底，无 circuit_breaker）
   - vendor: zhipu
+    enabled: true
     base_url: "https://open.bigmodel.cn/api/anthropic"
     api_key: "${ZHIPU_API_KEY}"
     timeout_ms: 3000000
@@ -116,15 +117,102 @@ vendors:
       threshold_percent: 95.0
       probe_interval_seconds: 300
 
+  # Vendor 4: MiniMax（默认禁用，需手动启用并添加到 tiers）
+  - vendor: minimax
+    enabled: false
+    base_url: "https://api.minimaxi.com/anthropic"
+    api_key: "${MINIMAX_API_KEY}"
+    timeout_ms: 3000000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 1000000000
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+  # Vendor 5: 阿里 Qwen（默认禁用）
+  - vendor: alibaba
+    enabled: false
+    base_url: "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic"
+    api_key: "${ALIBABA_API_KEY}"
+    timeout_ms: 3000000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 1000000000
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+  # Vendor 6: 小米 MiMo（默认禁用）
+  - vendor: xiaomi
+    enabled: false
+    base_url: "https://token-plan-cn.xiaomimimo.com/anthropic"
+    api_key: "${XIAOMI_API_KEY}"
+    timeout_ms: 3000000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 1000000000
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+  # Vendor 7: Kimi（默认禁用）
+  - vendor: kimi
+    enabled: false
+    base_url: "https://api.kimi.com/coding/"
+    api_key: "${KIMI_API_KEY}"
+    timeout_ms: 3000000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 1000000000
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+  # Vendor 8: 豆包 Doubao（默认禁用）
+  - vendor: doubao
+    enabled: false
+    base_url: "https://ark.cn-beijing.volces.com/api/coding"
+    api_key: "${ARK_API_KEY}"
+    timeout_ms: 3000000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 1000000000
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
 # === 故障转移触发条件 ===
 failover:
-  status_codes: [429, 403, 503, 500]
+  status_codes: [429, 403, 503, 500, 529]
   error_types:
     - "rate_limit_error"
     - "overloaded_error"
+    - "api_error"
   error_message_patterns:
     - "quota"
     - "usage cap"
+    - "internal network failure"
 
 # === 模型映射 ===
 model_mapping:
@@ -158,11 +246,76 @@ model_mapping:
     is_regex: true
   - pattern: "claude-opus-.*"
     vendors: ["zhipu"]
-    target: "glm-5v-turbo"
+    target: "glm-5.1"
     is_regex: true
   - pattern: "claude-haiku-.*"
     vendors: ["zhipu"]
     target: "glm-4.5-air"
+    is_regex: true
+  # MiniMax 模型映射（原生 Anthropic 兼容端点）
+  - pattern: "claude-sonnet-.*"
+    vendors: ["minimax"]
+    target: "minimax-m2.7"
+    is_regex: true
+  - pattern: "claude-opus-.*"
+    vendors: ["minimax"]
+    target: "minimax-m2.7"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["minimax"]
+    target: "minimax-m2.7"
+    is_regex: true
+  # 阿里 Qwen 模型映射（原生 Anthropic 兼容端点）
+  - pattern: "claude-sonnet-.*"
+    vendors: ["alibaba"]
+    target: "qwen3.6-plus"
+    is_regex: true
+  - pattern: "claude-opus-.*"
+    vendors: ["alibaba"]
+    target: "qwen3.6-plus"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["alibaba"]
+    target: "qwen3.6-plus"
+    is_regex: true
+  # 小米 MiMo 模型映射（原生 Anthropic 兼容端点）
+  - pattern: "claude-sonnet-.*"
+    vendors: ["xiaomi"]
+    target: "mimo-v2-pro"
+    is_regex: true
+  - pattern: "claude-opus-.*"
+    vendors: ["xiaomi"]
+    target: "mimo-v2-pro"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["xiaomi"]
+    target: "mimo-v2-pro"
+    is_regex: true
+  # Kimi 模型映射（原生 Anthropic 兼容端点）
+  - pattern: "claude-sonnet-.*"
+    vendors: ["kimi"]
+    target: "kimi-k2.5"
+    is_regex: true
+  - pattern: "claude-opus-.*"
+    vendors: ["kimi"]
+    target: "kimi-k2.5"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["kimi"]
+    target: "kimi-k2.5"
+    is_regex: true
+  # 豆包 Doubao 模型映射（三个不同模型对应不同 Claude 模型槽位）
+  - pattern: "claude-opus-.*"
+    vendors: ["doubao"]
+    target: "doubao-seed-2.0-code"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    vendors: ["doubao"]
+    target: "doubao-seed-2.0-pro"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["doubao"]
+    target: "doubao-seed-2.0-lite"
     is_regex: true
 
 # === 模型定价（USD / 1M tokens） ===
@@ -247,7 +400,7 @@ pricing:
   - vendor: zhipu
     model: glm-4.5-air # 待区分长短上下文定价
     input_cost_per_mtok: ¥0.80
-    output_cost_per_mtok: ¥6.00
+    output_cost_per_mtok: ¥2.00
     cache_read_cost_per_mtok: ¥0.16
   - vendor: zhipu
     model: glm-5v-turbo # 待区分长短上下文定价
@@ -256,9 +409,9 @@ pricing:
     cache_read_cost_per_mtok: ¥1.20
   - vendor: zhipu
     model: glm-5.1 # 待区分长短上下文定价
-    input_cost_per_mtok: ¥4.00
-    output_cost_per_mtok: ¥18.00
-    cache_read_cost_per_mtok: ¥1.00
+    input_cost_per_mtok: ¥6.00
+    output_cost_per_mtok: ¥24.00
+    cache_read_cost_per_mtok: ¥1.30
   - vendor: zhipu
     model: glm-5-turbo # 待区分长短上下文定价
     input_cost_per_mtok: ¥5.00
@@ -269,6 +422,64 @@ pricing:
     input_cost_per_mtok: ¥4.00
     output_cost_per_mtok: ¥18.00
     cache_read_cost_per_mtok: ¥1.00
+  # ── MiniMax ──
+  - vendor: minimax
+    model: minimax-m2.7
+    input_cost_per_mtok: ¥2.10
+    output_cost_per_mtok: ¥8.40
+    cache_write_cost_per_mtok: ¥2.625
+    cache_read_cost_per_mtok: ¥0.42
+  - vendor: minimax
+    model: minimax-m2.5
+    input_cost_per_mtok: ¥2.10
+    output_cost_per_mtok: ¥8.40
+    cache_write_cost_per_mtok: ¥2.625
+    cache_read_cost_per_mtok: ¥0.21
+  # ── 阿里 Qwen ──
+  - vendor: alibaba
+    model: qwen3.6-plus
+    input_cost_per_mtok: $0.276
+    output_cost_per_mtok: $1.651
+  # ── 小米 MiMo ──
+  - vendor: xiaomi
+    model: mimo-v2-pro
+    input_cost_per_mtok: ¥7.00
+    output_cost_per_mtok: ¥21.00
+    cache_read_cost_per_mtok: ¥1.40
+  - vendor: xiaomi
+    model: mimo-v2-omni
+    input_cost_per_mtok: ¥2.80
+    output_cost_per_mtok: ¥14.00
+    cache_read_cost_per_mtok: ¥0.56
+  - vendor: xiaomi
+    model: mimo-v2-flash
+    input_cost_per_mtok: ¥0.70
+    output_cost_per_mtok: ¥2.10
+    cache_read_cost_per_mtok: ¥0.07
+  # ── Kimi ──
+  - vendor: kimi
+    model: kimi-k2.5
+    input_cost_per_mtok: $0.60
+    output_cost_per_mtok: $3.00
+  # ── 豆包 Doubao ──
+  - vendor: doubao
+    model: doubao-seed-2.0-code
+    input_cost_per_mtok: ¥3.20
+    output_cost_per_mtok: ¥16.00
+    cache_write_cost_per_mtok: ¥0.64
+    cache_read_cost_per_mtok: ¥0.017
+  - vendor: doubao
+    model: doubao-seed-2.0-pro
+    input_cost_per_mtok: ¥3.20
+    output_cost_per_mtok: ¥16.00
+    cache_write_cost_per_mtok: ¥0.64
+    cache_read_cost_per_mtok: ¥0.017
+  - vendor: doubao
+    model: doubao-seed-2.0-lite
+    input_cost_per_mtok: ¥0.60
+    output_cost_per_mtok: ¥3.60
+    cache_write_cost_per_mtok: ¥0.12
+    cache_read_cost_per_mtok: ¥0.017
 
 database:
   path: "~/.coding-proxy/usage.db"
