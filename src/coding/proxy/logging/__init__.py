@@ -98,7 +98,7 @@ def build_log_config(
             },
             "access": {
                 "()": "uvicorn.logging.AccessFormatter",
-                'fmt': '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s',
+                "fmt": '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s',
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
         },
@@ -157,7 +157,12 @@ def build_log_config(
 
         # 为每个 logger 添加 file handler
         # 注意：uvicorn.error 无 handlers 键（通过 propagate 继承 uvicorn 的 handler）
-        for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access", "coding.proxy"):
+        for logger_name in (
+            "uvicorn",
+            "uvicorn.error",
+            "uvicorn.access",
+            "coding.proxy",
+        ):
             logger_cfg = config["loggers"][logger_name]
             handlers = logger_cfg.get("handlers", [])
             if isinstance(handlers, list):
