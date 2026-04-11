@@ -22,3 +22,6 @@ junit.xml
 config.yaml
 .claude/.prompts.md
 .python-version
+
+# Log files (dual-write logging)
+coding-proxy.log*

@@ -8,6 +8,9 @@ server:
 
 logging:
   level: "INFO"
+  # file: "coding-proxy.log"          # 文件日志路径；设为 null 或空字符串禁用
+  # max_bytes: 5242880                # 单文件上限（5 MB），触发轮转
+  # backup_count: 5                   # 保留 gzip 压缩备份文件数
 
 # === 降级链路优先级（可选） ===
 #
