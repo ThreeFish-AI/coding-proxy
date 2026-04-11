@@ -155,11 +155,33 @@ class VendorTier:
         if not is_probe_scenario:
             return cb_allows and qg_allows and wqg_allows
 
+        # 构建探测上下文摘要
+        probe_context_parts: list[str] = []
+        if self.circuit_breaker:
+            cb_info = self.circuit_breaker.get_info()
+            probe_context_parts.append(
+                f"circuit_breaker={cb_info['state']}, "
+                f"failures={cb_info['failure_count']}"
+            )
+        if self._rate_limit_deadline > 0:
+            waited = int(time.monotonic() - self._rate_limit_deadline)
+            probe_context_parts.append(f"rate_limit_waited={waited}s")
+        probe_context = (
+            " (" + ", ".join(probe_context_parts) + ")" if probe_context_parts else ""
+        )
+
         # ── 第二层: Health Check 门控 ──
-        logger.info("Tier %s: probe scenario, running health check", self.name)
+        logger.info(
+            "Tier %s: probe scenario%s, running health check",
+            self.name,
+            probe_context,
+        )
         healthy = await self.vendor.check_health()
         if not healthy:
-            logger.warning("Tier %s: health check failed, staying degraded", self.name)
+            logger.warning(
+                "Tier %s: health check failed, staying degraded",
+                self.name,
+            )
             self.record_failure()
             return False
 

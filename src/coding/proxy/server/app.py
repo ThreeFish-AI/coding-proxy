@@ -106,7 +106,9 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             vendor_cfg, config.failover, mapper, token_store
         )
         cb = (
-            _build_circuit_breaker(vendor_cfg.circuit_breaker)
+            _build_circuit_breaker(
+                vendor_cfg.circuit_breaker, vendor_name=vendor_cfg.vendor
+            )
             if vendor_cfg.circuit_breaker
             else None
         )
