@@ -1,6 +1,6 @@
 """日志模块.
 
-提供 uvicorn 兼容的 dictConfig 构建、JSON 结构化格式化器、
+提供 uvicorn 兼容的 dictConfig 构建、文件日志字符串格式化器、
 以及 gzip 压缩轮转支持。
 """
 
@@ -12,7 +12,7 @@ import logging.handlers
 import os
 from pathlib import Path
 
-from .formatters import JsonFormatter
+from .formatters import FileFormatter
 
 # ── 常量 ────────────────────────────────────────────────────────
 
@@ -83,7 +83,7 @@ def build_log_config(
 
     双写行为：
         - 控制台：人类可读格式，级别由 ``level`` 参数控制（handler 级别过滤）
-        - 文件：JSON 结构化格式，固定 DEBUG 级别（捕获所有日志）
+        - 文件：字符串格式（与控制台风格一致），固定 DEBUG 级别（捕获所有日志）
         - 当 ``file_path`` 为 ``None`` 或空字符串时，退化为纯控制台模式（向后兼容）
     """
     config: dict = {
@@ -138,16 +138,16 @@ def build_log_config(
         log_file = Path(file_path)
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # 注入 JSON formatter
-        config["formatters"]["json"] = {
-            "()": "coding.proxy.logging.formatters.JsonFormatter",
+        # 注入文件日志字符串 formatter
+        config["formatters"]["file_fmt"] = {
+            "()": "coding.proxy.logging.formatters.FileFormatter",
         }
 
         # 注入 RotatingFileHandler（gzip 压缩轮转）
         # 使用工厂函数（而非 class + namer/rotator kwargs），
         # 因为 dictConfig 不支持将 namer/rotator 作为构造参数传递
         config["handlers"]["file"] = {
-            "formatter": "json",
+            "formatter": "file_fmt",
             "()": "coding.proxy.logging._create_rotating_file_handler",
             "filename": str(log_file.resolve()),
             "maxBytes": max_bytes,
@@ -182,7 +182,7 @@ def build_log_config(
 
 __all__ = [
     "build_log_config",
-    "JsonFormatter",
+    "FileFormatter",
     "_gzip_namer",
     "_gzip_rotator",
 ]
