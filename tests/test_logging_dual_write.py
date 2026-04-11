@@ -1,7 +1,7 @@
 """双写日志系统单元测试.
 
 覆盖：
-1. JsonFormatter 输出格式验证
+1. FileFormatter 字符串输出格式验证
 2. build_log_config 无 file_path 时的向后兼容性
 3. build_log_config 有 file_path 时的双写配置生成
 4. handler 级别过滤（console=INFO, file=DEBUG）
@@ -12,24 +12,23 @@
 from __future__ import annotations
 
 import gzip
-import json
 import logging
 import logging.config
 
 from coding.proxy.config.server import LoggingConfig
 from coding.proxy.logging import (
-    JsonFormatter,
+    FileFormatter,
     _gzip_namer,
     _gzip_rotator,
     build_log_config,
 )
 
-# ── JsonFormatter 测试 ──────────────────────────────────────────
+# ── FileFormatter 测试 ──────────────────────────────────────────
 
 
-class TestJsonFormatter:
-    def test_basic_output_is_valid_json(self):
-        fmt = JsonFormatter()
+class TestFileFormatter:
+    def test_basic_output_contains_level_and_message(self):
+        fmt = FileFormatter()
         record = logging.LogRecord(
             name="test.logger",
             level=logging.INFO,
@@ -40,14 +39,11 @@ class TestJsonFormatter:
             exc_info=None,
         )
         result = fmt.format(record)
-        parsed = json.loads(result)
-        assert parsed["level"] == "INFO"
-        assert parsed["logger"] == "test.logger"
-        assert parsed["message"] == "hello world"
-        assert "timestamp" in parsed
+        assert "INFO" in result
+        assert "hello world" in result
 
-    def test_timestamp_is_iso_utc(self):
-        fmt = JsonFormatter()
+    def test_output_starts_with_timestamp(self):
+        fmt = FileFormatter()
         record = logging.LogRecord(
             name="test",
             level=logging.DEBUG,
@@ -58,13 +54,13 @@ class TestJsonFormatter:
             exc_info=None,
         )
         result = fmt.format(record)
-        parsed = json.loads(result)
-        ts = parsed["timestamp"]
-        # ISO 格式应包含 T 分隔符或 + 偏移量
-        assert "T" in ts or "+" in ts
+        # 格式：yyyy-MM-dd HH:mm:ss
+        parts = result.split()
+        assert len(parts[0]) == 10  # 日期部分
+        assert len(parts[1]) == 8  # 时间部分
 
     def test_exception_serialization(self):
-        fmt = JsonFormatter()
+        fmt = FileFormatter()
         try:
             raise ValueError("test error")
         except ValueError:
@@ -79,12 +75,11 @@ class TestJsonFormatter:
             exc_info=exc_info,
         )
         result = fmt.format(record)
-        parsed = json.loads(result)
-        assert "exception" in parsed
-        assert "ValueError" in parsed["exception"]
+        assert "ValueError" in result
+        assert "error occurred" in result
 
     def test_percent_style_formatting(self):
-        fmt = JsonFormatter()
+        fmt = FileFormatter()
         record = logging.LogRecord(
             name="test",
             level=logging.INFO,
@@ -95,11 +90,10 @@ class TestJsonFormatter:
             exc_info=None,
         )
         result = fmt.format(record)
-        parsed = json.loads(result)
-        assert parsed["message"] == "value=foo count=42"
+        assert "value=foo count=42" in result
 
     def test_chinese_message(self):
-        fmt = JsonFormatter()
+        fmt = FileFormatter()
         record = logging.LogRecord(
             name="test",
             level=logging.INFO,
@@ -110,23 +104,21 @@ class TestJsonFormatter:
             exc_info=None,
         )
         result = fmt.format(record)
-        parsed = json.loads(result)
-        assert "模型调用成功" in parsed["message"]
+        assert "模型调用成功" in result
 
-    def test_sorted_keys(self):
-        fmt = JsonFormatter()
+    def test_debug_level_visible(self):
+        fmt = FileFormatter()
         record = logging.LogRecord(
             name="test",
-            level=logging.INFO,
+            level=logging.DEBUG,
             pathname="",
             lineno=1,
-            msg="sort_test",
+            msg="debug_msg",
             args=(),
             exc_info=None,
         )
         result = fmt.format(record)
-        keys = list(json.loads(result).keys())
-        assert keys == sorted(keys)
+        assert "DEBUG" in result
 
 
 # ── build_log_config 向后兼容测试 ──────────────────────────────
@@ -136,7 +128,7 @@ class TestBuildLogConfigBackwardCompat:
     def test_no_file_path_returns_console_only(self):
         config = build_log_config(level="INFO")
         assert "file" not in config["handlers"]
-        assert "json" not in config["formatters"]
+        assert "file_fmt" not in config["formatters"]
         assert config["loggers"]["coding.proxy"]["handlers"] == ["default"]
 
     def test_none_file_path_returns_console_only(self):
@@ -164,7 +156,7 @@ class TestBuildLogConfigDualWrite:
         log_file = tmp_path / "test.log"
         config = build_log_config(level="INFO", file_path=str(log_file))
         assert "file" in config["handlers"]
-        assert "json" in config["formatters"]
+        assert "file_fmt" in config["formatters"]
 
     def test_file_handler_uses_rotating(self, tmp_path):
         log_file = tmp_path / "test.log"
@@ -309,14 +301,13 @@ class TestDualWriteIntegration:
             logger.debug("debug_only_message")
             logger.info("info_message")
 
-            # 验证文件包含两条记录
+            # 验证文件包含两条记录（字符串格式）
             log_content = log_file.read_text()
             lines = [line for line in log_content.strip().split("\n") if line]
             assert len(lines) == 2
 
-            messages = [json.loads(line)["message"] for line in lines]
-            assert "debug_only_message" in messages
-            assert "info_message" in messages
+            assert "debug_only_message" in log_content
+            assert "info_message" in log_content
         finally:
             self._reset_logging_state()
 
