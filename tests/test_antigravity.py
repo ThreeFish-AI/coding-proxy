@@ -504,12 +504,14 @@ async def test_discover_project_id_single_active_project():
 
     mock_response = MagicMock()
     mock_response.json.return_value = {
-        "projects": [{
-            "projectId": "my-gcp-123",
-            "projectNumber": "456",
-            "name": "My GCP Project",
-            "lifecycleState": "ACTIVE",
-        }]
+        "projects": [
+            {
+                "projectId": "my-gcp-123",
+                "projectNumber": "456",
+                "name": "My GCP Project",
+                "lifecycleState": "ACTIVE",
+            }
+        ]
     }
     mock_response.raise_for_status = MagicMock()
 
@@ -689,13 +691,20 @@ async def test_prepare_request_triggers_discovery_when_no_project_id():
     async def mock_discover(token):
         call_count[0] += 1
         vendor._project_id_discovered = "auto-found"
-        vendor._base_url = _V1INTERNAL_BASE_URL if "v1internal" not in vendor._base_url else vendor._base_url
+        vendor._base_url = (
+            _V1INTERNAL_BASE_URL
+            if "v1internal" not in vendor._base_url
+            else vendor._base_url
+        )
         return "auto-found"
 
     vendor._discover_project_id = mock_discover
 
     body, headers = await vendor._prepare_request(
-        {"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "Hi"}]},
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hi"}],
+        },
         {},
     )
 
@@ -720,7 +729,10 @@ async def test_prepare_request_skips_discovery_when_configured():
     vendor._discover_project_id = mock_discover
 
     await vendor._prepare_request(
-        {"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "Hi"}]},
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hi"}],
+        },
         {},
     )
 

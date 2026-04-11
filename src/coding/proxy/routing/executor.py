@@ -494,7 +494,9 @@ class _RouteExecutor:
                         rate_limit_deadline=compute_rate_limit_deadline(rl_info),
                     )
                     if not is_last:
-                        next_tier = self._tiers[i + 1] if i + 1 < len(self._tiers) else None
+                        next_tier = (
+                            self._tiers[i + 1] if i + 1 < len(self._tiers) else None
+                        )
                         next_info = f" → next: {next_tier.name}" if next_tier else ""
                         logger.warning(
                             "Tier %s error %d, failing over%s",
@@ -730,9 +732,7 @@ class _RouteExecutor:
         current_index: int,
     ) -> None:
         """记录 vendor 轮转摘要日志（谁 → 谁，原因）."""
-        next_tier = (
-            tiers[current_index + 1] if current_index + 1 < len(tiers) else None
-        )
+        next_tier = tiers[current_index + 1] if current_index + 1 < len(tiers) else None
         if next_tier is None:
             return
 

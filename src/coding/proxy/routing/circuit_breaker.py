@@ -149,7 +149,9 @@ class CircuitBreaker:
         with self._lock:
             self._transition_to(CircuitState.CLOSED)
             self._current_recovery = self._recovery_timeout
-            logger.info("Circuit breaker%s: manually reset to CLOSED", self._vendor_label)
+            logger.info(
+                "Circuit breaker%s: manually reset to CLOSED", self._vendor_label
+            )
 
     def get_info(self) -> dict:
         """获取熔断器状态信息."""

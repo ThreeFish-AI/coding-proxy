@@ -344,7 +344,9 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         if not self._project_id and not self._project_discovery_attempted:
             discovered = await self._discover_project_id(token)
             if discovered:
-                logger.info("已自动启用 v1internal 协议模式（project_id=%s）", discovered)
+                logger.info(
+                    "已自动启用 v1internal 协议模式（project_id=%s）", discovered
+                )
             else:
                 logger.info(
                     "无法自动发现 GCP project_id，继续使用标准 GLA 模式。"
@@ -431,7 +433,8 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
             result["model_resolution_reason"] = self._last_model_resolution_reason
         # project_id 发现诊断
         result["project_id_source"] = (
-            "configured" if self._project_id
+            "configured"
+            if self._project_id
             else ("discovered" if self._project_id_discovered else "none")
         )
         if self._project_id_discovered:
