@@ -26,6 +26,7 @@ class LoggingConfig(BaseModel):
         max_bytes: 单个日志文件最大字节数（触发轮转）。默认 5 MB。
         backup_count: 保留的已压缩备份文件数。默认 5。
     """
+
     level: str = "INFO"
     file: str | None = None
     max_bytes: int = 5 * 1024 * 1024
