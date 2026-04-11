@@ -48,9 +48,13 @@ logger = logging.getLogger(__name__)
 
 
 def _log_http_error_detail(
-    tier_name: str, exc: Exception, *, is_stream: bool = False
+    tier_name: str,
+    exc: Exception,
+    *,
+    is_stream: bool = False,
+    tier: VendorTier | None = None,
 ) -> None:
-    """记录 HTTP 错误的详细信息（状态码 / 响应体摘要 / 异常类型）.
+    """记录 HTTP 错误的详细信息（状态码 / 响应体摘要 / 异常类型 / 熔断器快照）.
 
     替代原先单行 ``logger.warning("Tier %s stream failed: %s", ...)``，
     在非 200 响应时输出更丰富的诊断上下文，便于跟踪上游故障根因。
@@ -78,6 +82,14 @@ def _log_http_error_detail(
                 detail_parts.append(f"  error_msg={err.get('message', 'N/A')[:200]}")
     else:
         detail_parts.append(f"  message={str(exc)[:300]}")
+    # 熔断器状态快照
+    if tier and tier.circuit_breaker:
+        cb = tier.circuit_breaker
+        cb_info = cb.get_info()
+        detail_parts.append(
+            f"  circuit_breaker={cb_info['state']} "
+            f"(failures={cb_info['failure_count']}/{cb._failure_threshold})"
+        )
     logger.warning("\n".join(detail_parts))
 
 
@@ -268,6 +280,12 @@ class _RouteExecutor:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = usage.get("model_served") or tier.vendor.map_model(model)
+                if failed_tier_name is not None:
+                    logger.info(
+                        "Tier %s stream succeeded (took over from failed tier: %s)",
+                        tier.name,
+                        failed_tier_name,
+                    )
                 self._recorder.log_model_call(
                     vendor=tier.name,
                     model_requested=model,
@@ -310,7 +328,7 @@ class _RouteExecutor:
                 httpx.ConnectError,
                 httpx.ReadError,
             ) as exc:
-                _log_http_error_detail(tier.name, exc, is_stream=True)
+                _log_http_error_detail(tier.name, exc, is_stream=True, tier=tier)
                 (
                     should_continue,
                     failed_tier_name,
@@ -325,6 +343,7 @@ class _RouteExecutor:
                     request_body=body,
                 )
                 if should_continue:
+                    self._log_failover_transition(tier, exc, self._tiers, i)
                     continue
                 if is_last:
                     raise
@@ -399,6 +418,12 @@ class _RouteExecutor:
                     duration = int((time.monotonic() - start) * 1000)
                     model = body.get("model", "unknown")
                     model_served = resp.model_served or tier.vendor.map_model(model)
+                    if failed_tier_name is not None:
+                        logger.info(
+                            "Tier %s message succeeded (took over from failed tier: %s)",
+                            tier.name,
+                            failed_tier_name,
+                        )
                     self._recorder.log_model_call(
                         vendor=tier.name,
                         model_requested=model,
@@ -469,10 +494,15 @@ class _RouteExecutor:
                         rate_limit_deadline=compute_rate_limit_deadline(rl_info),
                     )
                     if not is_last:
+                        next_tier = (
+                            self._tiers[i + 1] if i + 1 < len(self._tiers) else None
+                        )
+                        next_info = f" → next: {next_tier.name}" if next_tier else ""
                         logger.warning(
-                            "Tier %s error %d, failing over",
+                            "Tier %s error %d, failing over%s",
                             tier.name,
                             resp.status_code,
+                            next_info,
                         )
                         failed_tier_name = tier.name
                         continue
@@ -513,7 +543,7 @@ class _RouteExecutor:
                 continue
 
             except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
-                _log_http_error_detail(tier.name, exc, is_stream=False)
+                _log_http_error_detail(tier.name, exc, is_stream=False, tier=tier)
                 tier.record_failure()
                 failed_tier_name = tier.name
                 if is_last:
@@ -693,6 +723,30 @@ class _RouteExecutor:
             tier.record_failure()
 
         return False, tier.name, exc
+
+    @staticmethod
+    def _log_failover_transition(
+        current_tier: VendorTier,
+        exc: Exception,
+        tiers: list[VendorTier],
+        current_index: int,
+    ) -> None:
+        """记录 vendor 轮转摘要日志（谁 → 谁，原因）."""
+        next_tier = tiers[current_index + 1] if current_index + 1 < len(tiers) else None
+        if next_tier is None:
+            return
+
+        # 提取错误摘要
+        reason = type(exc).__name__
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+            reason = f"HTTP {exc.response.status_code}"
+
+        logger.info(
+            "Failover: %s → %s (reason: %s)",
+            current_tier.name,
+            next_tier.name,
+            reason,
+        )
 
     @staticmethod
     def _is_cap_error(resp: VendorResponse) -> bool:

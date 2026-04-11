@@ -104,11 +104,18 @@ def start(
     # 打印启动品牌横幅
     print_banner(console, host=cfg.server.host, port=cfg.server.port)
 
+    # 解析文件日志路径：未显式配置时使用默认值
+    _file_path: str | None = cfg.logging.file or "coding-proxy.log"
     uvicorn.run(
         fastapi_app,
         host=cfg.server.host,
         port=cfg.server.port,
-        log_config=build_log_config(cfg.logging.level),
+        log_config=build_log_config(
+            level=cfg.logging.level,
+            file_path=_file_path,
+            max_bytes=cfg.logging.max_bytes,
+            backup_count=cfg.logging.backup_count,
+        ),
     )
 
 

@@ -32,11 +32,14 @@ class CircuitBreaker:
         recovery_timeout_seconds: int = 300,
         success_threshold: int = 2,
         max_recovery_seconds: int = 3600,
+        *,
+        vendor_name: str = "",
     ) -> None:
         self._failure_threshold = failure_threshold
         self._recovery_timeout = recovery_timeout_seconds
         self._success_threshold = success_threshold
         self._max_recovery = max_recovery_seconds
+        self._vendor_label = f" [{vendor_name}]" if vendor_name else ""
 
         self._state = CircuitState.CLOSED
         self._failure_count = 0
@@ -65,7 +68,13 @@ class CircuitBreaker:
                 self._success_count += 1
                 if self._success_count >= self._success_threshold:
                     self._transition_to(CircuitState.CLOSED)
-                    logger.info("Circuit breaker: HALF_OPEN → CLOSED (recovered)")
+                    logger.info(
+                        "Circuit breaker%s: HALF_OPEN → CLOSED "
+                        "(recovered, %d/%d consecutive successes)",
+                        self._vendor_label,
+                        self._success_count,
+                        self._success_threshold,
+                    )
             elif self._state == CircuitState.CLOSED:
                 # 正常状态下成功，无需操作
                 pass
@@ -94,7 +103,10 @@ class CircuitBreaker:
                 self._transition_to(CircuitState.OPEN)
                 self._backoff_recovery(hint_seconds=retry_after_seconds)
                 logger.warning(
-                    "Circuit breaker: HALF_OPEN → OPEN (recovery failed, next retry in %ds)",
+                    "Circuit breaker%s: HALF_OPEN → OPEN "
+                    "(recovery probe failed, backoff %ds → next retry in %ds)",
+                    self._vendor_label,
+                    self._current_recovery,
                     self._current_recovery,
                 )
             elif self._state == CircuitState.CLOSED:
@@ -117,14 +129,17 @@ class CircuitBreaker:
                         )
                     if force_open:
                         logger.warning(
-                            "Circuit breaker: CLOSED → OPEN "
-                            "(forced, rate-limited, next retry in %ds)",
+                            "Circuit breaker%s: CLOSED → OPEN "
+                            "(forced, rate-limited, retry-after=%ss → next retry in %ds)",
+                            self._vendor_label,
+                            retry_after_seconds or "N/A",
                             self._current_recovery,
                         )
                     else:
                         logger.warning(
-                            "Circuit breaker: CLOSED → OPEN "
+                            "Circuit breaker%s: CLOSED → OPEN "
                             "(%d consecutive failures, next retry in %ds)",
+                            self._vendor_label,
                             self._failure_count,
                             self._current_recovery,
                         )
@@ -134,7 +149,9 @@ class CircuitBreaker:
         with self._lock:
             self._transition_to(CircuitState.CLOSED)
             self._current_recovery = self._recovery_timeout
-            logger.info("Circuit breaker: manually reset to CLOSED")
+            logger.info(
+                "Circuit breaker%s: manually reset to CLOSED", self._vendor_label
+            )
 
     def get_info(self) -> dict:
         """获取熔断器状态信息."""
@@ -157,7 +174,13 @@ class CircuitBreaker:
         elapsed = time.monotonic() - self._last_failure_time
         if elapsed >= self._current_recovery:
             self._transition_to(CircuitState.HALF_OPEN)
-            logger.info("Circuit breaker: OPEN → HALF_OPEN (recovery timeout)")
+            elapsed_s = int(elapsed)
+            logger.info(
+                "Circuit breaker%s: OPEN → HALF_OPEN (recovery timeout, waited %ds/%ds)",
+                self._vendor_label,
+                elapsed_s,
+                self._current_recovery,
+            )
 
     def _transition_to(self, new_state: CircuitState) -> None:
         self._state = new_state

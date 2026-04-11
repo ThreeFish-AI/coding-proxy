@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [v0.2.1](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.1a1) — 2026-04-11
+
+- feat(logging): 实现日志双写（控制台 + 本地文件），日志文件支持 5MB 自动轮转及 gzip 压缩备份；ModelCall 日志降级为 DEBUG 级别；
+- feat(circuit-breaker): 补全熔断器状态转换日志的 vendor 上下文信息;
+
 ## [v0.2.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.0) — 2026-04-09
 
 > [!IMPORTANT]

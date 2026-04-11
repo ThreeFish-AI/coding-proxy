@@ -1,7 +1,7 @@
 [project]
 name = "coding-proxy"
-version = "0.2.0"
-description = "A High-Availability, Transparent, and Smart Multi-Vendor Proxy for Claude Code. Support Claude Plans, GitHub Copilot, Google Antigravity, ZAI/GLM."
+version = "0.2.1"
+description = "A High-Availability, Transparent, and Smart Multi-Vendor Proxy for Claude Code. Support Claude Plans, GitHub Copilot, Google Antigravity, ZAI/GLM, MiniMax, Qwen, Xiaomi, Kimi, Doubao..."
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "ThreeFish-AI", email = "threefish.ai@gmail.com" }]

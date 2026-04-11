@@ -8,6 +8,9 @@ server:
 
 logging:
   level: "INFO"
+  # file: "coding-proxy.log"          # 文件日志路径；设为 null 或空字符串禁用
+  # max_bytes: 5242880                # 单文件上限（5 MB），触发轮转
+  # backup_count: 5                   # 保留 gzip 压缩备份文件数
 
 # === 降级链路优先级（可选） ===
 #
@@ -232,11 +235,15 @@ model_mapping:
   # Google Antigravity 模型映射
   - pattern: "claude-sonnet-.*"
     vendors: ["antigravity"]
-    target: "claude-sonnet-4-6-thinking"
+    target: "Claude Sonnet 4.6"
     is_regex: true
   - pattern: "claude-opus-.*"
     vendors: ["antigravity"]
-    target: "claude-opus-4-6-thinking"
+    target: "Claude Opus 4.6 Thinking"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["antigravity"]
+    target: "Gemini 3 Flash"
     is_regex: true
   # 智谱 GLM 映射（官方原生 Anthropic 兼容端点）
   # glm-5v-turbo 完整承载 Claude Code 满血能力（tool calling / thinking / 多模态）
@@ -350,6 +357,12 @@ pricing:
     cache_write_cost_per_mtok: $6.25
     cache_read_cost_per_mtok: $0.50
   - vendor: copilot
+    model: Claude Opus 4.6
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: copilot
     model: Claude Sonnet 4.6
     input_cost_per_mtok: $3.0
     output_cost_per_mtok: $15.0
@@ -369,6 +382,12 @@ pricing:
     cache_read_cost_per_mtok: $0.10
   - vendor: copilot
     model: claude-haiku-4-5-20251001
+    input_cost_per_mtok: $1
+    output_cost_per_mtok: $5
+    cache_write_cost_per_mtok: $1.25
+    cache_read_cost_per_mtok: $0.10
+  - vendor: copilot
+    model: Claude Haiku 4.5
     input_cost_per_mtok: $1
     output_cost_per_mtok: $5
     cache_write_cost_per_mtok: $1.25
