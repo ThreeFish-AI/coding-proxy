@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **请求规范化死代码清理**：移除 `request_normalizer` 中永远不可达的 `tool_result` 重定位逻辑（Phase 1 剥离已覆盖全部场景，Phase 2 重定位因方向错误无法启用）；更新 docstring 使之与实际行为（剥离）一致；
+
 ## [v0.2.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.0) — 2026-04-09
 
 > [!IMPORTANT]
