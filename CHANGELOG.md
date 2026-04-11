@@ -4,22 +4,10 @@
 
 ## [Unreleased]
 
-- style(lint): 移除未使用变量 `old_base_url` 并合并重复的 `antigravity` 导入块;
 ## [v0.2.1](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.1a1) — 2026-04-11
 
-- fix(antigravity): 修复 Google OAuth token 刷新后 scope 校验过严导致 403 的问题;
-- refactor(request-normalizer): 移除跨供应商 tool_result 重定位死代码，docstring 对齐实际剥离行为;
-
-
-- **请求规范化死代码清理**：移除 `request_normalizer` 中永远不可达的 `tool_result` 重定位逻辑（Phase 1 剥离已覆盖全部场景，Phase 2 重定位因方向错误无法启用）；更新 docstring 使之与实际行为（剥离）一致；
-
-### 🐛 Bug 修复
-
-- **fix(antigravity)**: 新增 Google Cloud Code **v1internal 协议支持 + project_id 自动发现**，彻底解决 `ACCESS_TOKEN_SCOPE_INSUFFICIENT` (403) 问题。
-  - **根因**：此前调用标准 Generative Language API (`generativelanguage.googleapis.com`)，该端点对 OAuth scope 校验严格；参考项目 Antigravity-Manager 实际使用的是 Cloud Code v1internal 内部 API (`cloudcode-pa.googleapis.com/v1internal`)，接受相同凭证但协议格式不同
-  - **修复（v1internal 协议）**：新增 `project_id` 配置字段 + v1internal 请求信封包装 + 客户端指纹 Headers + 端点 URL 适配
-  - **修复（自动发现）**：利用已有的 `cloud-platform` OAuth scope 通过 Cloud Resource Manager API 自动发现用户的 GCP `project_id`，首次请求时零配置自动切换至 v1internal 模式——开箱即用，无需手动配置
-  - **附带改进**：`_acquire()` scope 校验保持 warning 降级；`_mark_scope_error_if_needed()` 增强诊断日志；`get_diagnostics()` 暴露发现状态
+- feat(logging): 实现日志双写（控制台 + 本地文件），日志文件支持 5MB 自动轮转及 gzip 压缩备份；ModelCall 日志降级为 DEBUG 级别；
+- feat(circuit-breaker): 补全熔断器状态转换日志的 vendor 上下文信息;
 
 ## [v0.2.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.0) — 2026-04-09
 
