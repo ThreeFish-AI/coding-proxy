@@ -13,13 +13,16 @@ from coding.proxy.config.schema import (
     ModelMappingRule,
 )
 from coding.proxy.routing.model_mapper import ModelMapper
-from coding.proxy.vendors.antigravity import AntigravityVendor, GoogleOAuthTokenManager
+from coding.proxy.vendors.antigravity import (
+    _V1INTERNAL_BASE_URL,
+    AntigravityVendor,
+    GoogleOAuthTokenManager,
+)
 from coding.proxy.vendors.base import RequestCapabilities
 from coding.proxy.vendors.token_manager import (  # noqa: F401
     TokenAcquireError,
     TokenErrorKind,
 )
-from coding.proxy.vendors.antigravity import _V1INTERNAL_BASE_URL
 
 # --- GoogleOAuthTokenManager ---
 

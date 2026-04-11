@@ -3,6 +3,8 @@
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+
+- style(lint): 移除未使用变量 `old_base_url` 并合并重复的 `antigravity` 导入块;
 ## [v0.2.1](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.1a1) — 2026-04-11
 
 - fix(antigravity): 修复 Google OAuth token 刷新后 scope 校验过严导致 403 的问题;

@@ -229,7 +229,6 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
                 return ""
 
             # 发现成功：原子性切换到 v1internal 模式
-            old_base_url = self._base_url
             self._base_url = _V1INTERNAL_BASE_URL
             self._project_id_discovered = project_id
 
