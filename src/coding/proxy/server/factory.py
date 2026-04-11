@@ -91,13 +91,14 @@ def _find_copilot_vendor(router: Any) -> CopilotVendor | None:
     return None
 
 
-def _build_circuit_breaker(cfg: CircuitBreakerConfig) -> CircuitBreaker:
+def _build_circuit_breaker(cfg: CircuitBreakerConfig, *, vendor_name: str = "") -> CircuitBreaker:
     """从配置构建熔断器实例."""
     return CircuitBreaker(
         failure_threshold=cfg.failure_threshold,
         recovery_timeout_seconds=cfg.recovery_timeout_seconds,
         success_threshold=cfg.success_threshold,
         max_recovery_seconds=cfg.max_recovery_seconds,
+        vendor_name=vendor_name,
     )
 
 
