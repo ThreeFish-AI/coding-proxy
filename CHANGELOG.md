@@ -13,7 +13,10 @@
 
 ### 🐛 Bug 修复
 
-- **fix(antigravity)**: 修复 Google OAuth token 刷新后 scope 校验过严导致 403 `ACCESS_TOKEN_SCOPE_INSUFFICIENT` 的问题。将 `_acquire()` 中严格的 5-scope 全量校验降级为 warning 日志，与参考项目 Antigravity-Manager 行为对齐。Google OAuth2 规范允许 refresh_token 返回的 access_token 仅包含部分已授权 scope，此前因校验过于严格导致有效 token 被拒绝使用，触发熔断器。
+- **fix(antigravity)**: 新增 Google Cloud Code **v1internal 协议支持**，彻底解决 `ACCESS_TOKEN_SCOPE_INSUFFICIENT` (403) 问题。
+  - **根因**：此前调用标准 Generative Language API (`generativelanguage.googleapis.com`)，该端点对 OAuth scope 校验严格；参考项目 Antigravity-Manager 实际使用的是 Cloud Code v1internal 内部 API (`cloudcode-pa.googleapis.com/v1internal`)，接受相同凭证但协议格式不同
+  - **修复**：新增 `project_id` 配置字段，当配置 `project_id` 且 `base_url` 含 `v1internal` 时自动启用 v1internal 模式：请求体包裹在 v1internal 信封中（含 `project`/`requestId`/`model`/`userAgent` 字段），注入客户端指纹 Headers（`x-client-name`/`x-client-version`/Chrome-Electron UA），端点 URL 适配 v1internal 格式
+  - **附带改进**：`_acquire()` scope 校验保持 warning 降级（与 Antigravity-Manager 行为对齐）；`_mark_scope_error_if_needed()` 增强诊断日志，提示用户切换 v1internal 协议
 
 ## [v0.2.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.0) — 2026-04-09
 

@@ -363,3 +363,107 @@ def test_compatibility_profile_json_output_native():
     vendor = AntigravityVendor(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
     profile = vendor.get_compatibility_profile()
     assert profile.json_output.name == "NATIVE"
+
+
+# ── v1internal 协议测试 ──────────────────────────────
+
+
+def test_is_v1internal_mode_with_project_id_and_v1internal_url():
+    """配置了 project_id 且 base_url 含 v1internal 时启用 v1internal 模式."""
+    config = AntigravityConfig(
+        project_id="my-gcp-project",
+        base_url="https://cloudcode-pa.googleapis.com/v1internal",
+    )
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    assert vendor._is_v1internal_mode() is True
+
+
+def test_is_v1internal_mode_without_project_id():
+    """未配置 project_id 时即使 URL 含 v1internal 也不启用."""
+    config = AntigravityConfig(
+        base_url="https://cloudcode-pa.googleapis.com/v1internal",
+    )
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    assert vendor._is_v1internal_mode() is False
+
+
+def test_is_v1internal_mode_standard_gla_url():
+    """标准 GLA URL 不启用 v1internal 模式（即使有 project_id）."""
+    config = AntigravityConfig(
+        project_id="my-gcp-project",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+    )
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    assert vendor._is_v1internal_mode() is False
+
+
+@pytest.mark.asyncio
+async def test_prepare_request_v1internal_envelope():
+    """v1internal 模式下请求体应被包裹在 v1internal 信封中."""
+    config = AntigravityConfig(
+        project_id="test-project-123",
+        base_url="https://cloudcode-pa.googleapis.com/v1internal",
+        model_endpoint="models/claude-sonnet-4-20250514",
+    )
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    vendor._token_manager.get_token = AsyncMock(return_value="v1_tok")
+
+    body, headers = await vendor._prepare_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+        {},
+    )
+
+    # 验证信封结构
+    assert body["project"] == "test-project-123"
+    assert body["userAgent"] == "antigravity"
+    assert body["requestType"] == "agent"
+    assert "requestId" in body
+    assert "request" in body  # 原始 Gemini 请求体
+    assert "model" in body
+
+    # 验证客户端指纹 Headers
+    assert headers["x-client-name"] == "antigravity"
+    assert headers["x-client-version"] == "4.1.31"
+    assert "Antigravity/4.1.31" in headers["user-agent"]
+    assert headers["authorization"] == "Bearer v1_tok"
+
+
+@pytest.mark.asyncio
+async def test_prepare_request_standard_gla_no_envelope():
+    """标准 GLA 模式下请求体不做信封包装."""
+    config = AntigravityConfig(
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+    )
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    vendor._token_manager.get_token = AsyncMock(return_value="gla_tok")
+
+    body, headers = await vendor._prepare_request(
+        {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+        {},
+    )
+
+    # 标准模式：直接是 Gemini 请求体，无信封字段
+    assert "project" not in body
+    assert "contents" in body  # Gemini 格式的 contents 字段
+    assert headers["authorization"] == "Bearer gla_tok"
+    assert "x-client-name" not in headers
+
+
+def test_mark_scope_error_if_needed_enhanced_logging(caplog):
+    """_mark_scope_error_if_needed 在检测到 scope 错误时应输出增强诊断日志."""
+    import logging
+
+    vendor = AntigravityVendor(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
+    with caplog.at_level(logging.ERROR, logger="coding.proxy.vendors.antigravity"):
+        vendor._mark_scope_error_if_needed(
+            '{"error": {"message": "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}}'
+        )
+
+    # 应包含增强的诊断提示信息
+    assert any("v1internal" in r.message for r in caplog.records)

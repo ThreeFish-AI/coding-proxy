@@ -1,9 +1,10 @@
-"""Google Antigravity Claude 供应商 — OAuth2 认证 + Gemini 格式转换."""
+"""Google Antigravity Claude 供应商 — OAuth2 认证 + Gemini/v1internal 格式转换."""
 
 from __future__ import annotations
 
 import json
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -30,6 +31,12 @@ from .mixins import TokenBackendMixin
 from .token_manager import BaseTokenManager, TokenAcquireError, TokenErrorKind
 
 logger = logging.getLogger(__name__)
+
+# v1internal 客户端指纹常量（与 Antigravity-Manager 对齐）
+_V1INTERNAL_USER_AGENT = (
+    "Antigravity/4.1.31 (Macintosh; Intel Mac OS X 10_15_7) "
+    "Chrome/132.0.6834.160 Electron/39.2.3"
+)
 
 
 # ── Google OAuth2 Token 管理器（原 antigravity_token_manager.py） ──
@@ -137,9 +144,17 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         self._default_model = config.model_endpoint.removeprefix("models/")
         self._last_request_adaptations: list[str] = []
         self._safety_settings = config.safety_settings
+        # v1internal 协议字段
+        self._project_id: str = config.project_id
+        self._session_id: str = uuid.uuid4().hex[:16]
+        self._message_count: int = 0
 
     def get_name(self) -> str:
         return "antigravity"
+
+    def _is_v1internal_mode(self) -> bool:
+        """检测是否启用 v1internal 协议模式（与 Antigravity-Manager 对齐）."""
+        return bool(self._project_id) and "v1internal" in self._base_url
 
     def get_capabilities(self) -> VendorCapabilities:
         return VendorCapabilities(
@@ -199,7 +214,12 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         request_body: dict[str, Any],
         headers: dict[str, str],
     ) -> tuple[dict[str, Any], dict[str, str]]:
-        """转换 Anthropic 请求为 Gemini 格式，注入 Google OAuth token."""
+        """转换 Anthropic 请求并注入 Google OAuth token.
+
+        支持两种协议模式：
+        - 标准 Gemini 模式：直接发送 Gemini 请求体到 generativelanguage.googleapis.com
+        - v1internal 模式：将请求体包裹在 v1internal 信封中发送到 cloudcode-pa.googleapis.com
+        """
         resolved_model = self.map_model(request_body.get("model", "unknown"))
         converted = convert_request(
             request_body,
@@ -209,6 +229,10 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         gemini_body = converted.body
         self._last_request_adaptations = converted.adaptations
         token = await self._token_manager.get_token()
+
+        if self._is_v1internal_mode():
+            return self._prepare_v1internal_request(gemini_body, resolved_model, token)
+
         new_headers = {
             "content-type": "application/json",
             "authorization": f"Bearer {token}",
@@ -222,10 +246,51 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         )
         return gemini_body, new_headers
 
+    def _prepare_v1internal_request(
+        self,
+        gemini_body: dict[str, Any],
+        resolved_model: str,
+        token: str,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        """将 Gemini 请求体包裹在 v1internal 信封中（与 Antigravity-Manager 对齐）.
+
+        v1internal 是 Google Cloud Code 内部 API 协议，接受与标准 GLA 相同的 OAuth 凭证，
+        但需要特定的信封格式和客户端指纹 Headers。
+        """
+        self._message_count += 1
+        envelope = {
+            "project": self._project_id,
+            "requestId": f"agent/antigravity/{self._session_id}/{self._message_count}",
+            "request": gemini_body,
+            "model": resolved_model,
+            "userAgent": "antigravity",
+            "requestType": "agent",
+        }
+        new_headers = {
+            "content-type": "application/json",
+            "authorization": f"Bearer {token}",
+            "user-agent": _V1INTERNAL_USER_AGENT,
+            "x-client-name": "antigravity",
+            "x-client-version": "4.1.31",
+        }
+        logger.debug(
+            "_prepare_v1internal_request: model=%s -> %s, project=%s, requestId=%s",
+            resolved_model,
+            resolved_model,
+            self._project_id,
+            envelope["requestId"],
+        )
+        return envelope, new_headers
+
     def _mark_scope_error_if_needed(self, error_text: str) -> None:
         lowered = error_text.lower()
         if "access_token_scope_insufficient" not in lowered:
             return
+        logger.error(
+            "Generative Language API 拒绝访问（ACCESS_TOKEN_SCOPE_INSUFFICIENT）。"
+            "如使用标准 GLA 端点，请确认凭证已授权正确的 scope；"
+            "建议切换至 v1internal 协议（配置 project_id）以获得更好的兼容性。"
+        )
         self._token_manager.mark_error(
             "Google access_token scope 不足，当前凭证不能调用 Generative Language API",
             kind=TokenErrorKind.INSUFFICIENT_SCOPE,
@@ -250,11 +315,15 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         request_body: dict[str, Any],
         headers: dict[str, str],
     ) -> VendorResponse:
-        """覆写: Gemini 端点 + 响应逆转换."""
+        """覆写: Gemini / v1internal 端点 + 响应逆转换."""
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
         resolved_model = self._last_resolved_model
-        endpoint = f"/models/{resolved_model}:generateContent"
+        endpoint = (
+            ":generateContent"
+            if self._is_v1internal_mode()
+            else f"/models/{resolved_model}:generateContent"
+        )
 
         logger.debug("send_message: POST %s", endpoint)
         response = await client.post(endpoint, json=body, headers=prepared_headers)
@@ -292,11 +361,15 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         request_body: dict[str, Any],
         headers: dict[str, str],
     ) -> AsyncIterator[bytes]:
-        """覆写: Gemini SSE 流 -> Anthropic SSE 流适配."""
+        """覆写: Gemini / v1internal SSE 流 -> Anthropic SSE 流适配."""
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
         resolved_model = self._last_resolved_model
-        endpoint = f"/models/{resolved_model}:streamGenerateContent?alt=sse"
+        endpoint = (
+            ":streamGenerateContent?alt=sse"
+            if self._is_v1internal_mode()
+            else f"/models/{resolved_model}:streamGenerateContent?alt=sse"
+        )
 
         logger.debug("send_message_stream: POST %s", endpoint)
 

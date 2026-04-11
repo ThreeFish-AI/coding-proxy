@@ -34,6 +34,7 @@ class AntigravityConfig(BaseModel):
     model_endpoint: str = "models/claude-sonnet-4-20250514"
     timeout_ms: int = 300000
     safety_settings: dict[str, str] | None = None
+    project_id: str = ""  # GCP Project ID（v1internal 协议必填）
 
 
 class ZhipuConfig(BaseModel):
