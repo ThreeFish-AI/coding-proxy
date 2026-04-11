@@ -1,31 +1,33 @@
 # =============================================================================
-# coding-proxy: PyPI Publishing Pipeline (5-Stage Unified Pipeline)
+# coding-proxy: PyPI Publishing Pipeline (4-Stage Unified Pipeline)
 # =============================================================================
 # Trigger: GitHub Release publication event (release.types: [published])
 #
-# Architecture: 5-Stage Serial Pipeline (prerelease path) + Direct Path (stable)
+# Architecture: 4-Stage Serial Pipeline (prerelease only — 所有生产发布均走预发布)
 #
-# Prerelease Path (prerelease == true):
-#   Stage 1 (build):              矩阵构建 3.12/3.13/3.14，上传 artifacts
-#   Stage 2 (publish-testpypi):   发布到 TestPyPI 供验证
-#   Stage 3 (production-gate):    environment: pypi + Required Reviewers 人工审批门控
-#   Stage 4 (promote-and-publish):更新 Release 元数据 + 复用 artifacts 发布到 PyPI
-#   Stage 5 (update-changelog):   从 Release notes 生成 Changelog PR → master
+#   Stage 1 (build):            矩阵构建 3.12/3.13/3.14，上传 artifacts
+#   Stage 2 (publish-testpypi): 发布到 TestPyPI 供验证
+#   Stage 3 (publish-to-pypi):  ⏸ Production Approval Gate (environment: pypi)
+#                               审批通过后自动：Promote Release + Publish to PyPI
+#   Stage 4 (update-changelog): 从 Release notes 生成 Changelog PR → master
 #
-# Direct Path (prerelease == false):
-#   Stage 1 (build):              矩阵构建（共用）
-#   Stage D (publish-pypi):       直接发布到 PyPI（hotfix 路径）
+# 设计决策 — Stage 3 合并审批与发布的理由：
+#   pypa/gh-action-pypi-publish@release/v1 始终优先尝试 OIDC Trusted Publishing。
+#   若将审批与发布拆分为两个 job，则无法同时满足：
+#     - 单一人工审批（不能两个 job 都声明 environment: pypi 触发二次审批）
+#     - OIDC 需要 environment: pypi 声明才能匹配 PyPI Trusted Publisher 配置
+#   因此将 Approval Gate 与实际发布操作合并为同一 job，审批通过后顺序执行。
 #
 # Pre-requisites — 需要在 GitHub Settings 一次性手动配置：
 #   1. repo → Settings → Environments → "pypi"
 #      → Required reviewers: 添加审批人员（Production Approval Gate 所需）
 #   2. repo → Settings → Actions → General → Workflow permissions
-#      → "Read and write permissions"（Stage 5 推分支所需）
+#      → "Read and write permissions"（Stage 4 推分支所需）
 #      → 勾选 "Allow GitHub Actions to create and approve pull requests"
 #
-# Authentication (API Token):
-#   - PYPI_API_TOKEN:      PyPI 生产环境 token（repository secret）
-#   - TEST_PYPI_API_TOKEN: TestPyPI token（repository secret）
+# Authentication:
+#   - TEST_PYPI_API_TOKEN: TestPyPI API Token（repository secret）
+#   - PYPI Trusted Publisher: 已配置 OIDC（无需 API Token，通过 environment: pypi 自动认证）
 #
 # References:
 #   [1] https://packaging.python.org/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/
@@ -129,21 +131,31 @@ jobs:
           verbose: true
 
   # ===========================================================================
-  # Stage 3: PRODUCTION APPROVAL GATE -- 唯一人工介入点
+  # Stage 3: PUBLISH TO PYPI -- Production Approval Gate + Promote + Publish
   # ===========================================================================
-  # 工作原理：job 声明 environment: pypi（需配置 Required Reviewers），
-  # GitHub Actions pre-job 机制在 job 启动前挂起，等待审批人点击 "Approve"。
-  # Job body 仅打印信息，实际门控由 GitHub Environments 机制承担。
+  # 设计决策：将 Approval Gate 与实际发布操作合并为同一 job。
+  #
+  # 原因：pypa/gh-action-pypi-publish@release/v1 始终优先尝试 OIDC Trusted Publishing，
+  #       需要 id-token: write + environment: pypi 同时满足才能通过 PyPI 认证。
+  #       若拆分为两个 job，则无法避免二次审批或 OIDC 认证失败。
+  #
+  # 工作流程：
+  #   1. GitHub Actions pre-job 机制检测到 environment: pypi → 挂起等待审批
+  #   2. 审批人点击 Approve → job 开始执行
+  #   3. 顺序执行：Promote Release → Download Artifacts → Publish to PyPI
   # ===========================================================================
-  production-gate:
-    name: "⏸ Production Approval Gate"
+  publish-to-pypi:
+    name: "⏸ Production Approval Gate → Publish to PyPI"
     runs-on: ubuntu-latest
     needs: publish-testpypi
     if: github.event.release.prerelease == true
-    timeout-minutes: 1440  # 24 小时，给审批人充足时间
+    timeout-minutes: 1440  # 24 小时（含审批等待 + 发布执行）
     environment:
       name: pypi
-      url: https://test.pypi.org/p/coding-proxy  # 供审批人验证 TestPyPI 包的链接
+      url: https://pypi.org/p/coding-proxy
+    permissions:
+      contents: write  # 更新 GitHub Release 元数据（prerelease=false, make_latest=true）
+      id-token: write  # PyPI OIDC Trusted Publishing 所需
 
     steps:
       - name: Approval granted — proceeding to PyPI production
@@ -152,22 +164,6 @@ jobs:
           echo "Tag:     ${{ github.ref_name }}"
           echo "Release: ${{ github.event.release.name }}"
 
-  # ===========================================================================
-  # Stage 4: PROMOTE + PUBLISH TO PYPI -- 晋升 Release 元数据并发布到 PyPI
-  # ===========================================================================
-  # 注：此 job 故意不声明 environment，避免触发二次审批。
-  #     生产保护已由 Stage 3 (production-gate) 承担。
-  # ===========================================================================
-  promote-and-publish:
-    name: Promote to Official Release + Publish to PyPI
-    runs-on: ubuntu-latest
-    needs: production-gate
-    if: github.event.release.prerelease == true
-    timeout-minutes: 15
-    permissions:
-      contents: write  # 更新 GitHub Release 元数据（prerelease=false, make_latest=true）
-
-    steps:
       - name: Promote GitHub Release to stable
         uses: actions/github-script@v7
         with:
@@ -196,10 +192,9 @@ jobs:
       - name: List artifacts
         run: ls -la dist/
 
-      - name: Publish to PyPI
+      - name: Publish to PyPI (OIDC Trusted Publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
           verbose: true
 
@@ -209,7 +204,7 @@ jobs:
   update-changelog:
     name: Update Changelog
     runs-on: ubuntu-latest
-    needs: promote-and-publish
+    needs: publish-to-pypi
     if: github.event.release.prerelease == true
     timeout-minutes: 10
     permissions:
@@ -329,33 +324,3 @@ jobs:
 
             core.notice(`✅ PR created: ${pr.data.html_url}`);
 
-  # ===========================================================================
-  # Direct Path: PUBLISH TO PYPI -- 直接稳定版发布（hotfix 路径）
-  # ===========================================================================
-  publish-pypi:
-    name: Publish to PyPI (Direct Stable)
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event.release.prerelease == false
-    timeout-minutes: 10
-    environment:
-      name: pypi
-      url: https://pypi.org/p/coding-proxy
-    permissions:
-      contents: read
-
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: dist-py*
-          path: dist/
-          merge-multiple: true
-
-      - name: List artifacts
-        run: ls -la dist/
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
