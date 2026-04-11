@@ -1,63 +1,60 @@
 # =============================================================================
-# coding-proxy: PyPI Publishing Workflow (Initial Release)
+# coding-proxy: PyPI Publishing Pipeline (5-Stage Unified Pipeline)
 # =============================================================================
-# Trigger: GitHub Release publication event
-# Architecture: Build-Publish Separation (PyPA security best practice)
-#   Paired with: promote.yml (prerelease → stable promotion gate)
-#   - Job 1 (build): Low privileges, produces sdist+wheel artifacts
-#   - Job 2 (publish-testpypi): Publish to TestPyPI (prereleases only)
-#   - Job 3 (publish-pypi): Publish to PyPI (stable releases / hotfixes)
+# Trigger: GitHub Release publication event (release.types: [published])
 #
-# Routing Logic:
-#   - prerelease == true  --> TestPyPI (with skip-existing tolerance)
-#                          --> THEN use promote.yml to promote to PyPI after validation
-#   - prerelease == false --> PyPI production (direct stable release, e.g. hotfixes)
+# Architecture: 5-Stage Serial Pipeline (prerelease path) + Direct Path (stable)
 #
-# Promotion Flow (see promote.yml):
-#   1. Create release with prerelease: true  --> builds + publishes to TestPyPI
-#   2. Human validates package on TestPyPI
-#   3. Run promote.yml (workflow_dispatch)  --> promotes to PyPI production
+# Prerelease Path (prerelease == true):
+#   Stage 1 (build):              矩阵构建 3.12/3.13/3.14，上传 artifacts
+#   Stage 2 (publish-testpypi):   发布到 TestPyPI 供验证
+#   Stage 3 (production-gate):    environment: pypi + Required Reviewers 人工审批门控
+#   Stage 4 (promote-and-publish):更新 Release 元数据 + 复用 artifacts 发布到 PyPI
+#   Stage 5 (update-changelog):   从 Release notes 生成 Changelog PR → master
 #
-# Pre-requisites (choose ONE authentication method):
+# Direct Path (prerelease == false):
+#   Stage 1 (build):              矩阵构建（共用）
+#   Stage D (publish-pypi):       直接发布到 PyPI（hotfix 路径）
 #
-#   Option A — OIDC Trusted Publishing (recommended, no secrets needed):
-#     1. Create GitHub Environments: "pypi" and "testpypi"
-#     2. Configure Trusted Publishers on PyPI/TestPyPI admin panels
-#     3. (Recommended) Set "Required reviewers" on "pypi" environment
+# Pre-requisites — 需要在 GitHub Settings 一次性手动配置：
+#   1. repo → Settings → Environments → "pypi"
+#      → Required reviewers: 添加审批人员（Production Approval Gate 所需）
+#   2. repo → Settings → Actions → General → Workflow permissions
+#      → "Read and write permissions"（Stage 5 推分支所需）
+#      → 勾选 "Allow GitHub Actions to create and approve pull requests"
 #
-#   Option B — API Token Fallback (simpler initial setup):
-#     1. Set repository secrets: PYPI_API_TOKEN and/or TEST_PYPI_API_TOKEN
-#     2. (Optional) Create "pypi"/"testpypi" environments for deployment guards
-#        If environments are not created, remove the `environment:` blocks below.
+# Authentication (API Token):
+#   - PYPI_API_TOKEN:      PyPI 生产环境 token（repository secret）
+#   - TEST_PYPI_API_TOKEN: TestPyPI token（repository secret）
 #
 # References:
 #   [1] https://packaging.python.org/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/
 #   [2] https://github.com/pypa/gh-action-pypi-publish
-#   [3] https://docs.pypi.org/trusted-publishers/using-a-publisher/
+#   [3] https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment
 # =============================================================================
 
-name: Release / Publish to PyPI
+name: Release / Publish Pipeline
 
 on:
   release:
     types: [published]
 
 permissions:
-  contents: read
+  contents: read  # 全局最低权限，各 job 按需 override
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false  # 发布流水线不可被中断
 
 jobs:
   # ===========================================================================
-  # Job 1: BUILD -- Produce distribution artifacts (low privilege isolation)
+  # Stage 1: BUILD -- 矩阵构建，产出 sdist + wheel artifacts
   # ===========================================================================
   build:
-    name: Build distributions
+    name: Build distributions (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -70,7 +67,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -97,7 +94,7 @@ jobs:
           retention-days: 14
 
   # ===========================================================================
-  # Job 2: PUBLISH TO TESTPYPI -- Prerelease / staging releases only
+  # Stage 2: PUBLISH TO TESTPYPI -- prerelease 路径专用
   # ===========================================================================
   publish-testpypi:
     name: Publish to TestPyPI
@@ -120,20 +117,225 @@ jobs:
           path: dist/
           merge-multiple: true
 
+      - name: List artifacts
+        run: ls -la dist/
+
       - name: Publish to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.TEST_PYPI_API_TOKEN }}
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
-          attestations: false # TestPyPI 不支持 attestations，必须显式禁用
-          verbose: true # 启用详细日志以获取 400 错误响应体
+          attestations: false  # TestPyPI 不支持 attestations，必须显式禁用
+          verbose: true
 
   # ===========================================================================
-  # Job 3: PUBLISH TO PYPI -- Production releases only
+  # Stage 3: PRODUCTION APPROVAL GATE -- 唯一人工介入点
+  # ===========================================================================
+  # 工作原理：job 声明 environment: pypi（需配置 Required Reviewers），
+  # GitHub Actions pre-job 机制在 job 启动前挂起，等待审批人点击 "Approve"。
+  # Job body 仅打印信息，实际门控由 GitHub Environments 机制承担。
+  # ===========================================================================
+  production-gate:
+    name: "⏸ Production Approval Gate"
+    runs-on: ubuntu-latest
+    needs: publish-testpypi
+    if: github.event.release.prerelease == true
+    timeout-minutes: 1440  # 24 小时，给审批人充足时间
+    environment:
+      name: pypi
+      url: https://test.pypi.org/p/coding-proxy  # 供审批人验证 TestPyPI 包的链接
+
+    steps:
+      - name: Approval granted — proceeding to PyPI production
+        run: |
+          echo "✅ Production deployment approved"
+          echo "Tag:     ${{ github.ref_name }}"
+          echo "Release: ${{ github.event.release.name }}"
+
+  # ===========================================================================
+  # Stage 4: PROMOTE + PUBLISH TO PYPI -- 晋升 Release 元数据并发布到 PyPI
+  # ===========================================================================
+  # 注：此 job 故意不声明 environment，避免触发二次审批。
+  #     生产保护已由 Stage 3 (production-gate) 承担。
+  # ===========================================================================
+  promote-and-publish:
+    name: Promote to Official Release + Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: production-gate
+    if: github.event.release.prerelease == true
+    timeout-minutes: 15
+    permissions:
+      contents: write  # 更新 GitHub Release 元数据（prerelease=false, make_latest=true）
+      id-token: write  # OIDC 预留（当前使用 API Token）
+
+    steps:
+      - name: Promote GitHub Release to stable
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const releaseId = ${{ github.event.release.id }};
+            const tagName = '${{ github.ref_name }}';
+
+            await github.rest.repos.updateRelease({
+              owner,
+              repo,
+              release_id: releaseId,
+              prerelease: false,
+              make_latest: true,
+            });
+
+            core.notice(`✅ Release #${releaseId} (${tagName}) promoted: prerelease=false, make_latest=true`);
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-py*
+          path: dist/
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+          verbose: true
+
+  # ===========================================================================
+  # Stage 5: UPDATE CHANGELOG -- 自动生成 Changelog PR → master
+  # ===========================================================================
+  update-changelog:
+    name: Update Changelog
+    runs-on: ubuntu-latest
+    needs: promote-and-publish
+    if: github.event.release.prerelease == true
+    timeout-minutes: 10
+    permissions:
+      contents: write        # git push 新分支
+      pull-requests: write   # 创建 PR
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Extract stable version from prerelease tag
+        id: version
+        run: |
+          PRERELEASE_TAG="${{ github.ref_name }}"
+          # v0.2.0a1 → v0.2.0（移除预发布后缀 a*/b*/rc*）
+          STABLE_VERSION=$(echo "$PRERELEASE_TAG" | sed 's/\(v[0-9]*\.[0-9]*\.[0-9]*\).*/\1/')
+          echo "prerelease_tag=$PRERELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "stable_version=$STABLE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "branch_name=chore/changelog-$STABLE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Extracted: $PRERELEASE_TAG → $STABLE_VERSION"
+
+      - name: Check if Changelog entry already exists
+        id: check
+        run: |
+          STABLE="${{ steps.version.outputs.stable_version }}"
+          if grep -qF "[$STABLE]" CHANGELOG.md; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ Changelog entry for $STABLE already exists, skipping PR creation"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "✅ No existing entry for $STABLE, will create PR"
+          fi
+
+      - name: Fetch release body and update CHANGELOG.md
+        if: steps.check.outputs.exists == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+
+            // 通过 API 获取 Release body，避免 shell 特殊字符注入问题
+            const release = await github.rest.repos.getReleaseByTag({
+              owner,
+              repo,
+              tag: '${{ steps.version.outputs.prerelease_tag }}',
+            });
+
+            const stable = '${{ steps.version.outputs.stable_version }}';
+            const date = new Date().toISOString().slice(0, 10);
+            const releaseUrl = `https://github.com/${owner}/${repo}/releases/tag/${{ steps.version.outputs.prerelease_tag }}`;
+            const body = release.data.body || '';
+
+            // 构建新条目
+            const newEntry = `\n## [${stable}](${releaseUrl}) — ${date}\n\n${body}\n`;
+
+            // 读取 CHANGELOG.md，在 ## [Unreleased] 行后插入新条目
+            let content = fs.readFileSync('CHANGELOG.md', 'utf8');
+            const marker = '## [Unreleased]';
+            const idx = content.indexOf(marker);
+            if (idx === -1) {
+              core.setFailed('CHANGELOG.md 中未找到 ## [Unreleased] 标记，无法插入条目');
+              return;
+            }
+            const insertPos = idx + marker.length;
+            content = content.slice(0, insertPos) + newEntry + content.slice(insertPos);
+            fs.writeFileSync('CHANGELOG.md', content, 'utf8');
+            core.info(`✅ CHANGELOG.md updated with entry for ${stable}`);
+
+      - name: Create branch and commit
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          BRANCH="${{ steps.version.outputs.branch_name }}"
+          STABLE="${{ steps.version.outputs.stable_version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+          git add CHANGELOG.md
+          git commit -m "docs(changelog): add entry for $STABLE"
+          git push origin "$BRANCH"
+
+      - name: Create Pull Request
+        if: steps.check.outputs.exists == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const stable = '${{ steps.version.outputs.stable_version }}';
+            const branch = '${{ steps.version.outputs.branch_name }}';
+            const prereleaseTag = '${{ steps.version.outputs.prerelease_tag }}';
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${{ github.run_id }}`;
+
+            const pr = await github.rest.pulls.create({
+              owner,
+              repo,
+              title: `docs(changelog): 补充 ${stable} 发版说明`,
+              body: [
+                `## 摘要`,
+                ``,
+                `自动生成的 PR，为 **${stable}** 正式版补充 CHANGELOG 条目。`,
+                ``,
+                `- 来源：[\`${prereleaseTag}\`](https://github.com/${owner}/${repo}/releases/tag/${prereleaseTag}) Release notes`,
+                `- 目标分支：\`master\``,
+                ``,
+                `请审阅 CHANGELOG 条目后合并。`,
+                ``,
+                `> 🤖 由 [发布流水线](${runUrl}) 自动生成`,
+              ].join('\n'),
+              head: branch,
+              base: 'master',
+            });
+
+            core.notice(`✅ PR created: ${pr.data.html_url}`);
+
+  # ===========================================================================
+  # Direct Path: PUBLISH TO PYPI -- 直接稳定版发布（hotfix 路径）
   # ===========================================================================
   publish-pypi:
-    name: Publish to PyPI
+    name: Publish to PyPI (Direct Stable)
     runs-on: ubuntu-latest
     needs: build
     if: github.event.release.prerelease == false
@@ -152,6 +354,9 @@ jobs:
           pattern: dist-py*
           path: dist/
           merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
