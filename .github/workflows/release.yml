@@ -106,7 +106,6 @@ jobs:
       name: testpypi
       url: https://test.pypi.org/p/coding-proxy
     permissions:
-      id-token: write
       contents: read
 
     steps:
@@ -167,7 +166,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write  # 更新 GitHub Release 元数据（prerelease=false, make_latest=true）
-      id-token: write  # OIDC 预留（当前使用 API Token）
 
     steps:
       - name: Promote GitHub Release to stable
@@ -344,7 +342,6 @@ jobs:
       name: pypi
       url: https://pypi.org/p/coding-proxy
     permissions:
-      id-token: write
       contents: read
 
     steps:
