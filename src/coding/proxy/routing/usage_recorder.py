@@ -66,7 +66,7 @@ class UsageRecorder:
             )
             if cost_value is not None:
                 cost_str = cost_value.format()
-        logger.info(
+        logger.debug(
             "ModelCall: vendor=%s model_requested=%s model_served=%s "
             "duration=%dms tokens=[in:%d out:%d cache_create:%d cache_read:%d] cost=%s",
             vendor,
