@@ -410,8 +410,17 @@ async def test_query_daily_days_boundary_exact(logger):
 @pytest.mark.asyncio
 async def test_query_daily_groups_by_local_date(logger):
     """UTC 时间 16:30 (= UTC+8 次日 00:30) 应归入本地次日."""
-    # 模拟：北京时间 2026-04-04 00:30 → UTC 2026-04-03 16:30
-    utc_ts = "2026-04-03T16:30:00.000Z"
+    # 动态计算：取「今天本地日期」的前一天作为基准，
+    # 构造该日本地 00:30（= UTC 前日 16:30）的时间戳，
+    # 确保 days=7 窗口必然包含此数据。
+    now_local = datetime.now(_SHANGHAI)
+    target_local_date = now_local.date() - timedelta(days=1)  # 昨天
+    target_local_dt = datetime(
+        target_local_date.year, target_local_date.month,
+        target_local_date.day, 0, 30, 0, tzinfo=_SHANGHAI,
+    )
+    utc_ts = target_local_dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
     await logger._db.execute(
         """INSERT INTO usage_log (ts, vendor, model_requested, model_served,
                                   input_tokens, output_tokens)
@@ -424,8 +433,8 @@ async def test_query_daily_groups_by_local_date(logger):
         rows = await logger.query_daily(days=7)
 
     assert len(rows) == 1
-    # 在 UTC+8 下，UTC 16:30 是次日 00:30，应显示为 2026-04-04
-    assert rows[0]["date"] == "2026-04-04"
+    # 在 UTC+8 下，UTC 16:30 是次日 00:30，应显示为 target_local_date
+    assert rows[0]["date"] == target_local_date.strftime("%Y-%m-%d")
 
 
 @pytest.mark.asyncio
