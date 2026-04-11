@@ -97,10 +97,10 @@ class GoogleOAuthTokenManager(BaseTokenManager):
             from ..auth.providers.google import GoogleOAuthProvider
 
             if not GoogleOAuthProvider.has_required_scopes(scope):
-                raise TokenAcquireError.with_kind(
-                    "Google access_token 缺少 Antigravity 所需 scope",
-                    kind=TokenErrorKind.INSUFFICIENT_SCOPE,
-                    needs_reauth=True,
+                logger.warning(
+                    "Google access_token scope 不完整（%s），"
+                    "可能影响 Generative Language API 调用",
+                    scope,
                 )
         expires_in = data.get("expires_in", 3600)
         logger.info("Google OAuth token refreshed, expires_in=%ds", expires_in)

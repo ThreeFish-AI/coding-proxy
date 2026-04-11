@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 🐛 Bug 修复
+
+- **fix(antigravity)**: 修复 Google OAuth token 刷新后 scope 校验过严导致 403 `ACCESS_TOKEN_SCOPE_INSUFFICIENT` 的问题。将 `_acquire()` 中严格的 5-scope 全量校验降级为 warning 日志，与参考项目 Antigravity-Manager 行为对齐。Google OAuth2 规范允许 refresh_token 返回的 access_token 仅包含部分已授权 scope，此前因校验过于严格导致有效 token 被拒绝使用，触发熔断器。
+
 ## [v0.2.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.0) — 2026-04-09
 
 > [!IMPORTANT]
