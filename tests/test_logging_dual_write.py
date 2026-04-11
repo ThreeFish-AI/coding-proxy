@@ -16,16 +16,13 @@ import json
 import logging
 import logging.config
 
-import pytest
-
+from coding.proxy.config.server import LoggingConfig
 from coding.proxy.logging import (
     JsonFormatter,
     _gzip_namer,
     _gzip_rotator,
     build_log_config,
 )
-from coding.proxy.config.server import LoggingConfig
-
 
 # ── JsonFormatter 测试 ──────────────────────────────────────────
 
@@ -279,37 +276,64 @@ class TestLoggingConfig:
 
 
 class TestDualWriteIntegration:
+    @staticmethod
+    def _reset_logging_state() -> None:
+        """彻底重置 logging 模块全局状态，消除 dictConfig 的副作用.
+
+        ``logging.config.dictConfig()`` 会修改管理器内部状态：
+        - 移除已有 handler 并注入新的（StreamHandler + RotatingFileHandler）
+        - 将 logger 级别设为 DEBUG
+        - **将 propagate 设为 False**（这是导致后续 caplog 测试失败的关键原因）
+
+        若不重置，``coding.proxy`` 及其子 logger 的消息无法传播到 root logger，
+        而 pytest 的 caplog fixture 恰好通过 root logger 捕获记录。
+        """
+        manager = logging.root.manager
+        for name, lg in list(manager.loggerDict.items()):
+            if isinstance(lg, logging.Logger):
+                lg.handlers.clear()
+                lg.level = logging.NOTSET
+                lg.propagate = True
+        root = logging.getLogger()
+        root.setLevel(logging.WARNING)
+
     def test_debug_visible_in_file_not_console(self, tmp_path, capsys):
         """验证 DEBUG 级别消息写入文件但不显示在控制台."""
         log_file = tmp_path / "integration.log"
         config = build_log_config(level="INFO", file_path=str(log_file))
 
-        logging.config.dictConfig(config)
+        try:
+            logging.config.dictConfig(config)
 
-        logger = logging.getLogger("coding.proxy.test_integration")
-        logger.debug("debug_only_message")
-        logger.info("info_message")
+            logger = logging.getLogger("coding.proxy.test_integration")
+            logger.debug("debug_only_message")
+            logger.info("info_message")
 
-        # 验证文件包含两条记录
-        log_content = log_file.read_text()
-        lines = [l for l in log_content.strip().split("\n") if l]
-        assert len(lines) == 2
+            # 验证文件包含两条记录
+            log_content = log_file.read_text()
+            lines = [line for line in log_content.strip().split("\n") if line]
+            assert len(lines) == 2
 
-        messages = [json.loads(l)["message"] for l in lines]
-        assert "debug_only_message" in messages
-        assert "info_message" in messages
+            messages = [json.loads(line)["message"] for line in lines]
+            assert "debug_only_message" in messages
+            assert "info_message" in messages
+        finally:
+            self._reset_logging_state()
 
     def test_console_only_shows_info_and_above(self, tmp_path, capsys):
         """验证控制台只输出 INFO+ 级别的消息."""
         log_file = tmp_path / "console_filter.log"
         config = build_log_config(level="INFO", file_path=str(log_file))
 
-        logging.config.dictConfig(config)
+        try:
+            logging.config.dictConfig(config)
 
-        logger = logging.getLogger("coding.proxy.test_console")
-        logger.debug("should_not_appear")
-        logger.info("should_appear")
+            logger = logging.getLogger("coding.proxy.test_console")
+            logger.debug("should_not_appear")
+            logger.info("should_appear")
 
-        captured = capsys.readouterr()
-        assert "should_not_appear" not in captured.err
-        assert "should_appear" in captured.err
+            captured = capsys.readouterr()
+            assert "should_not_appear" not in captured.err
+            assert "should_appear" in captured.err
+        finally:
+            self._reset_logging_state()
