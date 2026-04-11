@@ -416,8 +416,13 @@ async def test_query_daily_groups_by_local_date(logger):
     now_local = datetime.now(_SHANGHAI)
     target_local_date = now_local.date() - timedelta(days=1)  # 昨天
     target_local_dt = datetime(
-        target_local_date.year, target_local_date.month,
-        target_local_date.day, 0, 30, 0, tzinfo=_SHANGHAI,
+        target_local_date.year,
+        target_local_date.month,
+        target_local_date.day,
+        0,
+        30,
+        0,
+        tzinfo=_SHANGHAI,
     )
     utc_ts = target_local_dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
