@@ -14,7 +14,10 @@ from coding.proxy.config.schema import (
 from coding.proxy.routing.model_mapper import ModelMapper
 from coding.proxy.vendors.antigravity import AntigravityVendor, GoogleOAuthTokenManager
 from coding.proxy.vendors.base import RequestCapabilities
-from coding.proxy.vendors.token_manager import TokenAcquireError, TokenErrorKind
+from coding.proxy.vendors.token_manager import (  # noqa: F401
+    TokenAcquireError,
+    TokenErrorKind,
+)
 
 # --- GoogleOAuthTokenManager ---
 
@@ -130,8 +133,12 @@ async def test_token_manager_close():
 
 
 @pytest.mark.asyncio
-async def test_token_manager_insufficient_scope_requires_reauth():
-    """refresh 成功但 scope 不足时，应要求重新授权."""
+async def test_token_manager_partial_scope_warns_but_succeeds():
+    """refresh 成功但 scope 不完整时，应发出警告但正常返回 token.
+
+    Google OAuth2 规范允许 refresh_token 返回的 access_token 仅包含部分已授权 scope，
+    这是正常行为。参考 Antigravity-Manager 项目，不做刷新后的严格 scope 校验。
+    """
     tm = GoogleOAuthTokenManager("cid", "secret", "refresh")
 
     mock_response = MagicMock()
@@ -147,11 +154,9 @@ async def test_token_manager_insufficient_scope_requires_reauth():
     mock_client.is_closed = False
     tm._client = mock_client
 
-    with pytest.raises(TokenAcquireError) as exc_info:
-        await tm.get_token()
-
-    assert exc_info.value.needs_reauth is True
-    assert exc_info.value.kind == TokenErrorKind.INSUFFICIENT_SCOPE
+    # 应正常返回 token，不再抛异常
+    token = await tm.get_token()
+    assert token == "goog_abc"
 
 
 # --- AntigravityVendor ---
