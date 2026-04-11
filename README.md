@@ -29,7 +29,7 @@ When you're deeply immersed in your coding "zone" with **Claude Code** (or any A
 
 ## 🌟 Core Features
 
-- **⛓️ N-tier Chained Failover**: Automatically downgrades from official Claude Plans, gracefully falling back to GitHub Copilot, then Google Antigravity, with Zhipu GLM acting as the ultimate safety net.
+- **⛓️ N-tier Chained Failover**: Autonomous descending sequence, supporting Claude's official plans, as well as Coding Plans from GitHub Copilot, Z AI, MiniMax, Alibaba Qwen, Xiaomi, Kimi, Doubao, etc.
 - **🛡️ Smart Resilience & Quota Guardians**: Every single vendor node comes fully armed with an independent **Circuit Breaker** and **Quota Guard** to proactively dodge avalanches without breaking a sweat.
 - **👻 Phantom-like Transparency**: **100% transparent** to the client! No code tweaks required. Overwrite `ANTHROPIC_BASE_URL` with a single line, and you're good to go.
 - **🔄 Universal Alchemy (Formats & Models)**: Native support for two-way request/streaming (SSE) translations between Anthropic ←→ Gemini. Plus, auto/DIY model name mapping (e.g., effortlessly morphing `claude-*` into `glm-*`).
