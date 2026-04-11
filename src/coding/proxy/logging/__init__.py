@@ -118,7 +118,11 @@ def build_log_config(
         },
         "loggers": {
             "uvicorn": {"handlers": ["default"], "level": level, "propagate": False},
-            "uvicorn.error": {"handlers": ["default"], "level": level, "propagate": False},
+            "uvicorn.error": {
+                "handlers": ["default"],
+                "level": level,
+                "propagate": False,
+            },
             "uvicorn.access": {
                 "handlers": ["access"],
                 "level": "INFO",
