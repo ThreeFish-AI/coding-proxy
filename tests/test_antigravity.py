@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from coding.proxy.config.schema import (
@@ -18,6 +19,7 @@ from coding.proxy.vendors.token_manager import (  # noqa: F401
     TokenAcquireError,
     TokenErrorKind,
 )
+from coding.proxy.vendors.antigravity import _V1INTERNAL_BASE_URL
 
 # --- GoogleOAuthTokenManager ---
 
@@ -467,3 +469,298 @@ def test_mark_scope_error_if_needed_enhanced_logging(caplog):
 
     # 应包含增强的诊断提示信息
     assert any("v1internal" in r.message for r in caplog.records)
+
+
+# ── project_id 自动发现测试 ──────────────────────────────
+
+
+def test_effective_project_id_returns_configured_value():
+    """配置了 project_id 时优先返回配置值."""
+    config = AntigravityConfig(project_id="manual-project")
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    assert vendor._effective_project_id == "manual-project"
+
+
+def test_effective_project_id_returns_discovered_when_no_config():
+    """未配置但已发现时返回发现值."""
+    config = AntigravityConfig()
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    vendor._project_id_discovered = "auto-discovered"
+    assert vendor._effective_project_id == "auto-discovered"
+
+
+def test_effective_project_id_empty_when_neither():
+    """既未配置也未发现时返回空字符串."""
+    config = AntigravityConfig()
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    assert vendor._effective_project_id == ""
+
+
+@pytest.mark.asyncio
+async def test_discover_project_id_single_active_project():
+    """单个 ACTIVE 项目 → 直接选中并返回 projectId，自动切换 v1internal 模式."""
+    config = AntigravityConfig()  # 未配置 project_id
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "projects": [{
+            "projectId": "my-gcp-123",
+            "projectNumber": "456",
+            "name": "My GCP Project",
+            "lifecycleState": "ACTIVE",
+        }]
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    vendor._client = mock_client
+
+    result = await vendor._discover_project_id("test_token")
+
+    assert result == "my-gcp-123"
+    assert vendor._project_id_discovered == "my-gcp-123"
+    assert vendor._base_url == "https://cloudcode-pa.googleapis.com/v1internal"
+    assert vendor._is_v1internal_mode() is True
+
+
+@pytest.mark.asyncio
+async def test_discover_project_id_multiple_projects_selects_first_active():
+    """多个项目 → 选择第一个 ACTIVE 的."""
+    config = AntigravityConfig()
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "projects": [
+            {"projectId": "inactive-proj", "lifecycleState": "INACTIVE"},
+            {"projectId": "active-proj", "lifecycleState": "ACTIVE"},
+        ]
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    vendor._client = mock_client
+
+    result = await vendor._discover_project_id("test_token")
+    assert result == "active-proj"
+
+
+@pytest.mark.asyncio
+async def test_discover_project_id_no_active_selects_first_non_deleting():
+    """无 ACTIVE 项目 → 选择第一个非 DELETE_REQUESTED 的."""
+    config = AntigravityConfig()
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "projects": [
+            {"projectId": "deleting-proj", "lifecycleState": "DELETE_REQUESTED"},
+            {"projectId": "pending-proj", "lifecycleState": "PENDING"},
+        ]
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    vendor._client = mock_client
+
+    result = await vendor._discover_project_id("test_token")
+    assert result == "pending-proj"
+
+
+@pytest.mark.asyncio
+async def test_discover_project_id_all_deleting_falls_back_to_first():
+    """全部在删除中 → 兜底选择第一个."""
+    config = AntigravityConfig()
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "projects": [
+            {"projectId": "del-1", "lifecycleState": "DELETE_REQUESTED"},
+            {"projectId": "del-2", "lifecycleState": "DELETE_REQUESTED"},
+        ]
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    vendor._client = mock_client
+
+    result = await vendor._discover_project_id("test_token")
+    assert result == "del-1"
+
+
+@pytest.mark.asyncio
+async def test_discover_project_id_empty_list_returns_empty():
+    """空项目列表 → 返回空字符串."""
+    config = AntigravityConfig()
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"projects": []}
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    vendor._client = mock_client
+
+    result = await vendor._discover_project_id("test_token")
+    assert result == ""
+    assert vendor._project_id_discovered == ""
+
+
+@pytest.mark.asyncio
+async def test_discover_project_id_api_error_returns_empty():
+    """API 返回 HTTP 错误 → 返回空字符串."""
+    config = AntigravityConfig()
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+
+    mock_client = AsyncMock()
+    mock_client.is_closed = False
+    mock_client.get.side_effect = httpx.HTTPStatusError(
+        "403 Forbidden",
+        request=MagicMock(),
+        response=httpx.Response(403, request=MagicMock()),
+    )
+    vendor._client = mock_client
+
+    result = await vendor._discover_project_id("test_token")
+    assert result == ""
+    assert vendor._project_discovery_attempted is True
+
+
+@pytest.mark.asyncio
+async def test_discover_project_id_idempotent():
+    """重复调用不重复请求 API（attempted 标志）."""
+    config = AntigravityConfig()
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+
+    # 首次调用：返回空列表（无项目）
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"projects": []}
+    mock_response.raise_for_status = MagicMock()
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    mock_client.is_closed = False
+    vendor._client = mock_client
+
+    r1 = await vendor._discover_project_id("tok1")
+    r2 = await vendor._discover_project_id("tok2")
+
+    assert r1 == ""
+    assert r2 == ""
+    # 只请求了一次（第二次因 attempted=True 短路返回）
+    assert mock_client.get.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_discover_skips_when_configured():
+    """已配置 project_id 时发现返回空且不执行 API 调用."""
+    config = AntigravityConfig(project_id="manual-id")
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+
+    result = await vendor._discover_project_id("token")
+    # 应直接返回空（因为 _project_id 已配置）
+    assert result == ""
+    # attempted 标记应已设置（标记为"已处理"状态）
+    assert vendor._project_discovery_attempted is True
+
+
+@pytest.mark.asyncio
+async def test_prepare_request_triggers_discovery_when_no_project_id():
+    """未配置 project_id 时 _prepare_request 应触发自动发现."""
+    config = AntigravityConfig()
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    vendor._token_manager.get_token = AsyncMock(return_value="tok")
+
+    # Mock discovery 返回成功
+    original_discover = vendor._discover_project_id
+    call_count = [0]
+
+    async def mock_discover(token):
+        call_count[0] += 1
+        vendor._project_id_discovered = "auto-found"
+        vendor._base_url = _V1INTERNAL_BASE_URL if "v1internal" not in vendor._base_url else vendor._base_url
+        return "auto-found"
+
+    vendor._discover_project_id = mock_discover
+
+    body, headers = await vendor._prepare_request(
+        {"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "Hi"}]},
+        {},
+    )
+
+    assert call_count[0] == 1
+    # 恢复原始方法
+    vendor._discover_project_id = original_discover
+
+
+@pytest.mark.asyncio
+async def test_prepare_request_skips_discovery_when_configured():
+    """已配置 project_id 时 _prepare_request 不触发发现."""
+    config = AntigravityConfig(project_id="manual-id")
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+    vendor._token_manager.get_token = AsyncMock(return_value="tok")
+
+    call_count = [0]
+
+    async def mock_discover(token):
+        call_count[0] += 1
+        return ""
+
+    vendor._discover_project_id = mock_discover
+
+    await vendor._prepare_request(
+        {"model": "claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "Hi"}]},
+        {},
+    )
+
+    assert call_count[0] == 0  # 不应触发发现
+
+
+def test_is_v1internal_mode_uses_effective_project_id():
+    """_is_v1internal_mode 应基于 _effective_project_id 判断."""
+    config = AntigravityConfig(base_url=_V1INTERNAL_BASE_URL)
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+
+    # 未配置、未发现 → False
+    assert vendor._is_v1internal_mode() is False
+
+    # 发现后 → True
+    vendor._project_id_discovered = "found-it"
+    assert vendor._is_v1internal_mode() is True
+
+    # 配置值覆盖发现值
+    vendor._project_id_discovered = ""
+    vendor._project_id = "manual"
+    assert vendor._is_v1internal_mode() is True
+
+
+def test_diagnostics_includes_discovery_status():
+    """get_diagnostics() 包含 project_id 来源和 v1internal 模式状态."""
+    config = AntigravityConfig()
+    vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
+
+    diag = vendor.get_diagnostics()
+    assert diag["project_id_source"] == "none"
+    assert diag["is_v1internal_mode"] is False
+
+    # 模拟发现后
+    vendor._project_id_discovered = "auto-p-123"
+    diag = vendor.get_diagnostics()
+    assert diag["project_id_source"] == "discovered"
+    assert diag["discovered_project_id"] == "auto-p-123"
+
+    # 手动配置覆盖
+    vendor._project_id = "manual-p"
+    diag = vendor.get_diagnostics()
+    assert diag["project_id_source"] == "configured"

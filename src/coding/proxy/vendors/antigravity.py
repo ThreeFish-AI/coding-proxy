@@ -37,6 +37,9 @@ _V1INTERNAL_USER_AGENT = (
     "Antigravity/4.1.31 (Macintosh; Intel Mac OS X 10_15_7) "
     "Chrome/132.0.6834.160 Electron/39.2.3"
 )
+# Cloud Resource Manager API（用于自动发现 GCP project_id）
+_CRM_PROJECTS_URL = "https://cloudresourcemanager.googleapis.com/v1/projects"
+_V1INTERNAL_BASE_URL = "https://cloudcode-pa.googleapis.com/v1internal"
 
 
 # ── Google OAuth2 Token 管理器（原 antigravity_token_manager.py） ──
@@ -148,13 +151,120 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         self._project_id: str = config.project_id
         self._session_id: str = uuid.uuid4().hex[:16]
         self._message_count: int = 0
+        # project_id 自动发现状态
+        self._project_id_discovered: str = ""
+        self._project_discovery_attempted: bool = False
 
     def get_name(self) -> str:
         return "antigravity"
 
     def _is_v1internal_mode(self) -> bool:
         """检测是否启用 v1internal 协议模式（与 Antigravity-Manager 对齐）."""
-        return bool(self._project_id) and "v1internal" in self._base_url
+        return bool(self._effective_project_id) and "v1internal" in self._base_url
+
+    @property
+    def _effective_project_id(self) -> str:
+        """返回有效的 project_id：显式配置优先，否则使用自动发现的值."""
+        return self._project_id or self._project_id_discovered
+
+    async def _discover_project_id(self, access_token: str) -> str:
+        """通过 Cloud Resource Manager API 自动发现用户的 GCP project_id.
+
+        利用已有的 cloud-platform OAuth scope 调用 CRM API 列出用户有权限的项目，
+        选择合适的 project_id 后自动切换至 v1internal 模式。
+
+        Args:
+            access_token: 当前有效的 Google OAuth access_token
+
+        Returns:
+            发现到的 project_id；失败返回空字符串
+        """
+        if self._project_discovery_attempted:
+            return self._project_id_discovered
+
+        # 已手动配置则跳过
+        if self._project_id:
+            self._project_discovery_attempted = True
+            return ""
+
+        self._project_discovery_attempted = True
+        client = self._get_client()
+        try:
+            response = await client.get(
+                _CRM_PROJECTS_URL,
+                headers={"authorization": f"Bearer {access_token}"},
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            projects = data.get("projects", [])
+
+            if not projects:
+                logger.warning(
+                    "GCP 项目自动发现完成但未找到任何项目，"
+                    "回退至标准 GLA 模式。请手动配置 project_id 或确认账号已关联 GCP 项目。"
+                )
+                return ""
+
+            # 选择策略：优先 ACTIVE 状态的项目
+            selected = None
+            for p in projects:
+                if p.get("lifecycleState", "") == "ACTIVE":
+                    selected = p
+                    break
+            if selected is None:
+                for p in projects:
+                    if p.get("lifecycleState", "") != "DELETE_REQUESTED":
+                        selected = p
+                        break
+            if selected is None:
+                selected = projects[0]
+
+            project_id = selected.get("projectId", "")
+            if not project_id:
+                logger.warning(
+                    "GCP 项目 '%s' 缺少 projectId 字段，跳过。",
+                    selected.get("name", "unknown"),
+                )
+                return ""
+
+            # 发现成功：原子性切换到 v1internal 模式
+            old_base_url = self._base_url
+            self._base_url = _V1INTERNAL_BASE_URL
+            self._project_id_discovered = project_id
+
+            # 重建 HTTP 客户端（base_url 是初始化参数）
+            if self._client is not None and not self._client.is_closed:
+                await self._client.aclose()
+                self._client = None
+
+            logger.info(
+                "GCP 项目自动发现成功: project_id=%s, name=%s, "
+                "已自动切换至 v1internal 协议模式",
+                project_id,
+                selected.get("name", "unknown"),
+            )
+            return project_id
+
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "GCP 项目自动发现 API 错误 (HTTP %d)，回退至标准 GLA 模式。%s",
+                exc.response.status_code,
+                exc,
+            )
+            return ""
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            logger.warning(
+                "GCP 项目自动发现网络异常，回退至标准 GLA 模式。%s",
+                exc,
+            )
+            return ""
+        except Exception as exc:
+            logger.error(
+                "GCP 项目自动发现未知异常，回退至标准 GLA 模式。%s",
+                exc,
+            )
+            return ""
 
     def get_capabilities(self) -> VendorCapabilities:
         return VendorCapabilities(
@@ -230,6 +340,17 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         self._last_request_adaptations = converted.adaptations
         token = await self._token_manager.get_token()
 
+        # 懒加载：未配置 project_id 时自动发现并切换 v1internal 模式
+        if not self._project_id and not self._project_discovery_attempted:
+            discovered = await self._discover_project_id(token)
+            if discovered:
+                logger.info("已自动启用 v1internal 协议模式（project_id=%s）", discovered)
+            else:
+                logger.info(
+                    "无法自动发现 GCP project_id，继续使用标准 GLA 模式。"
+                    "如需启用 v1internal 协议，请在配置中手动指定 project_id。"
+                )
+
         if self._is_v1internal_mode():
             return self._prepare_v1internal_request(gemini_body, resolved_model, token)
 
@@ -259,7 +380,7 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         """
         self._message_count += 1
         envelope = {
-            "project": self._project_id,
+            "project": self._effective_project_id,
             "requestId": f"agent/antigravity/{self._session_id}/{self._message_count}",
             "request": gemini_body,
             "model": resolved_model,
@@ -277,7 +398,7 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
             "_prepare_v1internal_request: model=%s -> %s, project=%s, requestId=%s",
             resolved_model,
             resolved_model,
-            self._project_id,
+            self._effective_project_id,
             envelope["requestId"],
         )
         return envelope, new_headers
@@ -308,6 +429,14 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
             result["resolved_model"] = self._last_resolved_model
         if self._last_model_resolution_reason:
             result["model_resolution_reason"] = self._last_model_resolution_reason
+        # project_id 发现诊断
+        result["project_id_source"] = (
+            "configured" if self._project_id
+            else ("discovered" if self._project_id_discovered else "none")
+        )
+        if self._project_id_discovered:
+            result["discovered_project_id"] = self._project_id_discovered
+        result["is_v1internal_mode"] = self._is_v1internal_mode()
         return result
 
     async def send_message(
