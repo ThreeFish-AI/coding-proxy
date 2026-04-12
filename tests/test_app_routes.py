@@ -868,3 +868,158 @@ def test_vendor_500_passthrough_preserves_raw_body():
 
     assert resp.status_code == 500
     assert resp.content == original_body
+
+
+# ── /api/reset 重排序测试 ────────────────────────────────────────
+
+
+def _make_reorder_app() -> tuple:
+    """创建包含 anthropic + zhipu + copilot 三层的测试应用."""
+    config = ProxyConfig(
+        tiers=[
+            {
+                "vendor": "anthropic",
+                "enabled": True,
+                "circuit_breaker": {"failure_threshold": 3},
+            },
+            {"vendor": "zhipu", "enabled": True, "api_key": "sk-test"},
+            {"vendor": "copilot", "enabled": True},
+        ],
+        database={"path": "/tmp/test-coding-proxy-reorder.db"},
+    )
+    app = create_app(config)
+
+    async def route_ok(body, headers):
+        return VendorResponse(
+            status_code=200, raw_body=b"{}", usage=UsageInfo(input_tokens=1)
+        )
+
+    for tier in app.state.router.tiers:
+        tier.vendor.send_message = route_ok
+
+    return app
+
+
+def test_reset_promote_single_vendor():
+    """单 vendor → promote_vendor：将该 vendor 提升至首位，其余保持相对顺序."""
+    app = _make_reorder_app()
+    with TestClient(app) as client:
+        resp = client.post("/api/reset", json={"vendors": ["zhipu"]})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tier_order"] == ["zhipu", "anthropic", "copilot"]
+
+        # 验证路由器内部状态一致
+        assert app.state.router.get_vendor_names() == ["zhipu", "anthropic", "copilot"]
+
+
+def test_reset_reorder_full_chain():
+    """多 vendor → reorder_tiers：精确匹配指定顺序."""
+    app = _make_reorder_app()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/reset", json={"vendors": ["copilot", "anthropic", "zhipu"]}
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tier_order"] == ["copilot", "anthropic", "zhipu"]
+        assert app.state.router.get_vendor_names() == [
+            "copilot",
+            "anthropic",
+            "zhipu",
+        ]
+
+
+def test_reset_no_body_backward_compatible():
+    """无 body → 仅 reset，不返回 tier_order（向后兼容）."""
+    app = _make_reorder_app()
+    with TestClient(app) as client:
+        resp = client.post("/api/reset")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "tier_order" not in data
+        assert data["status"] == "ok"
+        # 顺序不变
+        assert app.state.router.get_vendor_names() == [
+            "anthropic",
+            "zhipu",
+            "copilot",
+        ]
+
+
+def test_reset_unknown_vendor_returns_400():
+    """未知 vendor 名称 → 400 错误."""
+    app = _make_reorder_app()
+    with TestClient(app) as client:
+        resp = client.post("/api/reset", json={"vendors": ["nonexist"]})
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert "未知 vendor" in err["message"]
+
+
+def test_reset_duplicate_vendor_returns_400():
+    """重复 vendor 名称 → 400 错误."""
+    app = _make_reorder_app()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/reset", json={"vendors": ["anthropic", "anthropic", "zhipu"]}
+        )
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert "重复" in err["message"]
+
+
+def test_reset_incomplete_vendor_list_returns_400():
+    """不完整的 vendor 列表（缺少现有 tier）→ 400 错误."""
+    app = _make_reorder_app()
+    with TestClient(app) as client:
+        resp = client.post("/api/reset", json={"vendors": ["anthropic", "zhipu"]})
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert "缺少 vendor" in err["message"]
+
+
+def test_reset_reorder_also_resets_circuit_breaker_and_rate_limit():
+    """重排序同时执行全量 reset（熔断器/配额守卫/rate limit 均被重置）."""
+    app = _make_reorder_app()
+    router = app.state.router
+
+    # 手动触发熔断器失败并设置 rate limit
+    router.tiers[0].record_failure(retry_after_seconds=300)
+    router.tiers[0]._rate_limit_deadline = 999999.0
+    assert not router.tiers[0].can_execute()
+
+    with TestClient(app) as client:
+        resp = client.post("/api/reset", json={"vendors": ["zhipu"]})
+        assert resp.status_code == 200
+
+    # 重排序后原 anthropic 仍是 tier 成员，但熔断器/rate limit 已被重置
+    anthropic_tier = next(t for t in router.tiers if t.name == "zhipu")
+    assert anthropic_tier.can_execute()
+    assert not anthropic_tier.is_rate_limited
+
+
+def test_reorder_tiers_shared_reference():
+    """验证 reorder_tiers 使用切片赋值，Executor 立即可见."""
+    from coding.proxy.routing.router import RequestRouter
+    from coding.proxy.routing.tier import VendorTier
+
+    t1 = VendorTier(vendor=MagicMock())
+    t1.vendor.get_name.return_value = "a"
+    t2 = VendorTier(vendor=MagicMock())
+    t2.vendor.get_name.return_value = "b"
+    t3 = VendorTier(vendor=MagicMock())
+    t3.vendor.get_name.return_value = "c"
+
+    router = RequestRouter([t1, t2, t3])
+    executor_tiers = router._executor._tiers
+
+    # 验证共享引用
+    assert executor_tiers is router._tiers
+
+    # 重排序
+    router.reorder_tiers(["c", "a", "b"])
+
+    # Executor 的列表也改变了（因为是同一个对象）
+    assert [t.name for t in executor_tiers] == ["c", "a", "b"]
+    assert router.get_vendor_names() == ["c", "a", "b"]

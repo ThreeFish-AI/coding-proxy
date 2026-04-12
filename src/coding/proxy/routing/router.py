@@ -68,6 +68,66 @@ class RequestRouter:
         """当前活跃供应商名称（由 Executor 在成功响应时写入）."""
         return self._active_vendor_name
 
+    # ── 运行时 N-tier 链路重排序 ─────────────────────────────
+
+    def get_vendor_names(self) -> list[str]:
+        """返回当前 tiers 的供应商名称列表（按优先级顺序）."""
+        return [t.name for t in self._tiers]
+
+    def reorder_tiers(self, vendor_names: list[str]) -> None:
+        """原地重排序 N-tier 链路.
+
+        使用切片赋值保持列表引用同一性，使 ``_RouteExecutor`` 立即可见。
+
+        Args:
+            vendor_names: 新的供应商名称顺序（必须包含所有当前 tier）。
+
+        Raises:
+            ValueError: 名称不存在、有重复、或未覆盖所有 tier。
+        """
+        name_to_tier = {t.name: t for t in self._tiers}
+        current_names = set(name_to_tier)
+
+        # 校验：重复
+        if len(vendor_names) != len(set(vendor_names)):
+            seen: set[str] = set()
+            dups = [n for n in vendor_names if n in seen or seen.add(n)]  # type: ignore[func-returns-value]
+            raise ValueError(f"vendor 名称重复: {', '.join(dups)}")
+
+        # 校验：名称存在性
+        unknown = [n for n in vendor_names if n not in current_names]
+        if unknown:
+            raise ValueError(
+                f"未知 vendor: {', '.join(unknown)}; "
+                f"可用: {', '.join(sorted(current_names))}"
+            )
+
+        # 校验：全量覆盖
+        provided = set(vendor_names)
+        if provided != current_names:
+            missing = current_names - provided
+            raise ValueError(f"缺少 vendor: {', '.join(sorted(missing))}")
+
+        self._tiers[:] = [name_to_tier[n] for n in vendor_names]
+
+    def promote_vendor(self, vendor_name: str) -> None:
+        """将指定 vendor 提升至最高优先级，其余保持相对顺序.
+
+        Args:
+            vendor_name: 要提升的供应商名称。
+
+        Raises:
+            ValueError: 名称不存在。
+        """
+        current_names = self.get_vendor_names()
+        if vendor_name not in current_names:
+            available = sorted(t.name for t in self._tiers)
+            raise ValueError(
+                f"未知 vendor: {vendor_name}; 可用: {', '.join(available)}"
+            )
+        new_order = [vendor_name] + [n for n in current_names if n != vendor_name]
+        self.reorder_tiers(new_order)
+
     # ── 公开路由接口（委托给 _RouteExecutor）───────────────
 
     async def route_stream(
