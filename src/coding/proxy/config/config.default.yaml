@@ -422,6 +422,11 @@ pricing:
     output_cost_per_mtok: ¥2.00
     cache_read_cost_per_mtok: ¥0.16
   - vendor: zhipu
+    model: glm-4.7 # 待区分长短上下文定价
+    input_cost_per_mtok: ¥2.00
+    output_cost_per_mtok: ¥8.00
+    cache_read_cost_per_mtok: ¥0.40
+  - vendor: zhipu
     model: glm-5v-turbo # 待区分长短上下文定价
     input_cost_per_mtok: ¥5.00
     output_cost_per_mtok: ¥22.00
