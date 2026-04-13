@@ -216,16 +216,50 @@ async def _run_usage(
 @app.command()
 def reset(
     port: int = typer.Option(8046, "--port", "-p", help="代理服务端口"),
+    vendor: str | None = typer.Option(
+        None,
+        "--vendor",
+        "-v",
+        help="提升/重排序 vendor 优先级（单个或逗号分隔多个）",
+    ),
 ) -> None:
-    """重置所有层级的熔断器和配额守卫（恢复使用最高优先级供应商）."""
+    """重置所有层级的熔断器和配额守卫.
+
+    可通过 -v 指定运行时 N-tier 链路重排序：
+
+    \b
+      -v zhipu               提升 zhipu 到最高优先级
+      -v zhipu,anthropic     替换整个 N-tier 链路顺序
+    """
     import httpx
 
+    # 构建请求 body
+    json_body: dict | None = None
+    if vendor:
+        parts = [v.strip() for v in vendor.split(",") if v.strip()]
+        if parts:
+            json_body = {"vendors": parts}
+
     try:
-        resp = httpx.post(f"http://127.0.0.1:{port}/api/reset", timeout=5)
+        resp = httpx.post(
+            f"http://127.0.0.1:{port}/api/reset",
+            json=json_body,
+            timeout=5,
+        )
         if resp.status_code == 200:
+            data = resp.json()
             console.print("[green]所有层级的熔断器和配额守卫已重置[/green]")
+            tier_order = data.get("tier_order")
+            if tier_order:
+                order_str = " → ".join(tier_order)
+                console.print(f"[cyan]当前链路顺序:[/] {order_str}")
         else:
-            console.print(f"[red]重置失败: {resp.status_code}[/red]")
+            try:
+                err = resp.json()
+                msg = err.get("error", {}).get("message", resp.text)
+            except Exception:
+                msg = resp.text
+            console.print(f"[red]重置失败: {msg}[/red]")
     except httpx.ConnectError:
         console.print("[red]代理服务未运行[/red]")
 
