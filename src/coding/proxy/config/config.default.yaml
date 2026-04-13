@@ -111,7 +111,7 @@ vendors:
     # 不配置 circuit_breaker → 自动成为终端层，不触发向下故障转移
     circuit_breaker:
       failure_threshold: 3
-      recovery_timeout_seconds: 300
+      recovery_timeout_seconds: 30
       success_threshold: 2
     quota_guard:
       enabled: true # 启用后按 Premium Requests 配额管理
