@@ -261,7 +261,40 @@ def register_admin_routes(app: Any, router: Any) -> None:
     """注册管理操作路由（重置等）."""
 
     @app.post("/api/reset")
-    async def reset_circuit() -> dict:
+    async def reset_circuit(request: Request) -> Response:
+        """重置所有层级的熔断器/配额守卫/rate limit.
+
+        可选 JSON body ``{"vendors": ["v1", "v2", ...]}`` 支持运行时重排序：
+        - 单个 vendor → 提升至最高优先级，其余保持相对顺序
+        - 多个 vendor → 替换整个 N-tier 链路顺序（需覆盖所有 vendor）
+        """
+        # 解析可选 body
+        vendor_names: list[str] | None = None
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                raw = body.get("vendors")
+                if isinstance(raw, list) and raw:
+                    vendor_names = [str(v) for v in raw]
+        except Exception:
+            # 无 body 或非 JSON → 仅 reset（向后兼容）
+            pass
+
+        # 重排序（如果指定）
+        if vendor_names is not None:
+            try:
+                if len(vendor_names) == 1:
+                    router.promote_vendor(vendor_names[0])
+                else:
+                    router.reorder_tiers(vendor_names)
+            except ValueError as exc:
+                return json_error_response(
+                    400,
+                    error_type="invalid_request_error",
+                    message=str(exc),
+                )
+
+        # 全量 reset
         for tier in router.tiers:
             if tier.circuit_breaker:
                 tier.circuit_breaker.reset()
@@ -270,7 +303,16 @@ def register_admin_routes(app: Any, router: Any) -> None:
             if tier.weekly_quota_guard:
                 tier.weekly_quota_guard.reset()
             tier.reset_rate_limit()
-        return {"status": "ok"}
+
+        result: dict[str, Any] = {"status": "ok"}
+        if vendor_names is not None:
+            result["tier_order"] = router.get_vendor_names()
+
+        return Response(
+            content=json.dumps(result, ensure_ascii=False).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
 
 
 def register_reauth_routes(app: Any, reauth_coordinator: Any) -> None:
