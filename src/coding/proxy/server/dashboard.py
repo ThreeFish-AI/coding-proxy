@@ -19,14 +19,20 @@ def _build_favicon() -> bytes:
 
     width, height = 16, 16
     pixel_rows: list[bytes] = []
+    cx, cy = width / 2.0, height / 2.0
     for y in range(height - 1, -1, -1):  # BMP bottom-up
         row = bytearray()
         for x in range(width):
-            t = (x + (height - 1 - y)) / (width + height - 2)
-            r = int(88 + (188 - 88) * t)
-            g = int(166 + (140 - 166) * t)
-            b = 255
-            row.extend([b, g, r, 255])  # BGRA
+            dx = x - cx + 0.5
+            dy = y - cy + 0.5
+            if dx * dx + dy * dy > (width / 2.0) ** 2:
+                row.extend([0, 0, 0, 0])  # 圆外透明
+            else:
+                t = (x + (height - 1 - y)) / (width + height - 2)
+                r = int(88 + (188 - 88) * t)
+                g = int(166 + (140 - 166) * t)
+                b = 255
+                row.extend([b, g, r, 255])  # BGRA
         pixel_rows.append(bytes(row))
 
     bmp_hdr = struct.pack(
@@ -114,7 +120,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .logo {
       width: 30px; height: 30px;
       background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-      border-radius: 8px;
+      border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
       font-size: 15px; font-weight: 700; color: #fff;
       box-shadow: 0 2px 8px rgba(88,166,255,.3);
@@ -468,11 +474,28 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
 <script>
 // ── 颜色配置 ──────────────────────────────────────────────
+// 调色盘参考 Tailwind CSS 400-level，深色背景高区分度最佳实践
 const VENDOR_COLORS = [
-  '#58a6ff','#bc8cff','#3fb950','#ffa657','#f85149',
-  '#79c0ff','#d2a8ff','#56d364','#ffb77c','#ff7b72',
-  '#39d353','#e3b341','#a5d6ff','#f0a9eb','#7ee787',
-  '#ffa198','#cae8ff','#dbedff','#b6e3ff','#54aeff',
+  '#60A5FA',  // blue-400
+  '#FB923C',  // orange-400
+  '#34D399',  // emerald-400
+  '#A78BFA',  // violet-400
+  '#F87171',  // red-400
+  '#38BDF8',  // sky-400
+  '#FBBF24',  // amber-400
+  '#F472B6',  // pink-400
+  '#4ADE80',  // green-400
+  '#E879F9',  // fuchsia-400
+  '#818CF8',  // indigo-400
+  '#2DD4BF',  // teal-400
+  '#FB7185',  // rose-400
+  '#FCD34D',  // yellow-300
+  '#6EE7B7',  // emerald-300
+  '#C4B5FD',  // violet-300
+  '#7DD3FC',  // sky-300
+  '#FED7AA',  // orange-200
+  '#FECDD3',  // rose-200
+  '#BBF7D0',  // green-200
 ];
 
 // ── 工具函数 ──────────────────────────────────────────────
@@ -505,8 +528,67 @@ Chart.defaults.font.size = 11;
 
 const COMMON_SCALE_X = { grid: { display: false }, ticks: { maxTicksLimit: 10 } };
 const COMMON_SCALE_Y = { grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true };
-const COMMON_LEGEND = { position: 'bottom', labels: { boxWidth: 8, padding: 14, usePointStyle: true, pointStyleWidth: 8, font: { size: 11 } } };
+const COMMON_LEGEND = {
+  position: 'bottom',
+  labels: {
+    boxWidth: 8,
+    padding: 14,
+    usePointStyle: true,
+    pointStyle: 'circle',
+    pointStyleWidth: 8,
+    font: { size: 11 },
+    generateLabels: chart => {
+      const items = Chart.defaults.plugins.legend.labels.generateLabels(chart);
+      items.forEach(item => { item.pointStyle = 'circle'; item.lineWidth = 0; });
+      return items;
+    },
+  },
+};
 const COMMON_LINE_DATASET = { tension: .35, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2 };
+
+// ── Legend 点击交互：单击=仅选该项，Ctrl/Meta+单击=多选追加，Shift+单击=排除 ──
+function legendOnClick(e, legendItem, legend) {
+  const chart = legend.chart;
+  const isShift = e.native.shiftKey;
+  const isCtrl  = e.native.ctrlKey || e.native.metaKey;
+  if (chart.config.type === 'doughnut' || chart.config.type === 'pie') {
+    const idx = legendItem.index;
+    const dataLen = chart.data.labels.length;
+    if (isShift) {
+      chart.toggleDataVisibility(idx);
+    } else if (isCtrl) {
+      if (!chart.getDataVisibility(idx)) chart.toggleDataVisibility(idx);
+    } else {
+      const allOthersHidden = [...Array(dataLen).keys()].filter(i => i !== idx).every(i => !chart.getDataVisibility(i));
+      if (allOthersHidden) {
+        for (let i = 0; i < dataLen; i++) { if (!chart.getDataVisibility(i)) chart.toggleDataVisibility(i); }
+      } else {
+        for (let i = 0; i < dataLen; i++) {
+          const vis = chart.getDataVisibility(i);
+          if (i === idx && !vis) chart.toggleDataVisibility(i);
+          if (i !== idx && vis)  chart.toggleDataVisibility(i);
+        }
+      }
+    }
+  } else {
+    const idx = legendItem.datasetIndex;
+    const datasets = chart.data.datasets;
+    if (isShift) {
+      const meta = chart.getDatasetMeta(idx);
+      meta.hidden = !meta.hidden;
+    } else if (isCtrl) {
+      chart.getDatasetMeta(idx).hidden = false;
+    } else {
+      const allOthersHidden = datasets.every((_, i) => i === idx || !!chart.getDatasetMeta(i).hidden);
+      if (allOthersHidden) {
+        datasets.forEach((_, i) => { chart.getDatasetMeta(i).hidden = false; });
+      } else {
+        datasets.forEach((_, i) => { chart.getDatasetMeta(i).hidden = (i !== idx); });
+      }
+    }
+  }
+  chart.update();
+}
 
 // ── 图表实例 ──────────────────────────────────────────────
 let chartTimeline = null;
@@ -659,7 +741,10 @@ function buildTimeline(rows) {
     options: {
       responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
-      plugins: { legend: COMMON_LEGEND },
+      plugins: {
+        legend: { ...COMMON_LEGEND, onClick: legendOnClick },
+        tooltip: { itemSort: (a, b) => (b.raw || 0) - (a.raw || 0) },
+      },
       scales: {
         x: COMMON_SCALE_X,
         y: { ...COMMON_SCALE_Y, ticks: { precision: 0 } },
@@ -699,7 +784,7 @@ function buildVendorDist(rows) {
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
-        legend: COMMON_LEGEND,
+        legend: { ...COMMON_LEGEND, onClick: legendOnClick },
         tooltip: { callbacks: { label: c => ` ${c.label}: ${c.raw.toLocaleString()} 次` } },
       },
     },
@@ -748,8 +833,11 @@ function buildTokenTimeline(rows) {
       responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: COMMON_LEGEND,
-        tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${fmtTokens(c.raw)}` } },
+        legend: { ...COMMON_LEGEND, onClick: legendOnClick },
+        tooltip: {
+          itemSort: (a, b) => (b.raw || 0) - (a.raw || 0),
+          callbacks: { label: c => ` ${c.dataset.label}: ${fmtTokens(c.raw)}` },
+        },
       },
       scales: {
         x: COMMON_SCALE_X,
@@ -811,16 +899,21 @@ function buildModelTokenTimeline(rows) {
       plugins: {
         legend: {
           position: keys.length > 8 ? 'right' : 'bottom',
+          onClick: legendOnClick,
           labels: {
             ...COMMON_LEGEND.labels,
-            generateLabels: chart => Chart.defaults.plugins.legend.labels.generateLabels(chart).map(item => {
+            generateLabels: chart => {
+              const items = COMMON_LEGEND.labels.generateLabels(chart);
               const maxLen = 32;
-              if (item.text.length > maxLen) item.text = item.text.slice(0, maxLen) + '…';
-              return item;
-            }),
+              items.forEach(item => {
+                if (item.text.length > maxLen) item.text = item.text.slice(0, maxLen) + '…';
+              });
+              return items;
+            },
           },
         },
         tooltip: {
+          itemSort: (a, b) => (b.raw || 0) - (a.raw || 0),
           callbacks: {
             label: c => ` ${c.dataset.label}: ${fmtTokens(c.raw)}`,
             footer: items => {
