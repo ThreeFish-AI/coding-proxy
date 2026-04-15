@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from ..logging.db import TimePeriod
 
+
 # ── Favicon (16×16, 蓝紫渐变) ────────────────────────────────────────────
 def _build_favicon() -> bytes:
     """程序化生成 16×16 ICO，蓝紫渐变与 Dashboard Logo 一致."""
@@ -28,13 +29,17 @@ def _build_favicon() -> bytes:
             row.extend([b, g, r, 255])  # BGRA
         pixel_rows.append(bytes(row))
 
-    bmp_hdr = struct.pack("<IIIHHIIIIII", 40, width, height * 2, 1, 32, 0, 0, 0, 0, 0, 0)
+    bmp_hdr = struct.pack(
+        "<IIIHHIIIIII", 40, width, height * 2, 1, 32, 0, 0, 0, 0, 0, 0
+    )
     px_data = b"".join(pixel_rows)
     mask_data = b"\x00\x00\x00\x00" * height
     image_data = bmp_hdr + px_data + mask_data
 
     ico_hdr = struct.pack("<HHH", 0, 1, 1)
-    dir_entry = struct.pack("<BBBBHHII", width, height, 0, 0, 1, 32, len(image_data), 22)
+    dir_entry = struct.pack(
+        "<BBBBHHII", width, height, 0, 0, 1, 32, len(image_data), 22
+    )
     return ico_hdr + dir_entry + image_data
 
 
