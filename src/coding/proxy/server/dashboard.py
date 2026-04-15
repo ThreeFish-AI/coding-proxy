@@ -722,7 +722,7 @@ function buildTimeline(rows) {
       label: v,
       data: dates.map(d => vendorDateMap[v][d] || 0),
       borderColor: color,
-      backgroundColor: makeGradient(ctx, color),
+      backgroundColor: color + '30',
       fill: true,
     };
   });
@@ -735,11 +735,20 @@ function buildTimeline(rows) {
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { ...COMMON_LEGEND, onClick: legendOnClick },
-        tooltip: { itemSort: (a, b) => (b.raw || 0) - (a.raw || 0) },
+        tooltip: {
+          itemSort: (a, b) => (b.raw || 0) - (a.raw || 0),
+          callbacks: {
+            label: c => ` ${c.dataset.label}: ${fmtNum(c.raw)}`,
+            footer: items => {
+              const total = items.reduce((s, i) => s + (i.raw || 0), 0);
+              return total > 0 ? '合计: ' + fmtNum(total) : '';
+            },
+          },
+        },
       },
       scales: {
         x: COMMON_SCALE_X,
-        y: { ...COMMON_SCALE_Y, ticks: { precision: 0 } },
+        y: { ...COMMON_SCALE_Y, stacked: true, ticks: { precision: 0 } },
       },
     },
   });
@@ -813,7 +822,7 @@ function buildTokenTimeline(rows) {
       label: v,
       data: dates.map(d => vendorDateMap[v][d] || 0),
       borderColor: color,
-      backgroundColor: makeGradient(ctx, color),
+      backgroundColor: color + '30',
       fill: true,
     };
   });
@@ -828,12 +837,18 @@ function buildTokenTimeline(rows) {
         legend: { ...COMMON_LEGEND, onClick: legendOnClick },
         tooltip: {
           itemSort: (a, b) => (b.raw || 0) - (a.raw || 0),
-          callbacks: { label: c => ` ${c.dataset.label}: ${fmtTokens(c.raw)}` },
+          callbacks: {
+            label: c => ` ${c.dataset.label}: ${fmtTokens(c.raw)}`,
+            footer: items => {
+              const total = items.reduce((s, i) => s + (i.raw || 0), 0);
+              return total > 0 ? '合计: ' + fmtTokens(total) : '';
+            },
+          },
         },
       },
       scales: {
         x: COMMON_SCALE_X,
-        y: { ...COMMON_SCALE_Y, ticks: { callback: v => fmtTokens(v) } },
+        y: { ...COMMON_SCALE_Y, stacked: true, ticks: { callback: v => fmtTokens(v) } },
       },
     },
   });
