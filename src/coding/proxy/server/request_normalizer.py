@@ -42,9 +42,10 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
     处理策略：
     1. 移除供应商私有块（如 server_tool_use_delta）
     2. 重写无效/非标准的 tool_use / tool_result ID
-    3. **剥离错位的 tool_result 块**：Anthropic API 要求 ``tool_result`` 只能出现在
+    3. **重定位错位的 tool_result 块**：Anthropic API 要求 ``tool_result`` 只能出现在
        ``user`` 消息中。当检测到非 user 消息中存在 ``tool_result`` 时，
-       直接剥离以防止上游返回 ``400 invalid_request_error`` 导致全链路降级失败。
+       将其重定位到紧邻的下一个 user 消息中，以保持 ``tool_use`` / ``tool_result``
+       配对关系，防止上游返回 ``400 invalid_request_error``。
     """
     normalized = copy.deepcopy(body)
     adaptations: list[str] = []
@@ -57,8 +58,9 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
         normalized_counter += 1
         return f"toolu_normalized_{normalized_counter}"
 
-    # 收集本轮被剥离的 misplaced tool_result 信息（用于汇总日志）
-    stripped_misplaced: list[
+    # 收集本轮被重定位的 misplaced tool_result 块及日志信息
+    relocated_results: list[tuple[int, dict[str, Any]]] = []  # (source_msg_idx, block)
+    relocated_log_info: list[
         tuple[str, int, int, str]
     ] = []  # (role, msg_idx, blk_idx, tool_use_id)
 
@@ -138,18 +140,25 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
                     return None
                 return normalized_block
 
-            # tool_result 出现在非 user 消息中（如 assistant）—— 收集信息，稍后汇总日志。
+            # tool_result 出现在非 user 消息中（如 assistant）—— 重定位到紧邻的 user 消息。
             # 典型触发场景：跨供应商降级时（如 Zhipu GLM → Anthropic），
             # GLM-5 在 assistant 响应中同时包含 tool_use 和 tool_result 内容块，
             # Claude Code 将此响应当作对话历史存储后，tool_result 出现在 assistant 角色消息中。
-            # Anthropic API 严格要求 tool_result 只能出现在 user 消息中，因此必须剥离。
-            adaptations.append("misplaced_tool_result_stripped")
-            stripped_misplaced.append(
+            # 直接剥离会导致 tool_use 成为孤儿块（无配对 tool_result），触发上游 400 错误。
+            # 因此改为重定位：将 tool_result 移至紧邻的下一个 user 消息中。
+            normalized_block = dict(block)
+            tool_use_id = normalized_block.get("tool_use_id")
+            if isinstance(tool_use_id, str) and tool_use_id in tool_id_map:
+                normalized_block["tool_use_id"] = tool_id_map[tool_use_id]
+                adaptations.append("tool_result_tool_use_id_rewritten")
+            adaptations.append("misplaced_tool_result_relocated")
+            relocated_results.append((message_index, normalized_block))
+            relocated_log_info.append(
                 (
                     message_role,
                     message_index,
                     block_index,
-                    block.get("tool_use_id", "N/A"),
+                    normalized_block.get("tool_use_id", "N/A"),
                 )
             )
             return None
@@ -175,11 +184,34 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
                 new_content.append(normalized_block)
         message["content"] = new_content
 
-    # ── 汇总日志：misplaced tool_result 剥离 ──────────────────
-    # 将逐块的 WARNING 合并为单条日志，并对同一 tool_use_id 跨请求去重：
-    # 首次出现 → WARNING（含因果上下文），后续 → DEBUG。
-    if stripped_misplaced:
-        _emit_misplaced_tool_result_summary(stripped_misplaced)
+    # ── 重定位 misplaced tool_result 到紧邻的 user 消息 ──────────
+    # 按源消息索引降序处理，避免插入新消息时索引偏移。
+    messages_list = normalized.get("messages", [])
+    for source_idx, result_block in sorted(
+        relocated_results, key=lambda x: x[0], reverse=True
+    ):
+        target_user_idx = None
+        for j in range(source_idx + 1, len(messages_list)):
+            if isinstance(messages_list[j], dict) and messages_list[j].get("role") == "user":
+                target_user_idx = j
+                break
+        if target_user_idx is not None:
+            # 追加到已有 user 消息的 content 末尾
+            target_content = messages_list[target_user_idx].get("content")
+            if isinstance(target_content, list):
+                target_content.append(result_block)
+            else:
+                messages_list[target_user_idx]["content"] = [result_block]
+        else:
+            # 无后续 user 消息：插入一条合成 user 消息
+            messages_list.insert(source_idx + 1, {
+                "role": "user",
+                "content": [result_block],
+            })
+
+    # ── 汇总日志：misplaced tool_result 重定位 ──────────────────
+    if relocated_log_info:
+        _emit_misplaced_tool_result_summary(relocated_log_info)
 
     return NormalizationResult(
         body=normalized,
@@ -191,10 +223,10 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
 def _emit_misplaced_tool_result_summary(
     stripped: list[tuple[str, int, int, str]],
 ) -> None:
-    """为被剥离的 misplaced tool_result 输出汇总日志.
+    """为被重定位的 misplaced tool_result 输出汇总日志.
 
     策略：
-    - 将同一次请求中的多个剥离事件合并为单条日志
+    - 将同一次请求中的多个重定位事件合并为单条日志
     - 首次出现的 tool_use_id → WARNING（含完整因果上下文）
     - 同一 tool_use_id 在后续请求中再次出现 → DEBUG（避免日志噪声）
 
@@ -228,13 +260,13 @@ def _emit_misplaced_tool_result_summary(
         )
         new_count = sum(1 for _, _, _, tid in stripped if tid in new_id_set)
         logger.warning(
-            "Vendor degradation adaptation: stripped %d misplaced tool_result block(s) "
-            "from non-user message(s). Cause: cross-vendor conversation history contains "
-            "tool_result blocks in assistant messages (typical when GLM-5 includes tool "
-            "results inline in responses). Anthropic API strictly requires tool_result "
-            "only in user messages, so these blocks are stripped to prevent 400 "
-            "invalid_request_error. Affected: %s. Subsequent occurrences of these "
-            "tool_use_ids will be logged at DEBUG level.",
+            "Vendor degradation adaptation: relocated %d misplaced tool_result block(s) "
+            "from non-user message(s) to adjacent user message(s). Cause: cross-vendor "
+            "conversation history contains tool_result blocks in assistant messages "
+            "(typical when GLM-5 includes tool results inline in responses). Anthropic "
+            "API requires tool_result only in user messages, so these blocks are "
+            "relocated to maintain tool_use/tool_result pairing. Affected: %s. "
+            "Subsequent occurrences of these tool_use_ids will be logged at DEBUG level.",
             new_count,
             positions,
         )
@@ -243,7 +275,7 @@ def _emit_misplaced_tool_result_summary(
         # 已报告过的：DEBUG
         known_count = sum(1 for _, _, _, tid in stripped if tid in known_id_set)
         logger.debug(
-            "Normalization: stripped %d previously reported misplaced tool_result "
+            "Normalization: relocated %d previously reported misplaced tool_result "
             "block(s) (tool_use_ids: %s)",
             known_count,
             ", ".join(sorted(known_id_set)),
