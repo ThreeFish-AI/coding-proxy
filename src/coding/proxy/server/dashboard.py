@@ -11,6 +11,35 @@ from fastapi.responses import HTMLResponse, Response
 
 from ..logging.db import TimePeriod
 
+# ── Favicon (16×16, 蓝紫渐变) ────────────────────────────────────────────
+def _build_favicon() -> bytes:
+    """程序化生成 16×16 ICO，蓝紫渐变与 Dashboard Logo 一致."""
+    import struct
+
+    width, height = 16, 16
+    pixel_rows: list[bytes] = []
+    for y in range(height - 1, -1, -1):  # BMP bottom-up
+        row = bytearray()
+        for x in range(width):
+            t = (x + (height - 1 - y)) / (width + height - 2)
+            r = int(88 + (188 - 88) * t)
+            g = int(166 + (140 - 166) * t)
+            b = 255
+            row.extend([b, g, r, 255])  # BGRA
+        pixel_rows.append(bytes(row))
+
+    bmp_hdr = struct.pack("<IIIHHIIIIII", 40, width, height * 2, 1, 32, 0, 0, 0, 0, 0, 0)
+    px_data = b"".join(pixel_rows)
+    mask_data = b"\x00\x00\x00\x00" * height
+    image_data = bmp_hdr + px_data + mask_data
+
+    ico_hdr = struct.pack("<HHH", 0, 1, 1)
+    dir_entry = struct.pack("<BBBBHHII", width, height, 0, 0, 1, 32, len(image_data), 22)
+    return ico_hdr + dir_entry + image_data
+
+
+_FAVICON_ICO: bytes = _build_favicon()
+
 logger = logging.getLogger(__name__)
 
 # ── HTML 模板 ──────────────────────────────────────────────────────────────
@@ -20,7 +49,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>coding-proxy Dashboard</title>
+  <title>Coding Proxy Dashboard</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <style>
     :root {
@@ -125,7 +155,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .charts-grid-3 {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr 2fr;
       gap: 14px;
       margin-bottom: 14px;
     }
@@ -197,6 +227,35 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border: 1px solid rgba(188,140,255,.25);
     }
     .arrow { color: var(--text-secondary); margin: 0 4px; }
+    /* ── 时间区间选择栏 ── */
+    .time-range-bar {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 16px; flex-wrap: wrap;
+    }
+    .time-range-label { font-size: 13px; color: var(--text-secondary); }
+    .range-btn {
+      padding: 4px 14px; border-radius: 14px;
+      background: rgba(48,54,61,.6);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-size: 12px; cursor: pointer;
+      transition: background .15s, color .15s, border-color .15s;
+    }
+    .range-btn:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+    .range-btn.active {
+      background: rgba(88,166,255,.15);
+      border-color: rgba(88,166,255,.5);
+      color: var(--accent-blue);
+    }
+    .range-custom { display: none; align-items: center; gap: 6px; }
+    .range-custom.visible { display: flex; }
+    .range-date {
+      padding: 3px 8px; border-radius: var(--radius);
+      background: var(--bg-card); border: 1px solid var(--border);
+      color: var(--text-primary); font-size: 12px;
+      color-scheme: dark;
+    }
+    .range-sep { font-size: 12px; color: var(--text-secondary); }
     /* ── 空态 ── */
     .empty {
       text-align: center; padding: 32px;
@@ -210,7 +269,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <header>
   <div class="header-left">
     <div class="logo">C</div>
-    <h1>coding-proxy Dashboard</h1>
+    <h1>Coding Proxy Dashboard</h1>
     <span class="badge" id="version-badge">v-.-.-</span>
   </div>
   <div class="header-right">
@@ -220,6 +279,19 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 </header>
 
 <main>
+  <!-- 时间区间选择器 -->
+  <div class="time-range-bar">
+    <span class="time-range-label">数据时间区间：</span>
+    <button class="range-btn active" onclick="setTimeRange(7, this)">最近一周</button>
+    <button class="range-btn" onclick="setTimeRange(30, this)">最近一月</button>
+    <button class="range-btn" onclick="setTimeRange(0, this)">自选区间</button>
+    <div class="range-custom" id="range-custom">
+      <input type="date" id="range-start" class="range-date" onchange="applyCustomRange()" />
+      <span class="range-sep">–</span>
+      <input type="date" id="range-end" class="range-date" onchange="applyCustomRange()" />
+    </div>
+  </div>
+
   <!-- KPI 卡片 -->
   <div class="kpi-grid" id="kpi-grid">
     <div class="kpi-card"><div class="kpi-label">今日请求数</div><div class="kpi-value color-blue" id="kpi-req-today">–</div><div class="kpi-sub" id="kpi-req-week">本周 –</div></div>
@@ -239,25 +311,25 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </div>
     <div class="card">
-      <div class="card-title">近 7 天请求量趋势</div>
+      <div class="card-title" id="title-timeline">近 7 天请求量趋势</div>
       <div class="chart-wrap-lg">
         <canvas id="chart-timeline"></canvas>
       </div>
     </div>
   </div>
 
-  <!-- 供应商分布 + Token 类型分布 -->
+  <!-- 供应商分布 + Token 量趋势 -->
   <div class="charts-grid-3">
     <div class="card">
-      <div class="card-title">供应商请求分布（近 7 天）</div>
+      <div class="card-title" id="title-vendor-dist">供应商请求分布（近 7 天）</div>
       <div class="chart-wrap">
         <canvas id="chart-vendor-dist"></canvas>
       </div>
     </div>
     <div class="card">
-      <div class="card-title">Token 类型分布（近 7 天）</div>
-      <div class="chart-wrap">
-        <canvas id="chart-token-type"></canvas>
+      <div class="card-title" id="title-token-timeline">近 7 天 Token 量趋势</div>
+      <div class="chart-wrap-lg">
+        <canvas id="chart-token-timeline"></canvas>
       </div>
     </div>
   </div>
@@ -317,11 +389,11 @@ Chart.defaults.font.size = 12;
 // ── 图表实例 ──────────────────────────────────────────────
 let chartTimeline = null;
 let chartVendorDist = null;
-let chartTokenType = null;
+let chartTokenTimeline = null;
 
 function destroyCharts() {
-  [chartTimeline, chartVendorDist, chartTokenType].forEach(c => c && c.destroy());
-  chartTimeline = chartVendorDist = chartTokenType = null;
+  [chartTimeline, chartVendorDist, chartTokenTimeline].forEach(c => c && c.destroy());
+  chartTimeline = chartVendorDist = chartTokenTimeline = null;
 }
 
 // ── 数据拉取 ──────────────────────────────────────────────
@@ -507,49 +579,52 @@ function buildVendorDist(rows) {
   });
 }
 
-// ── Token 类型堆叠柱图 ────────────────────────────────────
-function buildTokenType(rows) {
-  // 按 date 汇总 token 类型
-  const byDate = {};
+// ── Token 量趋势折线图 ────────────────────────────────────
+function buildTokenTimeline(rows) {
+  // 按 vendor 分组，按 date 汇总 token 总量
+  const vendorDateMap = {}; // vendor → {date → total_tokens}
   const allDates = new Set();
   for (const r of rows) {
-    const d = r.date;
-    if (!d) continue;
-    if (!byDate[d]) byDate[d] = {input:0,output:0,cache_creation:0,cache_read:0};
-    byDate[d].input += r.total_input || 0;
-    byDate[d].output += r.total_output || 0;
-    byDate[d].cache_creation += r.total_cache_creation || 0;
-    byDate[d].cache_read += r.total_cache_read || 0;
+    const v = r.vendor, d = r.date;
+    if (!v || !d) continue;
+    if (!vendorDateMap[v]) vendorDateMap[v] = {};
+    const total = (r.total_input || 0) + (r.total_output || 0)
+                + (r.total_cache_creation || 0) + (r.total_cache_read || 0);
+    vendorDateMap[v][d] = (vendorDateMap[v][d] || 0) + total;
     allDates.add(d);
   }
   const dates = [...allDates].sort();
+  const vendors = Object.keys(vendorDateMap).sort();
 
-  if (chartTokenType) chartTokenType.destroy();
-  const ctx = document.getElementById('chart-token-type').getContext('2d');
+  if (chartTokenTimeline) chartTokenTimeline.destroy();
+  const ctx = document.getElementById('chart-token-timeline').getContext('2d');
   if (!dates.length) {
     ctx.canvas.parentElement.innerHTML = '<div class="empty">暂无数据</div>';
     return;
   }
 
-  const typeLabels = { input:'输入', output:'输出', cache_creation:'缓存写入', cache_read:'缓存读取' };
-  const datasets = Object.entries(typeLabels).map(([key, label]) => ({
-    label,
-    data: dates.map(d => byDate[d]?.[key] || 0),
-    backgroundColor: TOKEN_COLORS[key],
-    stack: 'tokens',
-    borderWidth: 0,
+  const datasets = vendors.map((v, i) => ({
+    label: v,
+    data: dates.map(d => vendorDateMap[v][d] || 0),
+    borderColor: VENDOR_COLORS[i % VENDOR_COLORS.length],
+    backgroundColor: VENDOR_COLORS[i % VENDOR_COLORS.length] + '22',
+    fill: true,
+    tension: .3,
+    pointRadius: 3,
+    pointHoverRadius: 5,
   }));
 
-  chartTokenType = new Chart(ctx, {
-    type: 'bar',
+  chartTokenTimeline = new Chart(ctx, {
+    type: 'line',
     data: { labels: dates, datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, padding: 10 } } },
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, padding: 12 } } },
       scales: {
-        x: { stacked: true, grid: { color: '#30363d' } },
+        x: { grid: { color: '#30363d' } },
         y: {
-          stacked: true, grid: { color: '#30363d' }, beginAtZero: true,
+          grid: { color: '#30363d' }, beginAtZero: true,
           ticks: { callback: v => fmtTokens(v) },
         },
       },
@@ -572,6 +647,56 @@ function updateFtTable(failoverStats) {
     </tr>`).join('');
 }
 
+// ── 时间区间控制 ──────────────────────────────────────────
+let currentDays = 7;
+
+function setTimeRange(days, btn) {
+  currentDays = days;
+  document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const customEl = document.getElementById('range-custom');
+  if (days === 0) {
+    customEl.classList.add('visible');
+    // 初始化日期：默认今天往前 7 天
+    const today = new Date();
+    const weekAgo = new Date(today);
+    weekAgo.setDate(weekAgo.getDate() - 6);
+    document.getElementById('range-end').value = today.toISOString().slice(0, 10);
+    document.getElementById('range-start').value = weekAgo.toISOString().slice(0, 10);
+    applyCustomRange();
+  } else {
+    customEl.classList.remove('visible');
+    refresh();
+  }
+}
+
+function applyCustomRange() {
+  const s = document.getElementById('range-start').value;
+  const e = document.getElementById('range-end').value;
+  if (!s || !e) return;
+  const startMs = new Date(s).getTime();
+  const endMs = new Date(e).getTime();
+  if (endMs < startMs) return;
+  currentDays = Math.ceil((endMs - startMs) / 86400000) + 1;
+  refresh();
+}
+
+function rangeLabel() {
+  if (currentDays <= 7) return '近 7 天';
+  if (currentDays <= 30) return '近 30 天';
+  return '近 ' + currentDays + ' 天';
+}
+
+function updateChartTitles(days) {
+  const label = days <= 7 ? '近 7 天' : (days <= 30 ? '近 30 天' : '近 ' + days + ' 天');
+  const tl = document.getElementById('title-timeline');
+  const tt = document.getElementById('title-token-timeline');
+  const vd = document.getElementById('title-vendor-dist');
+  if (tl) tl.textContent = label + ' 请求量趋势';
+  if (tt) tt.textContent = label + ' Token 量趋势';
+  if (vd) vd.textContent = '供应商请求分布（' + label + '）';
+}
+
 // ── 主刷新逻辑 ────────────────────────────────────────────
 let refreshing = false;
 async function refresh() {
@@ -579,9 +704,10 @@ async function refresh() {
   refreshing = true;
   document.getElementById('refresh-time').textContent = '刷新中…';
   try {
+    const days = currentDays > 0 ? currentDays : 7;
     const [summary, timeline, status] = await Promise.all([
       fetchJSON('/api/dashboard/summary'),
-      fetchJSON('/api/dashboard/timeline?days=7'),
+      fetchJSON('/api/dashboard/timeline?days=' + days),
       fetchJSON('/api/status'),
     ]);
 
@@ -592,11 +718,12 @@ async function refresh() {
 
     updateKPI(summary);
     updateVendorStatus(status);
+    updateChartTitles(days);
 
     const rows = timeline.rows || [];
     buildTimeline(rows);
     buildVendorDist(rows);
-    buildTokenType(rows);
+    buildTokenTimeline(rows);
 
     updateFtTable(summary.failover_stats || []);
 
@@ -686,6 +813,11 @@ def _compute_cost_str(rows: list[dict], pricing_table: Any) -> str:
 def register_dashboard_routes(app: Any) -> None:
     """注册 Dashboard 相关路由."""
     from .. import __version__
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Response:
+        """返回内嵌 favicon."""
+        return Response(content=_FAVICON_ICO, media_type="image/x-icon")
 
     @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
     async def dashboard() -> HTMLResponse:
