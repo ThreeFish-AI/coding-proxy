@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [v0.2.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.3a1) — 2026-04-15
+
+- feat(dashboard): 新增实时 Web Dashboard 页面，聚合展示流量与用量统计;
+- docs(user-guide): 补充 POST /v1/messages 完整 API 参考文档;
+- fix(request-normalizer): misplaced tool_result 从剥离改为重定位，修复跨供应商降级后 Anthropic 恢复失败;
+
 ## [v0.2.2](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.2) — 2026-04-13
 
 - feat(reset): CLI reset 命令新增 -v/--vendor 参数，支持运行时 N-tier 链路重排序（逗号分隔的 vendor 列表）;
