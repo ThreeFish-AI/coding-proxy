@@ -197,6 +197,7 @@ class QuotaGuard:
                 if self._budget > 0
                 else 0,
                 "threshold_percent": self._threshold * 100,
+                "window_hours": self.window_hours,
             }
 
     def _expire(self) -> None:

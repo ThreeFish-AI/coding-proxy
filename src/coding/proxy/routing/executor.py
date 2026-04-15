@@ -276,7 +276,12 @@ class _RouteExecutor:
                         tier.name,
                         usage,
                     )
-                tier.record_success(info.input_tokens + info.output_tokens)
+                tier.record_success(
+                    info.input_tokens
+                    + info.output_tokens
+                    + info.cache_creation_tokens
+                    + info.cache_read_tokens
+                )
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = usage.get("model_served") or tier.vendor.map_model(model)
