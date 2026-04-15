@@ -353,3 +353,7 @@ def register_all_routes(
     register_admin_routes(app, router)
     if reauth_coordinator:
         register_reauth_routes(app, reauth_coordinator)
+
+    from .dashboard import register_dashboard_routes
+
+    register_dashboard_routes(app)
