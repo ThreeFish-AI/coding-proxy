@@ -91,7 +91,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     @keyframes fadeInUp {
       from { opacity: 0; transform: translateY(10px); }
-      to   { opacity: 1; transform: translateY(0); }
+      to   { opacity: 1; }
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -352,6 +352,40 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .loading { opacity: .4; pointer-events: none; }
     /* ── 图表标签截断 ── */
     .chart-legend-note { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; text-align: center; }
+    /* ── 外部 Tooltip ── */
+    #chart-tooltip {
+      position: fixed;
+      pointer-events: none;
+      background: rgba(13,17,23,.95);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--text-primary);
+      box-shadow: var(--shadow-md);
+      z-index: 1000;
+      opacity: 0;
+      transition: opacity .15s ease;
+      max-width: 360px;
+      max-height: 60vh;
+      overflow-y: auto;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+    #chart-tooltip.active { opacity: 1; }
+    #chart-tooltip-title {
+      font-weight: 600; margin-bottom: 6px; padding-bottom: 6px;
+      border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 11px;
+    }
+    #chart-tooltip-items { display: flex; flex-direction: column; gap: 3px; }
+    .tt-item { display: flex; align-items: center; gap: 8px; line-height: 1.4; }
+    .tt-color { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .tt-label { flex: 1; color: var(--text-primary); }
+    .tt-value { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-secondary); }
+    #chart-tooltip-footer {
+      margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle);
+      font-weight: 500; font-size: 11px; color: var(--text-secondary);
+    }
   </style>
 </head>
 <body>
@@ -457,6 +491,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
 </main>
 
+<div id="chart-tooltip"></div>
+
 <script>
 // ── 颜色配置 ──────────────────────────────────────────────
 // 调色盘参考 Tailwind CSS 400-level，深色背景高区分度最佳实践
@@ -527,12 +563,83 @@ const COMMON_LEGEND = {
     font: { size: 11 },
     generateLabels: chart => {
       const items = Chart.defaults.plugins.legend.labels.generateLabels(chart);
-      items.forEach(item => { item.pointStyle = 'circle'; item.lineWidth = 0; item.fillStyle = item.strokeStyle; });
-      return items;
+      return items.filter(item => isValidLabel(item.text)).map(item => {
+        item.pointStyle = 'circle';
+        item.lineWidth = 0;
+        item.fillStyle = item.strokeStyle;
+        return item;
+      });
     },
   },
 };
 const COMMON_LINE_DATASET = { tension: .35, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2 };
+
+// ── 外部 Tooltip（数据项较多时可溢出卡片边界）─────────────
+function createExternalTooltipHandler(context) {
+  const { chart, tooltip } = context;
+  const el = document.getElementById('chart-tooltip');
+  if (!el) return;
+
+  if (!tooltip.opacity) {
+    el.classList.remove('active');
+    return;
+  }
+
+  // 构建 HTML
+  const titleLines = tooltip.title || [];
+  const dataPoints = tooltip.dataPoints || [];
+  const footerLines = tooltip.footer || [];
+
+  let html = '';
+  if (titleLines.length) {
+    html += '<div id="chart-tooltip-title">' + titleLines.join('<br>') + '</div>';
+  }
+  if (dataPoints.length) {
+    html += '<div id="chart-tooltip-items">';
+    dataPoints.forEach(dp => {
+      const color = dp.dataset.borderColor || dp.backgroundColor || '#8b949e';
+      const label = dp.dataset.label || '';
+      const value = fmtTokens(dp.raw);
+      html += '<div class="tt-item">' +
+        '<span class="tt-color" style="background:' + color + '"></span>' +
+        '<span class="tt-label">' + label + '</span>' +
+        '<span class="tt-value">' + value + '</span>' +
+        '</div>';
+    });
+    html += '</div>';
+  }
+  if (footerLines.length) {
+    html += '<div id="chart-tooltip-footer">' + footerLines.join('<br>') + '</div>';
+  }
+  el.innerHTML = html;
+
+  // 定位（fixed，基于 canvas 视口坐标）
+  const canvasRect = chart.canvas.getBoundingClientRect();
+  const elW = el.offsetWidth || 200;
+  const elH = el.offsetHeight || 100;
+  const caretX = tooltip.caretX || 0;
+  const caretY = tooltip.caretY || 0;
+
+  let left = canvasRect.left + caretX + 14;
+  let top = canvasRect.top + caretY - 14;
+
+  // 边界修正
+  if (left + elW > window.innerWidth - 10) {
+    left = canvasRect.left + caretX - elW - 14;
+  }
+  if (top + elH > window.innerHeight - 10) {
+    top = window.innerHeight - elH - 10;
+  }
+  if (top < 10) {
+    top = 10;
+  }
+
+  el.style.left = left + 'px';
+  el.style.top = top + 'px';
+  el.classList.add('active');
+}
+
+const EXTERNAL_TOOLTIP = { enabled: false, external: createExternalTooltipHandler };
 
 // ── Legend 点击交互：单击=仅选该项，Ctrl/Meta+单击=多选追加，Shift+单击=排除 ──
 function legendOnClick(e, legendItem, legend) {
@@ -588,6 +695,8 @@ function destroyCharts() {
   [chartTimeline, chartVendorDist, chartTokenTimeline, chartModelTokenTimeline]
     .forEach(c => c && c.destroy());
   chartTimeline = chartVendorDist = chartTokenTimeline = chartModelTokenTimeline = null;
+  const tip = document.getElementById('chart-tooltip');
+  if (tip) tip.classList.remove('active');
 }
 
 // ── 数据拉取 ──────────────────────────────────────────────
@@ -926,9 +1035,10 @@ function buildModelTokenTimeline(rows) {
           },
         },
         tooltip: {
+          ...EXTERNAL_TOOLTIP,
           itemSort: (a, b) => (b.raw || 0) - (a.raw || 0),
           callbacks: {
-            label: c => ` ${c.dataset.label}: ${fmtTokens(c.raw)}`,
+            label: c => ' ' + c.dataset.label + ': ' + fmtTokens(c.raw),
             footer: items => {
               const total = items.reduce((s, i) => s + (i.raw || 0), 0);
               return total > 0 ? '合计: ' + fmtTokens(total) : '';
