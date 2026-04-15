@@ -908,17 +908,298 @@ curl -I http://127.0.0.1:8046/
 
 ### 5.2 POST /v1/messages
 
-代理 Anthropic Messages API，支持流式和非流式请求。
+代理 Anthropic Messages API，支持流式（SSE）与非流式请求。请求经过规范化处理后，路由至配置的 vendor tier 链；若当前 tier 不可用或返回可恢复错误，自动故障转移至下一 tier。
+
+#### 5.2.1 请求格式
+
+**请求头**
+
+| 请求头 | 必填 | 说明 |
+|--------|------|------|
+| `Content-Type` | ✓ | 固定为 `application/json` |
+| `Authorization` | ✗ | 格式 `Bearer <token>`；对 Anthropic vendor 透传，对其他 vendor 由代理内部凭证管理 |
+| `anthropic-version` | ✗ | Anthropic API 版本，建议传 `2023-06-01`；透传至上游 |
+| `anthropic-beta` | ✗ | Beta 功能标识，透传至上游（如 `interleaved-thinking-2025-05-14`） |
+
+> **注**：`hop-by-hop` 头（如 `Connection`、`Transfer-Encoding`）会在转发前自动过滤。
+
+**请求体参数**
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|------|------|------|------|------|
+| `model` | string | ✓ | 非空 | 目标模型标识。经 `model_mapping` 规则映射后路由至实际 vendor 模型 |
+| `messages` | array | ✓ | 至少 1 条；`user`/`assistant` 交替；末尾必须为 `user` | 对话历史，详见[消息结构](#消息结构) |
+| `max_tokens` | integer | ✗ | > 0 | 最大输出 token 数 |
+| `stream` | boolean | ✗ | 默认 `false` | 是否以 SSE 流式返回 |
+| `temperature` | number | ✗ | `[0, 2]` | 采样温度 |
+| `top_p` | number | ✗ | `(0, 1]` | Top-p 采样 |
+| `top_k` | integer | ✗ | ≥ 1 | Top-k 采样 |
+| `stop_sequences` | array[string] | ✗ | | 提前停止的字符串序列 |
+| `system` | string \| array | ✗ | | 系统提示词；可为纯字符串或 content block 数组 |
+| `tools` | array | ✗ | | 工具定义；详见 Anthropic 官方文档 |
+| `tool_choice` | object | ✗ | | 工具选择策略（`auto`/`any`/`tool`） |
+| `thinking` | object | ✗ | 需 `budget_tokens`；部分 vendor 不支持 | Extended Thinking 配置，格式 `{"type":"enabled","budget_tokens":N}` |
+| `metadata` | object | ✗ | | 用户元数据（如 `user_id`），透传至上游 |
+
+<a id="消息结构"></a>**消息结构**
+
+每条消息的 `content` 字段可为纯字符串或 content block 数组：
+
+```json
+{
+  "role": "user",
+  "content": [
+    { "type": "text", "text": "请描述这张图片" },
+    {
+      "type": "image",
+      "source": {
+        "type": "base64",
+        "media_type": "image/png",
+        "data": "<base64 编码的图片数据>"
+      }
+    }
+  ]
+}
+```
+
+支持的 content block 类型：
+
+| 类型 | 适用角色 | 必填字段 | 说明 |
+|------|---------|---------|------|
+| `text` | `user`/`assistant` | `text` | 纯文本 |
+| `image` | `user` | `source`（`type`/`media_type`/`data` 或 `url`） | 图片；部分 vendor 不支持 |
+| `tool_use` | `assistant` | `id`（`toolu_` 前缀）、`name`、`input` | 模型发起工具调用 |
+| `tool_result` | `user` | `tool_use_id`、`content` | 工具调用结果；**只能出现在 `user` 消息中** |
+| `thinking` | `assistant` | `thinking`、`signature` | Extended Thinking 内容块；跨 vendor 时会被自动剥离 |
+
+---
+
+#### 5.2.2 非流式请求示例
 
 ```bash
 curl -X POST http://127.0.0.1:8046/v1/messages \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ANTHROPIC_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
-  -d '{"model":"claude-sonnet-4-*","max_tokens":1024,"messages":[{"role":"user","content":"Hello"}]}'
+  -d '{
+    "model": "claude-sonnet-4-5",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "你好，介绍一下你自己"}
+    ]
+  }'
 ```
 
-> **注**：示例中使用 `claude-sonnet-4-*` 通配形式表示模型系列。具体版本号以 [Anthropic 官方文档](https://docs.anthropic.com/en/docs/about-claude/models) 为准。
+**成功响应（HTTP 200）**
+
+```json
+{
+  "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    { "type": "text", "text": "你好！我是 Claude，一个由 Anthropic 开发的 AI 助手。" }
+  ],
+  "model": "claude-sonnet-4-5-20251101",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 14,
+    "output_tokens": 32,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0
+  }
+}
+```
+
+**响应字段说明**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | string | 消息唯一 ID，格式 `msg_*` |
+| `type` | string | 固定为 `"message"` |
+| `role` | string | 固定为 `"assistant"` |
+| `content` | array | 响应内容块列表（`text`/`tool_use` 等） |
+| `model` | string | 实际处理请求的模型完整 ID |
+| `stop_reason` | string | 停止原因，见下表 |
+| `stop_sequence` | string \| null | 触发停止的序列字符串；未命中时为 `null` |
+| `usage.input_tokens` | integer | 输入消耗的 token 数 |
+| `usage.output_tokens` | integer | 输出消耗的 token 数 |
+| `usage.cache_creation_input_tokens` | integer | 创建缓存的 token 数（Prompt Cache） |
+| `usage.cache_read_input_tokens` | integer | 从缓存命中的 token 数（Prompt Cache） |
+
+**`stop_reason` 枚举**
+
+| 值 | 含义 |
+|----|------|
+| `end_turn` | 模型自然输出完毕 |
+| `tool_use` | 模型发起工具调用，等待结果 |
+| `stop_sequence` | 触发了请求中指定的停止序列 |
+| `max_tokens` | 达到 `max_tokens` 上限 |
+
+---
+
+#### 5.2.3 流式请求示例（SSE 模式）
+
+在请求体中设置 `"stream": true`，响应将以 `text/event-stream` 格式逐块下发：
+
+```bash
+curl -X POST http://127.0.0.1:8046/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  --no-buffer \
+  -d '{
+    "model": "claude-sonnet-4-5",
+    "max_tokens": 1024,
+    "stream": true,
+    "messages": [
+      {"role": "user", "content": "用一句话介绍你自己"}
+    ]
+  }'
+```
+
+**SSE 事件流示例**
+
+```
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_01abc","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5-20251101","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":14,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: ping
+data: {"type":"ping"}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我是"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" Claude"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":8}}
+
+event: message_stop
+data: {"type":"message_stop"}
+```
+
+**SSE 事件类型说明**
+
+| 事件类型 | 说明 |
+|---------|------|
+| `message_start` | 消息开始，包含初始元数据 |
+| `content_block_start` | 新的 content block 开始（每个 block 有独立 `index`） |
+| `content_block_delta` | content block 增量；`delta.type` 为 `text_delta` 或 `input_json_delta`（工具调用参数） |
+| `content_block_stop` | 当前 content block 结束 |
+| `message_delta` | 消息级别的增量更新，包含最终 `stop_reason` 和累计 `usage` |
+| `message_stop` | 消息结束，流关闭 |
+| `ping` | 心跳事件，客户端可忽略 |
+| `error` | 流式处理过程中发生错误（见[错误响应](#错误响应)） |
+
+> **注**：流式模式下，一旦 SSE 流开始发送，代理不再进行 tier 级别的故障转移。若中途出现错误，会以 `event: error` 事件通知客户端，随后关闭流。
+
+---
+
+#### 5.2.4 工具调用示例
+
+```bash
+curl -X POST http://127.0.0.1:8046/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-sonnet-4-5",
+    "max_tokens": 1024,
+    "tools": [
+      {
+        "name": "get_weather",
+        "description": "获取指定城市的当前天气",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "city": {"type": "string", "description": "城市名称"}
+          },
+          "required": ["city"]
+        }
+      }
+    ],
+    "messages": [
+      {"role": "user", "content": "北京今天天气怎么样？"}
+    ]
+  }'
+```
+
+---
+
+<a id="错误响应"></a>
+#### 5.2.5 错误响应
+
+**错误响应结构**
+
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "message": "详细错误描述",
+    "details": ["原因1", "原因2"]
+  }
+}
+```
+
+> `details` 字段为可选，仅在 `NoCompatibleVendorError`（无可用 vendor）等特定场景中包含。
+
+**HTTP 状态码对照**
+
+| HTTP 状态码 | `error.type` | 触发场景 | 是否可重试 |
+|------------|-------------|---------|-----------|
+| `400` | `invalid_request_error` | 请求格式/内容不合规（消息结构错误、缺少必填字段、无兼容 vendor 等） | ✗ |
+| `401` | `authentication_error` | 无有效认证凭证 | ✗ |
+| `403` | `permission_error` | 权限不足 | ✗ |
+| `429` | `rate_limit_error` | 所有 vendor 均触发速率限制 | ✓（等待后重试） |
+| `500` | `api_error` | 代理内部异常 | ✓（视情况） |
+| `502` | `api_error` | 所有 vendor 均不可达（超时/连接失败） | ✓ |
+| `503` | `authentication_error` | Token 获取失败（如 OAuth 凭证失效） | ✓（重新认证后） |
+
+**流式错误事件**
+
+流式响应中途发生错误时，以 SSE 事件形式通知：
+
+```
+event: error
+data: {"type":"error","error":{"type":"api_error","message":"上游连接超时"}}
+```
+
+---
+
+#### 5.2.6 请求规范化行为
+
+代理在将请求转发至 vendor 前，会自动进行规范化处理。**以下行为对调用方透明，无需手动处理**：
+
+**自动修复（静默处理）**
+
+| 问题 | 处理方式 |
+|------|---------|
+| `tool_use_id` 格式不符（非 `toolu_` 前缀，如 `srvtoolu_*`） | 自动重写为合规格式，并维护映射关系 |
+| `tool_result` 出现在 `assistant` 消息中 | 将该 block 从 assistant 消息中剥离（首次触发时记录 WARNING 日志） |
+| `tool_use` 缺少合法 ID | 自动生成新 ID 并建立映射 |
+
+**致命验证错误（返回 HTTP 400）**
+
+| 场景 | 错误示例 |
+|------|---------|
+| `tool_use` block 缺少 `id` 字段 | `"tool_use block is missing 'id' field"` |
+| `tool_result` block 缺少 `tool_use_id` 字段 | `"tool_result block is missing 'tool_use_id' field"` |
+| 消息角色不交替（连续相同角色） | `"messages must alternate between user and assistant"` |
+| `messages` 末尾不是 `user` 消息 | `"last message must be from user"` |
+
+**Thinking Block 跨 Vendor 处理**
+
+当请求被路由至非 Anthropic vendor（如 Copilot、智谱等）时，assistant 历史消息中的 `thinking` block 会被自动剥离，因为这些 block 包含仅 Anthropic 可验证的签名（`signature` 字段）。此行为不影响当前轮次的 `thinking` 功能配置（由目标 vendor 的能力决定）。
+
+> **注**：示例中使用 `claude-sonnet-4-5` 作为模型 ID 示例。实际可用的模型 ID 取决于配置的 vendor 与 `model_mapping` 规则，以 [Anthropic 官方文档](https://docs.anthropic.com/en/docs/about-claude/models) 和本地配置为准。
 
 ### 5.3 POST /v1/messages/count_tokens
 
