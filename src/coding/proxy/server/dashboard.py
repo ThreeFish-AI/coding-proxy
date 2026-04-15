@@ -1114,7 +1114,9 @@ def register_dashboard_routes(app: Any) -> None:
             # 今日（最近 1 天）
             today_rows = await token_logger.query_usage(period=TimePeriod.DAY, count=1)
             # 所选区间
-            range_rows = await token_logger.query_usage(period=TimePeriod.DAY, count=days)
+            range_rows = await token_logger.query_usage(
+                period=TimePeriod.DAY, count=days
+            )
             # 故障转移（所选区间）
             failover_stats = await token_logger.query_failover_stats(days=days)
         except Exception as exc:
