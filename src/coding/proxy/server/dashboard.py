@@ -148,7 +148,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     /* ── KPI 卡片 ── */
     .kpi-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 12px;
       margin-bottom: 18px;
     }
@@ -189,7 +189,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       font-family: 'JetBrains Mono', monospace;
       letter-spacing: -0.5px;
     }
-    .kpi-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 5px; }
+    .kpi-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
     .color-blue { color: var(--accent-blue); }
     .color-green { color: var(--accent-green); }
     .color-yellow { color: var(--accent-yellow); }
@@ -446,24 +446,6 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- 故障转移明细表 -->
-  <div class="card">
-    <div class="card-title">故障转移明细</div>
-    <div class="ft-table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>来源供应商</th>
-            <th>目标供应商</th>
-            <th>次数</th>
-          </tr>
-        </thead>
-        <tbody id="ft-tbody">
-          <tr><td colspan="3" class="empty">加载中…</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
 </main>
 
 <script>
@@ -529,28 +511,29 @@ async function fetchJSON(url) {
 
 // ── KPI 更新 ──────────────────────────────────────────────
 function updateKPI(summary) {
-  const t = summary.today, w = summary.week;
+  const t = summary.today, r = summary.range;
+  const lbl = currentRangeLabel;
 
   document.getElementById('kpi-req-today').textContent = fmtNum(t.requests);
-  document.getElementById('kpi-req-week').textContent = '本周 ' + fmtNum(w.requests);
+  document.getElementById('kpi-req-week').textContent = lbl + ' ' + fmtNum(r.requests);
 
-  const tokT = t.tokens, tokW = w.tokens;
+  const tokT = t.tokens, tokR = r.tokens;
   const totalT = tokT.input + tokT.output + tokT.cache_creation + tokT.cache_read;
-  const totalW = tokW.input + tokW.output + tokW.cache_creation + tokW.cache_read;
+  const totalR = tokR.input + tokR.output + tokR.cache_creation + tokR.cache_read;
   document.getElementById('kpi-tok-today').textContent = fmtTokens(totalT);
-  document.getElementById('kpi-tok-week').textContent = '本周 ' + fmtTokens(totalW);
+  document.getElementById('kpi-tok-week').textContent = lbl + ' ' + fmtTokens(totalR);
 
   document.getElementById('kpi-out-today').textContent = fmtTokens(tokT.output);
-  document.getElementById('kpi-out-week').textContent = '本周 ' + fmtTokens(tokW.output);
+  document.getElementById('kpi-out-week').textContent = lbl + ' ' + fmtTokens(tokR.output);
 
   document.getElementById('kpi-cost-today').textContent = t.cost || '–';
-  document.getElementById('kpi-cost-week').textContent = '本周 ' + (w.cost || '–');
+  document.getElementById('kpi-cost-week').textContent = lbl + ' ' + (r.cost || '–');
 
   document.getElementById('kpi-fo-today').textContent = fmtNum(t.failovers);
-  document.getElementById('kpi-fo-week').textContent = '本周 ' + fmtNum(w.failovers);
+  document.getElementById('kpi-fo-week').textContent = lbl + ' ' + fmtNum(r.failovers);
 
   document.getElementById('kpi-lat-today').textContent = t.avg_duration_ms ? t.avg_duration_ms + 'ms' : '–';
-  document.getElementById('kpi-lat-week').textContent = '本周 ' + (w.avg_duration_ms ? w.avg_duration_ms + 'ms' : '–');
+  document.getElementById('kpi-lat-week').textContent = lbl + ' ' + (r.avg_duration_ms ? r.avg_duration_ms + 'ms' : '–');
 }
 
 // ── 供应商状态 ────────────────────────────────────────────
@@ -842,26 +825,14 @@ function buildModelTokenTimeline(rows) {
   });
 }
 
-// ── 故障转移明细表 ────────────────────────────────────────
-function updateFtTable(failoverStats) {
-  const tbody = document.getElementById('ft-tbody');
-  if (!failoverStats || !failoverStats.length) {
-    tbody.innerHTML = '<tr><td colspan="3" class="empty"><div class="empty-icon">✅</div>暂无故障转移记录</td></tr>';
-    return;
-  }
-  tbody.innerHTML = failoverStats.map(r => `
-    <tr>
-      <td><span class="tag-vendor">${r.failover_from || 'unknown'}</span></td>
-      <td><span class="tag-vendor">${r.vendor || ''}</span></td>
-      <td><span style="font-family:'JetBrains Mono',monospace">${fmtNum(r.count)}</span></td>
-    </tr>`).join('');
-}
-
 // ── 时间区间控制 ──────────────────────────────────────────
 let currentDays = 7;
+let currentRangeLabel = '本周';
 
 function setTimeRange(days, btn) {
   currentDays = days;
+  if (days === 7) currentRangeLabel = '本周';
+  else if (days === 30) currentRangeLabel = '本月';
   document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   const customEl = document.getElementById('range-custom');
@@ -887,6 +858,7 @@ function applyCustomRange() {
   const endMs = new Date(e).getTime();
   if (endMs < startMs) return;
   currentDays = Math.ceil((endMs - startMs) / 86400000) + 1;
+  currentRangeLabel = s + '—' + e;
   refresh();
 }
 
@@ -911,7 +883,7 @@ async function refresh() {
   try {
     const days = currentDays > 0 ? currentDays : 7;
     const [summary, timeline, status] = await Promise.all([
-      fetchJSON('/api/dashboard/summary'),
+      fetchJSON('/api/dashboard/summary?days=' + days),
       fetchJSON('/api/dashboard/timeline?days=' + days),
       fetchJSON('/api/status'),
     ]);
@@ -929,8 +901,6 @@ async function refresh() {
     buildVendorDist(rows);
     buildTokenTimeline(rows);
     buildModelTokenTimeline(rows);
-
-    updateFtTable(summary.failover_stats || []);
 
     document.getElementById('refresh-time').textContent = '上次刷新: ' + now();
   } catch (e) {
@@ -1030,8 +1000,8 @@ def register_dashboard_routes(app: Any) -> None:
         return HTMLResponse(content=_DASHBOARD_HTML)
 
     @app.get("/api/dashboard/summary")
-    async def dashboard_summary(request: Request) -> Response:
-        """返回 Dashboard 汇总数据（今日 / 本周 / 本月）."""
+    async def dashboard_summary(request: Request, days: int = 7) -> Response:
+        """返回 Dashboard 汇总数据（今日 / 所选区间）."""
         token_logger = getattr(request.app.state, "token_logger", None)
         pricing_table = getattr(request.app.state, "pricing_table", None)
 
@@ -1042,15 +1012,15 @@ def register_dashboard_routes(app: Any) -> None:
                 media_type="application/json",
             )
 
+        days = max(1, min(days, 90))  # 限制范围 1~90 天
+
         try:
             # 今日（最近 1 天）
             today_rows = await token_logger.query_usage(period=TimePeriod.DAY, count=1)
-            # 本周（最近 7 天）
-            week_rows = await token_logger.query_usage(period=TimePeriod.DAY, count=7)
-            # 本月（最近 30 天）
-            month_rows = await token_logger.query_usage(period=TimePeriod.DAY, count=30)
-            # 故障转移（最近 7 天）
-            failover_stats = await token_logger.query_failover_stats(days=7)
+            # 所选区间
+            range_rows = await token_logger.query_usage(period=TimePeriod.DAY, count=days)
+            # 故障转移（所选区间）
+            failover_stats = await token_logger.query_failover_stats(days=days)
         except Exception as exc:
             logger.error("dashboard_summary query error: %s", exc, exc_info=True)
             return Response(
@@ -1060,18 +1030,15 @@ def register_dashboard_routes(app: Any) -> None:
             )
 
         today = _sum_rows(today_rows)
-        week = _sum_rows(week_rows)
-        month = _sum_rows(month_rows)
+        range_stat = _sum_rows(range_rows)
 
         today["cost"] = _compute_cost_str(today_rows, pricing_table)
-        week["cost"] = _compute_cost_str(week_rows, pricing_table)
-        month["cost"] = _compute_cost_str(month_rows, pricing_table)
+        range_stat["cost"] = _compute_cost_str(range_rows, pricing_table)
 
         result = {
             "version": __version__,
             "today": today,
-            "week": week,
-            "month": month,
+            "range": range_stat,
             "failover_stats": failover_stats,
         }
         return Response(
