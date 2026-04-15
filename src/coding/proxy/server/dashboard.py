@@ -507,6 +507,7 @@ Chart.defaults.color = '#8b949e';
 Chart.defaults.borderColor = 'rgba(255,255,255,.04)';
 Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 Chart.defaults.font.size = 11;
+Chart.defaults.plugins.tooltip.usePointStyle = true;
 
 const COMMON_SCALE_X = { grid: { display: false }, ticks: { maxTicksLimit: 10 } };
 const COMMON_SCALE_Y = { grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true };
@@ -521,7 +522,7 @@ const COMMON_LEGEND = {
     font: { size: 11 },
     generateLabels: chart => {
       const items = Chart.defaults.plugins.legend.labels.generateLabels(chart);
-      items.forEach(item => { item.pointStyle = 'circle'; item.lineWidth = 0; });
+      items.forEach(item => { item.pointStyle = 'circle'; item.lineWidth = 0; item.fillStyle = item.strokeStyle; });
       return items;
     },
   },
@@ -1009,7 +1010,7 @@ async function refresh() {
 
 // 页面加载 + 每 30 秒自动刷新
 refresh();
-setInterval(refresh, 30000);
+setInterval(refresh, 600000);
 </script>
 </body>
 </html>
