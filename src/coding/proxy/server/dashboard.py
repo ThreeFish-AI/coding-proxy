@@ -101,6 +101,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       font-size: 14px;
       line-height: 1.5;
       min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
     }
     /* ── 头部 ── */
     header {
@@ -489,6 +492,7 @@ function fmtTokens(n) {
   return String(n);
 }
 function fmtNum(n) { return n == null ? '–' : n.toLocaleString(); }
+function isValidLabel(s) { return typeof s === 'string' && s !== 'undefined' && s !== 'null' && s.trim() !== ''; }
 function now() {
   return new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
@@ -505,20 +509,21 @@ function makeGradient(ctx, color) {
 // ── Chart.js 全局默认 ─────────────────────────────────────
 Chart.defaults.color = '#8b949e';
 Chart.defaults.borderColor = 'rgba(255,255,255,.04)';
-Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 Chart.defaults.font.size = 11;
 Chart.defaults.plugins.tooltip.usePointStyle = true;
+Chart.defaults.devicePixelRatio = window.devicePixelRatio || 1;
 
 const COMMON_SCALE_X = { grid: { display: false }, ticks: { maxTicksLimit: 10 } };
 const COMMON_SCALE_Y = { grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true };
 const COMMON_LEGEND = {
   position: 'bottom',
   labels: {
-    boxWidth: 8,
+    boxWidth: 10,
+    boxHeight: 10,
     padding: 14,
     usePointStyle: true,
     pointStyle: 'circle',
-    pointStyleWidth: 8,
     font: { size: 11 },
     generateLabels: chart => {
       const items = Chart.defaults.plugins.legend.labels.generateLabels(chart);
@@ -700,7 +705,7 @@ function buildTimeline(rows) {
   const allDates = new Set();
   for (const r of rows) {
     const v = r.vendor, d = r.date;
-    if (!v || !d) continue;
+    if (!isValidLabel(v) || !d) continue;
     if (!vendorDateMap[v]) vendorDateMap[v] = {};
     vendorDateMap[v][d] = (vendorDateMap[v][d] || 0) + (r.total_requests || 0);
     allDates.add(d);
@@ -745,7 +750,7 @@ function buildVendorDist(rows) {
   const vendorTotals = {};
   for (const r of rows) {
     const v = r.vendor;
-    if (!v) continue;
+    if (!isValidLabel(v)) continue;
     vendorTotals[v] = (vendorTotals[v] || 0) + (r.total_requests || 0);
   }
   const labels = Object.keys(vendorTotals).sort((a,b) => vendorTotals[b]-vendorTotals[a]);
@@ -784,7 +789,7 @@ function buildTokenTimeline(rows) {
   const allDates = new Set();
   for (const r of rows) {
     const v = r.vendor, d = r.date;
-    if (!v || !d) continue;
+    if (!isValidLabel(v) || !d) continue;
     if (!vendorDateMap[v]) vendorDateMap[v] = {};
     const total = (r.total_input || 0) + (r.total_output || 0)
                 + (r.total_cache_creation || 0) + (r.total_cache_read || 0);
@@ -839,7 +844,10 @@ function buildModelTokenTimeline(rows) {
   const modelDateMap = {};
   const allDates = new Set();
   for (const r of rows) {
-    const key = (r.vendor || '?') + ' / ' + (r.model_served || '?');
+    const v = r.vendor;
+    const m = r.model_served;
+    if (!isValidLabel(v) || !isValidLabel(m)) continue;
+    const key = v + ' / ' + m;
     const d = r.date;
     if (!d) continue;
     if (!modelDateMap[key]) modelDateMap[key] = {};
@@ -894,6 +902,9 @@ function buildModelTokenTimeline(rows) {
               const maxLen = 32;
               items.forEach(item => {
                 if (item.text.length > maxLen) item.text = item.text.slice(0, maxLen) + '…';
+                item.pointStyle = 'circle';
+                item.lineWidth = 0;
+                item.fillStyle = item.strokeStyle;
               });
               return items;
             },
