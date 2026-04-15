@@ -388,9 +388,9 @@ def _repair_orphaned_tool_use(
             if isinstance(next_content, list):
                 next_content.extend(synthetic_blocks)
             elif isinstance(next_content, str):
-                next_msg["content"] = (
-                    [{"type": "text", "text": next_content}] + synthetic_blocks
-                )
+                next_msg["content"] = [
+                    {"type": "text", "text": next_content}
+                ] + synthetic_blocks
             else:
                 next_msg["content"] = synthetic_blocks
         else:
