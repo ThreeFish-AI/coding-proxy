@@ -322,9 +322,13 @@ class TestMisplacedToolResultRelocation:
         # 消息 104 中的 tool_result 应被移除
         assert len(result.body["messages"][104]["content"]) == 1
         assert result.body["messages"][104]["content"][0]["type"] == "tool_use"
-        # 消息 105（user）应包含被重定位的 tool_result
+        # 消息 105（user）应包含原始文本 + 被重定位的 tool_result
         user_content = result.body["messages"][105]["content"]
+        assert isinstance(user_content, list)
         tool_result_blocks = [b for b in user_content if b.get("type") == "tool_result"]
+        text_blocks = [b for b in user_content if b.get("type") == "text"]
+        assert len(text_blocks) == 1
+        assert text_blocks[0]["text"] == "thanks"
         assert len(tool_result_blocks) == 1
         assert tool_result_blocks[0]["tool_use_id"] == "toolu_deep_1"
         assert tool_result_blocks[0]["content"] == "/var/log/system.log"
@@ -366,3 +370,211 @@ class TestMisplacedToolResultRelocation:
         assert relocated["tool_use_id"] == new_id
         assert "misplaced_tool_result_relocated" in result.adaptations
         assert "tool_result_tool_use_id_rewritten" in result.adaptations
+
+
+# ── 孤儿 tool_use 修复测试 ──────────────────────────────────
+
+
+class TestOrphanedToolUseRepair:
+    """验证孤儿 tool_use（无对应 tool_result）被合成占位 tool_result 修复.
+
+    典型触发场景：Zhipu 返回标准 tool_use 块后，流式过滤器未拦截，
+    但 Claude Code 因响应不完整或其他原因未发送对应 tool_result，
+    导致 assistant 消息中存在无配对的 tool_use 块。
+    """
+
+    def test_synthesizes_result_for_orphaned_tool_use(self):
+        """assistant 有 tool_use 且无后续 user 消息时，合成 user 消息含占位 tool_result."""
+        result = normalize_anthropic_request(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_123",
+                                "name": "Bash",
+                                "input": {"command": "ls"},
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
+
+        assert result.recoverable is True
+        messages = result.body["messages"]
+        assert len(messages) == 2
+        assert messages[1]["role"] == "user"
+        synthetic = messages[1]["content"][0]
+        assert synthetic["type"] == "tool_result"
+        assert synthetic["tool_use_id"] == "toolu_123"
+        assert synthetic["is_error"] is True
+        assert "orphaned_tool_use_repaired" in result.adaptations
+
+    def test_synthesizes_result_appends_to_existing_user(self):
+        """assistant 有 tool_use 且后续 user 消息为 text 时，追加合成 tool_result."""
+        result = normalize_anthropic_request(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_456",
+                                "name": "Bash",
+                                "input": {"command": "pwd"},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": "continue",
+                    },
+                ],
+            }
+        )
+
+        assert result.recoverable is True
+        messages = result.body["messages"]
+        user_content = messages[1]["content"]
+        assert isinstance(user_content, list)
+        # 原始文本转为 text block + 合成的 tool_result
+        assert len(user_content) == 2
+        assert user_content[0]["type"] == "text"
+        assert user_content[0]["text"] == "continue"
+        assert user_content[1]["type"] == "tool_result"
+        assert user_content[1]["tool_use_id"] == "toolu_456"
+        assert user_content[1]["is_error"] is True
+        assert "orphaned_tool_use_repaired" in result.adaptations
+
+    def test_synthesizes_only_missing_results(self):
+        """assistant 有 2 个 tool_use，user 仅有 1 个 tool_result 时，仅为缺失的合成."""
+        result = normalize_anthropic_request(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_A",
+                                "name": "Bash",
+                                "input": {"command": "ls"},
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_B",
+                                "name": "Read",
+                                "input": {"path": "/etc/hosts"},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_A",
+                                "content": "file1.txt",
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
+
+        assert result.recoverable is True
+        user_content = result.body["messages"][1]["content"]
+        assert len(user_content) == 2
+        # 原有 tool_result 保持不变
+        assert user_content[0]["tool_use_id"] == "toolu_A"
+        # 合成的 tool_result 仅针对 toolu_B
+        assert user_content[1]["type"] == "tool_result"
+        assert user_content[1]["tool_use_id"] == "toolu_B"
+        assert user_content[1]["is_error"] is True
+        assert "orphaned_tool_use_repaired" in result.adaptations
+
+    def test_no_repair_when_all_results_present(self):
+        """正常配对场景不应触发修复."""
+        result = normalize_anthropic_request(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_ok",
+                                "name": "Bash",
+                                "input": {"command": "echo hi"},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_ok",
+                                "content": "hi",
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
+
+        assert result.recoverable is True
+        assert "orphaned_tool_use_repaired" not in result.adaptations
+
+    def test_repair_with_normalized_ids(self):
+        """跨供应商降级场景：srvtoolu_ ID 被重写后仍需修复孤儿 tool_use."""
+        result = normalize_anthropic_request(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "server_tool_use",
+                                "id": "srvtoolu_X",
+                                "name": "Bash",
+                                "input": {"command": "ls"},
+                            },
+                            {
+                                "type": "server_tool_use",
+                                "id": "srvtoolu_Y",
+                                "name": "Read",
+                                "input": {"path": "/tmp"},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": "continue",
+                    },
+                ],
+            }
+        )
+
+        assert result.recoverable is True
+        messages = result.body["messages"]
+        # assistant 中 tool_use ID 已重写
+        new_ids = [b["id"] for b in messages[0]["content"]]
+        assert len(new_ids) == 2
+        assert all(id_.startswith("toolu_normalized_") for id_ in new_ids)
+        # user 消息应包含原始文本 + 两个合成的 tool_result
+        user_content = messages[1]["content"]
+        text_blocks = [b for b in user_content if b.get("type") == "text"]
+        synthetic_results = [
+            b
+            for b in user_content
+            if b.get("type") == "tool_result" and b.get("is_error") is True
+        ]
+        assert len(text_blocks) == 1
+        assert len(synthetic_results) == 2
+        assert {r["tool_use_id"] for r in synthetic_results} == set(new_ids)
+        assert "orphaned_tool_use_repaired" in result.adaptations

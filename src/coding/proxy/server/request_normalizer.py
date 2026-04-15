@@ -46,6 +46,9 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
        ``user`` 消息中。当检测到非 user 消息中存在 ``tool_result`` 时，
        将其重定位到紧邻的下一个 user 消息中，以保持 ``tool_use`` / ``tool_result``
        配对关系，防止上游返回 ``400 invalid_request_error``。
+    4. **修复孤儿 tool_use 块**：当 assistant 消息中的 ``tool_use`` 在紧邻的 user 消息中
+       没有对应的 ``tool_result`` 时（如跨供应商降级导致对话结构不完整），
+       合成一个 ``is_error=true`` 的占位 ``tool_result`` 以满足 API 约束。
     """
     normalized = copy.deepcopy(body)
     adaptations: list[str] = []
@@ -203,6 +206,12 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
             target_content = messages_list[target_user_idx].get("content")
             if isinstance(target_content, list):
                 target_content.append(result_block)
+            elif isinstance(target_content, str):
+                # string content 转为 text block 后追加，避免丢失原始文本
+                messages_list[target_user_idx]["content"] = [
+                    {"type": "text", "text": target_content},
+                    result_block,
+                ]
             else:
                 messages_list[target_user_idx]["content"] = [result_block]
         else:
@@ -218,6 +227,22 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
     # ── 汇总日志：misplaced tool_result 重定位 ──────────────────
     if relocated_log_info:
         _emit_misplaced_tool_result_summary(relocated_log_info)
+
+    # ── 修复通道：为孤儿 tool_use 合成 tool_result ──────────────
+    # Anthropic API 严格要求每个 tool_use 必须在紧邻的 user 消息中有对应的 tool_result。
+    # 当 tool_result 完全缺失时（如跨供应商降级导致对话结构不完整），
+    # 合成一个 is_error=true 的占位 tool_result 以满足 API 约束。
+    repaired = _repair_orphaned_tool_use(messages_list)
+    if repaired:
+        adaptations.append("orphaned_tool_use_repaired")
+        total_synthesized = sum(repaired.values())
+        logger.warning(
+            "Vendor degradation adaptation: synthesized %d tool_result block(s) "
+            "for orphaned tool_use to satisfy Anthropic pairing constraint. "
+            "Affected tool_use_ids: %s",
+            total_synthesized,
+            ", ".join(sorted(repaired)),
+        )
 
     return NormalizationResult(
         body=normalized,
@@ -286,3 +311,94 @@ def _emit_misplaced_tool_result_summary(
             known_count,
             ", ".join(sorted(known_id_set)),
         )
+
+
+def _repair_orphaned_tool_use(
+    messages_list: list[dict[str, Any]],
+) -> dict[str, int]:
+    """为孤儿 tool_use 块合成缺失的 tool_result.
+
+    遍历所有 assistant 消息，检查紧邻的 user 消息是否包含每个 tool_use
+    对应的 tool_result。对于缺失的 tool_result，合成一个 ``is_error=true``
+    的占位块以满足 Anthropic API 约束。
+
+    Args:
+        messages_list: 消息列表（就地修改）。
+
+    Returns:
+        dict: 以 tool_use_id 为键、修复次数为值的映射；无修复时返回空 dict。
+    """
+    repaired: dict[str, int] = {}
+    i = 0
+    while i < len(messages_list):
+        msg = messages_list[i]
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            i += 1
+            continue
+
+        content = msg.get("content")
+        if not isinstance(content, list):
+            i += 1
+            continue
+
+        # 收集当前 assistant 消息中所有 tool_use 的 id
+        tool_use_ids: list[str] = [
+            b["id"]
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")
+        ]
+        if not tool_use_ids:
+            i += 1
+            continue
+
+        # 检查紧邻的 user 消息中已有的 tool_result
+        next_msg = messages_list[i + 1] if i + 1 < len(messages_list) else None
+        existing_result_ids: set[str] = set()
+
+        if isinstance(next_msg, dict) and next_msg.get("role") == "user":
+            next_content = next_msg.get("content")
+            if isinstance(next_content, list):
+                existing_result_ids = {
+                    b["tool_use_id"]
+                    for b in next_content
+                    if isinstance(b, dict)
+                    and b.get("type") == "tool_result"
+                    and b.get("tool_use_id")
+                }
+
+        # 找出缺失的 tool_result
+        orphan_ids = [uid for uid in tool_use_ids if uid not in existing_result_ids]
+        if not orphan_ids:
+            i += 1
+            continue
+
+        # 为每个孤儿 tool_use 合成 tool_result
+        synthetic_blocks = [
+            {
+                "type": "tool_result",
+                "tool_use_id": uid,
+                "content": "",
+                "is_error": True,
+            }
+            for uid in orphan_ids
+        ]
+
+        if isinstance(next_msg, dict) and next_msg.get("role") == "user":
+            next_content = next_msg.get("content")
+            if isinstance(next_content, list):
+                next_content.extend(synthetic_blocks)
+            elif isinstance(next_content, str):
+                next_msg["content"] = (
+                    [{"type": "text", "text": next_content}] + synthetic_blocks
+                )
+            else:
+                next_msg["content"] = synthetic_blocks
+        else:
+            # 无紧邻 user 消息：插入合成 user 消息
+            messages_list.insert(i + 1, {"role": "user", "content": synthetic_blocks})
+
+        for uid in orphan_ids:
+            repaired[uid] = repaired.get(uid, 0) + 1
+
+        i += 1
+    return repaired
