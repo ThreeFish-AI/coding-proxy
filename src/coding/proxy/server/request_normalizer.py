@@ -192,7 +192,10 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
     ):
         target_user_idx = None
         for j in range(source_idx + 1, len(messages_list)):
-            if isinstance(messages_list[j], dict) and messages_list[j].get("role") == "user":
+            if (
+                isinstance(messages_list[j], dict)
+                and messages_list[j].get("role") == "user"
+            ):
                 target_user_idx = j
                 break
         if target_user_idx is not None:
@@ -204,10 +207,13 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
                 messages_list[target_user_idx]["content"] = [result_block]
         else:
             # 无后续 user 消息：插入一条合成 user 消息
-            messages_list.insert(source_idx + 1, {
-                "role": "user",
-                "content": [result_block],
-            })
+            messages_list.insert(
+                source_idx + 1,
+                {
+                    "role": "user",
+                    "content": [result_block],
+                },
+            )
 
     # ── 汇总日志：misplaced tool_result 重定位 ──────────────────
     if relocated_log_info:

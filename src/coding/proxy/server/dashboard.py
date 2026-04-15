@@ -707,17 +707,11 @@ def register_dashboard_routes(app: Any) -> None:
 
         try:
             # 今日（最近 1 天）
-            today_rows = await token_logger.query_usage(
-                period=TimePeriod.DAY, count=1
-            )
+            today_rows = await token_logger.query_usage(period=TimePeriod.DAY, count=1)
             # 本周（最近 7 天）
-            week_rows = await token_logger.query_usage(
-                period=TimePeriod.DAY, count=7
-            )
+            week_rows = await token_logger.query_usage(period=TimePeriod.DAY, count=7)
             # 本月（最近 30 天）
-            month_rows = await token_logger.query_usage(
-                period=TimePeriod.DAY, count=30
-            )
+            month_rows = await token_logger.query_usage(period=TimePeriod.DAY, count=30)
             # 故障转移（最近 7 天）
             failover_stats = await token_logger.query_failover_stats(days=7)
         except Exception as exc:
@@ -764,9 +758,7 @@ def register_dashboard_routes(app: Any) -> None:
         days = max(1, min(days, 90))  # 限制范围 1~90 天
 
         try:
-            rows = await token_logger.query_usage(
-                period=TimePeriod.DAY, count=days
-            )
+            rows = await token_logger.query_usage(period=TimePeriod.DAY, count=days)
         except Exception as exc:
             logger.error("dashboard_timeline query error: %s", exc, exc_info=True)
             return Response(
