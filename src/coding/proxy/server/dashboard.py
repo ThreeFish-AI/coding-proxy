@@ -578,6 +578,21 @@ function quotaBarColor(pct) {
   if (pct >= 70) return 'var(--accent-yellow)';
   return 'var(--accent-green)';
 }
+function quotaWindowLabel(wh) {
+  if (!wh) return '配额';
+  const h = parseFloat(wh);
+  if (h >= 24) return Math.round(h / 24) + 'd配额';
+  return Math.round(h) + 'h配额';
+}
+function renderQuotaBar(qg) {
+  if (!qg || qg.usage_percent == null) return '';
+  const pct = Math.round(qg.usage_percent);
+  const label = quotaWindowLabel(qg.window_hours);
+  return `<span class="status-badge ${quotaClass(pct)}">${label} ${pct}%</span>` +
+    `<div class="quota-bar-wrap"><div class="quota-bar-bg">` +
+    `<div class="quota-bar-fill" style="width:${Math.min(pct,100)}%;background:${quotaBarColor(pct)}"></div>` +
+    `</div></div>`;
+}
 
 function updateVendorStatus(status) {
   const tiers = status.tiers || [];
@@ -588,25 +603,13 @@ function updateVendorStatus(status) {
   }
   list.innerHTML = tiers.map(tier => {
     const cb = tier.circuit_breaker || {};
-    const qg = tier.quota_guard || {};
-    const wqg = tier.weekly_quota_guard || {};
     const cbClass = cbStateClass(cb.state);
     const cbLabel = cbStateLabel(cb.state);
-    const pct = qg.usage_percent != null ? Math.round(qg.usage_percent) : null;
-    const wpct = wqg.usage_percent != null ? Math.round(wqg.usage_percent) : null;
     const initial = (tier.name || '?').charAt(0).toUpperCase();
 
     let quotaHTML = '';
-    if (pct != null) {
-      quotaHTML += `
-        <span class="status-badge ${quotaClass(pct)}">日配 ${pct}%</span>
-        <div class="quota-bar-wrap">
-          <div class="quota-bar-bg"><div class="quota-bar-fill" style="width:${Math.min(pct,100)}%;background:${quotaBarColor(pct)}"></div></div>
-        </div>`;
-    }
-    if (wpct != null) {
-      quotaHTML += `<span class="status-badge ${quotaClass(wpct)}">周配 ${wpct}%</span>`;
-    }
+    if (tier.quota_guard) quotaHTML += renderQuotaBar(tier.quota_guard);
+    if (tier.weekly_quota_guard) quotaHTML += renderQuotaBar(tier.weekly_quota_guard);
 
     const rlInfo = tier.rate_limit || {};
     const rlHtml = rlInfo.limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
