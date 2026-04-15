@@ -56,6 +56,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Coding Proxy Dashboard</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <style>
     :root {
@@ -63,16 +66,26 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       --bg-card: #161b22;
       --bg-card-hover: #1c2128;
       --border: #30363d;
+      --border-subtle: rgba(48,54,61,.6);
       --text-primary: #e6edf3;
       --text-secondary: #8b949e;
+      --text-tertiary: #6e7681;
       --accent-blue: #58a6ff;
       --accent-green: #3fb950;
       --accent-yellow: #d29922;
       --accent-red: #f85149;
       --accent-purple: #bc8cff;
       --accent-orange: #ffa657;
-      --radius: 8px;
-      --shadow: 0 1px 3px rgba(0,0,0,.4);
+      --accent-teal: #39d353;
+      --radius: 10px;
+      --radius-sm: 6px;
+      --shadow: 0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
+      --shadow-md: 0 4px 12px rgba(0,0,0,.4), 0 2px 4px rgba(0,0,0,.3);
+      --glow-blue: 0 0 0 1px rgba(88,166,255,.15), 0 4px 16px rgba(88,166,255,.06);
+    }
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -85,9 +98,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     /* ── 头部 ── */
     header {
-      background: var(--bg-card);
+      background: rgba(22,27,34,.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
       border-bottom: 1px solid var(--border);
-      padding: 14px 24px;
+      padding: 13px 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -97,75 +112,105 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .header-left { display: flex; align-items: center; gap: 12px; }
     .logo {
-      width: 28px; height: 28px;
+      width: 30px; height: 30px;
       background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-      border-radius: 6px;
+      border-radius: 8px;
       display: flex; align-items: center; justify-content: center;
-      font-size: 16px; font-weight: bold; color: #fff;
+      font-size: 15px; font-weight: 700; color: #fff;
+      box-shadow: 0 2px 8px rgba(88,166,255,.3);
     }
-    h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+    h1 { font-size: 15px; font-weight: 600; color: var(--text-primary); letter-spacing: -.2px; }
     .header-right { display: flex; align-items: center; gap: 12px; }
     .badge {
       font-size: 11px; padding: 2px 8px;
       border-radius: 12px;
-      background: rgba(88,166,255,.15);
+      background: rgba(88,166,255,.1);
       color: var(--accent-blue);
-      border: 1px solid rgba(88,166,255,.25);
+      border: 1px solid rgba(88,166,255,.2);
+      font-family: 'JetBrains Mono', monospace;
     }
-    .refresh-time { font-size: 12px; color: var(--text-secondary); }
+    .refresh-time { font-size: 11px; color: var(--text-tertiary); }
     .btn-refresh {
-      padding: 5px 12px; border-radius: var(--radius);
-      background: rgba(48,54,61,.6);
+      padding: 5px 12px; border-radius: var(--radius-sm);
+      background: rgba(48,54,61,.5);
       border: 1px solid var(--border);
-      color: var(--text-primary);
+      color: var(--text-secondary);
       font-size: 12px; cursor: pointer;
-      transition: background .15s;
+      transition: all .2s ease;
     }
-    .btn-refresh:hover { background: var(--bg-card-hover); }
+    .btn-refresh:hover {
+      background: var(--bg-card-hover);
+      color: var(--text-primary);
+      border-color: rgba(88,166,255,.4);
+    }
     /* ── 主内容 ── */
-    main { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+    main { padding: 20px 24px; max-width: 1440px; margin: 0 auto; }
     /* ── KPI 卡片 ── */
     .kpi-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 14px;
-      margin-bottom: 20px;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
     }
     .kpi-card {
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 16px 20px;
+      padding: 16px 18px 14px;
       box-shadow: var(--shadow);
-      transition: background .15s;
+      transition: all .2s ease;
+      animation: fadeInUp .4s ease both;
+      position: relative;
+      overflow: hidden;
     }
-    .kpi-card:hover { background: var(--bg-card-hover); }
-    .kpi-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
-    .kpi-value { font-size: 26px; font-weight: 700; line-height: 1.2; }
-    .kpi-sub { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
-    .kpi-delta { font-size: 12px; margin-top: 4px; }
-    .kpi-delta.up { color: var(--accent-green); }
-    .kpi-delta.down { color: var(--accent-red); }
+    .kpi-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      border-radius: var(--radius) var(--radius) 0 0;
+    }
+    .kpi-card:nth-child(1)::before { background: var(--accent-blue); }
+    .kpi-card:nth-child(2)::before { background: var(--accent-purple); }
+    .kpi-card:nth-child(3)::before { background: var(--accent-green); }
+    .kpi-card:nth-child(4)::before { background: var(--accent-yellow); }
+    .kpi-card:nth-child(5)::before { background: var(--accent-red); }
+    .kpi-card:nth-child(6)::before { background: var(--accent-orange); }
+    .kpi-card:hover {
+      background: var(--bg-card-hover);
+      box-shadow: var(--glow-blue);
+      transform: translateY(-1px);
+    }
+    .kpi-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    .kpi-icon { font-size: 13px; opacity: .8; }
+    .kpi-label { font-size: 11px; color: var(--text-secondary); font-weight: 500; letter-spacing: .2px; }
+    .kpi-value {
+      font-size: 24px; font-weight: 700; line-height: 1.2;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: -0.5px;
+    }
+    .kpi-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 5px; }
     .color-blue { color: var(--accent-blue); }
     .color-green { color: var(--accent-green); }
     .color-yellow { color: var(--accent-yellow); }
     .color-red { color: var(--accent-red); }
     .color-purple { color: var(--accent-purple); }
+    .color-orange { color: var(--accent-orange); }
     /* ── 图表网格 ── */
     .charts-grid {
       display: grid;
       grid-template-columns: 1fr 2fr;
-      gap: 14px;
-      margin-bottom: 14px;
+      gap: 12px;
+      margin-bottom: 12px;
     }
-    .charts-grid-3 {
+    .charts-grid-2 {
       display: grid;
       grid-template-columns: 1fr 2fr;
-      gap: 14px;
-      margin-bottom: 14px;
+      gap: 12px;
+      margin-bottom: 12px;
     }
-    @media (max-width: 900px) {
-      .charts-grid, .charts-grid-3 { grid-template-columns: 1fr; }
+    @media (max-width: 960px) {
+      .charts-grid, .charts-grid-2 { grid-template-columns: 1fr; }
     }
     .card {
       background: var(--bg-card);
@@ -173,101 +218,131 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border-radius: var(--radius);
       padding: 16px 20px;
       box-shadow: var(--shadow);
+      transition: box-shadow .2s ease;
+      animation: fadeInUp .4s ease both;
     }
+    .card:hover { box-shadow: var(--shadow-md); }
     .card-title {
-      font-size: 13px; font-weight: 600;
-      color: var(--text-secondary);
+      font-size: 11px; font-weight: 600;
+      color: var(--text-tertiary);
       text-transform: uppercase;
-      letter-spacing: .5px;
+      letter-spacing: .8px;
       margin-bottom: 14px;
       display: flex; align-items: center; justify-content: space-between;
     }
     .chart-wrap { position: relative; height: 220px; }
     .chart-wrap-lg { position: relative; height: 240px; }
+    .chart-wrap-xl { position: relative; height: 260px; }
     /* ── 供应商状态 ── */
-    .vendor-list { display: flex; flex-direction: column; gap: 10px; }
+    .vendor-list { display: flex; flex-direction: column; gap: 8px; }
     .vendor-item {
       display: flex; align-items: center; justify-content: space-between;
       padding: 10px 12px;
-      background: rgba(255,255,255,.03);
-      border: 1px solid var(--border);
-      border-radius: 6px;
+      background: rgba(255,255,255,.02);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      transition: background .15s;
     }
-    .vendor-name { font-weight: 600; font-size: 13px; min-width: 80px; }
-    .vendor-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+    .vendor-item:hover { background: rgba(255,255,255,.04); }
+    .vendor-info { display: flex; align-items: center; gap: 10px; }
+    .vendor-avatar {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700; color: #fff;
+      flex-shrink: 0;
+    }
+    .vendor-name { font-weight: 600; font-size: 12px; }
+    .vendor-badges { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
     .status-badge {
-      font-size: 11px; padding: 2px 7px;
+      font-size: 10px; padding: 2px 7px;
       border-radius: 10px;
       font-weight: 500;
     }
-    .sb-ok { background: rgba(63,185,80,.15); color: var(--accent-green); border: 1px solid rgba(63,185,80,.25); }
-    .sb-warn { background: rgba(210,153,34,.15); color: var(--accent-yellow); border: 1px solid rgba(210,153,34,.25); }
-    .sb-err { background: rgba(248,81,73,.15); color: var(--accent-red); border: 1px solid rgba(248,81,73,.25); }
-    .sb-info { background: rgba(88,166,255,.15); color: var(--accent-blue); border: 1px solid rgba(88,166,255,.25); }
-    .quota-bar-wrap { flex: 1; margin: 0 12px; max-width: 120px; }
+    .sb-ok { background: rgba(63,185,80,.12); color: var(--accent-green); border: 1px solid rgba(63,185,80,.2); }
+    .sb-warn { background: rgba(210,153,34,.12); color: var(--accent-yellow); border: 1px solid rgba(210,153,34,.2); }
+    .sb-err { background: rgba(248,81,73,.12); color: var(--accent-red); border: 1px solid rgba(248,81,73,.2); }
+    .sb-info { background: rgba(88,166,255,.12); color: var(--accent-blue); border: 1px solid rgba(88,166,255,.2); }
+    .quota-bar-wrap { flex: 1; margin: 0 10px; max-width: 100px; }
     .quota-bar-bg {
-      height: 5px; border-radius: 3px;
-      background: rgba(255,255,255,.08);
+      height: 4px; border-radius: 2px;
+      background: rgba(255,255,255,.06);
       overflow: hidden;
     }
-    .quota-bar-fill { height: 100%; border-radius: 3px; transition: width .4s; }
-    .quota-pct { font-size: 11px; color: var(--text-secondary); margin-top: 2px; text-align: right; }
+    .quota-bar-fill {
+      height: 100%; border-radius: 2px;
+      transition: width .6s cubic-bezier(.4,0,.2,1);
+    }
     /* ── 故障转移表 ── */
     .ft-table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
+    thead tr { position: sticky; top: 0; background: var(--bg-card); z-index: 1; }
     th {
-      text-align: left; font-size: 12px; color: var(--text-secondary);
-      font-weight: 500; padding: 6px 10px;
+      text-align: left; font-size: 11px; color: var(--text-tertiary);
+      font-weight: 600; padding: 6px 10px;
       border-bottom: 1px solid var(--border);
+      letter-spacing: .4px; text-transform: uppercase;
     }
-    td { padding: 8px 10px; font-size: 13px; border-bottom: 1px solid rgba(48,54,61,.5); }
+    td { padding: 8px 10px; font-size: 13px; border-bottom: 1px solid var(--border-subtle); }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: rgba(255,255,255,.02); }
     .tag-vendor {
       display: inline-block;
-      font-size: 11px; padding: 1px 7px;
+      font-size: 11px; padding: 2px 8px;
       border-radius: 10px;
-      background: rgba(188,140,255,.15);
+      background: rgba(188,140,255,.1);
       color: var(--accent-purple);
-      border: 1px solid rgba(188,140,255,.25);
+      border: 1px solid rgba(188,140,255,.2);
+      font-weight: 500;
     }
-    .arrow { color: var(--text-secondary); margin: 0 4px; }
+    .arrow { color: var(--text-tertiary); margin: 0 4px; }
     /* ── 时间区间选择栏 ── */
     .time-range-bar {
       display: flex; align-items: center; gap: 8px;
-      margin-bottom: 16px; flex-wrap: wrap;
+      margin-bottom: 18px; flex-wrap: wrap;
+      padding: 10px 14px;
+      background: rgba(22,27,34,.6);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius);
+      backdrop-filter: blur(8px);
     }
-    .time-range-label { font-size: 13px; color: var(--text-secondary); }
+    .time-range-label { font-size: 12px; color: var(--text-tertiary); font-weight: 500; }
     .range-btn {
       padding: 4px 14px; border-radius: 14px;
-      background: rgba(48,54,61,.6);
-      border: 1px solid var(--border);
+      background: transparent;
+      border: 1px solid transparent;
       color: var(--text-secondary);
       font-size: 12px; cursor: pointer;
-      transition: background .15s, color .15s, border-color .15s;
+      transition: all .2s ease;
     }
-    .range-btn:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+    .range-btn:hover { background: rgba(255,255,255,.05); color: var(--text-primary); }
     .range-btn.active {
-      background: rgba(88,166,255,.15);
-      border-color: rgba(88,166,255,.5);
+      background: rgba(88,166,255,.12);
+      border-color: rgba(88,166,255,.35);
       color: var(--accent-blue);
+      font-weight: 500;
     }
     .range-custom { display: none; align-items: center; gap: 6px; }
     .range-custom.visible { display: flex; }
     .range-date {
-      padding: 3px 8px; border-radius: var(--radius);
-      background: var(--bg-card); border: 1px solid var(--border);
+      padding: 3px 10px; border-radius: var(--radius-sm);
+      background: rgba(48,54,61,.4); border: 1px solid var(--border);
       color: var(--text-primary); font-size: 12px;
       color-scheme: dark;
+      transition: border-color .2s;
     }
-    .range-sep { font-size: 12px; color: var(--text-secondary); }
+    .range-date:focus { outline: none; border-color: rgba(88,166,255,.5); }
+    .range-sep { font-size: 12px; color: var(--text-tertiary); }
     /* ── 空态 ── */
     .empty {
       text-align: center; padding: 32px;
-      color: var(--text-secondary); font-size: 13px;
+      color: var(--text-tertiary); font-size: 13px;
     }
+    .empty-icon { font-size: 28px; margin-bottom: 8px; opacity: .5; }
     /* ── 加载态 ── */
     .loading { opacity: .4; pointer-events: none; }
+    /* ── 图表标签截断 ── */
+    .chart-legend-note { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; text-align: center; }
   </style>
 </head>
 <body>
@@ -286,28 +361,52 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <main>
   <!-- 时间区间选择器 -->
   <div class="time-range-bar">
-    <span class="time-range-label">数据时间区间：</span>
-    <button class="range-btn active" onclick="setTimeRange(7, this)">最近一周</button>
-    <button class="range-btn" onclick="setTimeRange(30, this)">最近一月</button>
+    <span class="time-range-label">时间区间</span>
+    <button class="range-btn active" onclick="setTimeRange(7, this)">近 7 天</button>
+    <button class="range-btn" onclick="setTimeRange(30, this)">近 30 天</button>
     <button class="range-btn" onclick="setTimeRange(0, this)">自选区间</button>
     <div class="range-custom" id="range-custom">
       <input type="date" id="range-start" class="range-date" onchange="applyCustomRange()" />
-      <span class="range-sep">–</span>
+      <span class="range-sep">→</span>
       <input type="date" id="range-end" class="range-date" onchange="applyCustomRange()" />
     </div>
   </div>
 
   <!-- KPI 卡片 -->
   <div class="kpi-grid" id="kpi-grid">
-    <div class="kpi-card"><div class="kpi-label">今日请求数</div><div class="kpi-value color-blue" id="kpi-req-today">–</div><div class="kpi-sub" id="kpi-req-week">本周 –</div></div>
-    <div class="kpi-card"><div class="kpi-label">今日 Token 总量</div><div class="kpi-value color-purple" id="kpi-tok-today">–</div><div class="kpi-sub" id="kpi-tok-week">本周 –</div></div>
-    <div class="kpi-card"><div class="kpi-label">今日输出 Token</div><div class="kpi-value color-green" id="kpi-out-today">–</div><div class="kpi-sub" id="kpi-out-week">本周 –</div></div>
-    <div class="kpi-card"><div class="kpi-label">今日费用估算</div><div class="kpi-value color-yellow" id="kpi-cost-today">–</div><div class="kpi-sub" id="kpi-cost-week">本周 –</div></div>
-    <div class="kpi-card"><div class="kpi-label">故障转移（今日）</div><div class="kpi-value color-red" id="kpi-fo-today">–</div><div class="kpi-sub" id="kpi-fo-week">本周 –</div></div>
-    <div class="kpi-card"><div class="kpi-label">平均延迟（今日）</div><div class="kpi-value" id="kpi-lat-today">–</div><div class="kpi-sub" id="kpi-lat-week">本周 –</div></div>
+    <div class="kpi-card">
+      <div class="kpi-header"><span class="kpi-icon">📊</span><span class="kpi-label">今日请求数</span></div>
+      <div class="kpi-value color-blue" id="kpi-req-today">–</div>
+      <div class="kpi-sub" id="kpi-req-week">本周 –</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-header"><span class="kpi-icon">🔢</span><span class="kpi-label">今日 Token 总量</span></div>
+      <div class="kpi-value color-purple" id="kpi-tok-today">–</div>
+      <div class="kpi-sub" id="kpi-tok-week">本周 –</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-header"><span class="kpi-icon">💬</span><span class="kpi-label">今日输出 Token</span></div>
+      <div class="kpi-value color-green" id="kpi-out-today">–</div>
+      <div class="kpi-sub" id="kpi-out-week">本周 –</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-header"><span class="kpi-icon">💰</span><span class="kpi-label">今日费用估算</span></div>
+      <div class="kpi-value color-yellow" id="kpi-cost-today">–</div>
+      <div class="kpi-sub" id="kpi-cost-week">本周 –</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-header"><span class="kpi-icon">🔄</span><span class="kpi-label">故障转移（今日）</span></div>
+      <div class="kpi-value color-red" id="kpi-fo-today">–</div>
+      <div class="kpi-sub" id="kpi-fo-week">本周 –</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-header"><span class="kpi-icon">⚡</span><span class="kpi-label">平均延迟（今日）</span></div>
+      <div class="kpi-value color-orange" id="kpi-lat-today">–</div>
+      <div class="kpi-sub" id="kpi-lat-week">本周 –</div>
+    </div>
   </div>
 
-  <!-- 供应商状态 + 趋势折线图 -->
+  <!-- 供应商状态 + 请求量趋势折线图 -->
   <div class="charts-grid">
     <div class="card">
       <div class="card-title">供应商状态</div>
@@ -323,8 +422,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- 供应商分布 + Token 量趋势 -->
-  <div class="charts-grid-3">
+  <!-- 供应商分布 + Token 量趋势（按 vendor） -->
+  <div class="charts-grid-2">
     <div class="card">
       <div class="card-title" id="title-vendor-dist">供应商请求分布（近 7 天）</div>
       <div class="chart-wrap">
@@ -332,10 +431,18 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </div>
     <div class="card">
-      <div class="card-title" id="title-token-timeline">近 7 天 Token 量趋势</div>
+      <div class="card-title" id="title-token-timeline">近 7 天 Token 量趋势（按供应商）</div>
       <div class="chart-wrap-lg">
         <canvas id="chart-token-timeline"></canvas>
       </div>
+    </div>
+  </div>
+
+  <!-- Token 用量（按 Vendor / 模型）堆叠图 -->
+  <div class="card" style="margin-bottom:12px">
+    <div class="card-title" id="title-model-token-timeline">近 7 天 Token 用量（按 Vendor / 模型）</div>
+    <div class="chart-wrap-xl">
+      <canvas id="chart-model-token-timeline"></canvas>
     </div>
   </div>
 
@@ -364,13 +471,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 const VENDOR_COLORS = [
   '#58a6ff','#bc8cff','#3fb950','#ffa657','#f85149',
   '#79c0ff','#d2a8ff','#56d364','#ffb77c','#ff7b72',
+  '#39d353','#e3b341','#a5d6ff','#f0a9eb','#7ee787',
+  '#ffa198','#cae8ff','#dbedff','#b6e3ff','#54aeff',
 ];
-const TOKEN_COLORS = {
-  input: '#58a6ff',
-  output: '#3fb950',
-  cache_creation: '#d29922',
-  cache_read: '#bc8cff',
-};
 
 // ── 工具函数 ──────────────────────────────────────────────
 function fmtTokens(n) {
@@ -385,20 +488,36 @@ function now() {
   return new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
 
+// ── 渐变填充工具 ──────────────────────────────────────────
+function makeGradient(ctx, color) {
+  const h = ctx.canvas.height;
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, color + '44');
+  grad.addColorStop(1, color + '04');
+  return grad;
+}
+
 // ── Chart.js 全局默认 ─────────────────────────────────────
 Chart.defaults.color = '#8b949e';
-Chart.defaults.borderColor = '#30363d';
+Chart.defaults.borderColor = 'rgba(255,255,255,.04)';
 Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-Chart.defaults.font.size = 12;
+Chart.defaults.font.size = 11;
+
+const COMMON_SCALE_X = { grid: { display: false }, ticks: { maxTicksLimit: 10 } };
+const COMMON_SCALE_Y = { grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true };
+const COMMON_LEGEND = { position: 'bottom', labels: { boxWidth: 8, padding: 14, usePointStyle: true, pointStyleWidth: 8, font: { size: 11 } } };
+const COMMON_LINE_DATASET = { tension: .35, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2 };
 
 // ── 图表实例 ──────────────────────────────────────────────
 let chartTimeline = null;
 let chartVendorDist = null;
 let chartTokenTimeline = null;
+let chartModelTokenTimeline = null;
 
 function destroyCharts() {
-  [chartTimeline, chartVendorDist, chartTokenTimeline].forEach(c => c && c.destroy());
-  chartTimeline = chartVendorDist = chartTokenTimeline = null;
+  [chartTimeline, chartVendorDist, chartTokenTimeline, chartModelTokenTimeline]
+    .forEach(c => c && c.destroy());
+  chartTimeline = chartVendorDist = chartTokenTimeline = chartModelTokenTimeline = null;
 }
 
 // ── 数据拉取 ──────────────────────────────────────────────
@@ -410,7 +529,7 @@ async function fetchJSON(url) {
 
 // ── KPI 更新 ──────────────────────────────────────────────
 function updateKPI(summary) {
-  const t = summary.today, w = summary.week, m = summary.month;
+  const t = summary.today, w = summary.week;
 
   document.getElementById('kpi-req-today').textContent = fmtNum(t.requests);
   document.getElementById('kpi-req-week').textContent = '本周 ' + fmtNum(w.requests);
@@ -464,7 +583,7 @@ function updateVendorStatus(status) {
   const tiers = status.tiers || [];
   const list = document.getElementById('vendor-list');
   if (!tiers.length) {
-    list.innerHTML = '<div class="empty">无供应商数据</div>';
+    list.innerHTML = '<div class="empty"><div class="empty-icon">🔌</div>无供应商数据</div>';
     return;
   }
   list.innerHTML = tiers.map(tier => {
@@ -475,25 +594,28 @@ function updateVendorStatus(status) {
     const cbLabel = cbStateLabel(cb.state);
     const pct = qg.usage_percent != null ? Math.round(qg.usage_percent) : null;
     const wpct = wqg.usage_percent != null ? Math.round(wqg.usage_percent) : null;
+    const initial = (tier.name || '?').charAt(0).toUpperCase();
 
     let quotaHTML = '';
     if (pct != null) {
       quotaHTML += `
-        <span class="status-badge ${quotaClass(pct)}">日配额 ${pct}%</span>
+        <span class="status-badge ${quotaClass(pct)}">日配 ${pct}%</span>
         <div class="quota-bar-wrap">
           <div class="quota-bar-bg"><div class="quota-bar-fill" style="width:${Math.min(pct,100)}%;background:${quotaBarColor(pct)}"></div></div>
         </div>`;
     }
     if (wpct != null) {
-      quotaHTML += `<span class="status-badge ${quotaClass(wpct)}">周配额 ${wpct}%</span>`;
+      quotaHTML += `<span class="status-badge ${quotaClass(wpct)}">周配 ${wpct}%</span>`;
     }
 
     const rlInfo = tier.rate_limit || {};
-    const rlHtml = rlInfo.limited
-      ? `<span class="status-badge sb-warn">限速中</span>` : '';
+    const rlHtml = rlInfo.limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
 
     return `<div class="vendor-item">
-      <span class="vendor-name">${tier.name}</span>
+      <div class="vendor-info">
+        <div class="vendor-avatar">${initial}</div>
+        <span class="vendor-name">${tier.name}</span>
+      </div>
       <div class="vendor-badges">
         <span class="status-badge ${cbClass}">${cbLabel}${cb.failure_count ? ' ×'+cb.failure_count : ''}</span>
         ${quotaHTML}
@@ -503,10 +625,9 @@ function updateVendorStatus(status) {
   }).join('');
 }
 
-// ── 时序折线图 ────────────────────────────────────────────
+// ── 时序折线图（请求量，按 vendor）────────────────────────
 function buildTimeline(rows) {
-  // 按 vendor 分组，按 date 汇总
-  const vendorDateMap = {}; // vendor → {date → count}
+  const vendorDateMap = {};
   const allDates = new Set();
   for (const r of rows) {
     const v = r.vendor, d = r.date;
@@ -518,29 +639,30 @@ function buildTimeline(rows) {
   const dates = [...allDates].sort();
   const vendors = Object.keys(vendorDateMap).sort();
 
-  const datasets = vendors.map((v, i) => ({
-    label: v,
-    data: dates.map(d => vendorDateMap[v][d] || 0),
-    borderColor: VENDOR_COLORS[i % VENDOR_COLORS.length],
-    backgroundColor: VENDOR_COLORS[i % VENDOR_COLORS.length] + '22',
-    fill: true,
-    tension: .3,
-    pointRadius: 3,
-    pointHoverRadius: 5,
-  }));
-
   if (chartTimeline) chartTimeline.destroy();
   const ctx = document.getElementById('chart-timeline').getContext('2d');
+  const datasets = vendors.map((v, i) => {
+    const color = VENDOR_COLORS[i % VENDOR_COLORS.length];
+    return {
+      ...COMMON_LINE_DATASET,
+      label: v,
+      data: dates.map(d => vendorDateMap[v][d] || 0),
+      borderColor: color,
+      backgroundColor: makeGradient(ctx, color),
+      fill: true,
+    };
+  });
+
   chartTimeline = new Chart(ctx, {
     type: 'line',
     data: { labels: dates, datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, padding: 12 } } },
+      plugins: { legend: COMMON_LEGEND },
       scales: {
-        x: { grid: { color: '#30363d' } },
-        y: { grid: { color: '#30363d' }, beginAtZero: true, ticks: { precision: 0 } },
+        x: COMMON_SCALE_X,
+        y: { ...COMMON_SCALE_Y, ticks: { precision: 0 } },
       },
     },
   });
@@ -560,7 +682,7 @@ function buildVendorDist(rows) {
   if (chartVendorDist) chartVendorDist.destroy();
   const ctx = document.getElementById('chart-vendor-dist').getContext('2d');
   if (!labels.length) {
-    ctx.canvas.parentElement.innerHTML = '<div class="empty">暂无数据</div>';
+    ctx.canvas.parentElement.innerHTML = '<div class="empty"><div class="empty-icon">📭</div>暂无数据</div>';
     return;
   }
   chartVendorDist = new Chart(ctx, {
@@ -571,23 +693,22 @@ function buildVendorDist(rows) {
         data,
         backgroundColor: labels.map((_,i) => VENDOR_COLORS[i % VENDOR_COLORS.length]),
         borderWidth: 0,
-        hoverOffset: 6,
+        hoverOffset: 8,
       }],
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
-        legend: { position: 'bottom', labels: { boxWidth: 10, padding: 10 } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.raw} 次` } },
+        legend: COMMON_LEGEND,
+        tooltip: { callbacks: { label: c => ` ${c.label}: ${c.raw.toLocaleString()} 次` } },
       },
     },
   });
 }
 
-// ── Token 量趋势折线图 ────────────────────────────────────
+// ── Token 量趋势折线图（按 vendor）───────────────────────
 function buildTokenTimeline(rows) {
-  // 按 vendor 分组，按 date 汇总 token 总量
-  const vendorDateMap = {}; // vendor → {date → total_tokens}
+  const vendorDateMap = {};
   const allDates = new Set();
   for (const r of rows) {
     const v = r.vendor, d = r.date;
@@ -604,20 +725,21 @@ function buildTokenTimeline(rows) {
   if (chartTokenTimeline) chartTokenTimeline.destroy();
   const ctx = document.getElementById('chart-token-timeline').getContext('2d');
   if (!dates.length) {
-    ctx.canvas.parentElement.innerHTML = '<div class="empty">暂无数据</div>';
+    ctx.canvas.parentElement.innerHTML = '<div class="empty"><div class="empty-icon">📭</div>暂无数据</div>';
     return;
   }
 
-  const datasets = vendors.map((v, i) => ({
-    label: v,
-    data: dates.map(d => vendorDateMap[v][d] || 0),
-    borderColor: VENDOR_COLORS[i % VENDOR_COLORS.length],
-    backgroundColor: VENDOR_COLORS[i % VENDOR_COLORS.length] + '22',
-    fill: true,
-    tension: .3,
-    pointRadius: 3,
-    pointHoverRadius: 5,
-  }));
+  const datasets = vendors.map((v, i) => {
+    const color = VENDOR_COLORS[i % VENDOR_COLORS.length];
+    return {
+      ...COMMON_LINE_DATASET,
+      label: v,
+      data: dates.map(d => vendorDateMap[v][d] || 0),
+      borderColor: color,
+      backgroundColor: makeGradient(ctx, color),
+      fill: true,
+    };
+  });
 
   chartTokenTimeline = new Chart(ctx, {
     type: 'line',
@@ -625,11 +747,94 @@ function buildTokenTimeline(rows) {
     options: {
       responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, padding: 12 } } },
+      plugins: {
+        legend: COMMON_LEGEND,
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${fmtTokens(c.raw)}` } },
+      },
       scales: {
-        x: { grid: { color: '#30363d' } },
+        x: COMMON_SCALE_X,
+        y: { ...COMMON_SCALE_Y, ticks: { callback: v => fmtTokens(v) } },
+      },
+    },
+  });
+}
+
+// ── Token 用量趋势（按 Vendor / 模型，堆叠面积图）────────
+function buildModelTokenTimeline(rows) {
+  const modelDateMap = {};
+  const allDates = new Set();
+  for (const r of rows) {
+    const key = (r.vendor || '?') + ' / ' + (r.model_served || '?');
+    const d = r.date;
+    if (!d) continue;
+    if (!modelDateMap[key]) modelDateMap[key] = {};
+    const total = (r.total_input || 0) + (r.total_output || 0)
+                + (r.total_cache_creation || 0) + (r.total_cache_read || 0);
+    modelDateMap[key][d] = (modelDateMap[key][d] || 0) + total;
+    allDates.add(d);
+  }
+  const dates = [...allDates].sort();
+  // 按总量降序排列 key
+  const keys = Object.keys(modelDateMap).sort((a, b) => {
+    const sumA = Object.values(modelDateMap[a]).reduce((s, v) => s + v, 0);
+    const sumB = Object.values(modelDateMap[b]).reduce((s, v) => s + v, 0);
+    return sumB - sumA;
+  });
+
+  if (chartModelTokenTimeline) chartModelTokenTimeline.destroy();
+  const canvasEl = document.getElementById('chart-model-token-timeline');
+  if (!canvasEl) return;
+  const ctx = canvasEl.getContext('2d');
+  if (!dates.length || !keys.length) {
+    ctx.canvas.parentElement.innerHTML = '<div class="empty"><div class="empty-icon">📭</div>暂无数据</div>';
+    return;
+  }
+
+  const datasets = keys.map((key, i) => {
+    const color = VENDOR_COLORS[i % VENDOR_COLORS.length];
+    return {
+      ...COMMON_LINE_DATASET,
+      label: key,
+      data: dates.map(d => modelDateMap[key][d] || 0),
+      borderColor: color,
+      backgroundColor: color + '30',
+      fill: true,
+    };
+  });
+
+  chartModelTokenTimeline = new Chart(ctx, {
+    type: 'line',
+    data: { labels: dates, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          position: keys.length > 8 ? 'right' : 'bottom',
+          labels: {
+            ...COMMON_LEGEND.labels,
+            generateLabels: chart => Chart.defaults.plugins.legend.labels.generateLabels(chart).map(item => {
+              const maxLen = 32;
+              if (item.text.length > maxLen) item.text = item.text.slice(0, maxLen) + '…';
+              return item;
+            }),
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label: c => ` ${c.dataset.label}: ${fmtTokens(c.raw)}`,
+            footer: items => {
+              const total = items.reduce((s, i) => s + (i.raw || 0), 0);
+              return total > 0 ? '合计: ' + fmtTokens(total) : '';
+            },
+          },
+        },
+      },
+      scales: {
+        x: COMMON_SCALE_X,
         y: {
-          grid: { color: '#30363d' }, beginAtZero: true,
+          ...COMMON_SCALE_Y,
+          stacked: true,
           ticks: { callback: v => fmtTokens(v) },
         },
       },
@@ -641,14 +846,14 @@ function buildTokenTimeline(rows) {
 function updateFtTable(failoverStats) {
   const tbody = document.getElementById('ft-tbody');
   if (!failoverStats || !failoverStats.length) {
-    tbody.innerHTML = '<tr><td colspan="3" class="empty">暂无故障转移记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="3" class="empty"><div class="empty-icon">✅</div>暂无故障转移记录</td></tr>';
     return;
   }
   tbody.innerHTML = failoverStats.map(r => `
     <tr>
       <td><span class="tag-vendor">${r.failover_from || 'unknown'}</span></td>
       <td><span class="tag-vendor">${r.vendor || ''}</span></td>
-      <td>${fmtNum(r.count)}</td>
+      <td><span style="font-family:'JetBrains Mono',monospace">${fmtNum(r.count)}</span></td>
     </tr>`).join('');
 }
 
@@ -662,7 +867,6 @@ function setTimeRange(days, btn) {
   const customEl = document.getElementById('range-custom');
   if (days === 0) {
     customEl.classList.add('visible');
-    // 初始化日期：默认今天往前 7 天
     const today = new Date();
     const weekAgo = new Date(today);
     weekAgo.setDate(weekAgo.getDate() - 6);
@@ -686,20 +890,16 @@ function applyCustomRange() {
   refresh();
 }
 
-function rangeLabel() {
-  if (currentDays <= 7) return '近 7 天';
-  if (currentDays <= 30) return '近 30 天';
-  return '近 ' + currentDays + ' 天';
-}
-
 function updateChartTitles(days) {
   const label = days <= 7 ? '近 7 天' : (days <= 30 ? '近 30 天' : '近 ' + days + ' 天');
   const tl = document.getElementById('title-timeline');
   const tt = document.getElementById('title-token-timeline');
   const vd = document.getElementById('title-vendor-dist');
+  const mt = document.getElementById('title-model-token-timeline');
   if (tl) tl.textContent = label + ' 请求量趋势';
-  if (tt) tt.textContent = label + ' Token 量趋势';
+  if (tt) tt.textContent = label + ' Token 量趋势（按供应商）';
   if (vd) vd.textContent = '供应商请求分布（' + label + '）';
+  if (mt) mt.textContent = label + ' Token 用量（按 Vendor / 模型）';
 }
 
 // ── 主刷新逻辑 ────────────────────────────────────────────
@@ -716,7 +916,6 @@ async function refresh() {
       fetchJSON('/api/status'),
     ]);
 
-    // 版本号
     if (summary.version) {
       document.getElementById('version-badge').textContent = 'v' + summary.version;
     }
@@ -729,6 +928,7 @@ async function refresh() {
     buildTimeline(rows);
     buildVendorDist(rows);
     buildTokenTimeline(rows);
+    buildModelTokenTimeline(rows);
 
     updateFtTable(summary.failover_stats || []);
 
