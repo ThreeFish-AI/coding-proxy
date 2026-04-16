@@ -99,7 +99,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       background: var(--bg);
       color: var(--text-primary);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-      font-size: 14px;
+      font-size: 15px;
       line-height: 1.5;
       min-height: 100vh;
       -webkit-font-smoothing: antialiased;
@@ -129,23 +129,23 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       font-size: 15px; font-weight: 700; color: #fff;
       box-shadow: 0 4px 12px rgba(102,126,234,.25);
     }
-    h1 { font-size: 16px; font-weight: 500; color: var(--text-primary); letter-spacing: -.3px; }
+    h1 { font-size: 18px; font-weight: 600; color: var(--text-primary); letter-spacing: -.3px; }
     .header-right { display: flex; align-items: center; gap: 12px; }
     .badge {
-      font-size: 11px; padding: 2px 8px;
+      font-size: 12px; padding: 2px 8px;
       border-radius: 12px;
       background: rgba(88,166,255,.1);
       color: var(--accent-blue);
       border: 1px solid rgba(88,166,255,.2);
       font-family: 'JetBrains Mono', monospace;
     }
-    .refresh-time { font-size: 11px; color: var(--text-tertiary); }
+    .refresh-time { font-size: 12px; color: var(--text-tertiary); }
     .btn-refresh {
       padding: 5px 12px; border-radius: var(--radius-sm);
       background: rgba(48,54,61,.5);
       border: 1px solid var(--border);
       color: var(--text-secondary);
-      font-size: 12px; cursor: pointer;
+      font-size: 13px; cursor: pointer;
       transition: all .2s ease;
     }
     .btn-refresh:hover {
@@ -194,14 +194,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       box-shadow: var(--glow-blue);
     }
     .kpi-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-    .kpi-icon { font-size: 13px; opacity: .8; }
-    .kpi-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; letter-spacing: .2px; }
+    .kpi-icon { font-size: 15px; opacity: .8; }
+    .kpi-label { font-size: 13px; color: var(--text-secondary); font-weight: 600; letter-spacing: .2px; }
     .kpi-value {
-      font-size: 28px; font-weight: 600; line-height: 1.2;
+      font-size: 32px; font-weight: 700; line-height: 1.2;
       font-family: 'JetBrains Mono', monospace;
       letter-spacing: -1px;
     }
-    .kpi-sub { font-size: 12px; color: var(--text-tertiary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+    .kpi-sub { font-size: 13px; color: var(--text-tertiary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
     .color-blue { color: var(--accent-blue); }
     .color-green { color: var(--accent-green); }
     .color-yellow { color: var(--accent-yellow); }
@@ -221,6 +221,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       gap: 16px;
       margin-bottom: 16px;
     }
+    .charts-grid > .card,
+    .charts-grid-2 > .card {
+      min-width: 0;
+      overflow: hidden;
+    }
     @media (max-width: 960px) {
       .charts-grid, .charts-grid-2 { grid-template-columns: 1fr; }
     }
@@ -237,15 +242,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .card:hover { box-shadow: var(--shadow-md); }
     .card-title {
-      font-size: 12px; font-weight: 500;
+      font-size: 14px; font-weight: 600;
       color: var(--text-secondary);
       letter-spacing: .3px;
       margin-bottom: 16px;
       display: flex; align-items: center; justify-content: space-between;
     }
-    .chart-wrap { position: relative; height: 260px; }
-    .chart-wrap-lg { position: relative; height: 260px; }
-    .chart-wrap-xl { position: relative; height: 280px; }
+    .chart-wrap { position: relative; height: 260px; min-width: 0; }
+    .chart-wrap-lg { position: relative; height: 260px; min-width: 0; }
+    .chart-wrap-xl { position: relative; height: 280px; min-width: 0; }
     /* ── 供应商状态 ── */
     .vendor-list { display: flex; flex-direction: column; gap: 8px; }
     .vendor-item {
@@ -262,13 +267,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       width: 30px; height: 30px; border-radius: 8px;
       background: var(--gradient-primary);
       display: flex; align-items: center; justify-content: center;
-      font-size: 12px; font-weight: 700; color: #fff;
+      font-size: 13px; font-weight: 700; color: #fff;
       flex-shrink: 0;
     }
-    .vendor-name { font-weight: 600; font-size: 12px; }
+    .vendor-name { font-weight: 600; font-size: 14px; }
     .vendor-badges { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
     .status-badge {
-      font-size: 10px; padding: 2px 7px;
+      font-size: 11px; padding: 2px 7px;
       border-radius: 10px;
       font-weight: 500;
     }
@@ -291,17 +296,17 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     table { width: 100%; border-collapse: collapse; }
     thead tr { position: sticky; top: 0; background: var(--bg-card); z-index: 1; }
     th {
-      text-align: left; font-size: 11px; color: var(--text-tertiary);
+      text-align: left; font-size: 12px; color: var(--text-tertiary);
       font-weight: 600; padding: 6px 10px;
       border-bottom: 1px solid var(--border);
       letter-spacing: .4px; text-transform: uppercase;
     }
-    td { padding: 8px 10px; font-size: 13px; border-bottom: 1px solid var(--border-subtle); }
+    td { padding: 8px 10px; font-size: 14px; border-bottom: 1px solid var(--border-subtle); }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: rgba(255,255,255,.02); }
     .tag-vendor {
       display: inline-block;
-      font-size: 11px; padding: 2px 8px;
+      font-size: 12px; padding: 2px 8px;
       border-radius: 10px;
       background: rgba(188,140,255,.1);
       color: var(--accent-purple);
@@ -319,13 +324,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border-radius: var(--radius);
       backdrop-filter: blur(4px);
     }
-    .time-range-label { font-size: 12px; color: var(--text-tertiary); font-weight: 500; }
+    .time-range-label { font-size: 13px; color: var(--text-tertiary); font-weight: 600; }
     .range-btn {
       padding: 6px 16px; border-radius: 20px;
       background: transparent;
       border: 1px solid transparent;
       color: var(--text-secondary);
-      font-size: 13px; cursor: pointer;
+      font-size: 14px; cursor: pointer;
       transition: all .25s ease;
     }
     .range-btn:hover { background: rgba(255,255,255,.05); color: var(--text-primary); }
@@ -340,22 +345,22 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .range-date {
       padding: 3px 10px; border-radius: var(--radius-sm);
       background: rgba(48,54,61,.4); border: 1px solid var(--border);
-      color: var(--text-primary); font-size: 12px;
+      color: var(--text-primary); font-size: 13px;
       color-scheme: dark;
       transition: border-color .2s;
     }
     .range-date:focus { outline: none; border-color: rgba(88,166,255,.5); }
-    .range-sep { font-size: 12px; color: var(--text-tertiary); }
+    .range-sep { font-size: 13px; color: var(--text-tertiary); }
     /* ── 空态 ── */
     .empty {
       text-align: center; padding: 32px;
-      color: var(--text-tertiary); font-size: 13px;
+      color: var(--text-tertiary); font-size: 14px;
     }
-    .empty-icon { font-size: 28px; margin-bottom: 8px; opacity: .5; }
+    .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: .5; }
     /* ── 加载态 ── */
     .loading { opacity: .4; pointer-events: none; }
     /* ── 图表标签截断 ── */
-    .chart-legend-note { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; text-align: center; }
+    .chart-legend-note { font-size: 12px; color: var(--text-tertiary); margin-top: 4px; text-align: center; }
     /* ── 外部 Tooltip ── */
     #chart-tooltip {
       position: fixed;
@@ -364,7 +369,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border: 1px solid rgba(255,255,255,.08);
       border-radius: 12px;
       padding: 12px 16px;
-      font-size: 12px;
+      font-size: 13px;
       color: var(--text-primary);
       box-shadow: 0 12px 40px rgba(0,0,0,.5);
       backdrop-filter: blur(4px);
@@ -381,16 +386,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     #chart-tooltip.active { opacity: 1; }
     #chart-tooltip-title {
       font-weight: 600; margin-bottom: 6px; padding-bottom: 6px;
-      border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 11px;
+      border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 12px;
     }
     #chart-tooltip-items { display: flex; flex-direction: column; gap: 3px; }
     .tt-item { display: flex; align-items: center; gap: 8px; line-height: 1.4; }
     .tt-color { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .tt-label { flex: 1; color: var(--text-primary); }
-    .tt-value { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-secondary); }
+    .tt-value { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-secondary); }
     #chart-tooltip-footer {
       margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle);
-      font-weight: 500; font-size: 11px; color: var(--text-secondary);
+      font-weight: 500; font-size: 12px; color: var(--text-secondary);
     }
   </style>
 </head>
@@ -552,12 +557,12 @@ function makeGradient(ctx, color) {
 Chart.defaults.color = '#8b949e';
 Chart.defaults.borderColor = 'rgba(255,255,255,.03)';
 Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
-Chart.defaults.font.size = 12;
+Chart.defaults.font.size = 13;
 Chart.defaults.plugins.tooltip.usePointStyle = true;
 Chart.defaults.devicePixelRatio = window.devicePixelRatio || 1;
 
-const COMMON_SCALE_X = { grid: { display: false }, ticks: { maxTicksLimit: 10 } };
-const COMMON_SCALE_Y = { grid: { color: 'rgba(255,255,255,.03)' }, beginAtZero: true };
+const COMMON_SCALE_X = { grid: { display: false }, ticks: { maxTicksLimit: 10, font: { size: 12 } } };
+const COMMON_SCALE_Y = { grid: { color: 'rgba(255,255,255,.03)' }, beginAtZero: true, ticks: { font: { size: 12 } } };
 const COMMON_LEGEND = {
   position: 'bottom',
   labels: {
@@ -566,7 +571,7 @@ const COMMON_LEGEND = {
     padding: 14,
     usePointStyle: true,
     pointStyle: 'circle',
-    font: { size: 12 },
+    font: { size: 13, weight: '500' },
     generateLabels: chart => {
       const items = Chart.defaults.plugins.legend.labels.generateLabels(chart);
       return items.filter(item => isValidLabel(item.text)).map(item => {
@@ -905,8 +910,24 @@ function buildVendorDist(rows) {
           position: 'right',
           onClick: legendOnClick,
           labels: {
-            ...COMMON_LEGEND.labels,
+            boxWidth: 12,
+            boxHeight: 12,
             padding: 12,
+            usePointStyle: true,
+            pointStyle: 'circle',
+            font: { size: 13, weight: '500' },
+            generateLabels: chart => {
+              const ds = chart.data.datasets[0];
+              return chart.data.labels.map((label, i) => ({
+                text: label,
+                fillStyle: ds.backgroundColor[i],
+                strokeStyle: ds.backgroundColor[i],
+                lineWidth: 0,
+                hidden: !chart.getDataVisibility(i),
+                index: i,
+                pointStyle: 'circle',
+              }));
+            },
           },
         },
         tooltip: { callbacks: { label: c => ` ${c.label}: ${c.raw.toLocaleString()} 次` } },
