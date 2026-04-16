@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-## [v0.2.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.3a1) — 2026-04-15
+## [v0.2.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.3) — 2026-04-16
 
 - feat(dashboard): 新增实时 Web Dashboard 页面，聚合展示流量与用量统计;
 - docs(user-guide): 补充 POST /v1/messages 完整 API 参考文档;
