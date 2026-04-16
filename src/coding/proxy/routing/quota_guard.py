@@ -56,6 +56,18 @@ class QuotaGuard:
         """滑动窗口小时数（供基线加载使用）."""
         return self._window / 3600
 
+    @property
+    def _window_label(self) -> str:
+        """人类可读的窗口周期短标签."""
+        w = self._window
+        if w >= 86400 and w % 86400 == 0:
+            return f"{w // 86400}d"
+        if w >= 3600 and w % 3600 == 0:
+            return f"{w // 3600}h"
+        if w >= 60 and w % 60 == 0:
+            return f"{w // 60}m"
+        return f"{w}s"
+
     def can_use_primary(self) -> bool:
         """判断是否可以使用主后端."""
         if not self._enabled:
@@ -68,7 +80,8 @@ class QuotaGuard:
                 ):
                     self._transition_to(QuotaState.QUOTA_EXCEEDED)
                     logger.warning(
-                        "Quota guard: WITHIN_QUOTA → EXCEEDED (%.1f%%)",
+                        "Quota guard [%s]: WITHIN_QUOTA → EXCEEDED (%.1f%%)",
+                        self._window_label,
                         self._total / self._budget * 100,
                     )
                     return False
@@ -80,12 +93,18 @@ class QuotaGuard:
                 and self._total < int(self._budget * self._threshold)
             ):
                 self._transition_to(QuotaState.WITHIN_QUOTA)
-                logger.info("Quota guard: EXCEEDED → WITHIN_QUOTA (usage dropped)")
+                logger.info(
+                    "Quota guard [%s]: EXCEEDED → WITHIN_QUOTA (usage dropped)",
+                    self._window_label,
+                )
                 return True
             now = time.monotonic()
             if now - self._last_probe >= self._effective_probe_interval:
                 self._last_probe = now
-                logger.info("Quota guard: allowing probe request")
+                logger.info(
+                    "Quota guard [%s]: allowing probe request",
+                    self._window_label,
+                )
                 return True
             return False
 
@@ -104,7 +123,10 @@ class QuotaGuard:
         with self._lock:
             if self._state == QuotaState.QUOTA_EXCEEDED:
                 self._transition_to(QuotaState.WITHIN_QUOTA)
-                logger.info("Quota guard: EXCEEDED → WITHIN_QUOTA (probe success)")
+                logger.info(
+                    "Quota guard [%s]: EXCEEDED → WITHIN_QUOTA (probe success)",
+                    self._window_label,
+                )
 
     def notify_cap_error(self, retry_after_seconds: float | None = None) -> None:
         """外部通知检测到用量上限错误.
@@ -125,7 +147,8 @@ class QuotaGuard:
                 )
             self._cap_error_active = True
             logger.warning(
-                "Quota guard: cap error detected → EXCEEDED (effective_probe=%ds)",
+                "Quota guard [%s]: cap error detected → EXCEEDED (effective_probe=%ds)",
+                self._window_label,
                 int(self._effective_probe_interval),
             )
 
@@ -139,12 +162,17 @@ class QuotaGuard:
             self._total += total_tokens
             if vendor:
                 logger.info(
-                    "Quota guard [%s]: loaded baseline %d tokens",
+                    "Quota guard [%s/%s]: loaded baseline %d tokens",
                     vendor,
+                    self._window_label,
                     total_tokens,
                 )
             else:
-                logger.info("Quota guard: loaded baseline %d tokens", total_tokens)
+                logger.info(
+                    "Quota guard [%s]: loaded baseline %d tokens",
+                    self._window_label,
+                    total_tokens,
+                )
 
     def reset(self) -> None:
         """手动重置为 WITHIN_QUOTA 状态."""
@@ -152,7 +180,10 @@ class QuotaGuard:
             self._transition_to(QuotaState.WITHIN_QUOTA)
             self._entries.clear()
             self._total = 0
-            logger.info("Quota guard: manually reset to WITHIN_QUOTA")
+            logger.info(
+                "Quota guard [%s]: manually reset to WITHIN_QUOTA",
+                self._window_label,
+            )
 
     def get_info(self) -> dict:
         """获取配额守卫状态信息."""
@@ -166,6 +197,7 @@ class QuotaGuard:
                 if self._budget > 0
                 else 0,
                 "threshold_percent": self._threshold * 100,
+                "window_hours": self.window_hours,
             }
 
     def _expire(self) -> None:

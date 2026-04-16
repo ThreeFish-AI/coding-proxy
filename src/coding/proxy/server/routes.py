@@ -24,10 +24,14 @@ from .responses import (
 logger = logging.getLogger(__name__)
 
 
-async def _stream_proxy(router: Any, body: dict, headers: dict) -> Any:
+async def _stream_proxy(
+    router: Any, body: dict, headers: dict, normalization: Any = None
+) -> Any:
     """流式代理生成器."""
     try:
-        async for chunk, vendor_name in router.route_stream(body, headers):
+        async for chunk, vendor_name in router.route_stream(
+            body, headers, normalization=normalization
+        ):
             yield chunk
     except NoCompatibleVendorError as exc:
         yield (
@@ -78,13 +82,15 @@ def register_core_routes(app: Any, router: Any) -> None:
 
         if is_streaming:
             return StreamingResponse(
-                _stream_proxy(router, body, headers),
+                _stream_proxy(router, body, headers, normalization=normalization),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
             )
 
         try:
-            resp = await router.route_message(body, headers)
+            resp = await router.route_message(
+                body, headers, normalization=normalization
+            )
         except NoCompatibleVendorError as exc:
             return json_error_response(
                 400,
@@ -353,3 +359,7 @@ def register_all_routes(
     register_admin_routes(app, router)
     if reauth_coordinator:
         register_reauth_routes(app, reauth_coordinator)
+
+    from .dashboard import register_dashboard_routes
+
+    register_dashboard_routes(app)

@@ -134,18 +134,24 @@ class RequestRouter:
         self,
         body: dict[str, Any],
         headers: dict[str, str],
+        normalization: Any = None,
     ) -> AsyncIterator[tuple[bytes, str]]:
         """路由流式请求，按优先级尝试各层级."""
-        async for chunk, vendor_name in self._executor.execute_stream(body, headers):
+        async for chunk, vendor_name in self._executor.execute_stream(
+            body, headers, normalization=normalization
+        ):
             yield chunk, vendor_name
 
     async def route_message(
         self,
         body: dict[str, Any],
         headers: dict[str, str],
+        normalization: Any = None,
     ) -> Any:
         """路由非流式请求，按优先级尝试各层级."""
-        return await self._executor.execute_message(body, headers)
+        return await self._executor.execute_message(
+            body, headers, normalization=normalization
+        )
 
     # ── 生命周期 ───────────────────────────────────────────
 

@@ -29,6 +29,10 @@
 
 ## 🌟 核心特性 (Core Features)
 
+<div align="center">
+    <img src="../../assets/dashboard-v0.2.3.png">
+</div>
+
 - **⛓️ N-tier 链式故障转移 (Failover)**：自主降序序列，支持 Claude 官方 Plans，以及 GitHub Copilot、智谱、MiniMax、阿里千问、小米、Kimi、豆包等的 Coding Plan。
 - **🛡️ 智能弹性与容灾守卫**：每个供应商节点独立配备 **熔断器 (Circuit Breaker)** 与 **配额守卫 (Quota Guard)**，防雪崩、主动避险。
 - **👻 透明无感代理机制**：对客户端 **100% 透明**！无需修改任何代码，仅需一行配置覆盖 `ANTHROPIC_BASE_URL` 即可接入。

@@ -497,7 +497,7 @@ class TokenLogger:
             return 0
         cutoff_iso = _hours_ago_utc_iso(window_hours)
         cursor = await self._db.execute(
-            """SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS total
+            """SELECT COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS total
                FROM usage_log
                WHERE vendor = ? AND success = 1
                  AND ts >= ?""",
