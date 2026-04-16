@@ -1340,7 +1340,7 @@ def _compute_cost_str(rows: list[dict], pricing_table: Any) -> str:
 
     if not cost_totals:
         return "–"
-    return " + ".join(f"{cur.symbol}{amt:.4f}" for cur, amt in cost_totals.items())
+    return " + ".join(f"{cur.symbol}{amt:.2f}" for cur, amt in cost_totals.items())
 
 
 # ── 路由注册 ──────────────────────────────────────────────────────────────

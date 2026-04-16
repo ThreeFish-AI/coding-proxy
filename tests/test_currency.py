@@ -45,11 +45,11 @@ class TestCostValue:
 
     def test_format_usd(self):
         cv = CostValue(amount=0.3421, currency=Currency.USD)
-        assert cv.format() == "$0.3421"
+        assert cv.format() == "$0.34"
 
     def test_format_cny(self):
         cv = CostValue(amount=0.0953, currency=Currency.CNY)
-        assert cv.format() == "\u00a50.0953"
+        assert cv.format() == "\u00a50.10"
 
     def test_format_precision(self):
         cv = CostValue(amount=0.12345678, currency=Currency.USD)
@@ -58,7 +58,7 @@ class TestCostValue:
 
     def test_format_zero(self):
         cv = CostValue(amount=0.0, currency=Currency.USD)
-        assert cv.format() == "$0.0000"
+        assert cv.format() == "$0.00"
 
     def test_equality_same_currency(self):
         a = CostValue(1.0, Currency.USD)
