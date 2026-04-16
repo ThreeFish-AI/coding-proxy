@@ -58,7 +58,7 @@ vendors:
       probe_interval_seconds: 300
     weekly_quota_guard:
       enabled: true
-      token_budget: 500000000 # 一周 token 预算（根据订阅计划调整）
+      token_budget: 800000000 # 一周 token 预算（根据订阅计划调整）
       window_hours: 168.0 # 7 天滑动窗口
       threshold_percent: 99.0
       probe_interval_seconds: 1800 # 每 30 分钟探测一次
