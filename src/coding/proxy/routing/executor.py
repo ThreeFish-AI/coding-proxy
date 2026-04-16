@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -222,10 +223,43 @@ class _RouteExecutor:
 
     # ── 公开执行入口 ──────────────────────────────────────
 
+    def _prepare_body_for_tier(
+        self,
+        body: dict[str, Any],
+        tier: VendorTier,
+        normalization: Any = None,
+    ) -> dict[str, Any]:
+        """为指定 tier 准备请求体，必要时应用 Anthropic 专属修复（Phase 2）.
+
+        仅当 tier 为 Anthropic 且 NormalizationResult 标记需要修复时，
+        才执行 deep copy + Phase 2 修复，确保 Zhipu 等其他 vendor 不受影响。
+        """
+        if normalization is None or not normalization.has_anthropic_fixes:
+            return body
+        if tier.name != "anthropic":
+            return body
+
+        from ..server.request_normalizer import apply_anthropic_specific_fixes
+
+        body_for_vendor = copy.deepcopy(body)
+        fixes = apply_anthropic_specific_fixes(
+            body_for_vendor.get("messages", []),
+            normalization.misplaced_tool_results,
+            normalization.misplaced_log_info,
+        )
+        if fixes:
+            logger.debug(
+                "Applied Anthropic-specific fixes for tier %s: %s",
+                tier.name,
+                ", ".join(fixes),
+            )
+        return body_for_vendor
+
     async def execute_stream(
         self,
         body: dict[str, Any],
         headers: dict[str, str],
+        normalization: Any = None,
     ) -> AsyncIterator[tuple[bytes, str]]:
         """路由流式请求，按优先级尝试各层级."""
         last_idx = len(self._tiers) - 1
@@ -257,7 +291,8 @@ class _RouteExecutor:
             usage: dict[str, Any] = {}
 
             try:
-                async for chunk in tier.vendor.send_message_stream(body, headers):
+                body_for_tier = self._prepare_body_for_tier(body, tier, normalization)
+                async for chunk in tier.vendor.send_message_stream(body_for_tier, headers):
                     parse_usage_from_chunk(
                         chunk,
                         usage,
@@ -389,6 +424,7 @@ class _RouteExecutor:
         self,
         body: dict[str, Any],
         headers: dict[str, str],
+        normalization: Any = None,
     ) -> VendorResponse:
         """路由非流式请求，按优先级尝试各层级."""
         last_idx = len(self._tiers) - 1
@@ -417,7 +453,8 @@ class _RouteExecutor:
                 continue
 
             try:
-                resp = await tier.vendor.send_message(body, headers)
+                body_for_tier = self._prepare_body_for_tier(body, tier, normalization)
+                resp = await tier.vendor.send_message(body_for_tier, headers)
 
                 if resp.status_code < 400:
                     duration = int((time.monotonic() - start) * 1000)
