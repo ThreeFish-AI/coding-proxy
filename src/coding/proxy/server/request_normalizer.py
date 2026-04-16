@@ -30,25 +30,38 @@ class NormalizationResult:
     body: dict[str, Any]
     adaptations: list[str] = field(default_factory=list)
     fatal_reasons: list[str] = field(default_factory=list)
+    # Phase 2 上下文（仅 Anthropic tier 使用）
+    tool_id_map: dict[str, str] = field(default_factory=dict)
+    misplaced_tool_results: list[tuple[int, dict[str, Any]]] = field(
+        default_factory=list
+    )
+    misplaced_log_info: list[tuple[str, int, int, str]] = field(
+        default_factory=list
+    )
 
     @property
     def recoverable(self) -> bool:
         return not self.fatal_reasons
 
+    @property
+    def has_anthropic_fixes(self) -> bool:
+        """是否需要应用 Anthropic 专属修复（重定位 + 孤儿修复）."""
+        return bool(self.misplaced_tool_results) or bool(self.tool_id_map)
+
 
 def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
     """清洗供应商私有块，尽量恢复为合法 Anthropic Messages 请求.
 
+    这是 vendor-agnostic 的 Phase 1 规范化：对所有 vendor 均适用。
+
     处理策略：
     1. 移除供应商私有块（如 server_tool_use_delta）
     2. 重写无效/非标准的 tool_use / tool_result ID
-    3. **重定位错位的 tool_result 块**：Anthropic API 要求 ``tool_result`` 只能出现在
-       ``user`` 消息中。当检测到非 user 消息中存在 ``tool_result`` 时，
-       将其重定位到紧邻的下一个 user 消息中，以保持 ``tool_use`` / ``tool_result``
-       配对关系，防止上游返回 ``400 invalid_request_error``。
-    4. **修复孤儿 tool_use 块**：当 assistant 消息中的 ``tool_use`` 在紧邻的 user 消息中
-       没有对应的 ``tool_result`` 时（如跨供应商降级导致对话结构不完整），
-       合成一个 ``is_error=true`` 的占位 ``tool_result`` 以满足 API 约束。
+    3. **收集**（但不应用）错位的 tool_result 块信息，供 Phase 2 使用
+
+    Phase 2（Anthropic 专属修复：重定位 + 孤儿修复）由
+    :func:`apply_anthropic_specific_fixes` 独立执行，仅在请求实际发送给
+    Anthropic tier 时调用，确保 Zhipu 等其他 vendor 不受影响。
     """
     normalized = copy.deepcopy(body)
     adaptations: list[str] = []
@@ -61,9 +74,9 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
         normalized_counter += 1
         return f"toolu_normalized_{normalized_counter}"
 
-    # 收集本轮被重定位的 misplaced tool_result 块及日志信息
-    relocated_results: list[tuple[int, dict[str, Any]]] = []  # (source_msg_idx, block)
-    relocated_log_info: list[
+    # 收集本轮 misplaced tool_result 块（Phase 2 延迟到 Anthropic tier 执行）
+    collected_misplaced: list[tuple[int, dict[str, Any]]] = []  # (source_msg_idx, block)
+    misplaced_log_info: list[
         tuple[str, int, int, str]
     ] = []  # (role, msg_idx, blk_idx, tool_use_id)
 
@@ -143,20 +156,16 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
                     return None
                 return normalized_block
 
-            # tool_result 出现在非 user 消息中（如 assistant）—— 重定位到紧邻的 user 消息。
-            # 典型触发场景：跨供应商降级时（如 Zhipu GLM → Anthropic），
-            # GLM-5 在 assistant 响应中同时包含 tool_use 和 tool_result 内容块，
-            # Claude Code 将此响应当作对话历史存储后，tool_result 出现在 assistant 角色消息中。
-            # 直接剥离会导致 tool_use 成为孤儿块（无配对 tool_result），触发上游 400 错误。
-            # 因此改为重定位：将 tool_result 移至紧邻的下一个 user 消息中。
+            # tool_result 出现在非 user 消息中（如 assistant）—— 仅收集供 Phase 2 使用。
+            # Phase 2 由 apply_anthropic_specific_fixes() 执行，仅在 Anthropic tier 时调用。
+            # 对于 Zhipu 等其他 vendor，misplaced 块保留在原位不变。
             normalized_block = dict(block)
             tool_use_id = normalized_block.get("tool_use_id")
             if isinstance(tool_use_id, str) and tool_use_id in tool_id_map:
                 normalized_block["tool_use_id"] = tool_id_map[tool_use_id]
                 adaptations.append("tool_result_tool_use_id_rewritten")
-            adaptations.append("misplaced_tool_result_relocated")
-            relocated_results.append((message_index, normalized_block))
-            relocated_log_info.append(
+            collected_misplaced.append((message_index, normalized_block))
+            misplaced_log_info.append(
                 (
                     message_role,
                     message_index,
@@ -164,7 +173,7 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
                     normalized_block.get("tool_use_id", "N/A"),
                 )
             )
-            return None
+            return normalized_block
 
         return dict(block)
 
@@ -187,51 +196,104 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
                 new_content.append(normalized_block)
         message["content"] = new_content
 
-    # ── 重定位 misplaced tool_result 到紧邻的 user 消息 ──────────
-    # 按源消息索引降序处理，避免插入新消息时索引偏移。
-    messages_list = normalized.get("messages", [])
-    for source_idx, result_block in sorted(
-        relocated_results, key=lambda x: x[0], reverse=True
-    ):
-        target_user_idx = None
-        for j in range(source_idx + 1, len(messages_list)):
-            if (
-                isinstance(messages_list[j], dict)
-                and messages_list[j].get("role") == "user"
-            ):
-                target_user_idx = j
-                break
-        if target_user_idx is not None:
-            # 追加到已有 user 消息的 content 末尾
-            target_content = messages_list[target_user_idx].get("content")
-            if isinstance(target_content, list):
-                target_content.append(result_block)
-            elif isinstance(target_content, str):
-                # string content 转为 text block 后追加，避免丢失原始文本
-                messages_list[target_user_idx]["content"] = [
-                    {"type": "text", "text": target_content},
-                    result_block,
-                ]
+    return NormalizationResult(
+        body=normalized,
+        adaptations=sorted(set(adaptations)),
+        fatal_reasons=fatal_reasons,
+        tool_id_map=tool_id_map,
+        misplaced_tool_results=collected_misplaced,
+        misplaced_log_info=misplaced_log_info,
+    )
+
+
+def apply_anthropic_specific_fixes(
+    messages_list: list[dict[str, Any]],
+    misplaced_results: list[tuple[int, dict[str, Any]]],
+    misplaced_log_info: list[tuple[str, int, int, str]],
+) -> list[str]:
+    """应用 Anthropic 专属修复（重定位 + 孤儿修复）.
+
+    仅在请求实际发送给 Anthropic tier 时调用，确保 Zhipu 等其他 vendor 不受影响。
+    Phase 1（normalize_anthropic_request）仅收集 misplaced 信息，将实际修复延迟到此函数。
+
+    Args:
+        messages_list: 消息列表（就地修改）。
+        misplaced_results: Phase 1 收集的 misplaced tool_result 列表，
+            每个元素为 (source_msg_idx, block)。
+        misplaced_log_info: Phase 1 收集的日志信息列表，
+            每个元素为 (role, msg_idx, blk_idx, tool_use_id)。
+
+    Returns:
+        新增的 adaptation 标签列表。
+    """
+    adaptations: list[str] = []
+
+    if misplaced_results:
+        # ── 1. 从源消息中移除 misplaced tool_result 块 ───────────
+        to_remove: dict[int, set[str]] = {}
+        for source_idx, block in misplaced_results:
+            tid = block.get("tool_use_id", "")
+            if tid:
+                to_remove.setdefault(source_idx, set()).add(tid)
+
+        for msg_idx, tids in to_remove.items():
+            if msg_idx < len(messages_list):
+                msg = messages_list[msg_idx]
+                if isinstance(msg, dict):
+                    content = msg.get("content")
+                    if isinstance(content, list):
+                        msg["content"] = [
+                            b
+                            for b in content
+                            if not (
+                                isinstance(b, dict)
+                                and b.get("type") == "tool_result"
+                                and b.get("tool_use_id") in tids
+                            )
+                        ]
+
+        # ── 2. 重定位到紧邻的 user 消息 ──────────────────────────
+        # 按源消息索引降序处理，避免插入新消息时索引偏移。
+        for source_idx, result_block in sorted(
+            misplaced_results, key=lambda x: x[0], reverse=True
+        ):
+            target_user_idx = None
+            for j in range(source_idx + 1, len(messages_list)):
+                if (
+                    isinstance(messages_list[j], dict)
+                    and messages_list[j].get("role") == "user"
+                ):
+                    target_user_idx = j
+                    break
+
+            if target_user_idx is not None:
+                target_content = messages_list[target_user_idx].get("content")
+                if isinstance(target_content, list):
+                    target_content.append(result_block)
+                elif isinstance(target_content, str):
+                    # string content 转为 text block 后追加，避免丢失原始文本
+                    messages_list[target_user_idx]["content"] = [
+                        {"type": "text", "text": target_content},
+                        result_block,
+                    ]
+                else:
+                    messages_list[target_user_idx]["content"] = [result_block]
             else:
-                messages_list[target_user_idx]["content"] = [result_block]
-        else:
-            # 无后续 user 消息：插入一条合成 user 消息
-            messages_list.insert(
-                source_idx + 1,
-                {
-                    "role": "user",
-                    "content": [result_block],
-                },
-            )
+                # 无后续 user 消息：插入一条合成 user 消息
+                messages_list.insert(
+                    source_idx + 1,
+                    {
+                        "role": "user",
+                        "content": [result_block],
+                    },
+                )
 
-    # ── 汇总日志：misplaced tool_result 重定位 ──────────────────
-    if relocated_log_info:
-        _emit_misplaced_tool_result_summary(relocated_log_info)
+        adaptations.append("misplaced_tool_result_relocated")
 
-    # ── 修复通道：为孤儿 tool_use 合成 tool_result ──────────────
-    # Anthropic API 严格要求每个 tool_use 必须在紧邻的 user 消息中有对应的 tool_result。
-    # 当 tool_result 完全缺失时（如跨供应商降级导致对话结构不完整），
-    # 合成一个 is_error=true 的占位 tool_result 以满足 API 约束。
+        if misplaced_log_info:
+            _emit_misplaced_tool_result_summary(misplaced_log_info)
+
+    # ── 3. 修复通道：为孤儿 tool_use 合成 tool_result ──────────────
     repaired = _repair_orphaned_tool_use(messages_list)
     if repaired:
         adaptations.append("orphaned_tool_use_repaired")
@@ -244,11 +306,7 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
             ", ".join(sorted(repaired)),
         )
 
-    return NormalizationResult(
-        body=normalized,
-        adaptations=sorted(set(adaptations)),
-        fatal_reasons=fatal_reasons,
-    )
+    return adaptations
 
 
 def _emit_misplaced_tool_result_summary(
