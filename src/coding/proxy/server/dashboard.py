@@ -68,11 +68,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <style>
     :root {
-      --bg: #0d1117;
-      --bg-card: #161b22;
-      --bg-card-hover: #1c2128;
-      --border: #30363d;
-      --border-subtle: rgba(48,54,61,.6);
+      --bg: #0a0e14;
+      --bg-card: #12161e;
+      --bg-card-hover: #181d27;
+      --border: rgba(255,255,255,.06);
+      --border-subtle: rgba(255,255,255,.04);
       --text-primary: #e6edf3;
       --text-secondary: #8b949e;
       --text-tertiary: #6e7681;
@@ -83,15 +83,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       --accent-purple: #bc8cff;
       --accent-orange: #ffa657;
       --accent-teal: #39d353;
-      --radius: 10px;
-      --radius-sm: 6px;
-      --shadow: 0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
-      --shadow-md: 0 4px 12px rgba(0,0,0,.4), 0 2px 4px rgba(0,0,0,.3);
-      --glow-blue: 0 0 0 1px rgba(88,166,255,.15), 0 4px 16px rgba(88,166,255,.06);
+      --radius: 14px;
+      --radius-sm: 8px;
+      --shadow: 0 1px 2px rgba(0,0,0,.3);
+      --shadow-md: 0 8px 24px rgba(0,0,0,.3);
+      --glow-blue: 0 0 0 1px rgba(88,166,255,.1), 0 8px 32px rgba(88,166,255,.04);
+      --gradient-primary: linear-gradient(135deg, #667eea, #764ba2);
     }
     @keyframes fadeInUp {
       from { opacity: 0; transform: translateY(10px); }
-      to   { opacity: 1; }
+      to   { opacity: 1; transform: translateY(0); }
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -107,11 +108,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     /* ── 头部 ── */
     header {
-      background: rgba(22,27,34,.85);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border-bottom: 1px solid var(--border);
-      padding: 13px 24px;
+      background: rgba(10,14,20,.9);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      border-bottom: 1px solid rgba(255,255,255,.04);
+      padding: 16px 32px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -121,14 +122,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .header-left { display: flex; align-items: center; gap: 12px; }
     .logo {
-      width: 30px; height: 30px;
-      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-      border-radius: 50%;
+      width: 32px; height: 32px;
+      background: var(--gradient-primary);
+      border-radius: 10px;
       display: flex; align-items: center; justify-content: center;
       font-size: 15px; font-weight: 700; color: #fff;
-      box-shadow: 0 2px 8px rgba(88,166,255,.3);
+      box-shadow: 0 4px 12px rgba(102,126,234,.25);
     }
-    h1 { font-size: 15px; font-weight: 600; color: var(--text-primary); letter-spacing: -.2px; }
+    h1 { font-size: 16px; font-weight: 500; color: var(--text-primary); letter-spacing: -.3px; }
     .header-right { display: flex; align-items: center; gap: 12px; }
     .badge {
       font-size: 11px; padding: 2px 8px;
@@ -153,20 +154,22 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border-color: rgba(88,166,255,.4);
     }
     /* ── 主内容 ── */
-    main { padding: 20px 24px; max-width: 1440px; margin: 0 auto; }
+    main { padding: 28px 32px; max-width: 1440px; margin: 0 auto; }
     /* ── KPI 卡片 ── */
     .kpi-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 12px;
-      margin-bottom: 18px;
+      gap: 16px;
+      margin-bottom: 24px;
     }
     .kpi-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
+      background: rgba(18,22,30,.7);
+      border: 1px solid rgba(255,255,255,.05);
       border-radius: var(--radius);
-      padding: 16px 18px 14px;
+      padding: 20px 22px 18px;
       box-shadow: var(--shadow);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
       transition: all .2s ease;
       animation: fadeInUp .4s ease both;
       position: relative;
@@ -176,7 +179,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       content: '';
       position: absolute;
       top: 0; left: 0; right: 0;
-      height: 2px;
+      height: 1px;
+      opacity: .6;
       border-radius: var(--radius) var(--radius) 0 0;
     }
     .kpi-card:nth-child(1)::before { background: var(--accent-blue); }
@@ -188,17 +192,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .kpi-card:hover {
       background: var(--bg-card-hover);
       box-shadow: var(--glow-blue);
-      transform: translateY(-1px);
     }
     .kpi-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
     .kpi-icon { font-size: 13px; opacity: .8; }
-    .kpi-label { font-size: 11px; color: var(--text-secondary); font-weight: 500; letter-spacing: .2px; }
+    .kpi-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; letter-spacing: .2px; }
     .kpi-value {
-      font-size: 24px; font-weight: 700; line-height: 1.2;
+      font-size: 28px; font-weight: 600; line-height: 1.2;
       font-family: 'JetBrains Mono', monospace;
-      letter-spacing: -0.5px;
+      letter-spacing: -1px;
     }
-    .kpi-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+    .kpi-sub { font-size: 12px; color: var(--text-tertiary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
     .color-blue { color: var(--accent-blue); }
     .color-green { color: var(--accent-green); }
     .color-yellow { color: var(--accent-yellow); }
@@ -209,56 +212,57 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .charts-grid {
       display: grid;
       grid-template-columns: 1fr 2fr;
-      gap: 12px;
-      margin-bottom: 12px;
+      gap: 16px;
+      margin-bottom: 16px;
     }
     .charts-grid-2 {
       display: grid;
       grid-template-columns: 1fr 2fr;
-      gap: 12px;
-      margin-bottom: 12px;
+      gap: 16px;
+      margin-bottom: 16px;
     }
     @media (max-width: 960px) {
       .charts-grid, .charts-grid-2 { grid-template-columns: 1fr; }
     }
     .card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
+      background: rgba(18,22,30,.7);
+      border: 1px solid rgba(255,255,255,.05);
       border-radius: var(--radius);
-      padding: 16px 20px;
+      padding: 20px 24px;
       box-shadow: var(--shadow);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
       transition: box-shadow .2s ease;
       animation: fadeInUp .4s ease both;
     }
     .card:hover { box-shadow: var(--shadow-md); }
     .card-title {
-      font-size: 11px; font-weight: 600;
-      color: var(--text-tertiary);
-      text-transform: uppercase;
-      letter-spacing: .8px;
-      margin-bottom: 14px;
+      font-size: 12px; font-weight: 500;
+      color: var(--text-secondary);
+      letter-spacing: .3px;
+      margin-bottom: 16px;
       display: flex; align-items: center; justify-content: space-between;
     }
-    .chart-wrap { position: relative; height: 220px; }
-    .chart-wrap-lg { position: relative; height: 240px; }
-    .chart-wrap-xl { position: relative; height: 260px; }
+    .chart-wrap { position: relative; height: 260px; }
+    .chart-wrap-lg { position: relative; height: 260px; }
+    .chart-wrap-xl { position: relative; height: 280px; }
     /* ── 供应商状态 ── */
     .vendor-list { display: flex; flex-direction: column; gap: 8px; }
     .vendor-item {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 10px 12px;
-      background: rgba(255,255,255,.02);
-      border: 1px solid var(--border-subtle);
+      padding: 12px 14px;
+      background: rgba(255,255,255,.015);
+      border: 1px solid rgba(255,255,255,.04);
       border-radius: var(--radius-sm);
-      transition: background .15s;
+      transition: all .2s ease;
     }
-    .vendor-item:hover { background: rgba(255,255,255,.04); }
+    .vendor-item:hover { background: rgba(255,255,255,.03); border-color: rgba(255,255,255,.08); }
     .vendor-info { display: flex; align-items: center; gap: 10px; }
     .vendor-avatar {
-      width: 28px; height: 28px; border-radius: 50%;
-      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      width: 30px; height: 30px; border-radius: 8px;
+      background: var(--gradient-primary);
       display: flex; align-items: center; justify-content: center;
-      font-size: 11px; font-weight: 700; color: #fff;
+      font-size: 12px; font-weight: 700; color: #fff;
       flex-shrink: 0;
     }
     .vendor-name { font-weight: 600; font-size: 12px; }
@@ -308,26 +312,26 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     /* ── 时间区间选择栏 ── */
     .time-range-bar {
       display: flex; align-items: center; gap: 8px;
-      margin-bottom: 18px; flex-wrap: wrap;
-      padding: 10px 14px;
-      background: rgba(22,27,34,.6);
-      border: 1px solid var(--border-subtle);
+      margin-bottom: 24px; flex-wrap: wrap;
+      padding: 8px 16px;
+      background: rgba(18,22,30,.5);
+      border: 1px solid rgba(255,255,255,.04);
       border-radius: var(--radius);
-      backdrop-filter: blur(8px);
+      backdrop-filter: blur(4px);
     }
     .time-range-label { font-size: 12px; color: var(--text-tertiary); font-weight: 500; }
     .range-btn {
-      padding: 4px 14px; border-radius: 14px;
+      padding: 6px 16px; border-radius: 20px;
       background: transparent;
       border: 1px solid transparent;
       color: var(--text-secondary);
-      font-size: 12px; cursor: pointer;
-      transition: all .2s ease;
+      font-size: 13px; cursor: pointer;
+      transition: all .25s ease;
     }
     .range-btn:hover { background: rgba(255,255,255,.05); color: var(--text-primary); }
     .range-btn.active {
-      background: rgba(88,166,255,.12);
-      border-color: rgba(88,166,255,.35);
+      background: rgba(88,166,255,.08);
+      border-color: rgba(88,166,255,.2);
       color: var(--accent-blue);
       font-weight: 500;
     }
@@ -356,13 +360,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     #chart-tooltip {
       position: fixed;
       pointer-events: none;
-      background: rgba(13,17,23,.95);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 10px 14px;
+      background: rgba(10,14,20,.95);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 12px;
+      padding: 12px 16px;
       font-size: 12px;
       color: var(--text-primary);
-      box-shadow: var(--shadow-md);
+      box-shadow: 0 12px 40px rgba(0,0,0,.5);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
       z-index: 1000;
       opacity: 0;
       transition: opacity .15s ease;
@@ -537,21 +543,21 @@ function now() {
 function makeGradient(ctx, color) {
   const h = ctx.canvas.height;
   const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, color + '44');
-  grad.addColorStop(1, color + '04');
+  grad.addColorStop(0, color + '30');
+  grad.addColorStop(1, color + '00');
   return grad;
 }
 
 // ── Chart.js 全局默认 ─────────────────────────────────────
 Chart.defaults.color = '#8b949e';
-Chart.defaults.borderColor = 'rgba(255,255,255,.04)';
+Chart.defaults.borderColor = 'rgba(255,255,255,.03)';
 Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
-Chart.defaults.font.size = 11;
+Chart.defaults.font.size = 12;
 Chart.defaults.plugins.tooltip.usePointStyle = true;
 Chart.defaults.devicePixelRatio = window.devicePixelRatio || 1;
 
 const COMMON_SCALE_X = { grid: { display: false }, ticks: { maxTicksLimit: 10 } };
-const COMMON_SCALE_Y = { grid: { color: 'rgba(255,255,255,.04)' }, beginAtZero: true };
+const COMMON_SCALE_Y = { grid: { color: 'rgba(255,255,255,.03)' }, beginAtZero: true };
 const COMMON_LEGEND = {
   position: 'bottom',
   labels: {
@@ -560,7 +566,7 @@ const COMMON_LEGEND = {
     padding: 14,
     usePointStyle: true,
     pointStyle: 'circle',
-    font: { size: 11 },
+    font: { size: 12 },
     generateLabels: chart => {
       const items = Chart.defaults.plugins.legend.labels.generateLabels(chart);
       return items.filter(item => isValidLabel(item.text)).map(item => {
@@ -572,7 +578,7 @@ const COMMON_LEGEND = {
     },
   },
 };
-const COMMON_LINE_DATASET = { tension: .35, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2 };
+const COMMON_LINE_DATASET = { tension: .4, pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5 };
 
 // ── 外部 Tooltip（数据项较多时可溢出卡片边界）─────────────
 function createExternalTooltipHandler(context) {
@@ -893,8 +899,16 @@ function buildVendorDist(rows) {
     },
     options: {
       responsive: true, maintainAspectRatio: false,
+      cutout: '55%',
       plugins: {
-        legend: { ...COMMON_LEGEND, onClick: legendOnClick },
+        legend: {
+          position: 'right',
+          onClick: legendOnClick,
+          labels: {
+            ...COMMON_LEGEND.labels,
+            padding: 12,
+          },
+        },
         tooltip: { callbacks: { label: c => ` ${c.label}: ${c.raw.toLocaleString()} 次` } },
       },
     },
