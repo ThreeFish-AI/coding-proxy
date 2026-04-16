@@ -201,6 +201,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       font-family: 'JetBrains Mono', monospace;
       letter-spacing: -1px;
     }
+    #kpi-cost-today { font-size: 20px; white-space: nowrap; }
     .kpi-sub { font-size: 13px; color: var(--text-tertiary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
     .color-blue { color: var(--accent-blue); }
     .color-green { color: var(--accent-green); }
