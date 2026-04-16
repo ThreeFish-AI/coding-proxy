@@ -35,9 +35,7 @@ class NormalizationResult:
     misplaced_tool_results: list[tuple[int, dict[str, Any]]] = field(
         default_factory=list
     )
-    misplaced_log_info: list[tuple[str, int, int, str]] = field(
-        default_factory=list
-    )
+    misplaced_log_info: list[tuple[str, int, int, str]] = field(default_factory=list)
 
     @property
     def recoverable(self) -> bool:
@@ -75,7 +73,9 @@ def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
         return f"toolu_normalized_{normalized_counter}"
 
     # 收集本轮 misplaced tool_result 块（Phase 2 延迟到 Anthropic tier 执行）
-    collected_misplaced: list[tuple[int, dict[str, Any]]] = []  # (source_msg_idx, block)
+    collected_misplaced: list[
+        tuple[int, dict[str, Any]]
+    ] = []  # (source_msg_idx, block)
     misplaced_log_info: list[
         tuple[str, int, int, str]
     ] = []  # (role, msg_idx, blk_idx, tool_use_id)

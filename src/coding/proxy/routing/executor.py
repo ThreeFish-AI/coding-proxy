@@ -292,7 +292,9 @@ class _RouteExecutor:
 
             try:
                 body_for_tier = self._prepare_body_for_tier(body, tier, normalization)
-                async for chunk in tier.vendor.send_message_stream(body_for_tier, headers):
+                async for chunk in tier.vendor.send_message_stream(
+                    body_for_tier, headers
+                ):
                     parse_usage_from_chunk(
                         chunk,
                         usage,
