@@ -251,6 +251,43 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .chart-wrap { position: relative; height: 260px; min-width: 0; }
     .chart-wrap-lg { position: relative; height: 260px; min-width: 0; }
     .chart-wrap-xl { position: relative; height: 280px; min-width: 0; }
+    /* ── HTML Legend（单列可滚动） ── */
+    .chart-with-legend {
+      display: flex; align-items: stretch; gap: 0;
+    }
+    .chart-with-legend > .chart-wrap-xl { flex: 1 1 0; min-width: 0; }
+    .html-legend-wrap {
+      flex: 0 0 200px; max-height: 280px;
+      overflow-y: auto; overflow-x: hidden;
+      padding: 4px 0 4px 8px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,.15) transparent;
+    }
+    .html-legend-wrap::-webkit-scrollbar { width: 4px; }
+    .html-legend-wrap::-webkit-scrollbar-track { background: transparent; }
+    .html-legend-wrap::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 2px; }
+    .html-legend-wrap ul {
+      list-style: none; margin: 0; padding: 0;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .html-legend-wrap li {
+      display: flex; align-items: center; gap: 6px;
+      padding: 3px 6px; border-radius: 4px; cursor: pointer;
+      font-size: 12px; font-weight: 500; color: #8b949e;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      transition: background .15s ease; user-select: none;
+    }
+    .html-legend-wrap li:hover { background: rgba(255,255,255,.06); }
+    .html-legend-wrap li.legend-hidden { text-decoration: line-through; opacity: 0.4; }
+    .html-legend-wrap li .legend-color {
+      display: inline-block; width: 10px; height: 10px;
+      border-radius: 50%; flex-shrink: 0;
+    }
+    @media (max-width: 960px) {
+      .chart-with-legend { flex-direction: column; }
+      .html-legend-wrap { flex: none; max-height: 120px; padding: 8px 0 0 0; }
+      .html-legend-wrap ul { flex-direction: row; flex-wrap: wrap; gap: 4px 10px; }
+    }
     /* ── 供应商状态 ── */
     .vendor-list { display: flex; flex-direction: column; gap: 8px; }
     .vendor-item {
@@ -495,8 +532,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <!-- Token 用量（按 Vendor / 模型）堆叠图 -->
   <div class="card" style="margin-bottom:12px">
     <div class="card-title" id="title-model-token-timeline">近 7 天 Token 用量（按 Vendor / 模型）</div>
-    <div class="chart-wrap-xl">
-      <canvas id="chart-model-token-timeline"></canvas>
+    <div class="chart-with-legend">
+      <div class="chart-wrap-xl">
+        <canvas id="chart-model-token-timeline"></canvas>
+      </div>
+      <div class="html-legend-wrap" id="model-token-legend" style="display:none"></div>
     </div>
   </div>
 
@@ -584,6 +624,44 @@ const COMMON_LEGEND = {
   },
 };
 const COMMON_LINE_DATASET = { tension: .4, pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5 };
+
+// ── HTML Legend 插件（model-token-timeline 专用）─────────────
+const htmlLegendPlugin = {
+  id: 'htmlLegend',
+  afterUpdate(chart, args, options) {
+    const containerID = options.containerID;
+    if (!containerID) return;
+    const container = document.getElementById(containerID);
+    if (!container) return;
+    let ul = container.querySelector('ul');
+    if (!ul) { ul = document.createElement('ul'); container.appendChild(ul); }
+    while (ul.firstChild) ul.firstChild.remove();
+
+    const genLabels = chart.options.plugins.legend.labels.generateLabels;
+    const items = genLabels ? genLabels(chart) : [];
+    items.forEach(item => {
+      const li = document.createElement('li');
+      if (item.hidden) li.classList.add('legend-hidden');
+
+      const dot = document.createElement('span');
+      dot.className = 'legend-color';
+      dot.style.backgroundColor = item.hidden ? 'rgba(255,255,255,.15)' : (item.fillStyle || item.strokeStyle);
+
+      const txt = document.createElement('span');
+      txt.style.overflow = 'hidden';
+      txt.style.textOverflow = 'ellipsis';
+      txt.textContent = item.text || '';
+      txt.title = item.fullText || item.text || '';
+
+      li.appendChild(dot);
+      li.appendChild(txt);
+      li.addEventListener('click', e => {
+        legendOnClick({ native: e }, { datasetIndex: item.datasetIndex, index: item.index, text: item.text, hidden: item.hidden }, { chart });
+      });
+      ul.appendChild(li);
+    });
+  },
+};
 
 // ── 外部 Tooltip 工厂（数据项较多时可溢出卡片边界）────────
 function makeExternalTooltipHandler(opts = {}) {
@@ -719,6 +797,8 @@ function destroyCharts() {
   chartTimeline = chartVendorDist = chartTokenTimeline = chartModelTokenTimeline = null;
   const tip = document.getElementById('chart-tooltip');
   if (tip) tip.classList.remove('active');
+  const legendEl = document.getElementById('model-token-legend');
+  if (legendEl) legendEl.innerHTML = '';
 }
 
 // ── 数据拉取 ──────────────────────────────────────────────
@@ -1030,10 +1110,20 @@ function buildModelTokenTimeline(rows) {
   const canvasEl = document.getElementById('chart-model-token-timeline');
   if (!canvasEl) return;
   const ctx = canvasEl.getContext('2d');
+
+  // 清理 HTML Legend 容器
+  const legendEl = document.getElementById('model-token-legend');
+  if (legendEl) legendEl.innerHTML = '';
+
   if (!dates.length || !keys.length) {
+    if (legendEl) legendEl.style.display = 'none';
     ctx.canvas.parentElement.innerHTML = '<div class="empty"><div class="empty-icon">📭</div>暂无数据</div>';
     return;
   }
+
+  // 数据集 > 8 时启用 HTML Legend（单列可滚动）
+  const useHtmlLegend = keys.length > 8;
+  if (legendEl) legendEl.style.display = useHtmlLegend ? 'block' : 'none';
 
   const datasets = keys.map((key, i) => {
     const color = VENDOR_COLORS[i % VENDOR_COLORS.length];
@@ -1047,31 +1137,37 @@ function buildModelTokenTimeline(rows) {
     };
   });
 
+  const modelLegendLabels = {
+    ...COMMON_LEGEND.labels,
+    generateLabels: chart => {
+      const items = COMMON_LEGEND.labels.generateLabels(chart);
+      const maxLen = 32;
+      items.forEach(item => {
+        item.fullText = item.text;
+        if (item.text.length > maxLen) item.text = item.text.slice(0, maxLen) + '…';
+        item.pointStyle = 'circle';
+        item.lineWidth = 0;
+        item.fillStyle = item.strokeStyle;
+      });
+      return items;
+    },
+  };
+
   chartModelTokenTimeline = new Chart(ctx, {
     type: 'line',
     data: { labels: dates, datasets },
+    plugins: useHtmlLegend ? [htmlLegendPlugin] : [],
     options: {
       responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: {
-          position: keys.length > 8 ? 'right' : 'bottom',
+          ...COMMON_LEGEND,
+          display: !useHtmlLegend,
           onClick: legendOnClick,
-          labels: {
-            ...COMMON_LEGEND.labels,
-            generateLabels: chart => {
-              const items = COMMON_LEGEND.labels.generateLabels(chart);
-              const maxLen = 32;
-              items.forEach(item => {
-                if (item.text.length > maxLen) item.text = item.text.slice(0, maxLen) + '…';
-                item.pointStyle = 'circle';
-                item.lineWidth = 0;
-                item.fillStyle = item.strokeStyle;
-              });
-              return items;
-            },
-          },
+          labels: modelLegendLabels,
         },
+        htmlLegend: { containerID: 'model-token-legend' },
         tooltip: {
           ...EXTERNAL_TOOLTIP,
           itemSort: (a, b) => (b.raw || 0) - (a.raw || 0),
