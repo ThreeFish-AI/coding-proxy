@@ -3,6 +3,11 @@
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+## [v0.2.4](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.4a1) — 2026-04-16
+
+- refactor(thinking-strip): 条件化 thinking block 剥离，仅跨供应商场景触发;
+- style(dashboard): 缩小「今日费用估算」卡片费用数字字体使其单行显示;
+
 
 ## [v0.2.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.3) — 2026-04-16
 
