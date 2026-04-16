@@ -228,32 +228,79 @@ class _RouteExecutor:
         body: dict[str, Any],
         tier: VendorTier,
         normalization: Any = None,
+        session_record: Any = None,
     ) -> dict[str, Any]:
         """为指定 tier 准备请求体，必要时应用 Anthropic 专属修复（Phase 2）.
 
-        仅当 tier 为 Anthropic 且 NormalizationResult 标记需要修复时，
-        才执行 deep copy + Phase 2 修复，确保 Zhipu 等其他 vendor 不受影响。
+        仅当 tier 为 Anthropic 时才执行以下处理：
+        1. tool_result 重定位 + 孤儿修复（需 normalization.has_anthropic_fixes）
+        2. 条件化 thinking block 剥离（仅跨供应商场景）
+
+        确保 Zhipu 等其他 vendor 不受影响。
         """
-        if normalization is None or not normalization.has_anthropic_fixes:
-            return body
         if tier.name != "anthropic":
             return body
 
-        from ..server.request_normalizer import apply_anthropic_specific_fixes
+        needs_tool_fixes = normalization is not None and normalization.has_anthropic_fixes
+        needs_thinking_strip = self._needs_thinking_strip(normalization, session_record)
+
+        if not needs_tool_fixes and not needs_thinking_strip:
+            return body
+
+        from ..server.request_normalizer import (
+            apply_anthropic_specific_fixes,
+            strip_thinking_blocks,
+        )
 
         body_for_vendor = copy.deepcopy(body)
-        fixes = apply_anthropic_specific_fixes(
-            body_for_vendor.get("messages", []),
-            normalization.misplaced_tool_results,
-            normalization.misplaced_log_info,
-        )
-        if fixes:
-            logger.debug(
-                "Applied Anthropic-specific fixes for tier %s: %s",
-                tier.name,
-                ", ".join(fixes),
+
+        if needs_tool_fixes:
+            fixes = apply_anthropic_specific_fixes(
+                body_for_vendor.get("messages", []),
+                normalization.misplaced_tool_results,
+                normalization.misplaced_log_info,
             )
+            if fixes:
+                logger.debug(
+                    "Applied Anthropic-specific fixes for tier %s: %s",
+                    tier.name,
+                    ", ".join(fixes),
+                )
+
+        if needs_thinking_strip:
+            stripped = strip_thinking_blocks(body_for_vendor)
+            if stripped:
+                logger.debug(
+                    "Stripped %d thinking block(s) for cross-vendor compatibility",
+                    stripped,
+                )
+
         return body_for_vendor
+
+    @staticmethod
+    def _needs_thinking_strip(normalization: Any, session_record: Any) -> bool:
+        """判断是否需要剥离 thinking blocks（仅跨供应商场景）.
+
+        信号优先级：
+        1. 请求规范化信号 — 当前请求体中检测到跨供应商产物
+        2. 会话历史信号 — provider_state 中存在非 Anthropic 供应商记录
+
+        安全默认：当无法确定会话来源时（session_record 为 None），
+        回退到始终剥离，确保与 compat_session_store 未配置时的向后兼容。
+        """
+        # Signal 1: normalization 检测到跨供应商产物
+        if normalization is not None and normalization.has_cross_vendor_signals:
+            return True
+        # Signal 2: 无会话追踪能力 → 无法判断是否跨供应商 → 安全回退到剥离
+        if session_record is None:
+            return True
+        # Signal 3: 会话历史中有非 Anthropic 供应商
+        if session_record.provider_state:
+            non_anthropic = {v for v in session_record.provider_state if v != "anthropic"}
+            if non_anthropic:
+                return True
+        # 纯 Anthropic 会话，无跨供应商信号 → 保留 thinking blocks
+        return False
 
     async def execute_stream(
         self,
@@ -291,7 +338,9 @@ class _RouteExecutor:
             usage: dict[str, Any] = {}
 
             try:
-                body_for_tier = self._prepare_body_for_tier(body, tier, normalization)
+                body_for_tier = self._prepare_body_for_tier(
+                    body, tier, normalization, session_record=session_record
+                )
                 async for chunk in tier.vendor.send_message_stream(
                     body_for_tier, headers
                 ):
@@ -455,7 +504,9 @@ class _RouteExecutor:
                 continue
 
             try:
-                body_for_tier = self._prepare_body_for_tier(body, tier, normalization)
+                body_for_tier = self._prepare_body_for_tier(
+                    body, tier, normalization, session_record=session_record
+                )
                 resp = await tier.vendor.send_message(body_for_tier, headers)
 
                 if resp.status_code < 400:

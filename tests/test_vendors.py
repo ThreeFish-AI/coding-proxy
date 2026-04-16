@@ -46,8 +46,8 @@ async def test_anthropic_prepare_request_filters_headers():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_prepare_request_strips_thinking_blocks():
-    """Anthropic vendor 应剥离 assistant messages 中的 thinking blocks."""
+async def test_anthropic_prepare_request_preserves_thinking_blocks():
+    """Anthropic vendor 不再剥离 thinking blocks（已提升至 executor 层条件执行）."""
     vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
     body = {
         "model": "claude-opus-4-6",
@@ -58,7 +58,7 @@ async def test_anthropic_prepare_request_strips_thinking_blocks():
                     {
                         "type": "thinking",
                         "thinking": "Let me think about this...",
-                        "signature": "zhipu-issued-signature",
+                        "signature": "anthropic-issued-signature",
                     },
                     {"type": "text", "text": "Here is my answer."},
                 ],
@@ -67,16 +67,16 @@ async def test_anthropic_prepare_request_strips_thinking_blocks():
     }
     prepared_body, _ = await vendor._prepare_request(body, {})
 
-    # thinking block 被剥离，text block 保留
+    # thinking block 保留（剥离逻辑已迁移至 executor 层条件执行）
     content = prepared_body["messages"][0]["content"]
-    assert len(content) == 1
-    assert content[0]["type"] == "text"
-    assert content[0]["text"] == "Here is my answer."
+    assert len(content) == 2
+    assert content[0]["type"] == "thinking"
+    assert content[1]["type"] == "text"
 
 
 @pytest.mark.asyncio
-async def test_anthropic_prepare_request_strips_redacted_thinking_blocks():
-    """Anthropic vendor 应剥离 assistant messages 中的 redacted_thinking blocks."""
+async def test_anthropic_prepare_request_preserves_redacted_thinking_blocks():
+    """Anthropic vendor 不再剥离 redacted_thinking blocks（已提升至 executor 层）."""
     vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
     body = {
         "model": "claude-opus-4-6",
@@ -93,8 +93,9 @@ async def test_anthropic_prepare_request_strips_redacted_thinking_blocks():
     prepared_body, _ = await vendor._prepare_request(body, {})
 
     content = prepared_body["messages"][0]["content"]
-    assert len(content) == 1
-    assert content[0]["type"] == "text"
+    assert len(content) == 2
+    assert content[0]["type"] == "redacted_thinking"
+    assert content[1]["type"] == "text"
 
 
 @pytest.mark.asyncio
@@ -119,9 +120,10 @@ async def test_anthropic_prepare_request_preserves_thinking_param():
 
     # 顶层 thinking 参数保留
     assert prepared_body["thinking"] == {"type": "enabled", "budget_tokens": 10000}
-    # assistant message 的 thinking block 被剥离
-    assert len(prepared_body["messages"][0]["content"]) == 1
-    assert prepared_body["messages"][0]["content"][0]["type"] == "text"
+    # assistant message 的 thinking block 也保留（剥离逻辑已迁移至 executor 层）
+    assert len(prepared_body["messages"][0]["content"]) == 2
+    assert prepared_body["messages"][0]["content"][0]["type"] == "thinking"
+    assert prepared_body["messages"][0]["content"][1]["type"] == "text"
 
 
 @pytest.mark.asyncio
@@ -184,8 +186,8 @@ async def test_anthropic_prepare_request_handles_string_content():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_prepare_request_thinking_only_gets_placeholder():
-    """assistant message 仅含 thinking blocks 时，剥离后应插入占位 text block."""
+async def test_anthropic_prepare_request_preserves_thinking_only_message():
+    """assistant message 仅含 thinking blocks 时，_prepare_request 不再剥离（由 executor 处理）."""
     vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
     body = {
         "model": "claude-opus-4-6",
@@ -206,59 +208,15 @@ async def test_anthropic_prepare_request_thinking_only_gets_placeholder():
     }
     prepared_body, _ = await vendor._prepare_request(body, {})
 
+    # thinking blocks 保留（不再由 _prepare_request 剥离）
     content = prepared_body["messages"][1]["content"]
     assert len(content) == 1
-    assert content[0]["type"] == "text"
-    assert content[0]["text"] == "[thinking]"
+    assert content[0]["type"] == "thinking"
 
 
 @pytest.mark.asyncio
-async def test_anthropic_prepare_request_thinking_only_with_tool_result_context():
-    """多轮对话：thinking-only assistant + 后续 user tool_result 不应触发结构错误."""
-    vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
-    body = {
-        "model": "claude-opus-4-6",
-        "messages": [
-            {"role": "user", "content": "hello"},
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "thinking",
-                        "thinking": "thought 1",
-                        "signature": "sig-1",
-                    },
-                    {"type": "redacted_thinking", "data": "base64data"},
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "toolu_123",
-                        "content": "result data",
-                    },
-                ],
-            },
-        ],
-    }
-    prepared_body, _ = await vendor._prepare_request(body, {})
-
-    # assistant message 应包含占位 text block
-    content = prepared_body["messages"][1]["content"]
-    assert len(content) == 1
-    assert content[0]["type"] == "text"
-    assert content[0]["text"] == "[thinking]"
-
-    # user message 的 tool_result 应完整保留
-    user_content = prepared_body["messages"][2]["content"]
-    assert user_content[0]["type"] == "tool_result"
-
-
-@pytest.mark.asyncio
-async def test_anthropic_prepare_request_multi_turn_strips_all_thinking():
-    """多轮对话中所有 assistant thinking blocks 均应被剥离."""
+async def test_anthropic_prepare_request_preserves_multi_turn_thinking():
+    """多轮对话中 assistant thinking blocks 不再被 _prepare_request 剥离."""
     vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
     body = {
         "model": "claude-opus-4-6",
@@ -288,19 +246,21 @@ async def test_anthropic_prepare_request_multi_turn_strips_all_thinking():
     }
     prepared_body, _ = await vendor._prepare_request(body, {})
 
-    # 第一条 assistant message: thinking 被剥离，text 保留
+    # 第一条 assistant message: thinking + text 均保留
     content_0 = prepared_body["messages"][0]["content"]
-    assert len(content_0) == 1
-    assert content_0[0]["type"] == "text"
+    assert len(content_0) == 2
+    assert content_0[0]["type"] == "thinking"
+    assert content_0[1]["type"] == "text"
 
     # user message 不变
     assert prepared_body["messages"][1]["content"] == "follow up"
 
-    # 第三条 assistant message: thinking 被剥离，text + tool_use 保留
+    # 第三条 assistant message: thinking + text + tool_use 均保留
     content_2 = prepared_body["messages"][2]["content"]
-    assert len(content_2) == 2
-    assert content_2[0]["type"] == "text"
-    assert content_2[1]["type"] == "tool_use"
+    assert len(content_2) == 3
+    assert content_2[0]["type"] == "thinking"
+    assert content_2[1]["type"] == "text"
+    assert content_2[2]["type"] == "tool_use"
 
 
 @pytest.mark.asyncio
@@ -870,8 +830,8 @@ async def test_anthropic_preserves_tool_result_in_user_message():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_strips_both_thinking_and_misplaced_tool_result():
-    """Anthropic vendor 应同时剥离 thinking 和错位的 tool_result."""
+async def test_anthropic_strips_misplaced_tool_result_preserves_thinking():
+    """Anthropic vendor 仅剥离错位的 tool_result（纵深防御），保留 thinking blocks."""
     vendor = AnthropicVendor(AnthropicConfig(), FailoverConfig())
     body = {
         "model": "claude-opus-4-6",
@@ -901,10 +861,11 @@ async def test_anthropic_strips_both_thinking_and_misplaced_tool_result():
     }
     prepared_body, _ = await vendor._prepare_request(body, {})
 
-    # thinking 和 misplaced tool_result 都被剥离
+    # misplaced tool_result 被剥离（纵深防御），thinking 保留
     assistant_content = prepared_body["messages"][0]["content"]
-    assert len(assistant_content) == 1
-    assert assistant_content[0]["type"] == "tool_use"
+    assert len(assistant_content) == 2
+    assert assistant_content[0]["type"] == "thinking"
+    assert assistant_content[1]["type"] == "tool_use"
 
 
 @pytest.mark.asyncio

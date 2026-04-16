@@ -5,8 +5,10 @@ from __future__ import annotations
 import copy
 
 from coding.proxy.server.request_normalizer import (
+    NormalizationResult,
     apply_anthropic_specific_fixes,
     normalize_anthropic_request,
+    strip_thinking_blocks,
 )
 
 
@@ -685,3 +687,298 @@ class TestOrphanedToolUseRepair:
         assert len(text_blocks) == 1
         assert len(synthetic_results) == 2
         assert {r["tool_use_id"] for r in synthetic_results} == set(new_ids)
+
+
+# ── has_cross_vendor_signals 属性测试 ──────────────────────────
+
+
+class TestHasCrossVendorSignals:
+    """验证 NormalizationResult.has_cross_vendor_signals 属性."""
+
+    def test_true_when_tool_id_map_nonempty(self):
+        """tool_id_map 非空时标识为跨供应商信号."""
+        result = normalize_anthropic_request(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "server_tool_use",
+                                "id": "srvtoolu_abc",
+                                "name": "Bash",
+                                "input": {"command": "ls"},
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
+        assert result.tool_id_map  # 非空
+        assert result.has_cross_vendor_signals is True
+
+    def test_true_when_misplaced_tool_results_exist(self):
+        """misplaced_tool_results 非空时标识为跨供应商信号."""
+        result = normalize_anthropic_request(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_123",
+                                "name": "Bash",
+                                "input": {"command": "ls"},
+                            },
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_123",
+                                "content": "output",
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
+        assert result.misplaced_tool_results  # 非空
+        assert result.has_cross_vendor_signals is True
+
+    def test_true_when_vendor_block_removed(self):
+        """vendor block 被移除时标识为跨供应商信号."""
+        result = normalize_anthropic_request(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "hello"},
+                            {
+                                "type": "server_tool_use_delta",
+                                "partial_json": '{"cmd":"pwd"}',
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
+        assert "vendor_block_removed:server_tool_use_delta" in result.adaptations
+        assert result.has_cross_vendor_signals is True
+
+    def test_true_when_invalid_tool_id_rewritten(self):
+        """非标准 tool_use ID 被重写时标识为跨供应商信号."""
+        result = normalize_anthropic_request(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "glm_custom_id_123",
+                                "name": "Bash",
+                                "input": {"command": "ls"},
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
+        assert "invalid_tool_use_id_rewritten_for_anthropic" in result.adaptations
+        assert result.has_cross_vendor_signals is True
+
+    def test_false_for_pure_anthropic_request(self):
+        """纯 Anthropic 请求不应标识为跨供应商信号."""
+        result = normalize_anthropic_request(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": "let me think",
+                                "signature": "anthropic-valid-sig",
+                            },
+                            {"type": "text", "text": "response"},
+                        ],
+                    },
+                    {"role": "user", "content": "follow up"},
+                ],
+            }
+        )
+        assert not result.tool_id_map
+        assert not result.misplaced_tool_results
+        assert not result.adaptations
+        assert result.has_cross_vendor_signals is False
+
+    def test_false_for_standard_tool_use(self):
+        """标准 toolu_ ID 不应标识为跨供应商信号."""
+        result = normalize_anthropic_request(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_standard_abc",
+                                "name": "Bash",
+                                "input": {"command": "ls"},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_standard_abc",
+                                "content": "output",
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
+        assert result.has_cross_vendor_signals is False
+
+
+# ── strip_thinking_blocks 函数测试 ──────────────────────────────
+
+
+class TestStripThinkingBlocks:
+    """验证 strip_thinking_blocks 函数（从 vendors/anthropic.py 迁入）."""
+
+    def test_strips_thinking_blocks(self):
+        """剥离 assistant 消息中的 thinking blocks."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "Let me think...",
+                            "signature": "sig",
+                        },
+                        {"type": "text", "text": "Here is my answer."},
+                    ],
+                },
+            ],
+        }
+        stripped = strip_thinking_blocks(body)
+        assert stripped == 1
+        content = body["messages"][0]["content"]
+        assert len(content) == 1
+        assert content[0]["type"] == "text"
+
+    def test_strips_redacted_thinking_blocks(self):
+        """剥离 redacted_thinking blocks."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "redacted_thinking", "data": "base64"},
+                        {"type": "text", "text": "response"},
+                    ],
+                },
+            ],
+        }
+        stripped = strip_thinking_blocks(body)
+        assert stripped == 1
+        assert body["messages"][0]["content"][0]["type"] == "text"
+
+    def test_inserts_placeholder_when_content_becomes_empty(self):
+        """剥离后 content 为空时插入占位 text block."""
+        body = {
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "thought",
+                            "signature": "sig",
+                        },
+                    ],
+                },
+                {"role": "user", "content": "follow up"},
+            ],
+        }
+        stripped = strip_thinking_blocks(body)
+        assert stripped == 1
+        content = body["messages"][1]["content"]
+        assert len(content) == 1
+        assert content[0]["type"] == "text"
+        assert content[0]["text"] == "[thinking]"
+
+    def test_preserves_user_messages(self):
+        """user 消息不受影响."""
+        body = {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+            ],
+        }
+        stripped = strip_thinking_blocks(body)
+        assert stripped == 0
+        assert body["messages"][0]["content"][0]["text"] == "hello"
+
+    def test_preserves_top_level_thinking_param(self):
+        """body 顶层的 thinking 参数不受影响."""
+        body = {
+            "thinking": {"type": "enabled", "budget_tokens": 10000},
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "old", "signature": "sig"},
+                        {"type": "text", "text": "response"},
+                    ],
+                },
+            ],
+        }
+        stripped = strip_thinking_blocks(body)
+        assert stripped == 1
+        assert body["thinking"] == {"type": "enabled", "budget_tokens": 10000}
+
+    def test_multi_turn_strips_all(self):
+        """多轮对话中所有 assistant thinking blocks 均被剥离."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "t1", "signature": "s1"},
+                        {"type": "text", "text": "r1"},
+                    ],
+                },
+                {"role": "user", "content": "follow up"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "t2", "signature": "s2"},
+                        {"type": "text", "text": "r2"},
+                    ],
+                },
+            ],
+        }
+        stripped = strip_thinking_blocks(body)
+        assert stripped == 2
+        assert len(body["messages"][0]["content"]) == 1
+        assert len(body["messages"][2]["content"]) == 1
+
+    def test_returns_zero_when_no_thinking(self):
+        """无 thinking blocks 时返回 0."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "response"}],
+                },
+            ],
+        }
+        stripped = strip_thinking_blocks(body)
+        assert stripped == 0
