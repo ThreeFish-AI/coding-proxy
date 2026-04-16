@@ -22,6 +22,13 @@ _VENDOR_TOOL_BLOCK_TYPES = {
     "server_tool_use_delta",
 }
 
+# 标识跨供应商迁移产物的 adaptation 名称集合（用于条件化 thinking block 剥离）
+_CROSS_VENDOR_ADAPTATIONS = frozenset({
+    "vendor_block_removed",
+    "server_tool_use_id_rewritten_for_anthropic",
+    "invalid_tool_use_id_rewritten_for_anthropic",
+})
+
 
 @dataclass
 class NormalizationResult:
@@ -45,6 +52,22 @@ class NormalizationResult:
     def has_anthropic_fixes(self) -> bool:
         """是否需要应用 Anthropic 专属修复（重定位 + 孤儿修复）."""
         return bool(self.misplaced_tool_results) or bool(self.tool_id_map)
+
+    @property
+    def has_cross_vendor_signals(self) -> bool:
+        """是否检测到跨供应商迁移信号（用于条件化 thinking block 剥离）.
+
+        当请求体中包含非 Anthropic 原生格式的产物（如非标准 tool_use ID、
+        供应商私有块、错位的 tool_result 等）时返回 True。
+        """
+        if self.tool_id_map:
+            return True
+        if self.misplaced_tool_results:
+            return True
+        return any(
+            any(a.startswith(prefix) for prefix in _CROSS_VENDOR_ADAPTATIONS)
+            for a in self.adaptations
+        )
 
 
 def normalize_anthropic_request(body: dict[str, Any]) -> NormalizationResult:
@@ -460,3 +483,57 @@ def _repair_orphaned_tool_use(
 
         i += 1
     return repaired
+
+
+# ── Phase 2: Thinking block 剥离 ──────────────────────────────
+
+# 需要从 assistant messages 中剥离的 thinking block 类型
+_THINKING_BLOCK_TYPES = {"thinking", "redacted_thinking"}
+
+
+def strip_thinking_blocks(body: dict[str, Any]) -> int:
+    """从 assistant messages 中移除 thinking / redacted_thinking blocks.
+
+    Anthropic API 要求 thinking blocks 的 ``signature`` 必须是其签发的有效签名。
+    跨供应商迁移（如 Zhipu → Anthropic）后，conversation history 中可能包含
+    非 Anthropic 签发的 signature，导致 400 ``invalid_request_error``。
+    根据 Anthropic 官方文档，thinking blocks 可以被安全省略，不影响模型行为。
+
+    此函数仅在 executor 检测到跨供应商信号时调用（条件化剥离），
+    纯 Anthropic 会话中 thinking blocks 保持原样以维持上下文连续性。
+
+    Args:
+        body: 请求体（就地修改）。
+
+    Returns:
+        被移除的 thinking block 数量。
+    """
+    stripped = 0
+    for message in body.get("messages", []):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        original_len = len(content)
+        new_content = [
+            block
+            for block in content
+            if not (
+                isinstance(block, dict) and block.get("type") in _THINKING_BLOCK_TYPES
+            )
+        ]
+        removed = original_len - len(new_content)
+        if removed and not new_content:
+            # 剥离所有 thinking blocks 后 content 为空 ——
+            # Anthropic API 要求非末尾 assistant message 的 content 必须非空。
+            # 插入最小占位 text block 以保持消息结构合法性。
+            new_content = [{"type": "text", "text": "[thinking]"}]
+            logger.info(
+                "anthropic: inserted placeholder text block after stripping "
+                "%d thinking block(s) to avoid empty assistant content",
+                removed,
+            )
+        message["content"] = new_content
+        stripped += removed
+    return stripped

@@ -155,6 +155,13 @@ def register_core_routes(app: Any, router: Any) -> None:
 
         body = await request.json()
         headers = dict(request.headers)
+
+        # count_tokens 无会话上下文，无法判断 thinking block 来源，
+        # 安全剥离以防止跨供应商 signature 导致 400 错误。
+        from .request_normalizer import strip_thinking_blocks
+
+        strip_thinking_blocks(body)
+
         prepared_body, prepared_headers = await target_vendor._prepare_request(
             body, headers
         )

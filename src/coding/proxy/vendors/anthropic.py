@@ -11,51 +11,6 @@ from .base import PROXY_SKIP_HEADERS, BaseVendor
 
 logger = logging.getLogger(__name__)
 
-# 需要从 assistant messages 中剥离的 thinking block 类型
-_THINKING_BLOCK_TYPES = {"thinking", "redacted_thinking"}
-
-
-def _strip_thinking_blocks(body: dict[str, Any]) -> int:
-    """从 assistant messages 中移除 thinking / redacted_thinking blocks.
-
-    Anthropic API 要求 thinking blocks 的 ``signature`` 必须是其签发的有效签名。
-    跨供应商迁移（如 Zhipu → Anthropic）后，conversation history 中可能包含
-    非 Anthropic 签发的 signature，导致 400 ``invalid_request_error``。
-    根据 Anthropic 官方文档，thinking blocks 可以被安全省略，不影响模型行为。
-
-    Returns:
-        被移除的 thinking block 数量。
-    """
-    stripped = 0
-    for message in body.get("messages", []):
-        if not isinstance(message, dict) or message.get("role") != "assistant":
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        original_len = len(content)
-        new_content = [
-            block
-            for block in content
-            if not (
-                isinstance(block, dict) and block.get("type") in _THINKING_BLOCK_TYPES
-            )
-        ]
-        removed = original_len - len(new_content)
-        if removed and not new_content:
-            # 剥离所有 thinking blocks 后 content 为空 ——
-            # Anthropic API 要求非末尾 assistant message 的 content 必须非空。
-            # 插入最小占位 text block 以保持消息结构合法性。
-            new_content = [{"type": "text", "text": "[thinking]"}]
-            logger.info(
-                "anthropic: inserted placeholder text block after stripping "
-                "%d thinking block(s) to avoid empty assistant content",
-                removed,
-            )
-        message["content"] = new_content
-        stripped += removed
-    return stripped
-
 
 def _strip_misplaced_tool_results(body: dict[str, Any]) -> int:
     """从非 user 角色的消息中剥离 tool_result blocks（纵深防御）.
@@ -131,19 +86,13 @@ class AnthropicVendor(BaseVendor):
         request_body: dict[str, Any],
         headers: dict[str, str],
     ) -> tuple[dict[str, Any], dict[str, str]]:
-        """深拷贝请求体、剥离历史 thinking blocks 和错位的 tool_result blocks，过滤无关请求头.
+        """深拷贝请求体、剥离错位的 tool_result blocks，过滤无关请求头.
 
         深拷贝确保 Anthropic 的请求体修改不会污染后续 tier 的输入。
-        剥离 thinking blocks 防止跨供应商 signature 不兼容导致 400 错误。
+        thinking block 剥离已提升至 executor 层条件执行（仅跨供应商场景）。
         剥离错位的 tool_result blocks 防止跨供应商 tool_result 放置位置不合规导致 400 错误。
         """
         body = copy.deepcopy(request_body)
-        stripped_thinking = _strip_thinking_blocks(body)
-        if stripped_thinking:
-            logger.debug(
-                "anthropic: stripped %d thinking block(s) from conversation history",
-                stripped_thinking,
-            )
 
         stripped_tool_results = _strip_misplaced_tool_results(body)
         if stripped_tool_results:
