@@ -1565,7 +1565,9 @@ class TestNeedsThinkingStrip:
         session_record = MagicMock()
         session_record.provider_state = {"anthropic": {}}
 
-        assert _RouteExecutor._needs_thinking_strip(normalization, session_record) is True
+        assert (
+            _RouteExecutor._needs_thinking_strip(normalization, session_record) is True
+        )
 
     def test_true_when_session_record_is_none(self):
         """session_record 为 None 时安全回退到 True."""
@@ -1585,7 +1587,9 @@ class TestNeedsThinkingStrip:
         session_record = MagicMock()
         session_record.provider_state = {"anthropic": {}, "zhipu": {}}
 
-        assert _RouteExecutor._needs_thinking_strip(normalization, session_record) is True
+        assert (
+            _RouteExecutor._needs_thinking_strip(normalization, session_record) is True
+        )
 
     def test_false_when_anthropic_only_session(self):
         """纯 Anthropic 会话且无跨供应商信号时返回 False."""
@@ -1594,7 +1598,9 @@ class TestNeedsThinkingStrip:
         session_record = MagicMock()
         session_record.provider_state = {"anthropic": {"compat_mode": "native"}}
 
-        assert _RouteExecutor._needs_thinking_strip(normalization, session_record) is False
+        assert (
+            _RouteExecutor._needs_thinking_strip(normalization, session_record) is False
+        )
 
     def test_false_when_empty_provider_state(self):
         """空 provider_state（首次请求）且无跨供应商信号时返回 False."""
@@ -1603,7 +1609,9 @@ class TestNeedsThinkingStrip:
         session_record = MagicMock()
         session_record.provider_state = {}
 
-        assert _RouteExecutor._needs_thinking_strip(normalization, session_record) is False
+        assert (
+            _RouteExecutor._needs_thinking_strip(normalization, session_record) is False
+        )
 
     def test_true_when_normalization_none_but_session_has_non_anthropic(self):
         """normalization 为 None 但会话有非 Anthropic 供应商时返回 True."""

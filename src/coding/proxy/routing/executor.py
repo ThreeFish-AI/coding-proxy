@@ -241,7 +241,9 @@ class _RouteExecutor:
         if tier.name != "anthropic":
             return body
 
-        needs_tool_fixes = normalization is not None and normalization.has_anthropic_fixes
+        needs_tool_fixes = (
+            normalization is not None and normalization.has_anthropic_fixes
+        )
         needs_thinking_strip = self._needs_thinking_strip(normalization, session_record)
 
         if not needs_tool_fixes and not needs_thinking_strip:
@@ -296,7 +298,9 @@ class _RouteExecutor:
             return True
         # Signal 3: 会话历史中有非 Anthropic 供应商
         if session_record.provider_state:
-            non_anthropic = {v for v in session_record.provider_state if v != "anthropic"}
+            non_anthropic = {
+                v for v in session_record.provider_state if v != "anthropic"
+            }
             if non_anthropic:
                 return True
         # 纯 Anthropic 会话，无跨供应商信号 → 保留 thinking blocks

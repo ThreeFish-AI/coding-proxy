@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 
 from coding.proxy.server.request_normalizer import (
-    NormalizationResult,
     apply_anthropic_specific_fixes,
     normalize_anthropic_request,
     strip_thinking_blocks,

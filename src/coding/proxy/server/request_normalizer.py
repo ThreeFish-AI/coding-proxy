@@ -23,11 +23,13 @@ _VENDOR_TOOL_BLOCK_TYPES = {
 }
 
 # 标识跨供应商迁移产物的 adaptation 名称集合（用于条件化 thinking block 剥离）
-_CROSS_VENDOR_ADAPTATIONS = frozenset({
-    "vendor_block_removed",
-    "server_tool_use_id_rewritten_for_anthropic",
-    "invalid_tool_use_id_rewritten_for_anthropic",
-})
+_CROSS_VENDOR_ADAPTATIONS = frozenset(
+    {
+        "vendor_block_removed",
+        "server_tool_use_id_rewritten_for_anthropic",
+        "invalid_tool_use_id_rewritten_for_anthropic",
+    }
+)
 
 
 @dataclass
