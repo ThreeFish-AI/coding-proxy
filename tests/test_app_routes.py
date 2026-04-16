@@ -409,7 +409,7 @@ def test_stream_http_status_error_returns_anthropic_sse_error():
         )
     )
 
-    async def failing_route_stream(body, headers):
+    async def failing_route_stream(body, headers, **kwargs):
         request = httpx.Request("POST", "https://api.example.com/v1/messages")
         response = httpx.Response(
             429,
@@ -454,7 +454,7 @@ def test_stream_read_error_returns_anthropic_sse_error():
         )
     )
 
-    async def failing_route_stream(body, headers):
+    async def failing_route_stream(body, headers, **kwargs):
         raise httpx.ReadError("socket closed")
         yield  # pragma: no cover
 
@@ -490,7 +490,7 @@ def test_message_read_error_returns_502():
         )
     )
 
-    async def failing_route_message(body, headers):
+    async def failing_route_message(body, headers, **kwargs):
         raise httpx.ReadError("socket closed")
 
     app.state.router.route_message = failing_route_message
@@ -524,7 +524,7 @@ def test_stream_unexpected_exception_returns_sse_error_not_500():
         )
     )
 
-    async def failing_route_stream(body, headers):
+    async def failing_route_stream(body, headers, **kwargs):
         raise ValueError("unexpected parsing error")
         yield  # pragma: no cover
 
@@ -566,7 +566,7 @@ def test_non_stream_unexpected_exception_returns_500_json_not_raw_500():
         )
     )
 
-    async def failing_route_message(body, headers):
+    async def failing_route_message(body, headers, **kwargs):
         raise RuntimeError("internal state corruption")
 
     app.state.router.route_message = failing_route_message
@@ -598,7 +598,7 @@ def test_messages_normalizes_vendor_tool_blocks_before_routing():
 
     captured_body = {}
 
-    async def fake_route_message(body, headers):
+    async def fake_route_message(body, headers, **kwargs):
         captured_body["body"] = body
         return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo())
 
@@ -706,7 +706,7 @@ def test_normalization_adaptations_logged_at_debug_level(caplog):
 
     captured_body = {}
 
-    async def fake_route_message(body, headers):
+    async def fake_route_message(body, headers, **kwargs):
         captured_body["body"] = body
         return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo())
 
@@ -769,7 +769,7 @@ def test_non_standard_error_format_logged_at_debug(caplog):
         )
     )
 
-    async def zhipu_500_response(body, headers):
+    async def zhipu_500_response(body, headers, **kwargs):
         return VendorResponse(
             status_code=500,
             raw_body=b'{"error":{"code":"500","message":"\'ClaudeContentBlockToolResult\' object has no attribute \'id\'"}}',
@@ -808,7 +808,7 @@ def test_standard_error_format_no_debug_log(caplog):
         )
     )
 
-    async def standard_500_response(body, headers):
+    async def standard_500_response(body, headers, **kwargs):
         return VendorResponse(
             status_code=500,
             raw_body=b'{"error":{"type":"api_error","message":"internal error"}}',
@@ -848,7 +848,7 @@ def test_vendor_500_passthrough_preserves_raw_body():
 
     original_body = b'{"error":{"code":"500","message":"test upstream error"}}'
 
-    async def upstream_500(body, headers):
+    async def upstream_500(body, headers, **kwargs):
         return VendorResponse(
             status_code=500,
             raw_body=original_body,
