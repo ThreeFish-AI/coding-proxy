@@ -198,7 +198,7 @@ async def show_usage(
 
     if cost_totals:
         total_cost_str = " + ".join(
-            f"{cur.symbol}{amt:.4f}" for cur, amt in cost_totals.items()
+            f"{cur.symbol}{amt:.2f}" for cur, amt in cost_totals.items()
         )
     else:
         total_cost_str = "-"

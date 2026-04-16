@@ -50,8 +50,8 @@ class CostValue:
     amount: float
     currency: Currency = Currency.default()
 
-    def format(self, precision: int = 4) -> str:
-        """格式化为 ``$0.1234`` 或 ``¥0.1234``."""
+    def format(self, precision: int = 2) -> str:
+        """格式化为 ``$0.12`` 或 ``¥0.12``."""
         return f"{self.currency.symbol}{self.amount:.{precision}f}"
 
     @property
