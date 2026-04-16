@@ -585,72 +585,83 @@ const COMMON_LEGEND = {
 };
 const COMMON_LINE_DATASET = { tension: .4, pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5 };
 
-// ── 外部 Tooltip（数据项较多时可溢出卡片边界）─────────────
-function createExternalTooltipHandler(context) {
-  const { chart, tooltip } = context;
-  const el = document.getElementById('chart-tooltip');
-  if (!el) return;
+// ── 外部 Tooltip 工厂（数据项较多时可溢出卡片边界）────────
+function makeExternalTooltipHandler(opts = {}) {
+  const {
+    fmtValue = fmtTokens,
+    showTotal = true,
+    fmtTotal = null,
+  } = opts;
+  const fmtTotalFn = fmtTotal || fmtValue;
 
-  if (!tooltip.opacity) {
-    el.classList.remove('active');
-    return;
-  }
+  return function(context) {
+    const { chart, tooltip } = context;
+    const el = document.getElementById('chart-tooltip');
+    if (!el) return;
 
-  // 构建 HTML
-  const titleLines = tooltip.title || [];
-  const dataPoints = tooltip.dataPoints || [];
-  const footerLines = tooltip.footer || [];
+    if (!tooltip.opacity) {
+      el.classList.remove('active');
+      return;
+    }
 
-  let html = '';
-  if (titleLines.length) {
-    html += '<div id="chart-tooltip-title">' + titleLines.join('<br>') + '</div>';
-  }
-  if (dataPoints.length) {
-    html += '<div id="chart-tooltip-items">';
-    dataPoints.forEach(dp => {
-      const color = dp.dataset.borderColor || dp.backgroundColor || '#8b949e';
-      const label = dp.dataset.label || '';
-      const value = fmtTokens(dp.raw);
-      html += '<div class="tt-item">' +
-        '<span class="tt-color" style="background:' + color + '"></span>' +
-        '<span class="tt-label">' + label + '</span>' +
-        '<span class="tt-value">' + value + '</span>' +
-        '</div>';
-    });
-    html += '</div>';
-  }
-  if (footerLines.length) {
-    html += '<div id="chart-tooltip-footer">' + footerLines.join('<br>') + '</div>';
-  }
-  el.innerHTML = html;
+    const titleLines = tooltip.title || [];
+    const dataPoints = tooltip.dataPoints || [];
 
-  // 定位（fixed，基于 canvas 视口坐标）
-  const canvasRect = chart.canvas.getBoundingClientRect();
-  const elW = el.offsetWidth || 200;
-  const elH = el.offsetHeight || 100;
-  const caretX = tooltip.caretX || 0;
-  const caretY = tooltip.caretY || 0;
+    let html = '';
+    if (titleLines.length) {
+      html += '<div id="chart-tooltip-title">' + titleLines.join('<br>') + '</div>';
+    }
+    if (dataPoints.length) {
+      html += '<div id="chart-tooltip-items">';
+      dataPoints.forEach(dp => {
+        // 折线图: borderColor 为字符串；甜甜圈图: backgroundColor 为数组
+        const bg = dp.dataset.backgroundColor;
+        const color = dp.dataset.borderColor
+          || (Array.isArray(bg) ? bg[dp.dataIndex] : bg)
+          || '#8b949e';
+        const label = dp.dataset.label || dp.label || '';
+        const value = fmtValue(dp.raw);
+        html += '<div class="tt-item">' +
+          '<span class="tt-color" style="background:' + color + '"></span>' +
+          '<span class="tt-label">' + label + '</span>' +
+          '<span class="tt-value">' + value + '</span>' +
+          '</div>';
+      });
+      html += '</div>';
+    }
+    if (showTotal && dataPoints.length > 1) {
+      const total = dataPoints.reduce((s, dp) => s + (dp.raw || 0), 0);
+      if (total > 0) {
+        html += '<div id="chart-tooltip-footer">合计: ' + fmtTotalFn(total) + '</div>';
+      }
+    }
+    el.innerHTML = html;
 
-  let left = canvasRect.left + caretX + 14;
-  let top = canvasRect.top + caretY - 14;
+    // 定位（fixed，基于 canvas 视口坐标）
+    const canvasRect = chart.canvas.getBoundingClientRect();
+    const elW = el.offsetWidth || 200;
+    const elH = el.offsetHeight || 100;
+    const caretX = tooltip.caretX || 0;
+    const caretY = tooltip.caretY || 0;
 
-  // 边界修正
-  if (left + elW > window.innerWidth - 10) {
-    left = canvasRect.left + caretX - elW - 14;
-  }
-  if (top + elH > window.innerHeight - 10) {
-    top = window.innerHeight - elH - 10;
-  }
-  if (top < 10) {
-    top = 10;
-  }
+    let left = canvasRect.left + caretX + 14;
+    let top = canvasRect.top + caretY - 14;
 
-  el.style.left = left + 'px';
-  el.style.top = top + 'px';
-  el.classList.add('active');
+    if (left + elW > window.innerWidth - 10) {
+      left = canvasRect.left + caretX - elW - 14;
+    }
+    if (top + elH > window.innerHeight - 10) {
+      top = window.innerHeight - elH - 10;
+    }
+    if (top < 10) top = 10;
+
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+    el.classList.add('active');
+  };
 }
 
-const EXTERNAL_TOOLTIP = { enabled: false, external: createExternalTooltipHandler };
+const EXTERNAL_TOOLTIP = { enabled: false, external: makeExternalTooltipHandler() };
 
 // ── Legend 点击交互：单击=仅选该项，Ctrl/Meta+单击=多选追加，Shift+单击=排除 ──
 function legendOnClick(e, legendItem, legend) {
@@ -856,14 +867,9 @@ function buildTimeline(rows) {
       plugins: {
         legend: { ...COMMON_LEGEND, onClick: legendOnClick },
         tooltip: {
+          enabled: false,
+          external: makeExternalTooltipHandler({ fmtValue: fmtNum }),
           itemSort: (a, b) => (b.raw || 0) - (a.raw || 0),
-          callbacks: {
-            label: c => ` ${c.dataset.label}: ${fmtNum(c.raw)}`,
-            footer: items => {
-              const total = items.reduce((s, i) => s + (i.raw || 0), 0);
-              return total > 0 ? '合计: ' + fmtNum(total) : '';
-            },
-          },
         },
       },
       scales: {
@@ -910,18 +916,15 @@ function buildVendorDist(rows) {
           position: 'right',
           onClick: legendOnClick,
           labels: {
-            boxWidth: 12,
-            boxHeight: 12,
-            padding: 12,
-            usePointStyle: true,
-            pointStyle: 'circle',
-            font: { size: 13, weight: '500' },
+            ...COMMON_LEGEND.labels,
             generateLabels: chart => {
               const ds = chart.data.datasets[0];
               return chart.data.labels.map((label, i) => ({
                 text: label,
                 fillStyle: ds.backgroundColor[i],
                 strokeStyle: ds.backgroundColor[i],
+                fontColor: '#e6edf3',
+                color: '#e6edf3',
                 lineWidth: 0,
                 hidden: !chart.getDataVisibility(i),
                 index: i,
@@ -930,7 +933,13 @@ function buildVendorDist(rows) {
             },
           },
         },
-        tooltip: { callbacks: { label: c => ` ${c.label}: ${c.raw.toLocaleString()} 次` } },
+        tooltip: {
+          enabled: false,
+          external: makeExternalTooltipHandler({
+            fmtValue: v => v.toLocaleString() + ' 次',
+            showTotal: false,
+          }),
+        },
       },
     },
   });
@@ -980,14 +989,8 @@ function buildTokenTimeline(rows) {
       plugins: {
         legend: { ...COMMON_LEGEND, onClick: legendOnClick },
         tooltip: {
+          ...EXTERNAL_TOOLTIP,
           itemSort: (a, b) => (b.raw || 0) - (a.raw || 0),
-          callbacks: {
-            label: c => ` ${c.dataset.label}: ${fmtTokens(c.raw)}`,
-            footer: items => {
-              const total = items.reduce((s, i) => s + (i.raw || 0), 0);
-              return total > 0 ? '合计: ' + fmtTokens(total) : '';
-            },
-          },
         },
       },
       scales: {
@@ -1072,13 +1075,6 @@ function buildModelTokenTimeline(rows) {
         tooltip: {
           ...EXTERNAL_TOOLTIP,
           itemSort: (a, b) => (b.raw || 0) - (a.raw || 0),
-          callbacks: {
-            label: c => ' ' + c.dataset.label + ': ' + fmtTokens(c.raw),
-            footer: items => {
-              const total = items.reduce((s, i) => s + (i.raw || 0), 0);
-              return total > 0 ? '合计: ' + fmtTokens(total) : '';
-            },
-          },
         },
       },
       scales: {
