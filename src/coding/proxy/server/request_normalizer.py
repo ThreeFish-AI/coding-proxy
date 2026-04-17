@@ -487,6 +487,150 @@ def _repair_orphaned_tool_use(
     return repaired
 
 
+# ── Phase 2: 跨供应商 tool_use/tool_result 配对强制修复 ─────────
+
+
+def enforce_anthropic_tool_pairing(
+    messages_list: list[dict[str, Any]],
+) -> list[str]:
+    """为跨供应商场景强制保证 Anthropic tool_use/tool_result 配对约束.
+
+    单次正向遍历所有消息，对每个 assistant 消息执行：
+
+    1. 剥离所有 tool_result 块（跨供应商产物，如 GLM-5 内联的 tool_result）
+    2. 收集所有 tool_use ID
+    3. 确保紧邻的下一条消息是 user 消息且包含所有必需的 tool_result
+    4. 将剥离的 tool_result 重定位到正确的 user 消息
+    5. 为仍缺失的 tool_result 合成 ``is_error=True`` 的占位块
+
+    此函数是一个**自包含的单遍处理**，不依赖 Phase 1 收集的 misplaced 信息，
+    通过直接扫描消息列表确保处理的完备性。替代此前多步串联管线
+    （剥离 → 重定位 → 孤儿修复）因步骤间隐式依赖导致的漏修问题。
+
+    仅在请求实际发送给 Anthropic tier 且检测到跨供应商信号时调用，
+    确保 Zhipu 等其他 vendor 不受影响。
+
+    Args:
+        messages_list: 消息列表（就地修改）。
+
+    Returns:
+        新增的 adaptation 标签列表。
+    """
+    adaptations: list[str] = []
+    relocated_count = 0
+    synthesized_ids: list[str] = []
+
+    i = 0
+    while i < len(messages_list):
+        msg = messages_list[i]
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            i += 1
+            continue
+
+        content = msg.get("content")
+        if not isinstance(content, list):
+            i += 1
+            continue
+
+        # ── A. 从 assistant 消息中剥离所有 tool_result 块 ─────────
+        extracted_tool_results: dict[str, dict[str, Any]] = {}  # tool_use_id → block
+        retained_content: list[Any] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                tid = block.get("tool_use_id")
+                if tid:
+                    extracted_tool_results[tid] = block
+                    relocated_count += 1
+                # 无 tool_use_id 的 tool_result 直接丢弃（无效块）
+            else:
+                retained_content.append(block)
+
+        if extracted_tool_results:
+            msg["content"] = retained_content
+
+        # ── B. 收集所有 tool_use ID ───────────────────────────────
+        tool_use_ids: list[str] = [
+            b["id"]
+            for b in (
+                msg.get("content") if isinstance(msg.get("content"), list) else []
+            )
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")
+        ]
+        if not tool_use_ids:
+            # 无 tool_use 块：若剥离后 content 为空，插入占位
+            current_content = msg.get("content")
+            if isinstance(current_content, list) and not current_content:
+                msg["content"] = [{"type": "text", "text": ""}]
+            i += 1
+            continue
+
+        # ── C. 确保 messages[i+1] 是 user 消息 ───────────────────
+        next_idx = i + 1
+        if (
+            next_idx < len(messages_list)
+            and isinstance(messages_list[next_idx], dict)
+            and messages_list[next_idx].get("role") == "user"
+        ):
+            user_msg = messages_list[next_idx]
+        else:
+            # 插入合成 user 消息
+            user_msg: dict[str, Any] = {"role": "user", "content": []}
+            messages_list.insert(next_idx, user_msg)
+
+        # ── D. 确保 user_msg.content 是 list ─────────────────────
+        user_content = user_msg.get("content")
+        if isinstance(user_content, str):
+            user_msg["content"] = [{"type": "text", "text": user_content}]
+        elif not isinstance(user_content, list):
+            user_msg["content"] = []
+
+        # ── E. 收集 user 消息中已有的 tool_result IDs ─────────────
+        existing_result_ids: set[str] = {
+            b["tool_use_id"]
+            for b in user_msg["content"]
+            if isinstance(b, dict)
+            and b.get("type") == "tool_result"
+            and b.get("tool_use_id")
+        }
+
+        # ── F. 为每个 tool_use_id 确保 tool_result 存在 ──────────
+        for uid in tool_use_ids:
+            if uid in existing_result_ids:
+                continue  # 已有匹配的 tool_result
+
+            if uid in extracted_tool_results:
+                # 从 assistant 剥离的 tool_result 重定位到 user
+                user_msg["content"].append(extracted_tool_results[uid])
+            else:
+                # 完全缺失：合成 is_error=True 占位块
+                user_msg["content"].append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": uid,
+                        "content": "",
+                        "is_error": True,
+                    }
+                )
+                synthesized_ids.append(uid)
+
+        i += 1
+
+    # ── 构建 adaptation 标签与日志 ────────────────────────────
+    if relocated_count:
+        adaptations.append("misplaced_tool_result_relocated")
+    if synthesized_ids:
+        adaptations.append("orphaned_tool_use_repaired")
+        logger.warning(
+            "Vendor degradation adaptation: synthesized %d tool_result block(s) "
+            "for orphaned tool_use to satisfy Anthropic pairing constraint. "
+            "Affected tool_use_ids: %s",
+            len(synthesized_ids),
+            ", ".join(synthesized_ids),
+        )
+
+    return adaptations
+
+
 # ── Phase 2: Thinking block 剥离 ──────────────────────────────
 
 # 需要从 assistant messages 中剥离的 thinking block 类型

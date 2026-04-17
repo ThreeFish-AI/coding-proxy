@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- fix(request-normalizer): 重设计 zhipu→anthropic 跨供应商 tool_use/tool_result 配对修复——以单遍自包含 `enforce_anthropic_tool_pairing` 替代原有多步串联管线（剥离→重定位→孤儿修复），消除步骤间隐式依赖导致的孤儿 tool_use 漏修问题，彻底根治 `tool_use ids were found without tool_result blocks` 400 异常;
+
 ## [v0.2.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.3) — 2026-04-16
 
 - feat(dashboard): 新增实时 Web Dashboard 页面，聚合展示流量与用量统计;
