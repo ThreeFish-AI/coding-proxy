@@ -233,7 +233,7 @@ class _RouteExecutor:
         """为指定 tier 准备请求体，必要时应用 Anthropic 专属修复（Phase 2）.
 
         仅当 tier 为 Anthropic 时才执行以下处理：
-        1. tool_result 重定位 + 孤儿修复（需 normalization.has_anthropic_fixes）
+        1. 跨供应商 tool_use/tool_result 配对强制修复（单遍自包含扫描）
         2. 条件化 thinking block 剥离（仅跨供应商场景）
 
         确保 Zhipu 等其他 vendor 不受影响。
@@ -241,30 +241,28 @@ class _RouteExecutor:
         if tier.name != "anthropic":
             return body
 
-        needs_tool_fixes = (
-            normalization is not None and normalization.has_anthropic_fixes
+        needs_tool_pairing = self._needs_tool_pairing_enforcement(
+            normalization, session_record
         )
         needs_thinking_strip = self._needs_thinking_strip(normalization, session_record)
 
-        if not needs_tool_fixes and not needs_thinking_strip:
+        if not needs_tool_pairing and not needs_thinking_strip:
             return body
 
         from ..server.request_normalizer import (
-            apply_anthropic_specific_fixes,
+            enforce_anthropic_tool_pairing,
             strip_thinking_blocks,
         )
 
         body_for_vendor = copy.deepcopy(body)
 
-        if needs_tool_fixes:
-            fixes = apply_anthropic_specific_fixes(
+        if needs_tool_pairing:
+            fixes = enforce_anthropic_tool_pairing(
                 body_for_vendor.get("messages", []),
-                normalization.misplaced_tool_results,
-                normalization.misplaced_log_info,
             )
             if fixes:
                 logger.debug(
-                    "Applied Anthropic-specific fixes for tier %s: %s",
+                    "Applied tool pairing enforcement for tier %s: %s",
                     tier.name,
                     ", ".join(fixes),
                 )
@@ -278,6 +276,40 @@ class _RouteExecutor:
                 )
 
         return body_for_vendor
+
+    @staticmethod
+    def _needs_tool_pairing_enforcement(
+        normalization: Any, session_record: Any
+    ) -> bool:
+        """判断是否需要强制执行 Anthropic tool_use/tool_result 配对修复.
+
+        此方法扩展了原有 ``has_anthropic_fixes`` 的触发条件，覆盖以下场景：
+
+        1. 请求体中检测到跨供应商产物（如非标准 ID、misplaced tool_result）
+        2. Phase 1 检测到需要 Anthropic 修复（misplaced 或 ID 重写）
+        3. 会话历史中存在非 Anthropic 供应商记录（如 zhipu）
+        4. 无会话追踪能力时安全回退
+
+        条件 3 和 4 确保即使请求体本身无跨供应商产物（如 zhipu 使用标准
+        ``toolu_*`` ID 时），只要会话曾经过非 Anthropic 供应商，仍会执行配对修复。
+        """
+        # Signal 1: 当前请求体有跨供应商产物
+        if normalization is not None and normalization.has_cross_vendor_signals:
+            return True
+        # Signal 2: Phase 1 检测到需要 Anthropic 修复
+        if normalization is not None and normalization.has_anthropic_fixes:
+            return True
+        # Signal 3: 无会话追踪 → 安全回退
+        if session_record is None:
+            return True
+        # Signal 4: 会话历史中有非 Anthropic 供应商
+        if session_record.provider_state:
+            non_anthropic = {
+                v for v in session_record.provider_state if v != "anthropic"
+            }
+            if non_anthropic:
+                return True
+        return False
 
     @staticmethod
     def _needs_thinking_strip(normalization: Any, session_record: Any) -> bool:
