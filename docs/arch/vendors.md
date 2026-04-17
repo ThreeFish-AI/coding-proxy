@@ -57,9 +57,8 @@ classDiagram
     }
 
     class NativeAnthropicVendor {
-        <<abstract>>
-        +_vendor_name: str
-        +_display_name: str
+        _vendor_name: str  子类覆写
+        _display_name: str  子类覆写
         +_prepare_request(body, headers) tuple
         +send_message(body, headers) VendorResponse
         +send_message_stream(body, headers) AsyncIterator
@@ -327,6 +326,15 @@ GitHub token → Copilot token 交换管理：
 - **诊断**: 维护 `CopilotExchangeDiagnostics` 记录最近一次交换详情
 - **热更新**: `update_github_token()` 支持运行时重认证后 token 替换
 
+### GoogleOAuthTokenManager
+
+文件: [vendors/antigravity.py](../../src/coding/proxy/vendors/antigravity.py)（内嵌）
+
+Google OAuth2 refresh_token → access_token 刷新管理：
+
+- 继承 `BaseTokenManager`，实现 `_acquire()` 通过 Google OAuth2 token endpoint 刷新 access_token
+- 内嵌于 `antigravity.py` 而非独立文件，因仅 AntigravityVendor 使用
+
 ### CopilotModelResolver
 
 文件: [vendors/copilot_models.py](../../src/coding/proxy/vendors/copilot_models.py)
@@ -391,6 +399,6 @@ class ExampleVendor(NativeAnthropicVendor):
 
 1. **创建子类** — 在 [vendors/](../../src/coding/proxy/vendors/) 目录下新建文件，继承 `BaseVendor`
 2. **实现抽象方法** — `get_name()` 和 `_prepare_request()`
-3. **覆写钩子方法** — 按需覆写 `map_model()`、`get_capabilities()`、`get_compatibility_profile()`、`_get_endpoint()` 等
+3. **覆写可扩展方法** — 按需覆写 `map_model()`、`get_capabilities()`、`_get_endpoint()` 等；如需声明非默认兼容性画像则覆写 `get_compatibility_profile()`
 4. **如需 token 管理** — 组合 `TokenBackendMixin`，实现 `BaseTokenManager` 子类
 5. **后续步骤** — 同 Path A 的 2-5 步

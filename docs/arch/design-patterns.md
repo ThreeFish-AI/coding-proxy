@@ -67,7 +67,6 @@ classDiagram
     }
 
     class NativeAnthropicVendor {
-        <<abstract>>
         _prepare_request() 模型映射+API Key
         map_model() 委托ModelMapper
         _normalize_error_response() 401归一化

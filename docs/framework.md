@@ -306,9 +306,9 @@ flowchart TD
 
 | 层级        | 条件                                       | 默认值                                                  |
 | ----------- | ------------------------------------------ | ------------------------------------------------------- |
-| HTTP 状态码 | `status_code in failover.status_codes`     | `[429, 403, 503, 500]`                                  |
+| HTTP 状态码 | `status_code in failover.status_codes`     | `[429, 403, 503, 500, 529]`                                  |
 | 错误类型    | `error.type in failover.error_types`       | `["rate_limit_error", "overloaded_error", "api_error"]` |
-| 错误消息    | `pattern in error.message`（不区分大小写） | `["quota", "limit exceeded", "usage cap", "capacity"]`  |
+| 错误消息    | `pattern in error.message`（不区分大小写） | `["quota", "limit exceeded", "usage cap", "capacity", "internal network failure"]`  |
 
 **特殊规则**：对于 429 和 503 状态码，即使无法解析响应体（body），也会强制触发故障转移。
 

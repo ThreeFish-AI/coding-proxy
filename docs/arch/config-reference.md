@@ -139,9 +139,9 @@ flowchart TD
 
 | 字段                      | 类型         | 默认值                                          |
 | ------------------------- | ------------ | ----------------------------------------------- |
-| `status_codes`            | list[int]    | `[429, 403, 503, 500]`                          |
+| `status_codes`            | list[int]    | `[429, 403, 503, 500, 529]`                                          |
 | `error_types`             | list[str]    | `["rate_limit_error", "overloaded_error", "api_error"]` |
-| `error_message_patterns`  | list[str]    | `["quota", "limit exceeded", "usage cap", "capacity"]`  |
+| `error_message_patterns`  | list[str]    | `["quota", "limit exceeded", "usage cap", "capacity", "internal network failure"]`  |
 
 ---
 
