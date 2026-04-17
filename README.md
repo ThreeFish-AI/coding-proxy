@@ -118,7 +118,7 @@ graph RL
 
     subgraph CodingProxy["⚡ coding-proxy"]
         direction RL
-        
+
         Router["RequestRouter<br/><code>routing/router.py</code>"]:::router
 
         Router -->NTier
@@ -151,7 +151,7 @@ graph RL
             Tier2 -. "🆘 Safety Net Downgrade" .-> TierN
         end
 
-    end    
+    end
 
     Client -->|"POST /v1/messages"| CodingProxy
 ```
