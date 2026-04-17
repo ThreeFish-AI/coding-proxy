@@ -911,8 +911,21 @@ function updateVendorStatus(status) {
   }).join('');
 }
 
+// ── 按 tiers 顺序排序 vendor 列表 ─────────────────────────
+function sortByTierOrder(vendors, tierOrder) {
+  if (!tierOrder || !tierOrder.length) return vendors.sort();
+  const orderMap = {};
+  tierOrder.forEach((name, i) => { orderMap[name] = i; });
+  const maxIdx = tierOrder.length;
+  return vendors.sort((a, b) => {
+    const ia = orderMap[a] ?? maxIdx;
+    const ib = orderMap[b] ?? maxIdx;
+    return ia !== ib ? ia - ib : a.localeCompare(b);
+  });
+}
+
 // ── 时序折线图（请求量，按 vendor）────────────────────────
-function buildTimeline(rows) {
+function buildTimeline(rows, tierOrder) {
   const vendorDateMap = {};
   const allDates = new Set();
   for (const r of rows) {
@@ -923,7 +936,7 @@ function buildTimeline(rows) {
     allDates.add(d);
   }
   const dates = [...allDates].sort();
-  const vendors = Object.keys(vendorDateMap).sort();
+  const vendors = sortByTierOrder(Object.keys(vendorDateMap), tierOrder);
 
   if (chartTimeline) chartTimeline.destroy();
   const ctx = document.getElementById('chart-timeline').getContext('2d');
@@ -962,14 +975,14 @@ function buildTimeline(rows) {
 }
 
 // ── 供应商分布环形图 ──────────────────────────────────────
-function buildVendorDist(rows) {
+function buildVendorDist(rows, tierOrder) {
   const vendorTotals = {};
   for (const r of rows) {
     const v = r.vendor;
     if (!isValidLabel(v)) continue;
     vendorTotals[v] = (vendorTotals[v] || 0) + (r.total_requests || 0);
   }
-  const labels = Object.keys(vendorTotals).sort((a,b) => vendorTotals[b]-vendorTotals[a]);
+  const labels = sortByTierOrder(Object.keys(vendorTotals), tierOrder);
   const data = labels.map(v => vendorTotals[v]);
 
   if (chartVendorDist) chartVendorDist.destroy();
@@ -1027,7 +1040,7 @@ function buildVendorDist(rows) {
 }
 
 // ── Token 量趋势折线图（按 vendor）───────────────────────
-function buildTokenTimeline(rows) {
+function buildTokenTimeline(rows, tierOrder) {
   const vendorDateMap = {};
   const allDates = new Set();
   for (const r of rows) {
@@ -1040,7 +1053,7 @@ function buildTokenTimeline(rows) {
     allDates.add(d);
   }
   const dates = [...allDates].sort();
-  const vendors = Object.keys(vendorDateMap).sort();
+  const vendors = sortByTierOrder(Object.keys(vendorDateMap), tierOrder);
 
   if (chartTokenTimeline) chartTokenTimeline.destroy();
   const ctx = document.getElementById('chart-token-timeline').getContext('2d');
@@ -1258,9 +1271,10 @@ async function refresh() {
     updateChartTitles(days);
 
     const rows = timeline.rows || [];
-    buildTimeline(rows);
-    buildVendorDist(rows);
-    buildTokenTimeline(rows);
+    const tierOrder = (status.tiers || []).map(t => t.name);
+    buildTimeline(rows, tierOrder);
+    buildVendorDist(rows, tierOrder);
+    buildTokenTimeline(rows, tierOrder);
     buildModelTokenTimeline(rows);
 
     document.getElementById('refresh-time').textContent = '上次刷新: ' + now();
