@@ -1,0 +1,57 @@
+# =============================================================================
+# coding-proxy: Pre-commit Hooks Configuration
+# =============================================================================
+# 目的: 在代码提交前自动执行 Ruff lint/format 及通用卫生检查，作为 CI 的前置守护
+#
+# 设计决策：使用 local hook（language: system + uv run）而非 astral-sh/ruff-pre-commit
+#   - 遵循 Single Source of Truth 原则：Ruff 版本由 uv.lock 唯一管控，消除版本漂移
+#   - 与 CI 命令形态完全镜像（uv run ruff check/format）
+#   - 符合 AGENTS.md 包管理规范（统一使用 uv）
+#
+# 安装：uv run pre-commit install
+# 手动全量检查：uv run pre-commit run --all-files
+# =============================================================================
+
+minimum_pre_commit_version: "4.0.0"
+
+repos:
+  # ---------------------------------------------------------------------------
+  # 通用代码卫生检查（pre-commit-hooks 官方钩子集）
+  # 轻量级、无额外依赖、执行极快
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace      # 去除行尾空白
+      - id: end-of-file-fixer        # 确保文件以换行符结尾
+      - id: check-yaml
+        args: ["--unsafe"]           # 兼容 GitHub Actions ${{ }} 表达式语法
+      - id: check-toml               # 校验 TOML 语法（pyproject.toml）
+      - id: check-merge-conflict     # 阻止提交含未解决 merge conflict 标记的文件
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]       # 阈值 1MB（assets/dashboard-v0.2.3.png 为 944KB）
+
+  # ---------------------------------------------------------------------------
+  # Ruff: local hook，直接调用 uv 安装的 Ruff（与 CI 版本完全一致）
+  # 前置条件：uv sync --dev 已执行
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      # 对应 CI: uv run ruff check .
+      # --fix: 自动修复安全可修复问题（isort、UP 现代化等），降低开发摩擦
+      # --exit-non-zero-on-fix: 修复后返回非零码，触发 git 重新暂存已修复文件
+      - id: ruff-lint
+        name: Ruff (lint + auto-fix)
+        language: system
+        entry: uv run ruff check --fix --exit-non-zero-on-fix
+        types_or: [python, pyi]
+        require_serial: false
+
+      # 对应 CI: uv run ruff format --check .
+      # 本地直接 format（自动修复格式），CI 保留 --check 模式作为最终防线
+      - id: ruff-format
+        name: Ruff (format)
+        language: system
+        entry: uv run ruff format
+        types_or: [python, pyi]
+        require_serial: false

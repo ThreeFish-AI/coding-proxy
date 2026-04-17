@@ -71,9 +71,9 @@
 ## [v0.1.1](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.1.1) — 2026-04-05
 
 > [!IMPORTANT]
-> 
-> **🎉 coding-proxy MVP 惊艳登场！** 
-> 
+>
+> **🎉 coding-proxy MVP 惊艳登场！**
+>
 > 仅需配置一行环境变量，立刻为你的 Claude Code 接入“永不宕机”的多源智能引擎。主供应商打盹？毫秒级自动无缝切换备用通道，全天候护航你的编码心流，向打断大声说不！
 
 ### ✨ 核心亮点
