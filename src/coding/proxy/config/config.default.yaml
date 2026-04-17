@@ -52,7 +52,7 @@ vendors:
       success_threshold: 2
     quota_guard:
       enabled: false
-      token_budget: 60000000 # 5 小时 token 预算（根据订阅计划调整）
+      token_budget: 65000000 # 5 小时 token 预算（根据订阅计划调整）
       window_hours: 5.0
       threshold_percent: 99.0
       probe_interval_seconds: 300
