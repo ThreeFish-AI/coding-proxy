@@ -164,7 +164,7 @@ curl -I http://127.0.0.1:8046/
 | 问题 | 处理方式 |
 |------|---------|
 | `tool_use_id` 格式不符（非 `toolu_` 前缀） | 自动重写为合规格式 |
-| `tool_result` 出现在 `assistant` 消息中 | 剥离该 block（首次触发 WARNING 日志） |
+| `tool_result` 出现在 `assistant` 消息中 | 收集该 block；转发至 Anthropic tier 时执行重定位，其他 vendor 保留原位不变（首次触发 WARNING 日志） |
 | `tool_use` 缺少合法 ID | 自动生成新 ID |
 
 **致命验证错误（返回 HTTP 400）**
@@ -172,7 +172,9 @@ curl -I http://127.0.0.1:8046/
 | 场景 | 错误示例 |
 |------|---------|
 | `tool_use` block 缺少 `id` 字段 | `"tool_use block is missing 'id' field"` |
+| `tool_use` block 缺少 `name` 字段 | `"tool_use block missing name for id rewrite"` |
 | `tool_result` block 缺少 `tool_use_id` 字段 | `"tool_result block is missing 'tool_use_id' field"` |
+| `tool_result` 引用不存在的 `tool_use_id` | `"tool_result references unknown tool_use_id"` |
 | 消息角色不交替 | `"messages must alternate between user and assistant"` |
 | `messages` 末尾不是 `user` 消息 | `"last message must be from user"` |
 

@@ -42,11 +42,11 @@ logging:
 # 最近 7 天（默认）
 coding-proxy usage
 
-# 本周统计
-coding-proxy usage -w
+# 本周统计（第 1 周）
+coding-proxy usage -w 1
 
-# 本月统计
-coding-proxy usage -m
+# 本月统计（第 1 月）
+coding-proxy usage -m 1
 
 # 全部历史
 coding-proxy usage -t
@@ -112,7 +112,7 @@ curl http://127.0.0.1:8046/api/status
 
 ### 7.2 配额耗尽后自动降级
 
-**现象**：上游供应商返回 `403` 错误，消息含 "usage cap" 或 "quota"
+**现象**：上游供应商返回 `403` 错误，消息含 "quota"、"usage cap"、"limit exceeded"、"capacity" 等关键词
 
 **代理行为**：识别关键词 → 配额守卫标记 QUOTA_EXCEEDED → 后续请求自动路由到下一层级。
 

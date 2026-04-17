@@ -102,11 +102,11 @@ coding-proxy usage [OPTIONS]
 # 查看最近 7 天统计（默认）
 coding-proxy usage
 
-# 本周统计
-coding-proxy usage -w
+# 本周统计（第 1 周）
+coding-proxy usage -w 1
 
-# 本月统计
-coding-proxy usage -m
+# 本月统计（第 1 月）
+coding-proxy usage -m 1
 
 # 全部历史，按供应商+模型聚合
 coding-proxy usage -t

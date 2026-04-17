@@ -42,7 +42,7 @@ coding-proxy 支持三类供应商，共 9 种：
 | `vendor` | string | — | 供应商类型标识 |
 | `enabled` | bool | `true` | 是否启用 |
 | `base_url` | string | `""` | API 基础 URL；留空使用供应商默认值 |
-| `timeout_ms` | int | `300000` | 请求超时（毫秒） |
+| `timeout_ms` | int | `300000`/`3000000` | 请求超时（毫秒）；直连/协议转换供应商默认 300000（5 分钟），原生 Anthropic 兼容供应商默认 3000000（50 分钟） |
 
 弹性设施字段（`circuit_breaker`、`quota_guard`、`weekly_quota_guard`、`retry`）参见 [配置字段参考 — 弹性字段](../arch/config-reference.md#5-vendorconfig-弹性字段)。
 
@@ -79,7 +79,7 @@ coding-proxy 支持三类供应商，共 9 种：
 | `models_cache_ttl_seconds` | int | `300` | 模型列表缓存 TTL（秒） |
 
 > 默认已启用（`enabled: true`）。首次启动时若缺少有效凭证，自动触发 GitHub Device Flow 浏览器登录。
-> 可通过 [`GET /api/copilot/diagnostics`](./api-reference.md#57-get-apicopilotdiagnostics) 和 [`GET /api/copilot/models`](./api-reference.md#58-get-apicopilotmodels) 排查认证状态。
+> 可通过 [`GET /api/copilot/diagnostics`](./api-reference.md#7-get-apicopilotdiagnostics) 和 [`GET /api/copilot/models`](./api-reference.md#8-get-apicopilotmodels) 排查认证状态。
 
 ### 3.3 antigravity — Google Antigravity
 
@@ -92,7 +92,6 @@ coding-proxy 支持三类供应商，共 9 种：
 | `refresh_token` | string | `""` | Google OAuth2 Refresh Token，支持 `${ENV_VAR}` |
 | `base_url` | string | `"https://generativelanguage.googleapis.com/v1beta"` | Gemini API 基础地址 |
 | `model_endpoint` | string | `"models/claude-sonnet-4-20250514"` | 模型端点路径（仅作为未命中映射时的默认模型） |
-| `safety_settings` | dict or null | `null` | Gemini API 安全设置键值对（如 `{"HARASSMENT": "block_none"}`） |
 
 > 默认禁用（`enabled: false`）。启用需配置 OAuth 凭据，启动时自动触发 Google OAuth 登录。access_token 过期时优先静默刷新，无需重新登录。
 
@@ -189,7 +188,7 @@ tiers: ["zhipu", "anthropic", "copilot", "antigravity"]
 
 ## 5. model_mapping — 模型映射规则
 
-将 Claude 模型名自动转换为各供应商对应的实际模型名。完整规则列表参见 [`config.default.yaml`](../../config.default.yaml)。
+将 Claude 模型名自动转换为各供应商对应的实际模型名。完整规则列表参见项目内置的 `config.default.yaml`（`src/coding/proxy/config/config.default.yaml`）。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -233,7 +232,7 @@ model_mapping:
 
 ## 6. pricing — 模型定价
 
-按 `(vendor, model)` 配置四维定价，用于 [`coding-proxy usage`](./cli-reference.md#43-coding-proxy-usage) 的费用统计展示。完整定价表参见 [`config.default.yaml`](../../config.default.yaml)。
+按 `(vendor, model)` 配置四维定价，用于 [`coding-proxy usage`](./cli-reference.md#3-coding-proxy-usage) 的费用统计展示。完整定价表参见项目内置的 `config.default.yaml`（`src/coding/proxy/config/config.default.yaml`）。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|

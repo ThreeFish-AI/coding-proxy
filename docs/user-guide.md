@@ -28,7 +28,7 @@
 
 coding-proxy 是一个面向 Claude Code 的多**供应商(vendor)**智能代理服务。它在 Claude Code 和 API 供应商之间充当透明代理，具备以下核心能力：
 
-- **N-tier 自动故障转移(failover)**：支持多层供应商链式降级（默认链路：智谱 → Anthropic → Copilot → Antigravity），恢复后自动切回
+- **N-tier 自动故障转移(failover)**：支持多层供应商链式降级（默认活跃链路：智谱 → Anthropic → Copilot；Antigravity 默认禁用），恢复后自动切回
 - **9 种供应商支持**：Anthropic Claude、GitHub Copilot、Google Antigravity、智谱 GLM、MiniMax、阿里 Qwen、小米 MiMo、Kimi、豆包 Doubao
 - **模型名称映射**：自动将 Claude 模型名转换为各供应商对应的实际模型名
 - **格式双向转换**：自动转换 Anthropic ↔ Gemini 格式，支持非 Anthropic 兼容供应商
@@ -130,14 +130,13 @@ curl http://127.0.0.1:8046/health
 
 ### 4.1 配置文件位置与加载优先级
 
-按以下优先级加载（找到第一个即停止）：
+加载器先按以下顺序查找用户配置文件（找到第一个即停止）：
 
 1. `--config` 参数指定的路径（最高优先级）
 2. `./config.yaml`（项目根目录）
 3. `~/.coding-proxy/config.yaml`（用户主目录）
-4. 内置默认值（无需配置文件也可启动）
 
-加载器以 `config.default.yaml` 为基础模板进行深度合并，用户配置覆盖模板默认值。
+找到用户配置后，以内置 `config.default.yaml` 为基础模板进行**深度合并**，用户配置覆盖模板默认值。未找到用户配置文件时，直接使用模板默认值。
 
 ### 4.2 vendors — 供应商列表
 
@@ -215,7 +214,7 @@ logging:
 
 `primary`, `copilot`, `antigravity`, `fallback`, `circuit_breaker`, `copilot_circuit_breaker`, `antigravity_circuit_breaker`, `quota_guard`, `copilot_quota_guard`, `antigravity_quota_guard`
 
-如果配置文件中使用上述旧格式，系统启动时**自动迁移**至 vendors 格式并输出日志提示。建议尽快迁移至 vendors 新格式。
+当用户配置中**同时不存在** `vendors` 和 `tiers` 字段，但包含上述旧格式字段时，系统启动时**自动迁移**至 vendors 格式并输出日志提示。建议尽快迁移至 vendors 新格式。
 
 ---
 
@@ -226,8 +225,8 @@ logging:
 | 启动代理 | `coding-proxy start` |
 | 查看状态 | `coding-proxy status` |
 | 查看用量 | `coding-proxy usage` |
-| 查看本周 | `coding-proxy usage -w` |
-| 查看本月 | `coding-proxy usage -m` |
+| 查看本周 | `coding-proxy usage -w 1` |
+| 查看本月 | `coding-proxy usage -m 1` |
 | 重置熔断器 | `coding-proxy reset` |
 | 提升供应商 | `coding-proxy reset -v anthropic` |
 | GitHub 登录 | `coding-proxy auth login -p github` |
