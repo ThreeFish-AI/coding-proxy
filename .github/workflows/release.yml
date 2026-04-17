@@ -1,15 +1,14 @@
 # =============================================================================
-# coding-proxy: PyPI Publishing Pipeline (4-Stage Unified Pipeline)
+# coding-proxy: PyPI Publishing Pipeline (3-Stage Unified Pipeline)
 # =============================================================================
 # Trigger: GitHub Release publication event (release.types: [published])
 #
-# Architecture: 4-Stage Serial Pipeline (prerelease only — 所有生产发布均走预发布)
+# Architecture: 3-Stage Serial Pipeline (prerelease only — 所有生产发布均走预发布)
 #
 #   Stage 1 (build):            矩阵构建 3.12/3.13/3.14，上传 artifacts
 #   Stage 2 (publish-testpypi): 发布到 TestPyPI 供验证
 #   Stage 3 (publish-to-pypi):  ⏸ Production Approval Gate (environment: pypi)
 #                               审批通过后自动：Promote Release + Publish to PyPI
-#   Stage 4 (update-changelog): 从 Release notes 生成 Changelog PR → master
 #
 # 设计决策 — Stage 3 合并审批与发布的理由：
 #   pypa/gh-action-pypi-publish@release/v1 始终优先尝试 OIDC Trusted Publishing。
@@ -21,9 +20,6 @@
 # Pre-requisites — 需要在 GitHub Settings 一次性手动配置：
 #   1. repo → Settings → Environments → "pypi"
 #      → Required reviewers: 添加审批人员（Production Approval Gate 所需）
-#   2. repo → Settings → Actions → General → Workflow permissions
-#      → "Read and write permissions"（Stage 4 推分支所需）
-#      → 勾选 "Allow GitHub Actions to create and approve pull requests"
 #
 # Authentication:
 #   - TEST_PYPI_API_TOKEN: TestPyPI API Token（repository secret）
@@ -197,130 +193,4 @@ jobs:
         with:
           skip-existing: true
           verbose: true
-
-  # ===========================================================================
-  # Stage 5: UPDATE CHANGELOG -- 自动生成 Changelog PR → master
-  # ===========================================================================
-  update-changelog:
-    name: Update Changelog
-    runs-on: ubuntu-latest
-    needs: publish-to-pypi
-    if: github.event.release.prerelease == true
-    timeout-minutes: 10
-    permissions:
-      contents: write        # git push 新分支
-      pull-requests: write   # 创建 PR
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Extract stable version from prerelease tag
-        id: version
-        run: |
-          PRERELEASE_TAG="${{ github.ref_name }}"
-          # v0.2.0a1 → v0.2.0（移除预发布后缀 a*/b*/rc*）
-          STABLE_VERSION=$(echo "$PRERELEASE_TAG" | sed 's/\(v[0-9]*\.[0-9]*\.[0-9]*\).*/\1/')
-          echo "prerelease_tag=$PRERELEASE_TAG" >> "$GITHUB_OUTPUT"
-          echo "stable_version=$STABLE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "branch_name=chore/changelog-$STABLE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Extracted: $PRERELEASE_TAG → $STABLE_VERSION"
-
-      - name: Check if Changelog entry already exists
-        id: check
-        run: |
-          STABLE="${{ steps.version.outputs.stable_version }}"
-          if grep -qF "[$STABLE]" CHANGELOG.md; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "ℹ️ Changelog entry for $STABLE already exists, skipping PR creation"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "✅ No existing entry for $STABLE, will create PR"
-          fi
-
-      - name: Fetch release body and update CHANGELOG.md
-        if: steps.check.outputs.exists == 'false'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const { owner, repo } = context.repo;
-
-            // 通过 API 获取 Release body，避免 shell 特殊字符注入问题
-            const release = await github.rest.repos.getReleaseByTag({
-              owner,
-              repo,
-              tag: '${{ steps.version.outputs.prerelease_tag }}',
-            });
-
-            const stable = '${{ steps.version.outputs.stable_version }}';
-            const date = new Date().toISOString().slice(0, 10);
-            const releaseUrl = `https://github.com/${owner}/${repo}/releases/tag/${{ steps.version.outputs.prerelease_tag }}`;
-            const body = release.data.body || '';
-
-            // 构建新条目
-            const newEntry = `\n## [${stable}](${releaseUrl}) — ${date}\n\n${body}\n`;
-
-            // 读取 CHANGELOG.md，在 ## [Unreleased] 行后插入新条目
-            let content = fs.readFileSync('CHANGELOG.md', 'utf8');
-            const marker = '## [Unreleased]';
-            const idx = content.indexOf(marker);
-            if (idx === -1) {
-              core.setFailed('CHANGELOG.md 中未找到 ## [Unreleased] 标记，无法插入条目');
-              return;
-            }
-            const insertPos = idx + marker.length;
-            content = content.slice(0, insertPos) + newEntry + content.slice(insertPos);
-            fs.writeFileSync('CHANGELOG.md', content, 'utf8');
-            core.info(`✅ CHANGELOG.md updated with entry for ${stable}`);
-
-      - name: Create branch and commit
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          BRANCH="${{ steps.version.outputs.branch_name }}"
-          STABLE="${{ steps.version.outputs.stable_version }}"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git checkout -b "$BRANCH"
-          git add CHANGELOG.md
-          git commit -m "docs(changelog): add entry for $STABLE"
-          git push origin "$BRANCH"
-
-      - name: Create Pull Request
-        if: steps.check.outputs.exists == 'false'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const stable = '${{ steps.version.outputs.stable_version }}';
-            const branch = '${{ steps.version.outputs.branch_name }}';
-            const prereleaseTag = '${{ steps.version.outputs.prerelease_tag }}';
-            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${{ github.run_id }}`;
-
-            const pr = await github.rest.pulls.create({
-              owner,
-              repo,
-              title: `docs(changelog): 补充 ${stable} 发版说明`,
-              body: [
-                `## 摘要`,
-                ``,
-                `自动生成的 PR，为 **${stable}** 正式版补充 CHANGELOG 条目。`,
-                ``,
-                `- 来源：[\`${prereleaseTag}\`](https://github.com/${owner}/${repo}/releases/tag/${prereleaseTag}) Release notes`,
-                `- 目标分支：\`master\``,
-                ``,
-                `请审阅 CHANGELOG 条目后合并。`,
-                ``,
-                `> 🤖 由 [发布流水线](${runUrl}) 自动生成`,
-              ].join('\n'),
-              head: branch,
-              base: 'master',
-            });
-
-            core.notice(`✅ PR created: ${pr.data.html_url}`);
 
