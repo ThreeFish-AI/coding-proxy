@@ -230,14 +230,35 @@ class _RouteExecutor:
         normalization: Any = None,
         session_record: Any = None,
     ) -> dict[str, Any]:
-        """为指定 tier 准备请求体，必要时应用 Anthropic 专属修复（Phase 2）.
+        """为指定 tier 准备请求体，应用供应商专属转换通道 (Phase 2).
 
-        仅当 tier 为 Anthropic 时才执行以下处理：
-        1. 跨供应商 tool_use/tool_result 配对强制修复（单遍自包含扫描）
-        2. 条件化 thinking block 剥离（仅跨供应商场景）
-
-        确保 Zhipu 等其他 vendor 不受影响。
+        通道路由:
+        - zhipu / copilot: 委托 vendor_channels 专属通道
+        - anthropic: 保留现有 tool pairing + 条件 thinking strip 逻辑
+        - 其他: 原样返回
         """
+        # ── zhipu / copilot: 供应商专属转换通道 ──
+        from ..convert.vendor_channels import prepare_for_copilot, prepare_for_zhipu
+
+        channel_fn = None
+        if tier.name == "zhipu":
+            channel_fn = prepare_for_zhipu
+        elif tier.name == "copilot":
+            channel_fn = prepare_for_copilot
+
+        if channel_fn is not None:
+            if not self._needs_vendor_channel(tier.name, normalization, session_record):
+                return body
+            prepared, adaptations = channel_fn(body)
+            if adaptations:
+                logger.debug(
+                    "Applied vendor channel for tier %s: %s",
+                    tier.name,
+                    ", ".join(adaptations),
+                )
+            return prepared
+
+        # ── anthropic: 保留现有逻辑 ──
         if tier.name != "anthropic":
             return body
 
@@ -276,6 +297,32 @@ class _RouteExecutor:
                 )
 
         return body_for_vendor
+
+    @staticmethod
+    def _needs_vendor_channel(
+        tier_name: str,
+        normalization: Any,
+        session_record: Any,
+    ) -> bool:
+        """判断是否需要为目标供应商触发专属转换通道.
+
+        触发信号（满足任一）:
+        1. normalization 检测到跨供应商产物
+        2. 无会话追踪能力 → 安全回退
+        3. 会话历史中存在非当前供应商记录
+        """
+        # Signal 1: 跨供应商信号
+        if normalization is not None and normalization.has_cross_vendor_signals:
+            return True
+        # Signal 2: 无会话追踪 → 安全回退
+        if session_record is None:
+            return True
+        # Signal 3: 会话历史中有非当前供应商
+        if session_record.provider_state:
+            non_current = {v for v in session_record.provider_state if v != tier_name}
+            if non_current:
+                return True
+        return False
 
     @staticmethod
     def _needs_tool_pairing_enforcement(

@@ -1732,12 +1732,50 @@ class TestPrepareBodyForTierThinkingStrip:
         assert result["messages"][0]["content"][0]["type"] == "text"
 
     def test_skips_for_non_anthropic_tier(self):
-        """非 Anthropic tier 不执行任何处理."""
+        """无专属通道的非 Anthropic tier 不执行任何处理."""
         tier = MagicMock()
-        tier.name = "zhipu"
+        tier.name = "antigravity"  # antigravity 无 vendor channel，原样返回
 
         exec_inst = _executor([])
         body = self._body_with_thinking()
         result = exec_inst._prepare_body_for_tier(body, tier)
 
         assert result is body  # 原始 body 直接返回
+
+    def test_zhipu_tier_applies_channel_when_cross_vendor(self):
+        """zhipu tier 在跨供应商场景下应用专属转换通道."""
+        normalization = MagicMock()
+        normalization.has_cross_vendor_signals = True
+
+        tier = MagicMock()
+        tier.name = "zhipu"
+
+        exec_inst = _executor([])
+        body = self._body_with_thinking()
+        result = exec_inst._prepare_body_for_tier(
+            body, tier, normalization, session_record=None
+        )
+
+        # zhipu 通道剥离 thinking blocks + 移除 thinking 参数
+        assert result is not body
+        assert len(result["messages"][0]["content"]) == 1
+        assert result["messages"][0]["content"][0]["type"] == "text"
+
+    def test_zhipu_tier_skips_channel_in_pure_session(self):
+        """zhipu tier 在纯 zhipu 会话中不触发专属通道."""
+        normalization = MagicMock()
+        normalization.has_cross_vendor_signals = False
+
+        tier = MagicMock()
+        tier.name = "zhipu"
+
+        session_record = MagicMock()
+        session_record.provider_state = {"zhipu"}
+
+        exec_inst = _executor([])
+        body = self._body_with_thinking()
+        result = exec_inst._prepare_body_for_tier(
+            body, tier, normalization, session_record=session_record
+        )
+
+        assert result is body  # 纯 zhipu 会话，无需通道处理

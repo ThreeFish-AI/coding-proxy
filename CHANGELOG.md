@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 - fix(request-normalizer): 重设计 zhipu→anthropic 跨供应商 tool_use/tool_result 配对修复——以单遍自包含 `enforce_anthropic_tool_pairing` 替代原有多步串联管线（剥离→重定位→孤儿修复），消除步骤间隐式依赖导致的孤儿 tool_use 漏修问题，彻底根治 `tool_use ids were found without tool_result blocks` 400 异常;
+- feat(vendor-channels): 新增 zhipu/copilot 供应商专属转换通道（`prepare_for_zhipu` / `prepare_for_copilot`），在跨供应商故障转移时自动剥离 GLM-5 不兼容的 thinking 块、cache_control 字段、thinking 参数，并强制 tool_use/tool_result 配对，消除 `likely format incompatibility (400 + tool_results)` 错误;
 
 ## [v0.2.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.3) — 2026-04-16
 
