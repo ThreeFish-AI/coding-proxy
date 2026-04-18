@@ -4,7 +4,7 @@
 - zhipu → anthropic 转换 (prepare_zhipu_to_anthropic)
 - zhipu → copilot 转换 (prepare_zhipu_to_copilot)
 - copilot → zhipu 转换 (prepare_copilot_to_zhipu)
-- 共享辅助函数 (_strip_thinking_blocks_inplace, _strip_cache_control)
+- 共享辅助函数 (strip_thinking_blocks, _strip_cache_control)
 - 转换注册表 (VENDOR_TRANSITIONS, get_transition_channel)
 """
 
@@ -15,18 +15,18 @@ import copy
 from coding.proxy.convert.vendor_channels import (
     VENDOR_TRANSITIONS,
     _strip_cache_control,
-    _strip_thinking_blocks_inplace,
     get_transition_channel,
     prepare_copilot_to_zhipu,
     prepare_zhipu_to_anthropic,
     prepare_zhipu_to_copilot,
+    strip_thinking_blocks,
 )
 
 # ── 辅助函数测试 ──────────────────────────────────────────────
 
 
-class TestStripThinkingBlocksInplace:
-    """_strip_thinking_blocks_inplace 单元测试."""
+class TestStripThinkingBlocks:
+    """strip_thinking_blocks 单元测试."""
 
     def test_strips_thinking_blocks(self):
         body = {
@@ -40,7 +40,7 @@ class TestStripThinkingBlocksInplace:
                 },
             ]
         }
-        stripped = _strip_thinking_blocks_inplace(body)
+        stripped = strip_thinking_blocks(body)
         assert stripped == 1
         assert body["messages"][0]["content"] == [
             {"type": "text", "text": "response"},
@@ -57,7 +57,7 @@ class TestStripThinkingBlocksInplace:
                 },
             ]
         }
-        stripped = _strip_thinking_blocks_inplace(body)
+        stripped = strip_thinking_blocks(body)
         assert stripped == 1
         # content 为空时插入占位 text block
         assert body["messages"][0]["content"] == [
@@ -80,7 +80,7 @@ class TestStripThinkingBlocksInplace:
                 },
             ]
         }
-        stripped = _strip_thinking_blocks_inplace(body)
+        stripped = strip_thinking_blocks(body)
         assert stripped == 2
         assert body["messages"][1]["content"] == [
             {"type": "text", "text": "[thinking]"},
@@ -95,7 +95,7 @@ class TestStripThinkingBlocksInplace:
                 },
             ]
         }
-        stripped = _strip_thinking_blocks_inplace(body)
+        stripped = strip_thinking_blocks(body)
         assert stripped == 0
         assert body["messages"][0]["content"] == [{"type": "text", "text": "hello"}]
 
@@ -105,7 +105,7 @@ class TestStripThinkingBlocksInplace:
                 {"role": "user", "content": [{"type": "thinking", "thinking": "t"}]},
             ]
         }
-        stripped = _strip_thinking_blocks_inplace(body)
+        stripped = strip_thinking_blocks(body)
         assert stripped == 0
 
     def test_handles_string_content(self):
@@ -114,7 +114,7 @@ class TestStripThinkingBlocksInplace:
                 {"role": "assistant", "content": "plain text"},
             ]
         }
-        stripped = _strip_thinking_blocks_inplace(body)
+        stripped = strip_thinking_blocks(body)
         assert stripped == 0
 
 
