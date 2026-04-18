@@ -33,10 +33,10 @@
     <img src="../../assets/dashboard-v0.2.3.png">
 </div>
 
-- **⛓️ N-tier 链式故障转移 (Failover)**：自主降序序列，支持 Claude 官方 Plans，以及 GitHub Copilot、智谱、MiniMax、阿里千问、小米、Kimi、豆包等的 Coding Plan。
+- **⛓️ N-tier 链式故障转移 (Failover)**：自主降序序列，支持 Claude 官方 Plans，以及 GitHub Copilot、Google Antigravity、智谱、MiniMax、阿里千问、小米、Kimi、豆包等的 Coding Plan。
 - **🛡️ 智能弹性与容灾守卫**：每个供应商节点独立配备 **熔断器 (Circuit Breaker)** 与 **配额守卫 (Quota Guard)**，防雪崩、主动避险。
 - **👻 透明无感代理机制**：对客户端 **100% 透明**！无需修改任何代码，仅需一行配置覆盖 `ANTHROPIC_BASE_URL` 即可接入。
-- **🔄 跨模型与全格式转换**：原生支持 Anthropic ←→ Gemini 的请求与流式响应（SSE）双向转换，并支持自动/自助映射模型名称（如 `claude-*` 至 `glm-*`）。
+- **🔄 跨模型与全格式转换**：原生支持 Anthropic ←→ Gemini、Anthropic ←→ OpenAI 的请求与流式响应（SSE）双向转换，并支持自动/自助映射模型名称（如 `claude-*` 至 `glm-*`）。
 - **📊 极致可观测性 (Observability)**：内置基于 `SQLite WAL` 的本地监控追踪，CLI 提供一键输出详细的 Token 用量统计面板（`coding-proxy usage`）。
 - **⚡ 超轻量单机部署**：全异步架构 (`FastAPI` + `httpx`)，无需依赖 Redis、消息队列等外部组件，对开发者机器无额外负担。
 
@@ -95,6 +95,7 @@ claude
 | 指令     | 说明                                                                              | 示例用法                                      |
 | :------- | :-------------------------------------------------------------------------------- | :-------------------------------------------- |
 | `start`  | **启动代理服务器**。支持自定义端口与配置路径。                                    | `coding-proxy start -p 8080 -c ~/config.yaml` |
+| `auth`   | **管理 OAuth 登录凭证**。子命令：`login`（浏览器 OAuth 登录）、`status`（令牌状态）、`reauth`（重认证）、`logout`（清除令牌）。 | `coding-proxy auth login -p github`           |
 | `status` | **查看代理健康状态**。展示各层级熔断器（OPEN/CLOSED）与配额状态。                 | `coding-proxy status`                         |
 | `usage`  | **Token 统计看板**。按天/供应商/模型维度追踪每一次的 Token 消耗、故障转移及耗时。 | `coding-proxy usage -d 7 -v anthropic`        |
 | `reset`  | **强制一键重置**。人工确认主供应商恢复可用后，立刻初始化所有熔断器和配额状态。    | `coding-proxy reset`                          |
@@ -126,29 +127,29 @@ graph RL
         subgraph NTier["N-tier"]
             direction TB
 
-            subgraph Tier0 ["Tier 0: Anthropic"]
+            subgraph Tier0 ["Tier 0: Zhipu"]
                 direction RL
-                G0{"CB / Quota"}:::gateway -- "✅ Pass" --> API0(("Anthropic API")):::api
+                G0{"CB / Quota"}:::gateway -- "✅ Pass" --> API0(("GLM API")):::api
             end
 
-            subgraph Tier1 ["Tier 1: GitHub Copilot"]
+            subgraph Tier1 ["Tier 1: Anthropic"]
                 direction RL
-                G1{"CB / Quota"}:::gateway -- "✅ Pass" --> API1(("Copilot API")):::api
+                G1{"CB / Quota"}:::gateway -- "✅ Pass" --> API1(("Anthropic API")):::api
             end
 
-            subgraph Tier2 ["Tier 2: Google Antigravity"]
+            subgraph Tier2 ["Tier 2: GitHub Copilot"]
                 direction RL
-                G2{"CB / Quota"}:::gateway -- "✅ Pass" --> API2(("Gemini API")):::api
+                G2{"CB / Quota"}:::gateway -- "✅ Pass" --> API2(("Copilot API")):::api
             end
 
-            subgraph TierN ["Tier N: Zhipu"]
+            subgraph Tier3 ["Tier 3: Google Antigravity"]
                 direction RL
-                APIN(("GLM API")):::fallback
+                API3(("Gemini API")):::fallback
             end
 
             Tier0 -. "❌ Blocked / API Error" .-> Tier1
             Tier1 -. "❌ Blocked / API Error" .-> Tier2
-            Tier2 -. "🆘 Safety Net Downgrade" .-> TierN
+            Tier2 -. "🆘 Safety Net Downgrade" .-> Tier3
         end
 
     end
