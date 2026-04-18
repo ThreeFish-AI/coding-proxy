@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import copy
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -227,116 +226,58 @@ class _RouteExecutor:
         self,
         body: dict[str, Any],
         tier: VendorTier,
-        normalization: Any = None,
-        session_record: Any = None,
+        source_vendor: str | None = None,
     ) -> dict[str, Any]:
-        """为指定 tier 准备请求体，必要时应用 Anthropic 专属修复（Phase 2）.
+        """为指定 tier 准备请求体，应用源→目标绑定转换通道.
 
-        仅当 tier 为 Anthropic 时才执行以下处理：
-        1. 跨供应商 tool_use/tool_result 配对强制修复（单遍自包含扫描）
-        2. 条件化 thinking block 剥离（仅跨供应商场景）
-
-        确保 Zhipu 等其他 vendor 不受影响。
+        通过 VENDOR_TRANSITIONS 注册表查表分发，executor 不感知具体供应商逻辑。
+        未注册转换的源→目标对或 source_vendor 为 None 时原样返回请求体。
         """
-        if tier.name != "anthropic":
+        from ..convert.vendor_channels import get_transition_channel
+
+        if source_vendor is None:
             return body
 
-        needs_tool_pairing = self._needs_tool_pairing_enforcement(
-            normalization, session_record
-        )
-        needs_thinking_strip = self._needs_thinking_strip(normalization, session_record)
-
-        if not needs_tool_pairing and not needs_thinking_strip:
+        channel_fn = get_transition_channel(source_vendor, tier.name)
+        if channel_fn is None:
             return body
 
-        from ..server.request_normalizer import (
-            enforce_anthropic_tool_pairing,
-            strip_thinking_blocks,
-        )
-
-        body_for_vendor = copy.deepcopy(body)
-
-        if needs_tool_pairing:
-            fixes = enforce_anthropic_tool_pairing(
-                body_for_vendor.get("messages", []),
+        prepared, adaptations = channel_fn(body)
+        if adaptations:
+            logger.debug(
+                "Applied transition channel %s → %s: %s",
+                source_vendor,
+                tier.name,
+                ", ".join(adaptations),
             )
-            if fixes:
-                logger.debug(
-                    "Applied tool pairing enforcement for tier %s: %s",
-                    tier.name,
-                    ", ".join(fixes),
-                )
-
-        if needs_thinking_strip:
-            stripped = strip_thinking_blocks(body_for_vendor)
-            if stripped:
-                logger.debug(
-                    "Stripped %d thinking block(s) for cross-vendor compatibility",
-                    stripped,
-                )
-
-        return body_for_vendor
+        return prepared
 
     @staticmethod
-    def _needs_tool_pairing_enforcement(
-        normalization: Any, session_record: Any
-    ) -> bool:
-        """判断是否需要强制执行 Anthropic tool_use/tool_result 配对修复.
+    def _determine_source_vendor(
+        target_name: str,
+        failed_tier_name: str | None,
+        session_record: Any,
+    ) -> str | None:
+        """确定跨供应商转换的源 vendor.
 
-        此方法扩展了原有 ``has_anthropic_fixes`` 的触发条件，覆盖以下场景：
-
-        1. 请求体中检测到跨供应商产物（如非标准 ID、misplaced tool_result）
-        2. Phase 1 检测到需要 Anthropic 修复（misplaced 或 ID 重写）
-        3. 会话历史中存在非 Anthropic 供应商记录（如 zhipu）
-        4. 无会话追踪能力时安全回退
-
-        条件 3 和 4 确保即使请求体本身无跨供应商产物（如 zhipu 使用标准
-        ``toolu_*`` ID 时），只要会话曾经过非 Anthropic 供应商，仍会执行配对修复。
+        Priority 1: failed_tier_name（请求内故障转移，最可靠）。
+        Priority 2: session_record.provider_state 中有已注册转换的 vendor（跨请求）。
         """
-        # Signal 1: 当前请求体有跨供应商产物
-        if normalization is not None and normalization.has_cross_vendor_signals:
-            return True
-        # Signal 2: Phase 1 检测到需要 Anthropic 修复
-        if normalization is not None and normalization.has_anthropic_fixes:
-            return True
-        # Signal 3: 无会话追踪 → 安全回退
-        if session_record is None:
-            return True
-        # Signal 4: 会话历史中有非 Anthropic 供应商
-        if session_record.provider_state:
-            non_anthropic = {
-                v for v in session_record.provider_state if v != "anthropic"
-            }
-            if non_anthropic:
-                return True
-        return False
+        # 请求内：刚失败的 tier 就是源
+        if failed_tier_name and failed_tier_name != target_name:
+            return failed_tier_name
 
-    @staticmethod
-    def _needs_thinking_strip(normalization: Any, session_record: Any) -> bool:
-        """判断是否需要剥离 thinking blocks（仅跨供应商场景）.
+        # 跨请求：从会话历史找有注册转换的源
+        if session_record is not None and session_record.provider_state:
+            from ..convert.vendor_channels import get_transition_channel
 
-        信号优先级：
-        1. 请求规范化信号 — 当前请求体中检测到跨供应商产物
-        2. 会话历史信号 — provider_state 中存在非 Anthropic 供应商记录
+            for source in session_record.provider_state:
+                if source != target_name and get_transition_channel(
+                    source, target_name
+                ):
+                    return source
 
-        安全默认：当无法确定会话来源时（session_record 为 None），
-        回退到始终剥离，确保与 compat_session_store 未配置时的向后兼容。
-        """
-        # Signal 1: normalization 检测到跨供应商产物
-        if normalization is not None and normalization.has_cross_vendor_signals:
-            return True
-        # Signal 2: 无会话追踪能力 → 无法判断是否跨供应商 → 安全回退到剥离
-        if session_record is None:
-            return True
-        # Signal 3: 会话历史中有非 Anthropic 供应商
-        if session_record.provider_state:
-            non_anthropic = {
-                v for v in session_record.provider_state if v != "anthropic"
-            }
-            if non_anthropic:
-                return True
-        # 纯 Anthropic 会话，无跨供应商信号 → 保留 thinking blocks
-        return False
+        return None
 
     async def execute_stream(
         self,
@@ -374,9 +315,10 @@ class _RouteExecutor:
             usage: dict[str, Any] = {}
 
             try:
-                body_for_tier = self._prepare_body_for_tier(
-                    body, tier, normalization, session_record=session_record
+                source_vendor = _RouteExecutor._determine_source_vendor(
+                    tier.name, failed_tier_name, session_record
                 )
+                body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
                 async for chunk in tier.vendor.send_message_stream(
                     body_for_tier, headers
                 ):
@@ -540,9 +482,10 @@ class _RouteExecutor:
                 continue
 
             try:
-                body_for_tier = self._prepare_body_for_tier(
-                    body, tier, normalization, session_record=session_record
+                source_vendor = _RouteExecutor._determine_source_vendor(
+                    tier.name, failed_tier_name, session_record
                 )
+                body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
                 resp = await tier.vendor.send_message(body_for_tier, headers)
 
                 if resp.status_code < 400:

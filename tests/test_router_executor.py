@@ -1552,80 +1552,106 @@ class TestExecuteMessageLastTier500RecordsFailure:
         assert good.send_message.called
 
 
-# ── _needs_thinking_strip 条件判断测试 ──────────────────────────
+# ── _determine_source_vendor 源 vendor 推断测试 ──────────────────────
 
 
-class TestNeedsThinkingStrip:
-    """验证 _RouteExecutor._needs_thinking_strip 静态方法."""
+class TestDetermineSourceVendor:
+    """验证 _RouteExecutor._determine_source_vendor 静态方法.
 
-    def test_true_when_normalization_has_cross_vendor_signals(self):
-        """normalization 有跨供应商信号时返回 True."""
-        normalization = MagicMock()
-        normalization.has_cross_vendor_signals = True
+    Priority 1: failed_tier_name（请求内故障转移）
+    Priority 2: session_record.provider_state 中有已注册转换的 vendor（跨请求）
+    """
+
+    def test_returns_failed_tier_as_source(self):
+        """请求内故障转移：刚失败的 tier 就是源 vendor."""
+        session_record = MagicMock()
+        session_record.provider_state = {"zhipu": {}}
+
+        assert (
+            _RouteExecutor._determine_source_vendor("copilot", "zhipu", session_record)
+            == "zhipu"
+        )
+
+    def test_returns_failed_tier_even_with_empty_session(self):
+        """请求内故障转移优先于 session_record 为空."""
+        assert (
+            _RouteExecutor._determine_source_vendor("copilot", "zhipu", None) == "zhipu"
+        )
+
+    def test_returns_session_vendor_with_registered_transition(self):
+        """跨请求：会话历史中有已注册转换的 vendor 作为源."""
+        session_record = MagicMock()
+        session_record.provider_state = {"zhipu": {}, "copilot": {}}
+
+        # zhipu → copilot 有注册转换
+        assert (
+            _RouteExecutor._determine_source_vendor("copilot", None, session_record)
+            == "zhipu"
+        )
+
+    def test_returns_session_vendor_for_anthropic_target(self):
+        """跨请求：会话历史中有 zhipu → anthropic 已注册转换."""
+        session_record = MagicMock()
+        session_record.provider_state = {"zhipu": {}}
+
+        assert (
+            _RouteExecutor._determine_source_vendor("anthropic", None, session_record)
+            == "zhipu"
+        )
+
+    def test_returns_none_for_no_source(self):
+        """纯同 vendor 会话且无请求内故障 → 无源 vendor."""
         session_record = MagicMock()
         session_record.provider_state = {"anthropic": {}}
 
         assert (
-            _RouteExecutor._needs_thinking_strip(normalization, session_record) is True
+            _RouteExecutor._determine_source_vendor("anthropic", None, session_record)
+            is None
         )
 
-    def test_true_when_session_record_is_none(self):
-        """session_record 为 None 时安全回退到 True."""
-        normalization = MagicMock()
-        normalization.has_cross_vendor_signals = False
+    def test_returns_none_when_no_registered_transition(self):
+        """会话历史中有 vendor 但无对应已注册转换 → 无源 vendor.
 
-        assert _RouteExecutor._needs_thinking_strip(normalization, None) is True
-
-    def test_true_when_no_normalization_and_no_session(self):
-        """normalization 和 session_record 均为 None 时返回 True."""
-        assert _RouteExecutor._needs_thinking_strip(None, None) is True
-
-    def test_true_when_session_has_non_anthropic_vendor(self):
-        """会话历史中有非 Anthropic 供应商时返回 True."""
-        normalization = MagicMock()
-        normalization.has_cross_vendor_signals = False
+        例如 anthropic → zhipu 未注册，不会触发转换。
+        """
         session_record = MagicMock()
-        session_record.provider_state = {"anthropic": {}, "zhipu": {}}
+        session_record.provider_state = {"anthropic": {}}
 
         assert (
-            _RouteExecutor._needs_thinking_strip(normalization, session_record) is True
+            _RouteExecutor._determine_source_vendor("zhipu", None, session_record)
+            is None
         )
 
-    def test_false_when_anthropic_only_session(self):
-        """纯 Anthropic 会话且无跨供应商信号时返回 False."""
-        normalization = MagicMock()
-        normalization.has_cross_vendor_signals = False
-        session_record = MagicMock()
-        session_record.provider_state = {"anthropic": {"compat_mode": "native"}}
+    def test_returns_none_when_session_is_none(self):
+        """无会话存储且无请求内故障 → 无源 vendor."""
+        assert _RouteExecutor._determine_source_vendor("copilot", None, None) is None
 
-        assert (
-            _RouteExecutor._needs_thinking_strip(normalization, session_record) is False
-        )
-
-    def test_false_when_empty_provider_state(self):
-        """空 provider_state（首次请求）且无跨供应商信号时返回 False."""
-        normalization = MagicMock()
-        normalization.has_cross_vendor_signals = False
+    def test_returns_none_when_empty_provider_state(self):
+        """空 provider_state 且无请求内故障 → 无源 vendor."""
         session_record = MagicMock()
         session_record.provider_state = {}
 
         assert (
-            _RouteExecutor._needs_thinking_strip(normalization, session_record) is False
+            _RouteExecutor._determine_source_vendor("copilot", None, session_record)
+            is None
         )
 
-    def test_true_when_normalization_none_but_session_has_non_anthropic(self):
-        """normalization 为 None 但会话有非 Anthropic 供应商时返回 True."""
+    def test_returns_none_when_failed_tier_equals_target(self):
+        """失败的 tier 就是目标 tier → 不算跨供应商."""
         session_record = MagicMock()
-        session_record.provider_state = {"copilot": {}}
+        session_record.provider_state = {}
 
-        assert _RouteExecutor._needs_thinking_strip(None, session_record) is True
+        assert (
+            _RouteExecutor._determine_source_vendor("zhipu", "zhipu", session_record)
+            is None
+        )
 
 
-# ── _prepare_body_for_tier 条件化 thinking 剥离测试 ────────────────
+# ── _prepare_body_for_tier 转换通道应用测试 ────────────────────────
 
 
-class TestPrepareBodyForTierThinkingStrip:
-    """验证 _prepare_body_for_tier 的条件化 thinking block 剥离行为."""
+class TestPrepareBodyForTierTransition:
+    """验证 _prepare_body_for_tier 的源→目标转换通道应用行为."""
 
     @staticmethod
     def _body_with_thinking():
@@ -1646,98 +1672,80 @@ class TestPrepareBodyForTierThinkingStrip:
             ],
         }
 
-    def test_strips_thinking_when_cross_vendor_signals(self):
-        """normalization 有跨供应商信号时剥离 thinking blocks."""
-        normalization = MagicMock()
-        normalization.has_anthropic_fixes = False
-        normalization.has_cross_vendor_signals = True
-
+    def test_applies_zhipu_to_anthropic_transition(self):
+        """source_vendor=zhipu, target=anthropic → 剥离 thinking + tool pairing."""
         tier = MagicMock()
         tier.name = "anthropic"
 
         exec_inst = _executor([])
         body = self._body_with_thinking()
-        result = exec_inst._prepare_body_for_tier(
-            body, tier, normalization, session_record=None
-        )
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="zhipu")
 
-        # thinking block 被剥离
+        assert result is not body
         assert len(result["messages"][0]["content"]) == 1
         assert result["messages"][0]["content"][0]["type"] == "text"
         # 原始 body 未被修改
         assert len(body["messages"][0]["content"]) == 2
 
-    def test_strips_thinking_when_session_has_non_anthropic(self):
-        """会话中有非 Anthropic 供应商时剥离 thinking blocks."""
-        normalization = MagicMock()
-        normalization.has_anthropic_fixes = False
-        normalization.has_cross_vendor_signals = False
-
+    def test_applies_zhipu_to_copilot_transition(self):
+        """source_vendor=zhipu, target=copilot → 剥离 thinking + cache_control."""
         tier = MagicMock()
-        tier.name = "anthropic"
-
-        session_record = MagicMock()
-        session_record.provider_state = {"zhipu": {"compat_mode": "native"}}
+        tier.name = "copilot"
 
         exec_inst = _executor([])
         body = self._body_with_thinking()
-        result = exec_inst._prepare_body_for_tier(
-            body, tier, normalization, session_record=session_record
-        )
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="zhipu")
 
-        # thinking block 被剥离
+        assert result is not body
         assert len(result["messages"][0]["content"]) == 1
         assert result["messages"][0]["content"][0]["type"] == "text"
 
-    def test_preserves_thinking_when_anthropic_only_session(self):
-        """纯 Anthropic 会话保留 thinking blocks."""
-        normalization = MagicMock()
-        normalization.has_anthropic_fixes = False
-        normalization.has_cross_vendor_signals = False
+    def test_applies_copilot_to_zhipu_transition(self):
+        """source_vendor=copilot, target=zhipu → 剥离 thinking + cache_control + 移除 thinking 参数."""
+        body = {
+            "messages": self._body_with_thinking()["messages"],
+            "thinking": {"type": "enabled", "budget_tokens": 10000},
+        }
+        tier = MagicMock()
+        tier.name = "zhipu"
 
+        exec_inst = _executor([])
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="copilot")
+
+        assert result is not body
+        assert len(result["messages"][0]["content"]) == 1
+        assert "thinking" not in result
+
+    def test_returns_body_when_no_source_vendor(self):
+        """source_vendor=None → 原样返回请求体."""
         tier = MagicMock()
         tier.name = "anthropic"
 
-        session_record = MagicMock()
-        session_record.provider_state = {"anthropic": {"compat_mode": "native"}}
-
         exec_inst = _executor([])
         body = self._body_with_thinking()
-        result = exec_inst._prepare_body_for_tier(
-            body, tier, normalization, session_record=session_record
-        )
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor=None)
 
-        # 原始 body 直接返回（无 deep copy）
         assert result is body
         assert len(result["messages"][0]["content"]) == 2
-        assert result["messages"][0]["content"][0]["type"] == "thinking"
 
-    def test_strips_thinking_when_no_session_record(self):
-        """无会话记录时安全回退剥离."""
-        normalization = MagicMock()
-        normalization.has_anthropic_fixes = False
-        normalization.has_cross_vendor_signals = False
-
-        tier = MagicMock()
-        tier.name = "anthropic"
-
-        exec_inst = _executor([])
-        body = self._body_with_thinking()
-        result = exec_inst._prepare_body_for_tier(
-            body, tier, normalization, session_record=None
-        )
-
-        # thinking block 被剥离（安全回退）
-        assert len(result["messages"][0]["content"]) == 1
-        assert result["messages"][0]["content"][0]["type"] == "text"
-
-    def test_skips_for_non_anthropic_tier(self):
-        """非 Anthropic tier 不执行任何处理."""
+    def test_returns_body_for_unregistered_transition(self):
+        """未注册的转换对（如 anthropic → zhipu）→ 原样返回."""
         tier = MagicMock()
         tier.name = "zhipu"
 
         exec_inst = _executor([])
         body = self._body_with_thinking()
-        result = exec_inst._prepare_body_for_tier(body, tier)
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="anthropic")
 
-        assert result is body  # 原始 body 直接返回
+        assert result is body
+
+    def test_returns_body_for_unknown_tier(self):
+        """未知 tier（无注册转换）→ 原样返回."""
+        tier = MagicMock()
+        tier.name = "antigravity"
+
+        exec_inst = _executor([])
+        body = self._body_with_thinking()
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="zhipu")
+
+        assert result is body
