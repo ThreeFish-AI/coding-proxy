@@ -180,10 +180,10 @@ class BaseVendor(ABC):
 
 子类仅需覆写两个类属性：
 
-| 属性 | 类型 | 说明 |
-|------|------|------|
-| `_vendor_name` | `str` | 供应商标识名（`get_name()` 返回值 & `ModelMapper` 的 vendor 参数） |
-| `_display_name` | `str` | 错误消息中的显示名（如 `"Zhipu"`、`"MiniMax"`） |
+| 属性            | 类型  | 说明                                                               |
+| --------------- | ----- | ------------------------------------------------------------------ |
+| `_vendor_name`  | `str` | 供应商标识名（`get_name()` 返回值 & `ModelMapper` 的 vendor 参数） |
+| `_display_name` | `str` | 错误消息中的显示名（如 `"Zhipu"`、`"MiniMax"`）                    |
 
 ### 能力声明
 
@@ -197,17 +197,17 @@ json_output=NATIVE, usage_tokens=NATIVE
 
 ## 4. 供应商注册表
 
-| 供应商 | 文件 | 协议 | 认证方式 | 能力 |
-|--------|------|------|----------|------|
-| AnthropicVendor | [vendors/anthropic.py](../../src/coding/proxy/vendors/anthropic.py) | Anthropic Messages API | OAuth token 透传 | 全能力支持 |
-| CopilotVendor | [vendors/copilot.py](../../src/coding/proxy/vendors/copilot.py) | OpenAI Chat Completions | GitHub token → Copilot token 交换 | thinking 为 SIMULATED |
-| AntigravityVendor | [vendors/antigravity.py](../../src/coding/proxy/vendors/antigravity.py) | Gemini GenerateContent | Google OAuth2 refresh_token | tool_streaming / metadata / usage_tokens 为 SIMULATED |
-| ZhipuVendor | [vendors/zhipu.py](../../src/coding/proxy/vendors/zhipu.py) | Anthropic-compatible API | x-api-key | 全能力 (NATIVE) |
-| MinimaxVendor | [vendors/minimax.py](../../src/coding/proxy/vendors/minimax.py) | Anthropic-compatible API | x-api-key | 全能力 (NATIVE) |
-| KimiVendor | [vendors/kimi.py](../../src/coding/proxy/vendors/kimi.py) | Anthropic-compatible API | x-api-key | 全能力 (NATIVE) |
-| DoubaoVendor | [vendors/doubao.py](../../src/coding/proxy/vendors/doubao.py) | Anthropic-compatible API | x-api-key | 全能力 (NATIVE) |
-| XiaomiVendor | [vendors/xiaomi.py](../../src/coding/proxy/vendors/xiaomi.py) | Anthropic-compatible API | x-api-key | 全能力 (NATIVE) |
-| AlibabaVendor | [vendors/alibaba.py](../../src/coding/proxy/vendors/alibaba.py) | Anthropic-compatible API | x-api-key | 全能力 (NATIVE) |
+| 供应商            | 文件                                                                    | 协议                     | 认证方式                          | 能力                                                  |
+| ----------------- | ----------------------------------------------------------------------- | ------------------------ | --------------------------------- | ----------------------------------------------------- |
+| AnthropicVendor   | [vendors/anthropic.py](../../src/coding/proxy/vendors/anthropic.py)     | Anthropic Messages API   | OAuth token 透传                  | 全能力支持                                            |
+| CopilotVendor     | [vendors/copilot.py](../../src/coding/proxy/vendors/copilot.py)         | OpenAI Chat Completions  | GitHub token → Copilot token 交换 | thinking 为 SIMULATED                                 |
+| AntigravityVendor | [vendors/antigravity.py](../../src/coding/proxy/vendors/antigravity.py) | Gemini GenerateContent   | Google OAuth2 refresh_token       | tool_streaming / metadata / usage_tokens 为 SIMULATED |
+| ZhipuVendor       | [vendors/zhipu.py](../../src/coding/proxy/vendors/zhipu.py)             | Anthropic-compatible API | x-api-key                         | 全能力 (NATIVE)                                       |
+| MinimaxVendor     | [vendors/minimax.py](../../src/coding/proxy/vendors/minimax.py)         | Anthropic-compatible API | x-api-key                         | 全能力 (NATIVE)                                       |
+| KimiVendor        | [vendors/kimi.py](../../src/coding/proxy/vendors/kimi.py)               | Anthropic-compatible API | x-api-key                         | 全能力 (NATIVE)                                       |
+| DoubaoVendor      | [vendors/doubao.py](../../src/coding/proxy/vendors/doubao.py)           | Anthropic-compatible API | x-api-key                         | 全能力 (NATIVE)                                       |
+| XiaomiVendor      | [vendors/xiaomi.py](../../src/coding/proxy/vendors/xiaomi.py)           | Anthropic-compatible API | x-api-key                         | 全能力 (NATIVE)                                       |
+| AlibabaVendor     | [vendors/alibaba.py](../../src/coding/proxy/vendors/alibaba.py)         | Anthropic-compatible API | x-api-key                         | 全能力 (NATIVE)                                       |
 
 > 各供应商的默认 `base_url`、超时等配置项详见 [config-reference.md](./config-reference.md)。
 
@@ -350,18 +350,18 @@ Copilot 模型目录管理与解析策略：
 
 代码库从 "Backend" 命名体系迁移至 "Vendor" 命名体系，保留了以下别名（计划 v2 移除）：
 
-| 旧名称 | 新名称 | 定义位置 |
-|--------|--------|----------|
-| `BaseBackend` | `BaseVendor` | [vendors/base.py](../../src/coding/proxy/vendors/base.py) |
-| `NoCompatibleBackendError` | `NoCompatibleVendorError` | [vendors/base.py](../../src/coding/proxy/vendors/base.py) |
-| `BackendCapabilities` | `VendorCapabilities` | [model/vendor.py](../../src/coding/proxy/model/vendor.py) |
-| `BackendResponse` | `VendorResponse` | [model/vendor.py](../../src/coding/proxy/model/vendor.py) |
-| `TierConfig` | `VendorConfig` | [config/routing.py](../../src/coding/proxy/config/routing.py) |
-| `BackendType` | `VendorType` | [config/routing.py](../../src/coding/proxy/config/routing.py) |
-| `AnthropicBackend` | `AnthropicVendor` | [vendors/anthropic.py](../../src/coding/proxy/vendors/anthropic.py) |
-| `CopilotBackend` | `CopilotVendor` | [vendors/copilot.py](../../src/coding/proxy/vendors/copilot.py) |
-| `AntigravityBackend` | `AntigravityVendor` | [vendors/antigravity.py](../../src/coding/proxy/vendors/antigravity.py) |
-| `ZhipuBackend` | `ZhipuVendor` | [vendors/zhipu.py](../../src/coding/proxy/vendors/zhipu.py) |
+| 旧名称                     | 新名称                    | 定义位置                                                                |
+| -------------------------- | ------------------------- | ----------------------------------------------------------------------- |
+| `BaseBackend`              | `BaseVendor`              | [vendors/base.py](../../src/coding/proxy/vendors/base.py)               |
+| `NoCompatibleBackendError` | `NoCompatibleVendorError` | [vendors/base.py](../../src/coding/proxy/vendors/base.py)               |
+| `BackendCapabilities`      | `VendorCapabilities`      | [model/vendor.py](../../src/coding/proxy/model/vendor.py)               |
+| `BackendResponse`          | `VendorResponse`          | [model/vendor.py](../../src/coding/proxy/model/vendor.py)               |
+| `TierConfig`               | `VendorConfig`            | [config/routing.py](../../src/coding/proxy/config/routing.py)           |
+| `BackendType`              | `VendorType`              | [config/routing.py](../../src/coding/proxy/config/routing.py)           |
+| `AnthropicBackend`         | `AnthropicVendor`         | [vendors/anthropic.py](../../src/coding/proxy/vendors/anthropic.py)     |
+| `CopilotBackend`           | `CopilotVendor`           | [vendors/copilot.py](../../src/coding/proxy/vendors/copilot.py)         |
+| `AntigravityBackend`       | `AntigravityVendor`       | [vendors/antigravity.py](../../src/coding/proxy/vendors/antigravity.py) |
+| `ZhipuBackend`             | `ZhipuVendor`             | [vendors/zhipu.py](../../src/coding/proxy/vendors/zhipu.py)             |
 
 ## 8. 添加新供应商指南
 

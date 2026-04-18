@@ -12,13 +12,13 @@
 
 配置模型已从单体 `schema.py` 正交拆分为 5 个子模块：
 
-| 子模块          | 文件                                                             | 核心类型                                                                                                                                                  |
-| --------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **server**      | [`config/server.py`](../../src/coding/proxy/config/server.py)    | `ServerConfig`, `DatabaseConfig`, `LoggingConfig`                                                                                                         |
-| **vendors**     | [`config/vendors.py`](../../src/coding/proxy/config/vendors.py)  | `AnthropicConfig`, `CopilotConfig`, `AntigravityConfig`, `ZhipuConfig`, `MinimaxConfig`, `KimiConfig`, `DoubaoConfig`, `XiaomiConfig`, `AlibabaConfig`  |
-| **resiliency**  | [`config/resiliency.py`](../../src/coding/proxy/config/resiliency.py) | `CircuitBreakerConfig`, `RetryConfig`, `FailoverConfig`, `QuotaGuardConfig`                                                                          |
-| **routing**     | [`config/routing.py`](../../src/coding/proxy/config/routing.py)  | `VendorType`, `VendorConfig`, `ModelMappingRule`, `ModelPricingEntry`                                                                                     |
-| **auth_schema** | [`config/auth_schema.py`](../../src/coding/proxy/config/auth_schema.py) | `AuthConfig`                                                                                                                                       |
+| 子模块          | 文件                                                                    | 核心类型                                                                                                                                               |
+| --------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **server**      | [`config/server.py`](../../src/coding/proxy/config/server.py)           | `ServerConfig`, `DatabaseConfig`, `LoggingConfig`                                                                                                      |
+| **vendors**     | [`config/vendors.py`](../../src/coding/proxy/config/vendors.py)         | `AnthropicConfig`, `CopilotConfig`, `AntigravityConfig`, `ZhipuConfig`, `MinimaxConfig`, `KimiConfig`, `DoubaoConfig`, `XiaomiConfig`, `AlibabaConfig` |
+| **resiliency**  | [`config/resiliency.py`](../../src/coding/proxy/config/resiliency.py)   | `CircuitBreakerConfig`, `RetryConfig`, `FailoverConfig`, `QuotaGuardConfig`                                                                            |
+| **routing**     | [`config/routing.py`](../../src/coding/proxy/config/routing.py)         | `VendorType`, `VendorConfig`, `ModelMappingRule`, `ModelPricingEntry`                                                                                  |
+| **auth_schema** | [`config/auth_schema.py`](../../src/coding/proxy/config/auth_schema.py) | `AuthConfig`                                                                                                                                           |
 
 `config/schema.py` 作为聚合入口点 re-export 所有符号，并保留 `ProxyConfig` 顶层模型及旧格式迁移逻辑。
 
@@ -61,12 +61,12 @@ flowchart TD
 
 ### 3.3 LoggingConfig
 
-| 字段           | 类型        | 默认值   | 说明                                                         |
-| -------------- | ----------- | -------- | ------------------------------------------------------------ |
-| `level`        | str         | `"INFO"` | 控制台日志级别                                               |
-| `file`         | str \| null | `null`   | 文件日志路径（`null` 时输出到控制台）                        |
-| `max_bytes`    | int         | `5242880` | 单个日志文件最大字节数（5 MB），触发轮转                     |
-| `backup_count` | int         | `5`      | 保留的已压缩备份文件数                                       |
+| 字段           | 类型        | 默认值    | 说明                                     |
+| -------------- | ----------- | --------- | ---------------------------------------- |
+| `level`        | str         | `"INFO"`  | 控制台日志级别                           |
+| `file`         | str \| null | `null`    | 文件日志路径（`null` 时输出到控制台）    |
+| `max_bytes`    | int         | `5242880` | 单个日志文件最大字节数（5 MB），触发轮转 |
+| `backup_count` | int         | `5`       | 保留的已压缩备份文件数                   |
 
 ### 3.4 AuthConfig
 
@@ -78,12 +78,12 @@ flowchart TD
 
 ## 4. VendorConfig 通用字段
 
-| 字段         | 类型 | 默认值   | 说明                                                                                                                                                                |
-| ------------ | ---- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vendor`     | enum | --       | 供应商类型：`anthropic` / `copilot` / `antigravity` / `zhipu` / `minimax` / `kimi` / `doubao` / `xiaomi` / `alibaba`                                             |
-| `enabled`    | bool | `true`   | 是否启用                                                                                                                                                            |
-| `base_url`   | str  | `""`     | API 基础 URL（留空使用各供应商默认值）                                                                                                                              |
-| `timeout_ms` | int  | `300000` | 请求超时（毫秒）                                                                                                                                                    |
+| 字段         | 类型 | 默认值   | 说明                                                                                                                 |
+| ------------ | ---- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `vendor`     | enum | --       | 供应商类型：`anthropic` / `copilot` / `antigravity` / `zhipu` / `minimax` / `kimi` / `doubao` / `xiaomi` / `alibaba` |
+| `enabled`    | bool | `true`   | 是否启用                                                                                                             |
+| `base_url`   | str  | `""`     | API 基础 URL（留空使用各供应商默认值）                                                                               |
+| `timeout_ms` | int  | `300000` | 请求超时（毫秒）                                                                                                     |
 
 ---
 
@@ -102,12 +102,12 @@ flowchart TD
 
 > **设计语义**：参见 [设计模式 -- Circuit Breaker](./design-patterns.md#circuit-breaker)
 
-| 字段                       | 类型 | 默认值 | 说明                             |
-| -------------------------- | ---- | ------ | -------------------------------- |
-| `failure_threshold`        | int  | `3`    | 触发 OPEN 的连续失败次数         |
-| `recovery_timeout_seconds` | int  | `300`  | OPEN → HALF_OPEN 等待秒数        |
+| 字段                       | 类型 | 默认值 | 说明                              |
+| -------------------------- | ---- | ------ | --------------------------------- |
+| `failure_threshold`        | int  | `3`    | 触发 OPEN 的连续失败次数          |
+| `recovery_timeout_seconds` | int  | `300`  | OPEN → HALF_OPEN 等待秒数         |
 | `success_threshold`        | int  | `2`    | HALF_OPEN → CLOSED 所需连续成功数 |
-| `max_recovery_seconds`     | int  | `3600` | 指数退避最大恢复时间（秒）       |
+| `max_recovery_seconds`     | int  | `3600` | 指数退避最大恢复时间（秒）        |
 
 ### 5.2 QuotaGuardConfig — 配额守卫参数
 
@@ -125,23 +125,23 @@ flowchart TD
 
 > **设计语义**：参见 [设计模式 -- Retry with Full Jitter](./design-patterns.md#retry)
 
-| 字段                 | 类型  | 默认值 | 说明         |
-| -------------------- | ----- | ------ | ------------ |
-| `max_retries`        | int   | `2`    | 最大重试次数 |
-| `initial_delay_ms`   | int   | `500`  | 初始延迟（毫秒）     |
-| `max_delay_ms`       | int   | `5000` | 最大延迟（毫秒）     |
-| `backoff_multiplier` | float | `2.0`  | 退避倍数     |
-| `jitter`             | bool  | `true` | 是否启用抖动 |
+| 字段                 | 类型  | 默认值 | 说明             |
+| -------------------- | ----- | ------ | ---------------- |
+| `max_retries`        | int   | `2`    | 最大重试次数     |
+| `initial_delay_ms`   | int   | `500`  | 初始延迟（毫秒） |
+| `max_delay_ms`       | int   | `5000` | 最大延迟（毫秒） |
+| `backoff_multiplier` | float | `2.0`  | 退避倍数         |
+| `jitter`             | bool  | `true` | 是否启用抖动     |
 
 ### 5.4 FailoverConfig — 故障转移参数
 
 > **设计语义**：参见 [请求生命周期 -- 故障转移判定](../framework.md#fault-overhead)
 
-| 字段                      | 类型         | 默认值                                          |
-| ------------------------- | ------------ | ----------------------------------------------- |
-| `status_codes`            | list[int]    | `[429, 403, 503, 500, 529]`                                          |
-| `error_types`             | list[str]    | `["rate_limit_error", "overloaded_error", "api_error"]` |
-| `error_message_patterns`  | list[str]    | `["quota", "limit exceeded", "usage cap", "capacity", "internal network failure"]`  |
+| 字段                     | 类型      | 默认值                                                                             |
+| ------------------------ | --------- | ---------------------------------------------------------------------------------- |
+| `status_codes`           | list[int] | `[429, 403, 503, 500, 529]`                                                        |
+| `error_types`            | list[str] | `["rate_limit_error", "overloaded_error", "api_error"]`                            |
+| `error_message_patterns` | list[str] | `["quota", "limit exceeded", "usage cap", "capacity", "internal network failure"]` |
 
 ---
 
@@ -169,9 +169,9 @@ flowchart TD
 
 适用于 `zhipu` / `minimax` / `kimi` / `doubao` / `xiaomi` / `alibaba`。
 
-| 字段      | 类型 | 默认值 | 说明                           |
-| --------- | ---- | ------ | ------------------------------ |
-| `api_key` | str  | `""`   | API Key（支持 `${ENV_VAR}`）   |
+| 字段      | 类型 | 默认值 | 说明                         |
+| --------- | ---- | ------ | ---------------------------- |
+| `api_key` | str  | `""`   | API Key（支持 `${ENV_VAR}`） |
 
 ---
 
@@ -188,22 +188,22 @@ flowchart TD
 
 ### 7.2 ModelPricingEntry 字段
 
-| 字段                        | 类型  | 说明                                                 |
-| --------------------------- | ----- | ---------------------------------------------------- |
-| `vendor`                    | str   | 供应商名称                                           |
-| `model`                     | str   | 实际模型名                                           |
-| `input_cost_per_mtok`       | float | 输入 Token 单价（$/百万 token，支持 `$`/`¥` 前缀）   |
-| `output_cost_per_mtok`      | float | 输出 Token 单价                                      |
-| `cache_write_cost_per_mtok` | float | 缓存创建 Token 单价                                  |
-| `cache_read_cost_per_mtok`  | float | 缓存读取 Token 单价                                  |
+| 字段                        | 类型  | 说明                                               |
+| --------------------------- | ----- | -------------------------------------------------- |
+| `vendor`                    | str   | 供应商名称                                         |
+| `model`                     | str   | 实际模型名                                         |
+| `input_cost_per_mtok`       | float | 输入 Token 单价（$/百万 token，支持 `$`/`¥` 前缀） |
+| `output_cost_per_mtok`      | float | 输出 Token 单价                                    |
+| `cache_write_cost_per_mtok` | float | 缓存创建 Token 单价                                |
+| `cache_read_cost_per_mtok`  | float | 缓存读取 Token 单价                                |
 
 ---
 
 ## 8. tiers — 显式优先级
 
-| 字段    | 类型                     | 说明                                        |
-| ------- | ------------------------ | ------------------------------------------- |
-| `tiers` | list[VendorType] \| None | 降级链路优先级（None 时回退 vendors 顺序）  |
+| 字段    | 类型                     | 说明                                       |
+| ------- | ------------------------ | ------------------------------------------ |
+| `tiers` | list[VendorType] \| None | 降级链路优先级（None 时回退 vendors 顺序） |
 
 ---
 

@@ -113,14 +113,14 @@ classDiagram
 
 三类 Vendor 子类的差异化实现：
 
-| 方法                 | AnthropicVendor（直接透传） | CopilotVendor（协议转换）       | AntigravityVendor（协议转换）      | NativeAnthropicVendor 子类（薄透传） |
-| -------------------- | --------------------------- | ------------------------------- | ---------------------------------- | ------------------------------------ |
-| `_prepare_request()` | 过滤 hop-by-hop 头          | 过滤头 + 异步 token 注入        | Gemini 格式转换 + OAuth token      | 模型映射 + API Key 替换              |
-| `map_model()`        | 恒等映射                    | 恒等映射                        | 恒等映射                           | **委托 ModelMapper**                 |
-| `_get_endpoint()`    | `/v1/messages`              | `/v1/chat/completions`          | `/{model}:generateContent`         | `/v1/messages`（继承）               |
-| `_on_error_status()` | 继承基类（空操作）          | 401/403 token 失效              | 401/403 token 失效                 | 继承基类（空操作）                   |
-| `get_capabilities()` | 全部支持                    | 不支持 thinking                 | 不支持 tools/thinking/metadata     | 全部支持（NATIVE）                   |
-| `check_health()`     | 继承（True）                | 继承（True）                    | **覆写**（OAuth token 有效性检查） | 继承（True）                         |
+| 方法                 | AnthropicVendor（直接透传） | CopilotVendor（协议转换） | AntigravityVendor（协议转换）      | NativeAnthropicVendor 子类（薄透传） |
+| -------------------- | --------------------------- | ------------------------- | ---------------------------------- | ------------------------------------ |
+| `_prepare_request()` | 过滤 hop-by-hop 头          | 过滤头 + 异步 token 注入  | Gemini 格式转换 + OAuth token      | 模型映射 + API Key 替换              |
+| `map_model()`        | 恒等映射                    | 恒等映射                  | 恒等映射                           | **委托 ModelMapper**                 |
+| `_get_endpoint()`    | `/v1/messages`              | `/v1/chat/completions`    | `/{model}:generateContent`         | `/v1/messages`（继承）               |
+| `_on_error_status()` | 继承基类（空操作）          | 401/403 token 失效        | 401/403 token 失效                 | 继承基类（空操作）                   |
+| `get_capabilities()` | 全部支持                    | 不支持 thinking           | 不支持 tools/thinking/metadata     | 全部支持（NATIVE）                   |
+| `check_health()`     | 继承（True）                | 继承（True）              | **覆写**（OAuth token 有效性检查） | 继承（True）                         |
 
 > **供应商分类体系**详情参见 [供应商模块 -- 分类体系](./vendors.md#vendor-classification)。
 
@@ -441,22 +441,22 @@ graph LR
 
 每个 Vendor 子类充当 Adapter 角色，将异构的上游 API 适配为统一的 `BaseVendor` 接口：
 
-| Vendor                        | 上游协议                    | 适配行为                                               |
-| ----------------------------- | --------------------------- | ------------------------------------------------------ |
-| `AnthropicVendor`             | Anthropic Messages API      | 透传（近乎零适配开销）                                 |
-| `CopilotVendor`               | OpenAI Chat Completions API | 请求体/响应体双向格式转换 + token 注入                 |
-| `AntigravityVendor`           | Gemini GenerateContent API  | Anthropic ↔ Gemini 双向格式转换 + SSE 流适配 + OAuth   |
+| Vendor                        | 上游协议                    | 适配行为                                                      |
+| ----------------------------- | --------------------------- | ------------------------------------------------------------- |
+| `AnthropicVendor`             | Anthropic Messages API      | 透传（近乎零适配开销）                                        |
+| `CopilotVendor`               | OpenAI Chat Completions API | 请求体/响应体双向格式转换 + token 注入                        |
+| `AntigravityVendor`           | Gemini GenerateContent API  | Anthropic ↔ Gemini 双向格式转换 + SSE 流适配 + OAuth          |
 | `ZhipuVendor` 等 6 个原生兼容 | Anthropic-compatible API    | 模型名映射 + API Key 认证头替换（继承 NativeAnthropicVendor） |
 
 此外，[`convert/`](../../src/coding/proxy/convert/) 模块提供独立的纯函数适配器层，支持三向格式转换：
 
-| 转换方向                    | 模块                                                                                         | 说明               |
-| --------------------------- | -------------------------------------------------------------------------------------------- | ------------------ |
-| Anthropic -> Gemini         | [`convert/anthropic_to_gemini.py`](../../src/coding/proxy/convert/anthropic_to_gemini.py)   | 请求格式转换       |
-| Gemini -> Anthropic         | [`convert/gemini_to_anthropic.py`](../../src/coding/proxy/convert/gemini_to_anthropic.py)   | 响应格式转换       |
-| Gemini SSE -> Anthropic SSE | [`convert/gemini_sse_adapter.py`](../../src/coding/proxy/convert/gemini_sse_adapter.py)     | 流式事件重构       |
-| Anthropic -> OpenAI         | [`convert/anthropic_to_openai.py`](../../src/coding/proxy/convert/anthropic_to_openai.py)   | Copilot 请求适配   |
-| OpenAI -> Anthropic         | [`convert/openai_to_anthropic.py`](../../src/coding/proxy/convert/openai_to_anthropic.py)   | Copilot 响应逆适配 |
+| 转换方向                    | 模块                                                                                      | 说明               |
+| --------------------------- | ----------------------------------------------------------------------------------------- | ------------------ |
+| Anthropic -> Gemini         | [`convert/anthropic_to_gemini.py`](../../src/coding/proxy/convert/anthropic_to_gemini.py) | 请求格式转换       |
+| Gemini -> Anthropic         | [`convert/gemini_to_anthropic.py`](../../src/coding/proxy/convert/gemini_to_anthropic.py) | 响应格式转换       |
+| Gemini SSE -> Anthropic SSE | [`convert/gemini_sse_adapter.py`](../../src/coding/proxy/convert/gemini_sse_adapter.py)   | 流式事件重构       |
+| Anthropic -> OpenAI         | [`convert/anthropic_to_openai.py`](../../src/coding/proxy/convert/anthropic_to_openai.py) | Copilot 请求适配   |
+| OpenAI -> Anthropic         | [`convert/openai_to_anthropic.py`](../../src/coding/proxy/convert/openai_to_anthropic.py) | Copilot 响应逆适配 |
 
 ---
 

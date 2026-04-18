@@ -12,13 +12,13 @@
 
 [`convert/`](../../src/coding/proxy/convert/) 模块提供独立的纯函数适配器层，支持三向格式转换：
 
-| 转换方向                    | 模块                                                                                           | 说明               |
-| --------------------------- | ---------------------------------------------------------------------------------------------- | ------------------ |
-| Anthropic → Gemini          | [`convert/anthropic_to_gemini.py`](../../src/coding/proxy/convert/anthropic_to_gemini.py)     | 请求格式转换       |
-| Gemini → Anthropic          | [`convert/gemini_to_anthropic.py`](../../src/coding/proxy/convert/gemini_to_anthropic.py)     | 响应格式转换       |
-| Gemini SSE → Anthropic SSE  | [`convert/gemini_sse_adapter.py`](../../src/coding/proxy/convert/gemini_sse_adapter.py)       | 流式事件重构       |
-| Anthropic → OpenAI          | [`convert/anthropic_to_openai.py`](../../src/coding/proxy/convert/anthropic_to_openai.py)     | Copilot 请求适配   |
-| OpenAI → Anthropic          | [`convert/openai_to_anthropic.py`](../../src/coding/proxy/convert/openai_to_anthropic.py)     | Copilot 响应逆适配 |
+| 转换方向                   | 模块                                                                                      | 说明               |
+| -------------------------- | ----------------------------------------------------------------------------------------- | ------------------ |
+| Anthropic → Gemini         | [`convert/anthropic_to_gemini.py`](../../src/coding/proxy/convert/anthropic_to_gemini.py) | 请求格式转换       |
+| Gemini → Anthropic         | [`convert/gemini_to_anthropic.py`](../../src/coding/proxy/convert/gemini_to_anthropic.py) | 响应格式转换       |
+| Gemini SSE → Anthropic SSE | [`convert/gemini_sse_adapter.py`](../../src/coding/proxy/convert/gemini_sse_adapter.py)   | 流式事件重构       |
+| Anthropic → OpenAI         | [`convert/anthropic_to_openai.py`](../../src/coding/proxy/convert/anthropic_to_openai.py) | Copilot 请求适配   |
+| OpenAI → Anthropic         | [`convert/openai_to_anthropic.py`](../../src/coding/proxy/convert/openai_to_anthropic.py) | Copilot 响应逆适配 |
 
 ---
 
@@ -28,17 +28,17 @@
 
 **转换映射**：
 
-| Anthropic 字段                    | Gemini 字段                        | 说明                                               |
-| --------------------------------- | ---------------------------------- | -------------------------------------------------- |
-| `system`（str \| list）           | `systemInstruction.parts[].text`   | 支持字符串和文本块列表两种格式                     |
-| `messages[]`                      | `contents[]`                       | 角色映射：`assistant` → `model`，`user` → `user`   |
-| `content`（text）                 | `parts[].text`                     | 文本内容块                                         |
-| `content`（image）                | `parts[].inlineData`               | Base64 数据 + MIME 类型                            |
-| `content`（tool_use）             | `parts[].functionCall`             | `name` + `input` → `args`                          |
-| `content`（tool_result）          | `parts[].functionResponse`         | `tool_use_id` → `name`，`content` → `result`       |
-| `max_tokens`                      | `generationConfig.maxOutputTokens` |                                                    |
-| `temperature` / `top_p` / `top_k` | `generationConfig.*`               | 参数名驼峰转换                                     |
-| `stop_sequences`                  | `generationConfig.stopSequences`   |                                                    |
+| Anthropic 字段                    | Gemini 字段                        | 说明                                             |
+| --------------------------------- | ---------------------------------- | ------------------------------------------------ |
+| `system`（str \| list）           | `systemInstruction.parts[].text`   | 支持字符串和文本块列表两种格式                   |
+| `messages[]`                      | `contents[]`                       | 角色映射：`assistant` → `model`，`user` → `user` |
+| `content`（text）                 | `parts[].text`                     | 文本内容块                                       |
+| `content`（image）                | `parts[].inlineData`               | Base64 数据 + MIME 类型                          |
+| `content`（tool_use）             | `parts[].functionCall`             | `name` + `input` → `args`                        |
+| `content`（tool_result）          | `parts[].functionResponse`         | `tool_use_id` → `name`，`content` → `result`     |
+| `max_tokens`                      | `generationConfig.maxOutputTokens` |                                                  |
+| `temperature` / `top_p` / `top_k` | `generationConfig.*`               | 参数名驼峰转换                                   |
+| `stop_sequences`                  | `generationConfig.stopSequences`   |                                                  |
 
 **不支持的字段**（静默剥离并记录 WARNING）：`tools`、`tool_choice`、`metadata`、`extended_thinking`、`thinking`
 

@@ -12,20 +12,20 @@
 
 路由模块正交分解为 12 个子模块，每个子模块职责单一：
 
-| 子模块              | 文件                                                               | 职责                                        |
-| ------------------- | ------------------------------------------------------------------ | ------------------------------------------- |
-| **router**          | [`routing/router.py`](../../src/coding/proxy/routing/router.py)    | `RequestRouter` — 路由门面（Facade）        |
-| **executor**        | [`routing/executor.py`](../../src/coding/proxy/routing/executor.py)| `_RouteExecutor` — tier 迭代门控引擎        |
-| **tier**            | [`routing/tier.py`](../../src/coding/proxy/routing/tier.py)        | `VendorTier` — 最小调度单元（Composite）    |
-| **circuit_breaker** | [`routing/circuit_breaker.py`](../../src/coding/proxy/routing/circuit_breaker.py) | `CircuitBreaker` — 熔断器状态机 |
-| **quota_guard**     | [`routing/quota_guard.py`](../../src/coding/proxy/routing/quota_guard.py) | `QuotaGuard` — 配额守卫状态机     |
-| **retry**           | [`routing/retry.py`](../../src/coding/proxy/routing/retry.py)      | `RetryConfig` / `calculate_delay()` — 重试策略 |
-| **rate_limit**      | [`routing/rate_limit.py`](../../src/coding/proxy/routing/rate_limit.py) | `RateLimitInfo` / 解析与截止时间计算 |
-| **error_classifier**| [`routing/error_classifier.py`](../../src/coding/proxy/routing/error_classifier.py) | 请求能力画像 + 语义拒绝判定 |
-| **model_mapper**    | [`routing/model_mapper.py`](../../src/coding/proxy/routing/model_mapper.py) | `ModelMapper` — 三级优先级匹配链 |
-| **usage_recorder**  | [`routing/usage_recorder.py`](../../src/coding/proxy/routing/usage_recorder.py) | 用量记录、定价计算与证据构建 |
-| **usage_parser**    | [`routing/usage_parser.py`](../../src/coding/proxy/routing/usage_parser.py) | SSE chunk Token 用量提取          |
-| **session_manager** | [`routing/session_manager.py`](../../src/coding/proxy/routing/session_manager.py) | 兼容性会话生命周期管理            |
+| 子模块               | 文件                                                                                | 职责                                           |
+| -------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **router**           | [`routing/router.py`](../../src/coding/proxy/routing/router.py)                     | `RequestRouter` — 路由门面（Facade）           |
+| **executor**         | [`routing/executor.py`](../../src/coding/proxy/routing/executor.py)                 | `_RouteExecutor` — tier 迭代门控引擎           |
+| **tier**             | [`routing/tier.py`](../../src/coding/proxy/routing/tier.py)                         | `VendorTier` — 最小调度单元（Composite）       |
+| **circuit_breaker**  | [`routing/circuit_breaker.py`](../../src/coding/proxy/routing/circuit_breaker.py)   | `CircuitBreaker` — 熔断器状态机                |
+| **quota_guard**      | [`routing/quota_guard.py`](../../src/coding/proxy/routing/quota_guard.py)           | `QuotaGuard` — 配额守卫状态机                  |
+| **retry**            | [`routing/retry.py`](../../src/coding/proxy/routing/retry.py)                       | `RetryConfig` / `calculate_delay()` — 重试策略 |
+| **rate_limit**       | [`routing/rate_limit.py`](../../src/coding/proxy/routing/rate_limit.py)             | `RateLimitInfo` / 解析与截止时间计算           |
+| **error_classifier** | [`routing/error_classifier.py`](../../src/coding/proxy/routing/error_classifier.py) | 请求能力画像 + 语义拒绝判定                    |
+| **model_mapper**     | [`routing/model_mapper.py`](../../src/coding/proxy/routing/model_mapper.py)         | `ModelMapper` — 三级优先级匹配链               |
+| **usage_recorder**   | [`routing/usage_recorder.py`](../../src/coding/proxy/routing/usage_recorder.py)     | 用量记录、定价计算与证据构建                   |
+| **usage_parser**     | [`routing/usage_parser.py`](../../src/coding/proxy/routing/usage_parser.py)         | SSE chunk Token 用量提取                       |
+| **session_manager**  | [`routing/session_manager.py`](../../src/coding/proxy/routing/session_manager.py)   | 兼容性会话生命周期管理                         |
 
 ---
 
@@ -72,7 +72,7 @@ class VendorTier:
 | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
 | `execute_stream(body, headers)`                                    | 流式路由主循环，yield `(chunk, vendor_name)`                         |
 | `execute_message(body, headers)`                                   | 非流式路由主循环，返回 `VendorResponse`                              |
-| `_try_gate_tier(tier, is_last, caps, canonical, session, reasons)` | 单 tier 门控：能力匹配 → 兼容性决策 → 上下文应用 → 健康检查         |
+| `_try_gate_tier(tier, is_last, caps, canonical, session, reasons)` | 单 tier 门控：能力匹配 → 兼容性决策 → 上下文应用 → 健康检查          |
 | `_handle_token_error(tier, exc, is_last, failed_name)`             | TokenAcquireError 处理 + reauth 触发                                 |
 | `_handle_http_error(tier, exc, ...)`                               | HTTP 错误处理：语义拒绝 / cap error / rate limit 解析 / failure 记录 |
 | `_is_cap_error(resp)`                                              | 静态方法：检测 429/403 + 配额关键词                                  |
