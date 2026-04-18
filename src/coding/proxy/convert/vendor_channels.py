@@ -3,23 +3,36 @@
 每个通道函数接收标准化的 Anthropic 格式请求体，返回针对目标供应商
 调整后的请求体（深拷贝）。通道函数之间无依赖关系，可独立测试。
 
-通道触发条件由 executor 层根据会话历史和规范化信号判断。
+通道注册表 ``VENDOR_CHANNELS`` 提供统一的 tier_name → channel_fn 映射，
+executor 层通过 ``get_channel()`` 查表分发，无需感知具体供应商。
 
 通道矩阵:
-    zhipu  → copilot  : prepare_for_copilot  (剥离 thinking + cache_control + tool pairing)
-    copilot → zhipu   : prepare_for_zhipu    (剥离 thinking + cache_control + tool pairing + 移除 thinking 参数)
-    * → anthropic     : executor 现有逻辑    (enforce_anthropic_tool_pairing + 条件 thinking strip)
+    anthropic : prepare_for_anthropic  (tool pairing + 条件 thinking strip)
+    zhipu     : prepare_for_zhipu      (剥离 thinking + cache_control + tool pairing + 移除 thinking 参数)
+    copilot   : prepare_for_copilot    (剥离 thinking + cache_control + tool pairing)
 """
 
 from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _THINKING_BLOCK_TYPES = {"thinking", "redacted_thinking"}
+
+# ── 通道注册表 ────────────────────────────────────────────────
+# tier_name → (body) → (prepared_body, adaptations)
+VENDOR_CHANNELS: dict[
+    str, Callable[[dict[str, Any]], tuple[dict[str, Any], list[str]]]
+] = {}
+
+
+def get_channel(tier_name: str) -> Callable | None:
+    """查找供应商专属通道函数，不存在时返回 None."""
+    return VENDOR_CHANNELS.get(tier_name)
 
 
 # ── 共享辅助函数 ──────────────────────────────────────────────
@@ -181,3 +194,50 @@ def prepare_for_copilot(body: dict[str, Any]) -> tuple[dict[str, Any], list[str]
         adaptations.extend(pairing_fixes)
 
     return prepared, adaptations
+
+
+# ── anthropic 专属转换通道 ─────────────────────────────────────
+
+
+def prepare_for_anthropic(body: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """anthropic 专属转换通道: tool pairing + 条件 thinking strip.
+
+    Anthropic API 要求:
+    - 每个 tool_use 必须在紧随的 user 消息中有对应 tool_result
+    - thinking blocks 的 signature 必须是 Anthropic 签发（跨供应商后无效）
+
+    此通道执行两项变换:
+    1. enforce_anthropic_tool_pairing: 单遍正向扫描修复配对
+    2. strip_thinking_blocks: 移除非 Anthropic 签发的 thinking 块
+
+    两项变换均为幂等操作，安全地在已清理的请求体上重复执行。
+
+    Returns:
+        (prepared_body, adaptations) — adaptations 为应用的变换描述列表。
+    """
+    from ..server.request_normalizer import (
+        enforce_anthropic_tool_pairing,
+        strip_thinking_blocks,
+    )
+
+    prepared = copy.deepcopy(body)
+    adaptations: list[str] = []
+
+    # Step 1: 强制 tool_use/tool_result 配对
+    pairing_fixes = enforce_anthropic_tool_pairing(prepared.get("messages", []))
+    if pairing_fixes:
+        adaptations.extend(pairing_fixes)
+
+    # Step 2: 剥离 thinking blocks（跨供应商 signature 无效）
+    stripped = strip_thinking_blocks(prepared)
+    if stripped:
+        adaptations.append(f"stripped_{stripped}_thinking_blocks")
+
+    return prepared, adaptations
+
+
+# ── 注册所有通道 ──────────────────────────────────────────────
+
+VENDOR_CHANNELS["anthropic"] = prepare_for_anthropic
+VENDOR_CHANNELS["zhipu"] = prepare_for_zhipu
+VENDOR_CHANNELS["copilot"] = prepare_for_copilot

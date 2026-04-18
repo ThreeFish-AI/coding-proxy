@@ -1,9 +1,11 @@
 """供应商专属转换通道单元测试.
 
 覆盖 :mod:`coding.proxy.convert.vendor_channels` 的通道函数和辅助函数:
+- anthropic 通道 (prepare_for_anthropic)
 - zhipu 通道 (prepare_for_zhipu)
 - copilot 通道 (prepare_for_copilot)
 - 共享辅助函数 (_strip_thinking_blocks_inplace, _strip_cache_control)
+- 通道注册表 (VENDOR_CHANNELS, get_channel)
 """
 
 from __future__ import annotations
@@ -11,8 +13,11 @@ from __future__ import annotations
 import copy
 
 from coding.proxy.convert.vendor_channels import (
+    VENDOR_CHANNELS,
     _strip_cache_control,
     _strip_thinking_blocks_inplace,
+    get_channel,
+    prepare_for_anthropic,
     prepare_for_copilot,
     prepare_for_zhipu,
 )
@@ -381,6 +386,188 @@ class TestZhipuChannel:
         prepared2, adaptations2 = prepare_for_zhipu(prepared1)
         assert prepared2 == prepared1
         assert adaptations2 == []
+
+
+# ── anthropic 通道测试 ────────────────────────────────────────
+
+
+class TestAnthropicChannel:
+    """prepare_for_anthropic 通道单元测试."""
+
+    def test_enforces_tool_pairing(self):
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": "next turn",
+                },
+            ],
+        }
+        prepared, adaptations = prepare_for_anthropic(body)
+        user_content = prepared["messages"][1]["content"]
+        tool_results = [
+            b
+            for b in user_content
+            if isinstance(b, dict) and b.get("type") == "tool_result"
+        ]
+        assert len(tool_results) == 1
+        assert tool_results[0]["tool_use_id"] == "toolu_1"
+
+    def test_strips_thinking_blocks(self):
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "thought", "signature": "sig"},
+                        {"type": "text", "text": "response"},
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_for_anthropic(body)
+        assert any("thinking_blocks" in a for a in adaptations)
+        assert prepared["messages"][0]["content"] == [
+            {"type": "text", "text": "response"}
+        ]
+
+    def test_combined_tool_pairing_and_thinking_strip(self):
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "t", "signature": "s"},
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": "ok",
+                },
+            ],
+        }
+        prepared, adaptations = prepare_for_anthropic(body)
+        # thinking stripped
+        assert all(
+            b.get("type") not in ("thinking", "redacted_thinking")
+            for b in prepared["messages"][0]["content"]
+        )
+        # tool pairing enforced
+        user_content = prepared["messages"][1]["content"]
+        tool_results = [
+            b
+            for b in user_content
+            if isinstance(b, dict) and b.get("type") == "tool_result"
+        ]
+        assert len(tool_results) == 1
+
+    def test_preserves_original_body(self):
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "t"},
+                        {"type": "text", "text": "hi"},
+                    ],
+                },
+            ],
+        }
+        original = copy.deepcopy(body)
+        prepare_for_anthropic(body)
+        assert body == original
+
+    def test_noop_when_clean(self):
+        body = {
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            ],
+        }
+        prepared, adaptations = prepare_for_anthropic(body)
+        assert adaptations == []
+        assert prepared == body
+
+    def test_idempotency(self):
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "t"},
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": "ok",
+                },
+            ],
+        }
+        prepared1, _ = prepare_for_anthropic(body)
+        prepared2, adaptations2 = prepare_for_anthropic(prepared1)
+        assert prepared2 == prepared1
+        assert adaptations2 == []
+
+    def test_preserves_thinking_param(self):
+        """anthropic 通道不移除顶层 thinking 参数（Anthropic API 支持）."""
+        body = {
+            "messages": [],
+            "thinking": {"type": "enabled", "budget_tokens": 5000},
+        }
+        prepared, _ = prepare_for_anthropic(body)
+        assert "thinking" in prepared
+
+
+# ── 注册表测试 ────────────────────────────────────────────────
+
+
+class TestChannelRegistry:
+    """通道注册表 VENDOR_CHANNELS / get_channel 单元测试."""
+
+    def test_all_channels_registered(self):
+        assert "anthropic" in VENDOR_CHANNELS
+        assert "zhipu" in VENDOR_CHANNELS
+        assert "copilot" in VENDOR_CHANNELS
+
+    def test_get_channel_returns_function(self):
+        assert get_channel("anthropic") is prepare_for_anthropic
+        assert get_channel("zhipu") is prepare_for_zhipu
+        assert get_channel("copilot") is prepare_for_copilot
+
+    def test_get_channel_returns_none_for_unknown(self):
+        assert get_channel("unknown") is None
+        assert get_channel("antigravity") is None
+
+    def test_channel_functions_share_signature(self):
+        body = {"messages": []}
+        for name, fn in VENDOR_CHANNELS.items():
+            result = fn(body)
+            assert isinstance(result, tuple) and len(result) == 2
+            assert isinstance(result[0], dict)
+            assert isinstance(result[1], list)
 
 
 # ── copilot 通道测试 ──────────────────────────────────────────

@@ -1552,65 +1552,100 @@ class TestExecuteMessageLastTier500RecordsFailure:
         assert good.send_message.called
 
 
-# ── _needs_thinking_strip 条件判断测试 ──────────────────────────
+# ── _needs_vendor_channel 条件判断测试 ──────────────────────────
 
 
-class TestNeedsThinkingStrip:
-    """验证 _RouteExecutor._needs_thinking_strip 静态方法."""
+class TestNeedsVendorChannel:
+    """验证 _RouteExecutor._needs_vendor_channel 静态方法."""
 
     def test_true_when_normalization_has_cross_vendor_signals(self):
         """normalization 有跨供应商信号时返回 True."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = True
+        normalization.has_anthropic_fixes = False
         session_record = MagicMock()
         session_record.provider_state = {"anthropic": {}}
 
         assert (
-            _RouteExecutor._needs_thinking_strip(normalization, session_record) is True
+            _RouteExecutor._needs_vendor_channel(
+                "anthropic", normalization, session_record
+            )
+            is True
+        )
+
+    def test_true_when_normalization_has_anthropic_fixes(self):
+        """Phase 1 检测到 Anthropic 修复需求时返回 True."""
+        normalization = MagicMock()
+        normalization.has_cross_vendor_signals = False
+        normalization.has_anthropic_fixes = True
+        session_record = MagicMock()
+        session_record.provider_state = {"anthropic": {}}
+
+        assert (
+            _RouteExecutor._needs_vendor_channel(
+                "anthropic", normalization, session_record
+            )
+            is True
         )
 
     def test_true_when_session_record_is_none(self):
         """session_record 为 None 时安全回退到 True."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = False
+        normalization.has_anthropic_fixes = False
 
-        assert _RouteExecutor._needs_thinking_strip(normalization, None) is True
+        assert (
+            _RouteExecutor._needs_vendor_channel("anthropic", normalization, None)
+            is True
+        )
 
     def test_true_when_no_normalization_and_no_session(self):
         """normalization 和 session_record 均为 None 时返回 True."""
-        assert _RouteExecutor._needs_thinking_strip(None, None) is True
+        assert _RouteExecutor._needs_vendor_channel("anthropic", None, None) is True
 
     def test_true_when_session_has_non_anthropic_vendor(self):
         """会话历史中有非 Anthropic 供应商时返回 True."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = False
+        normalization.has_anthropic_fixes = False
         session_record = MagicMock()
         session_record.provider_state = {"anthropic": {}, "zhipu": {}}
 
         assert (
-            _RouteExecutor._needs_thinking_strip(normalization, session_record) is True
+            _RouteExecutor._needs_vendor_channel(
+                "anthropic", normalization, session_record
+            )
+            is True
         )
 
     def test_false_when_anthropic_only_session(self):
         """纯 Anthropic 会话且无跨供应商信号时返回 False."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = False
+        normalization.has_anthropic_fixes = False
         session_record = MagicMock()
         session_record.provider_state = {"anthropic": {"compat_mode": "native"}}
 
         assert (
-            _RouteExecutor._needs_thinking_strip(normalization, session_record) is False
+            _RouteExecutor._needs_vendor_channel(
+                "anthropic", normalization, session_record
+            )
+            is False
         )
 
     def test_false_when_empty_provider_state(self):
         """空 provider_state（首次请求）且无跨供应商信号时返回 False."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = False
+        normalization.has_anthropic_fixes = False
         session_record = MagicMock()
         session_record.provider_state = {}
 
         assert (
-            _RouteExecutor._needs_thinking_strip(normalization, session_record) is False
+            _RouteExecutor._needs_vendor_channel(
+                "anthropic", normalization, session_record
+            )
+            is False
         )
 
     def test_true_when_normalization_none_but_session_has_non_anthropic(self):
@@ -1618,7 +1653,10 @@ class TestNeedsThinkingStrip:
         session_record = MagicMock()
         session_record.provider_state = {"copilot": {}}
 
-        assert _RouteExecutor._needs_thinking_strip(None, session_record) is True
+        assert (
+            _RouteExecutor._needs_vendor_channel("anthropic", None, session_record)
+            is True
+        )
 
 
 # ── _prepare_body_for_tier 条件化 thinking 剥离测试 ────────────────
@@ -1746,6 +1784,7 @@ class TestPrepareBodyForTierThinkingStrip:
         """zhipu tier 在跨供应商场景下应用专属转换通道."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = True
+        normalization.has_anthropic_fixes = False
 
         tier = MagicMock()
         tier.name = "zhipu"
@@ -1765,6 +1804,7 @@ class TestPrepareBodyForTierThinkingStrip:
         """zhipu tier 在纯 zhipu 会话中不触发专属通道."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = False
+        normalization.has_anthropic_fixes = False
 
         tier = MagicMock()
         tier.name = "zhipu"
