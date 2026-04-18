@@ -33,10 +33,10 @@ When you're deeply immersed in your coding "zone" with **Claude Code** (or any A
     <img src="assets/dashboard-v0.2.3.png">
 </div>
 
-- **⛓️ N-tier Chained Failover**: Autonomous descending sequence, supporting Claude's official plans, as well as Coding Plans from GitHub Copilot, Z AI, MiniMax, Alibaba Qwen, Xiaomi, Kimi, Doubao, etc.
+- **⛓️ N-tier Chained Failover**: Autonomous descending sequence, supporting Claude's official plans, as well as Coding Plans from GitHub Copilot, Google Antigravity, Z AI, MiniMax, Alibaba Qwen, Xiaomi, Kimi, Doubao, etc.
 - **🛡️ Smart Resilience & Quota Guardians**: Every single vendor node comes fully armed with an independent **Circuit Breaker** and **Quota Guard** to proactively dodge avalanches without breaking a sweat.
 - **👻 Phantom-like Transparency**: **100% transparent** to the client! No code tweaks required. Overwrite `ANTHROPIC_BASE_URL` with a single line, and you're good to go.
-- **🔄 Universal Alchemy (Formats & Models)**: Native support for two-way request/streaming (SSE) translations between Anthropic ←→ Gemini. Plus, auto/DIY model name mapping (e.g., effortlessly morphing `claude-*` into `glm-*`).
+- **🔄 Universal Alchemy (Formats & Models)**: Native support for two-way request/streaming (SSE) translations between Anthropic ←→ Gemini and Anthropic ←→ OpenAI. Plus, auto/DIY model name mapping (e.g., effortlessly morphing `claude-*` into `glm-*`).
 - **📊 Extreme Observability**: Built-in, zero-BS local monitoring powered by a `SQLite WAL`. The CLI provides a one-click detailed Token usage dashboard (`coding-proxy usage`).
 - **⚡ Featherweight Standalone Deployment**: A fully asynchronous architecture (`FastAPI` + `httpx`). Zero dependency on Redis, message queues, or other heavy machinery—absolutely no extra baggage for your dev rig.
 
@@ -95,6 +95,7 @@ claude
 | Command  | Description                                                                                                                                        | Example Usage                                 |
 | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------- |
 | `start`  | **Fire up the proxy server.** Supports custom ports and configuration paths.                                                                       | `coding-proxy start -p 8080 -c ~/config.yaml` |
+| `auth`   | **Manage OAuth credentials.** Sub-commands: `login` (browser OAuth), `status` (token validity), `reauth` (re-authenticate), `logout` (clear tokens). | `coding-proxy auth login -p github`           |
 | `status` | **Check proxy health.** Shows circuit breaker states (OPEN/CLOSED) and quota status across all tiers.                                              | `coding-proxy status`                         |
 | `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/vendor/model dimensions.                | `coding-proxy usage -d 7 -v anthropic`        |
 | `reset`  | **The emergency flush button.** Force-reset all circuit breakers and quotas instantly when you've confirmed the main vendor is back from the dead. | `coding-proxy reset`                          |
@@ -126,29 +127,29 @@ graph RL
         subgraph NTier["N-tier"]
             direction TB
 
-            subgraph Tier0 ["Tier 0: Anthropic"]
+            subgraph Tier0 ["Tier 0: Zhipu"]
                 direction RL
-                G0{"CB / Quota"}:::gateway -- "✅ Pass" --> API0(("Anthropic API")):::api
+                G0{"CB / Quota"}:::gateway -- "✅ Pass" --> API0(("GLM API")):::api
             end
 
-            subgraph Tier1 ["Tier 1: GitHub Copilot"]
+            subgraph Tier1 ["Tier 1: Anthropic"]
                 direction RL
-                G1{"CB / Quota"}:::gateway -- "✅ Pass" --> API1(("Copilot API")):::api
+                G1{"CB / Quota"}:::gateway -- "✅ Pass" --> API1(("Anthropic API")):::api
             end
 
-            subgraph Tier2 ["Tier 2: Google Antigravity"]
+            subgraph Tier2 ["Tier 2: GitHub Copilot"]
                 direction RL
-                G2{"CB / Quota"}:::gateway -- "✅ Pass" --> API2(("Gemini API")):::api
+                G2{"CB / Quota"}:::gateway -- "✅ Pass" --> API2(("Copilot API")):::api
             end
 
-            subgraph TierN ["Tier N: Zhipu"]
+            subgraph Tier3 ["Tier 3: Google Antigravity"]
                 direction RL
-                APIN(("GLM API")):::fallback
+                API3(("Gemini API")):::fallback
             end
 
             Tier0 -. "❌ Blocked / API Error" .-> Tier1
             Tier1 -. "❌ Blocked / API Error" .-> Tier2
-            Tier2 -. "🆘 Safety Net Downgrade" .-> TierN
+            Tier2 -. "🆘 Safety Net Downgrade" .-> Tier3
         end
 
     end
