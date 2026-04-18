@@ -586,8 +586,12 @@ def test_non_stream_unexpected_exception_returns_500_json_not_raw_500():
     assert "RuntimeError" in data["error"]["message"]
 
 
-def test_messages_normalizes_vendor_tool_blocks_before_routing():
-    """入口应先规范化 server_tool_use，再交给高优先级 tier."""
+def test_messages_passes_body_unchanged_to_router():
+    """入口不再执行规范化，zhipu 产物透传至 router，由通道在路由时处理.
+
+    重构后：``request_normalizer`` 已移除，所有跨供应商兼容性由
+    ``convert/vendor_channels.py`` 中的源→目标绑定通道处理（在 executor 层触发）。
+    """
     app = create_app(
         ProxyConfig(
             primary={"enabled": True},
@@ -636,11 +640,12 @@ def test_messages_normalizes_vendor_tool_blocks_before_routing():
         )
 
     assert resp.status_code == 200
+    # 入口不再规范化：body 原样传递给 router
     assistant_block = captured_body["body"]["messages"][0]["content"][0]
     user_block = captured_body["body"]["messages"][1]["content"][0]
-    assert assistant_block["type"] == "tool_use"
-    assert assistant_block["id"].startswith("toolu_normalized_")
-    assert user_block["tool_use_id"] == assistant_block["id"]
+    assert assistant_block["type"] == "server_tool_use"
+    assert assistant_block["id"] == "srvtoolu_bad_1"
+    assert user_block["tool_use_id"] == "srvtoolu_bad_1"
 
 
 def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
@@ -689,12 +694,12 @@ def test_reset_keeps_tier_order_and_next_request_hits_primary_first():
     assert call_order == ["anthropic"]
 
 
-def test_normalization_adaptations_logged_at_debug_level(caplog):
-    """常规规范化适配（如 tool_use ID 重写）应记录在 DEBUG 级别而非 INFO，避免日志噪音.
+def test_entry_does_not_emit_normalization_info_logs(caplog):
+    """入口透传 body 至 router，不应在 INFO 级别产生规范化相关日志.
 
-    验证：非标准 tool_use_id 触发的 invalid_tool_use_id_rewritten_for_anthropic
-    和 tool_result_tool_use_id_rewritten 适配不会出现在 INFO 级别日志中，
-    但规范化功能本身仍正确工作（ID 被重写且配对一致）。
+    规范化已收敛到 convert/vendor_channels.py 的源→目标通道中，
+    在路由阶段由 executor 调用，日志级别为 DEBUG。
+    入口不再执行通用规范化，也不应输出 INFO 级别的规范化日志。
     """
     app = create_app(
         ProxyConfig(
@@ -704,10 +709,7 @@ def test_normalization_adaptations_logged_at_debug_level(caplog):
         )
     )
 
-    captured_body = {}
-
     async def fake_route_message(body, headers, **kwargs):
-        captured_body["body"] = body
         return VendorResponse(status_code=200, raw_body=b"{}", usage=UsageInfo())
 
     app.state.router.route_message = fake_route_message
@@ -744,15 +746,10 @@ def test_normalization_adaptations_logged_at_debug_level(caplog):
                 },
             )
 
-    # INFO 级别不应出现 normalization 日志（修复的核心目标）
+    # 入口无通用规范化逻辑，INFO 级别不应出现任何规范化日志
     info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
     assert not any("normalized before routing" in m for m in info_messages)
-
-    # 规范化功能仍正确工作：ID 被重写为标准格式
-    assistant_block = captured_body["body"]["messages"][0]["content"][0]
-    user_block = captured_body["body"]["messages"][1]["content"][0]
-    assert assistant_block["id"].startswith("toolu_normalized_")
-    assert user_block["tool_use_id"] == assistant_block["id"]
+    assert not any("normalization" in m.lower() for m in info_messages)
 
 
 def test_non_standard_error_format_logged_at_debug(caplog):
