@@ -1550,3 +1550,202 @@ class TestExecuteMessageLastTier500RecordsFailure:
 
         assert resp.status_code == 200
         assert good.send_message.called
+
+
+# ── _determine_source_vendor 源 vendor 推断测试 ──────────────────────
+
+
+class TestDetermineSourceVendor:
+    """验证 _RouteExecutor._determine_source_vendor 静态方法.
+
+    Priority 1: failed_tier_name（请求内故障转移）
+    Priority 2: session_record.provider_state 中有已注册转换的 vendor（跨请求）
+    """
+
+    def test_returns_failed_tier_as_source(self):
+        """请求内故障转移：刚失败的 tier 就是源 vendor."""
+        session_record = MagicMock()
+        session_record.provider_state = {"zhipu": {}}
+
+        assert (
+            _RouteExecutor._determine_source_vendor("copilot", "zhipu", session_record)
+            == "zhipu"
+        )
+
+    def test_returns_failed_tier_even_with_empty_session(self):
+        """请求内故障转移优先于 session_record 为空."""
+        assert (
+            _RouteExecutor._determine_source_vendor("copilot", "zhipu", None) == "zhipu"
+        )
+
+    def test_returns_session_vendor_with_registered_transition(self):
+        """跨请求：会话历史中有已注册转换的 vendor 作为源."""
+        session_record = MagicMock()
+        session_record.provider_state = {"zhipu": {}, "copilot": {}}
+
+        # zhipu → copilot 有注册转换
+        assert (
+            _RouteExecutor._determine_source_vendor("copilot", None, session_record)
+            == "zhipu"
+        )
+
+    def test_returns_session_vendor_for_anthropic_target(self):
+        """跨请求：会话历史中有 zhipu → anthropic 已注册转换."""
+        session_record = MagicMock()
+        session_record.provider_state = {"zhipu": {}}
+
+        assert (
+            _RouteExecutor._determine_source_vendor("anthropic", None, session_record)
+            == "zhipu"
+        )
+
+    def test_returns_none_for_no_source(self):
+        """纯同 vendor 会话且无请求内故障 → 无源 vendor."""
+        session_record = MagicMock()
+        session_record.provider_state = {"anthropic": {}}
+
+        assert (
+            _RouteExecutor._determine_source_vendor("anthropic", None, session_record)
+            is None
+        )
+
+    def test_returns_none_when_no_registered_transition(self):
+        """会话历史中有 vendor 但无对应已注册转换 → 无源 vendor.
+
+        例如 anthropic → zhipu 未注册，不会触发转换。
+        """
+        session_record = MagicMock()
+        session_record.provider_state = {"anthropic": {}}
+
+        assert (
+            _RouteExecutor._determine_source_vendor("zhipu", None, session_record)
+            is None
+        )
+
+    def test_returns_none_when_session_is_none(self):
+        """无会话存储且无请求内故障 → 无源 vendor."""
+        assert _RouteExecutor._determine_source_vendor("copilot", None, None) is None
+
+    def test_returns_none_when_empty_provider_state(self):
+        """空 provider_state 且无请求内故障 → 无源 vendor."""
+        session_record = MagicMock()
+        session_record.provider_state = {}
+
+        assert (
+            _RouteExecutor._determine_source_vendor("copilot", None, session_record)
+            is None
+        )
+
+    def test_returns_none_when_failed_tier_equals_target(self):
+        """失败的 tier 就是目标 tier → 不算跨供应商."""
+        session_record = MagicMock()
+        session_record.provider_state = {}
+
+        assert (
+            _RouteExecutor._determine_source_vendor("zhipu", "zhipu", session_record)
+            is None
+        )
+
+
+# ── _prepare_body_for_tier 转换通道应用测试 ────────────────────────
+
+
+class TestPrepareBodyForTierTransition:
+    """验证 _prepare_body_for_tier 的源→目标转换通道应用行为."""
+
+    @staticmethod
+    def _body_with_thinking():
+        return {
+            "model": "claude-opus-4-6",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "Let me think...",
+                            "signature": "zhipu-sig",
+                        },
+                        {"type": "text", "text": "response"},
+                    ],
+                },
+            ],
+        }
+
+    def test_applies_zhipu_to_anthropic_transition(self):
+        """source_vendor=zhipu, target=anthropic → 剥离 thinking + tool pairing."""
+        tier = MagicMock()
+        tier.name = "anthropic"
+
+        exec_inst = _executor([])
+        body = self._body_with_thinking()
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="zhipu")
+
+        assert result is not body
+        assert len(result["messages"][0]["content"]) == 1
+        assert result["messages"][0]["content"][0]["type"] == "text"
+        # 原始 body 未被修改
+        assert len(body["messages"][0]["content"]) == 2
+
+    def test_applies_zhipu_to_copilot_transition(self):
+        """source_vendor=zhipu, target=copilot → 剥离 thinking + cache_control."""
+        tier = MagicMock()
+        tier.name = "copilot"
+
+        exec_inst = _executor([])
+        body = self._body_with_thinking()
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="zhipu")
+
+        assert result is not body
+        assert len(result["messages"][0]["content"]) == 1
+        assert result["messages"][0]["content"][0]["type"] == "text"
+
+    def test_applies_copilot_to_zhipu_transition(self):
+        """source_vendor=copilot, target=zhipu → 剥离 thinking + cache_control + 移除 thinking 参数."""
+        body = {
+            "messages": self._body_with_thinking()["messages"],
+            "thinking": {"type": "enabled", "budget_tokens": 10000},
+        }
+        tier = MagicMock()
+        tier.name = "zhipu"
+
+        exec_inst = _executor([])
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="copilot")
+
+        assert result is not body
+        assert len(result["messages"][0]["content"]) == 1
+        assert "thinking" not in result
+
+    def test_returns_body_when_no_source_vendor(self):
+        """source_vendor=None → 原样返回请求体."""
+        tier = MagicMock()
+        tier.name = "anthropic"
+
+        exec_inst = _executor([])
+        body = self._body_with_thinking()
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor=None)
+
+        assert result is body
+        assert len(result["messages"][0]["content"]) == 2
+
+    def test_returns_body_for_unregistered_transition(self):
+        """未注册的转换对（如 anthropic → zhipu）→ 原样返回."""
+        tier = MagicMock()
+        tier.name = "zhipu"
+
+        exec_inst = _executor([])
+        body = self._body_with_thinking()
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="anthropic")
+
+        assert result is body
+
+    def test_returns_body_for_unknown_tier(self):
+        """未知 tier（无注册转换）→ 原样返回."""
+        tier = MagicMock()
+        tier.name = "antigravity"
+
+        exec_inst = _executor([])
+        body = self._body_with_thinking()
+        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="zhipu")
+
+        assert result is body

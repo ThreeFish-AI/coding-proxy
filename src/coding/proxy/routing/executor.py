@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import copy
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -227,39 +226,63 @@ class _RouteExecutor:
         self,
         body: dict[str, Any],
         tier: VendorTier,
-        normalization: Any = None,
+        source_vendor: str | None = None,
     ) -> dict[str, Any]:
-        """为指定 tier 准备请求体，必要时应用 Anthropic 专属修复（Phase 2）.
+        """为指定 tier 准备请求体，应用源→目标绑定转换通道.
 
-        仅当 tier 为 Anthropic 且 NormalizationResult 标记需要修复时，
-        才执行 deep copy + Phase 2 修复，确保 Zhipu 等其他 vendor 不受影响。
+        通过 VENDOR_TRANSITIONS 注册表查表分发，executor 不感知具体供应商逻辑。
+        未注册转换的源→目标对或 source_vendor 为 None 时原样返回请求体。
         """
-        if normalization is None or not normalization.has_anthropic_fixes:
-            return body
-        if tier.name != "anthropic":
+        from ..convert.vendor_channels import get_transition_channel
+
+        if source_vendor is None:
             return body
 
-        from ..server.request_normalizer import apply_anthropic_specific_fixes
+        channel_fn = get_transition_channel(source_vendor, tier.name)
+        if channel_fn is None:
+            return body
 
-        body_for_vendor = copy.deepcopy(body)
-        fixes = apply_anthropic_specific_fixes(
-            body_for_vendor.get("messages", []),
-            normalization.misplaced_tool_results,
-            normalization.misplaced_log_info,
-        )
-        if fixes:
+        prepared, adaptations = channel_fn(body)
+        if adaptations:
             logger.debug(
-                "Applied Anthropic-specific fixes for tier %s: %s",
+                "Applied transition channel %s → %s: %s",
+                source_vendor,
                 tier.name,
-                ", ".join(fixes),
+                ", ".join(adaptations),
             )
-        return body_for_vendor
+        return prepared
+
+    @staticmethod
+    def _determine_source_vendor(
+        target_name: str,
+        failed_tier_name: str | None,
+        session_record: Any,
+    ) -> str | None:
+        """确定跨供应商转换的源 vendor.
+
+        Priority 1: failed_tier_name（请求内故障转移，最可靠）。
+        Priority 2: session_record.provider_state 中有已注册转换的 vendor（跨请求）。
+        """
+        # 请求内：刚失败的 tier 就是源
+        if failed_tier_name and failed_tier_name != target_name:
+            return failed_tier_name
+
+        # 跨请求：从会话历史找有注册转换的源
+        if session_record is not None and session_record.provider_state:
+            from ..convert.vendor_channels import get_transition_channel
+
+            for source in session_record.provider_state:
+                if source != target_name and get_transition_channel(
+                    source, target_name
+                ):
+                    return source
+
+        return None
 
     async def execute_stream(
         self,
         body: dict[str, Any],
         headers: dict[str, str],
-        normalization: Any = None,
     ) -> AsyncIterator[tuple[bytes, str]]:
         """路由流式请求，按优先级尝试各层级."""
         last_idx = len(self._tiers) - 1
@@ -291,7 +314,10 @@ class _RouteExecutor:
             usage: dict[str, Any] = {}
 
             try:
-                body_for_tier = self._prepare_body_for_tier(body, tier, normalization)
+                source_vendor = _RouteExecutor._determine_source_vendor(
+                    tier.name, failed_tier_name, session_record
+                )
+                body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
                 async for chunk in tier.vendor.send_message_stream(
                     body_for_tier, headers
                 ):
@@ -426,7 +452,6 @@ class _RouteExecutor:
         self,
         body: dict[str, Any],
         headers: dict[str, str],
-        normalization: Any = None,
     ) -> VendorResponse:
         """路由非流式请求，按优先级尝试各层级."""
         last_idx = len(self._tiers) - 1
@@ -455,7 +480,10 @@ class _RouteExecutor:
                 continue
 
             try:
-                body_for_tier = self._prepare_body_for_tier(body, tier, normalization)
+                source_vendor = _RouteExecutor._determine_source_vendor(
+                    tier.name, failed_tier_name, session_record
+                )
+                body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
                 resp = await tier.vendor.send_message(body_for_tier, headers)
 
                 if resp.status_code < 400:

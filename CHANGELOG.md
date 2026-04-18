@@ -4,7 +4,11 @@
 
 ## [Unreleased]
 
-## [v0.2.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.3a1) — 2026-04-15
+- fix(request-normalizer): 重设计 zhipu→anthropic 跨供应商 tool_use/tool_result 配对修复——以单遍自包含 `enforce_anthropic_tool_pairing` 替代原有多步串联管线（剥离→重定位→孤儿修复），消除步骤间隐式依赖导致的孤儿 tool_use 漏修问题，彻底根治 `tool_use ids were found without tool_result blocks` 400 异常;
+- refactor(vendor-channels): 将供应商转换通道从「目标 vendor 专属」重构为「源→目标绑定」模型——注册表键从 `target_vendor` 改为 `(source, target)` 二元组，通道函数从 `prepare_for_X` 重命名为 `prepare_X_to_Y`，触发逻辑从 `_needs_vendor_channel` 替换为 `_determine_source_vendor`（基于请求内 `failed_tier_name` 和会话历史推断源 vendor），未注册的转换对（如 anthropic→zhipu）不触发任何通道;
+- feat(vendor-channels): 新增 zhipu→anthropic、zhipu→copilot、copilot→zhipu 三条源→目标绑定转换通道，在跨供应商故障转移时自动清理源 vendor 产物（thinking 块、cache_control 字段、thinking 参数、tool_use/tool_result 配对），消除 `likely format incompatibility (400 + tool_results)` 错误;
+
+## [v0.2.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.3) — 2026-04-16
 
 - feat(dashboard): 新增实时 Web Dashboard 页面，聚合展示流量与用量统计;
 - docs(user-guide): 补充 POST /v1/messages 完整 API 参考文档;
@@ -71,9 +75,9 @@
 ## [v0.1.1](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.1.1) — 2026-04-05
 
 > [!IMPORTANT]
-> 
-> **🎉 coding-proxy MVP 惊艳登场！** 
-> 
+>
+> **🎉 coding-proxy MVP 惊艳登场！**
+>
 > 仅需配置一行环境变量，立刻为你的 Claude Code 接入“永不宕机”的多源智能引擎。主供应商打盹？毫秒级自动无缝切换备用通道，全天候护航你的编码心流，向打断大声说不！
 
 ### ✨ 核心亮点

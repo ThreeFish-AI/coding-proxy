@@ -51,13 +51,13 @@ vendors:
       recovery_timeout_seconds: 300
       success_threshold: 2
     quota_guard:
-      enabled: true
-      token_budget: 50000000 # 5 小时 token 预算（根据订阅计划调整）
+      enabled: false
+      token_budget: 65000000 # 5 小时 token 预算（根据订阅计划调整）
       window_hours: 5.0
       threshold_percent: 99.0
       probe_interval_seconds: 300
     weekly_quota_guard:
-      enabled: true
+      enabled: false
       token_budget: 800000000 # 一周 token 预算（根据订阅计划调整）
       window_hours: 168.0 # 7 天滑动窗口
       threshold_percent: 99.0
@@ -84,7 +84,7 @@ vendors:
 
   # Vendor 2: Google Antigravity Plans（中间层，默认禁用）
   - vendor: antigravity
-    enabled: true # 启用需配置 OAuth 凭据
+    enabled: false # 启用需配置 OAuth 凭据
     client_id: "${GOOG_CLIENT_ID}" # Google OAuth2 Client ID
     client_secret: "${GOOG_CLIENT_SECRET}" # Google OAuth2 Client Secret
     refresh_token: "${GOOG_REFRESH_TOKEN}" # Google OAuth2 Refresh Token
@@ -96,7 +96,7 @@ vendors:
       recovery_timeout_seconds: 300
       success_threshold: 2
     quota_guard:
-      enabled: true # 启用后按 Premium Requests 配额管理
+      enabled: false # 启用后按 Premium Requests 配额管理
       token_budget: 0
       window_hours: 24.0
       threshold_percent: 95.0
