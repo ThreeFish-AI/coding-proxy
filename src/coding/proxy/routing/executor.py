@@ -257,25 +257,40 @@ class _RouteExecutor:
         target_name: str,
         failed_tier_name: str | None,
         session_record: Any,
+        body: dict[str, Any] | None = None,
     ) -> str | None:
         """确定跨供应商转换的源 vendor.
 
         Priority 1: failed_tier_name（请求内故障转移，最可靠）。
         Priority 2: session_record.provider_state 中有已注册转换的 vendor（跨请求）。
+        Priority 3: 从 body 内容推断（兜底首次请求无会话状态场景）。
         """
+        from ..convert.vendor_channels import (
+            get_transition_channel,
+            infer_source_vendor_from_body,
+        )
+
         # 请求内：刚失败的 tier 就是源
         if failed_tier_name and failed_tier_name != target_name:
             return failed_tier_name
 
         # 跨请求：从会话历史找有注册转换的源
         if session_record is not None and session_record.provider_state:
-            from ..convert.vendor_channels import get_transition_channel
-
             for source in session_record.provider_state:
                 if source != target_name and get_transition_channel(
                     source, target_name
                 ):
                     return source
+
+        # 首次请求兜底：从 body 内容推断（识别 zhipu 产物等）
+        if body is not None:
+            inferred = infer_source_vendor_from_body(body)
+            if (
+                inferred
+                and inferred != target_name
+                and get_transition_channel(inferred, target_name)
+            ):
+                return inferred
 
         return None
 
@@ -315,7 +330,7 @@ class _RouteExecutor:
 
             try:
                 source_vendor = _RouteExecutor._determine_source_vendor(
-                    tier.name, failed_tier_name, session_record
+                    tier.name, failed_tier_name, session_record, body
                 )
                 body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
                 async for chunk in tier.vendor.send_message_stream(
@@ -481,7 +496,7 @@ class _RouteExecutor:
 
             try:
                 source_vendor = _RouteExecutor._determine_source_vendor(
-                    tier.name, failed_tier_name, session_record
+                    tier.name, failed_tier_name, session_record, body
                 )
                 body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
                 resp = await tier.vendor.send_message(body_for_tier, headers)

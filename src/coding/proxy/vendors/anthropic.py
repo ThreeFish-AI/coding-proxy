@@ -20,7 +20,8 @@ def _strip_misplaced_tool_results(body: dict[str, Any]) -> int:
     同时包含 ``tool_use`` 和 ``tool_result`` 内容块，导致 Claude Code 将其存入
     conversation history 后，后续请求的 assistant message 中包含 ``tool_result``。
 
-    请求规范化层（``request_normalizer.py``）已处理此场景，本函数提供纵深防御。
+    源→目标转换通道（``convert/vendor_channels.py`` 中的 ``prepare_zhipu_to_anthropic``）
+    会在路由阶段处理此场景，本函数提供纵深防御。
 
     Returns:
         被移除的 tool_result block 数量。
