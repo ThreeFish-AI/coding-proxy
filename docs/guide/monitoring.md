@@ -18,13 +18,13 @@
 
 代理日志默认输出到控制台，包含以下关键事件：
 
-| 事件 | 日志级别 | 示例 |
-|------|---------|------|
-| 熔断器状态转换 | INFO/WARNING | `Circuit breaker: CLOSED → OPEN (3 consecutive failures)` |
-| 故障转移触发 | WARNING | `Primary error 429, failing over` |
-| 恢复成功 | INFO | `Circuit breaker: HALF_OPEN → CLOSED (recovered)` |
-| Rate Limit 生效 | INFO | `Tier zhipu: rate limit deadline active, 30.0s remaining` |
-| 自动登录 | INFO | `Copilot 层缺少有效凭证，启动 GitHub OAuth 登录...` |
+| 事件            | 日志级别     | 示例                                                      |
+| --------------- | ------------ | --------------------------------------------------------- |
+| 熔断器状态转换  | INFO/WARNING | `Circuit breaker: CLOSED → OPEN (3 consecutive failures)` |
+| 故障转移触发    | WARNING      | `Primary error 429, failing over`                         |
+| 恢复成功        | INFO         | `Circuit breaker: HALF_OPEN → CLOSED (recovered)`         |
+| Rate Limit 生效 | INFO         | `Tier zhipu: rate limit deadline active, 30.0s remaining` |
+| 自动登录        | INFO         | `Copilot 层缺少有效凭证，启动 GitHub OAuth 登录...`       |
 
 配置调整：
 
@@ -89,14 +89,14 @@ curl http://127.0.0.1:8046/api/status
 
 ## 6. 性能调优参考
 
-| 参数 | 默认值 | 稳定优先 | 敏感快速 | 说明 |
-|------|--------|---------|---------|------|
-| `timeout_ms` | 300000 | `300000` | `120000` | 长对话保持 5 分钟；短查询可缩短至 2 分钟 |
-| `failure_threshold` | 3 | `5` | `2` | 网络稳定环境降低以更快触发降级 |
-| `recovery_timeout_seconds` | 300 | `600` | `120` | 给供应商更多恢复时间 vs 更快尝试恢复 |
-| `token_budget` | 按计划 | 按计划设定 | — | 设为订阅额度的 95%~99% |
-| `window_hours` (quota_guard) | 5.0 | `8.0` | `3.0` | 长窗口更平滑，短窗口更灵敏 |
-| `max_retries` | 2 | `3` | `1` | 网络不稳定时增加重试 |
+| 参数                         | 默认值 | 稳定优先   | 敏感快速 | 说明                                     |
+| ---------------------------- | ------ | ---------- | -------- | ---------------------------------------- |
+| `timeout_ms`                 | 300000 | `300000`   | `120000` | 长对话保持 5 分钟；短查询可缩短至 2 分钟 |
+| `failure_threshold`          | 3      | `5`        | `2`      | 网络稳定环境降低以更快触发降级           |
+| `recovery_timeout_seconds`   | 300    | `600`      | `120`    | 给供应商更多恢复时间 vs 更快尝试恢复     |
+| `token_budget`               | 按计划 | 按计划设定 | —        | 设为订阅额度的 95%~99%                   |
+| `window_hours` (quota_guard) | 5.0    | `8.0`      | `3.0`    | 长窗口更平滑，短窗口更灵敏               |
+| `max_retries`                | 2      | `3`        | `1`      | 网络不稳定时增加重试                     |
 
 > 完整弹性参数表参见 [配置字段参考 — 弹性字段](../arch/config-reference.md#5-vendorconfig-弹性字段)。
 

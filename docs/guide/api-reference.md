@@ -3,22 +3,26 @@
 <details>
 <summary><strong>📑 目录（点击展开）</strong></summary>
 
-- [1. HEAD / 和 GET /](#1-head--和-get-)
-- [2. POST /v1/messages](#2-post-v1messages)
-  - [2.1 请求格式](#21-请求格式)
-  - [2.2 非流式响应](#22-非流式响应)
-  - [2.3 流式响应（SSE）](#23-流式响应sse)
-  - [2.4 错误响应](#24-错误响应)
-  - [2.5 请求规范化行为](#25-请求规范化行为)
-- [3. POST /v1/messages/count_tokens](#3-post-v1messagescount_tokens)
-- [4. GET /health](#4-get-health)
-- [5. GET /api/status](#5-get-apistatus)
-- [6. POST /api/reset](#6-post-apireset)
-- [7. GET /api/copilot/diagnostics](#7-get-apicopilotdiagnostics)
-- [8. GET /api/copilot/models](#8-get-apicopilotmodels)
-- [9. GET /api/reauth/status](#9-get-apireauthstatus)
-- [10. POST /api/reauth/{provider}](#10-post-apireauthprovider)
-- [11. Dashboard 端点](#11-dashboard-端点)
+- [HTTP API 端点](#http-api-端点)
+  - [1. HEAD / 和 GET /](#1-head--和-get-)
+  - [2. POST /v1/messages](#2-post-v1messages)
+    - [2.1 请求格式](#21-请求格式)
+    - [2.2 非流式响应](#22-非流式响应)
+    - [2.3 流式响应（SSE）](#23-流式响应sse)
+    - [2.4 错误响应](#24-错误响应)
+    - [2.5 请求规范化行为](#25-请求规范化行为)
+  - [3. POST /v1/messages/count\_tokens](#3-post-v1messagescount_tokens)
+  - [4. GET /health](#4-get-health)
+  - [5. GET /api/status](#5-get-apistatus)
+  - [6. POST /api/reset](#6-post-apireset)
+  - [7. GET /api/copilot/diagnostics](#7-get-apicopilotdiagnostics)
+  - [8. GET /api/copilot/models](#8-get-apicopilotmodels)
+  - [9. GET /api/reauth/status](#9-get-apireauthstatus)
+  - [10. POST /api/reauth/{provider}](#10-post-apireauthprovider)
+  - [11. Dashboard 端点](#11-dashboard-端点)
+    - [11.1 GET /dashboard](#111-get-dashboard)
+    - [11.2 GET /api/dashboard/summary](#112-get-apidashboardsummary)
+    - [11.3 GET /api/dashboard/timeline](#113-get-apidashboardtimeline)
 
 </details>
 
@@ -39,42 +43,42 @@ curl -I http://127.0.0.1:8046/
 
 **请求头**
 
-| 请求头 | 必填 | 说明 |
-|--------|------|------|
-| `Content-Type` | ✓ | 固定为 `application/json` |
-| `Authorization` | ✗ | 格式 `Bearer <token>`；对 Anthropic vendor 透传，对其他 vendor 由代理内部凭证管理 |
-| `anthropic-version` | ✗ | Anthropic API 版本，建议传 `2023-06-01`；透传至上游 |
-| `anthropic-beta` | ✗ | Beta 功能标识，透传至上游 |
+| 请求头              | 必填 | 说明                                                                              |
+| ------------------- | ---- | --------------------------------------------------------------------------------- |
+| `Content-Type`      | ✓    | 固定为 `application/json`                                                         |
+| `Authorization`     | ✗    | 格式 `Bearer <token>`；对 Anthropic vendor 透传，对其他 vendor 由代理内部凭证管理 |
+| `anthropic-version` | ✗    | Anthropic API 版本，建议传 `2023-06-01`；透传至上游                               |
+| `anthropic-beta`    | ✗    | Beta 功能标识，透传至上游                                                         |
 
 > `hop-by-hop` 头（如 `Connection`、`Transfer-Encoding`）会在转发前自动过滤。
 
 **请求体参数**
 
-| 字段 | 类型 | 必填 | 约束 | 说明 |
-|------|------|------|------|------|
-| `model` | string | ✓ | 非空 | 目标模型标识。经 [`model_mapping`](./vendors.md#5-model_mapping--模型映射规则) 规则映射后路由至实际 vendor 模型 |
-| `messages` | array | ✓ | 至少 1 条；`user`/`assistant` 交替；末尾必须为 `user` | 对话历史 |
-| `max_tokens` | integer | ✗ | > 0 | 最大输出 token 数 |
-| `stream` | boolean | ✗ | 默认 `false` | 是否以 SSE 流式返回 |
-| `temperature` | number | ✗ | `[0, 2]` | 采样温度 |
-| `top_p` | number | ✗ | `(0, 1]` | Top-p 采样 |
-| `top_k` | integer | ✗ | ≥ 1 | Top-k 采样 |
-| `stop_sequences` | array[string] | ✗ | | 提前停止的字符串序列 |
-| `system` | string \| array | ✗ | | 系统提示词 |
-| `tools` | array | ✗ | | 工具定义 |
-| `tool_choice` | object | ✗ | | 工具选择策略 |
-| `thinking` | object | ✗ | 需 `budget_tokens`；部分 vendor 不支持 | Extended Thinking 配置 |
-| `metadata` | object | ✗ | | 用户元数据，透传至上游 |
+| 字段             | 类型            | 必填 | 约束                                                  | 说明                                                                                                            |
+| ---------------- | --------------- | ---- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `model`          | string          | ✓    | 非空                                                  | 目标模型标识。经 [`model_mapping`](./vendors.md#5-model_mapping--模型映射规则) 规则映射后路由至实际 vendor 模型 |
+| `messages`       | array           | ✓    | 至少 1 条；`user`/`assistant` 交替；末尾必须为 `user` | 对话历史                                                                                                        |
+| `max_tokens`     | integer         | ✗    | > 0                                                   | 最大输出 token 数                                                                                               |
+| `stream`         | boolean         | ✗    | 默认 `false`                                          | 是否以 SSE 流式返回                                                                                             |
+| `temperature`    | number          | ✗    | `[0, 2]`                                              | 采样温度                                                                                                        |
+| `top_p`          | number          | ✗    | `(0, 1]`                                              | Top-p 采样                                                                                                      |
+| `top_k`          | integer         | ✗    | ≥ 1                                                   | Top-k 采样                                                                                                      |
+| `stop_sequences` | array[string]   | ✗    |                                                       | 提前停止的字符串序列                                                                                            |
+| `system`         | string \| array | ✗    |                                                       | 系统提示词                                                                                                      |
+| `tools`          | array           | ✗    |                                                       | 工具定义                                                                                                        |
+| `tool_choice`    | object          | ✗    |                                                       | 工具选择策略                                                                                                    |
+| `thinking`       | object          | ✗    | 需 `budget_tokens`；部分 vendor 不支持                | Extended Thinking 配置                                                                                          |
+| `metadata`       | object          | ✗    |                                                       | 用户元数据，透传至上游                                                                                          |
 
 **消息 content block 类型**
 
-| 类型 | 适用角色 | 必填字段 | 说明 |
-|------|---------|---------|------|
-| `text` | `user`/`assistant` | `text` | 纯文本 |
-| `image` | `user` | `source` | 图片；部分 vendor 不支持 |
-| `tool_use` | `assistant` | `id`（`toolu_` 前缀）、`name`、`input` | 模型发起工具调用 |
-| `tool_result` | `user` | `tool_use_id`、`content` | 工具调用结果 |
-| `thinking` | `assistant` | `thinking`、`signature` | Extended Thinking；跨 vendor 时自动剥离 |
+| 类型          | 适用角色           | 必填字段                               | 说明                                    |
+| ------------- | ------------------ | -------------------------------------- | --------------------------------------- |
+| `text`        | `user`/`assistant` | `text`                                 | 纯文本                                  |
+| `image`       | `user`             | `source`                               | 图片；部分 vendor 不支持                |
+| `tool_use`    | `assistant`        | `id`（`toolu_` 前缀）、`name`、`input` | 模型发起工具调用                        |
+| `tool_result` | `user`             | `tool_use_id`、`content`               | 工具调用结果                            |
+| `thinking`    | `assistant`        | `thinking`、`signature`                | Extended Thinking；跨 vendor 时自动剥离 |
 
 ### 2.2 非流式响应
 
@@ -102,12 +106,12 @@ curl -I http://127.0.0.1:8046/
 
 **`stop_reason` 枚举**
 
-| 值 | 含义 |
-|----|------|
-| `end_turn` | 模型自然输出完毕 |
-| `tool_use` | 模型发起工具调用 |
-| `stop_sequence` | 触发了停止序列 |
-| `max_tokens` | 达到 `max_tokens` 上限 |
+| 值              | 含义                   |
+| --------------- | ---------------------- |
+| `end_turn`      | 模型自然输出完毕       |
+| `tool_use`      | 模型发起工具调用       |
+| `stop_sequence` | 触发了停止序列         |
+| `max_tokens`    | 达到 `max_tokens` 上限 |
 
 ### 2.3 流式响应（SSE）
 
@@ -115,16 +119,16 @@ curl -I http://127.0.0.1:8046/
 
 **SSE 事件类型**
 
-| 事件类型 | 说明 |
-|---------|------|
-| `message_start` | 消息开始，包含初始元数据 |
-| `content_block_start` | 新的 content block 开始 |
+| 事件类型              | 说明                                           |
+| --------------------- | ---------------------------------------------- |
+| `message_start`       | 消息开始，包含初始元数据                       |
+| `content_block_start` | 新的 content block 开始                        |
 | `content_block_delta` | 增量数据（`text_delta` 或 `input_json_delta`） |
-| `content_block_stop` | 当前 content block 结束 |
-| `message_delta` | 消息级增量（`stop_reason` + `usage`） |
-| `message_stop` | 消息结束 |
-| `ping` | 心跳 |
-| `error` | 流式错误 |
+| `content_block_stop`  | 当前 content block 结束                        |
+| `message_delta`       | 消息级增量（`stop_reason` + `usage`）          |
+| `message_stop`        | 消息结束                                       |
+| `ping`                | 心跳                                           |
+| `error`               | 流式错误                                       |
 
 > 流式模式下，一旦 SSE 流开始发送，代理不再进行 tier 级别的故障转移。若中途出现错误，以 `event: error` 事件通知客户端。
 
@@ -144,16 +148,16 @@ curl -I http://127.0.0.1:8046/
 
 **HTTP 状态码对照**
 
-| HTTP 状态码 | `error.type` | 触发场景 | 可重试 |
-|------------|-------------|---------|--------|
-| `400` | `invalid_request_error` | 请求格式不合规、无兼容 vendor | ✗ |
-| `401` | `authentication_error` | 无有效认证凭证 | ✗ |
-| `403` | `permission_error` | 权限不足 | ✗ |
-| `429` | `rate_limit_error` | 所有 vendor 均触发速率限制 | ✓ |
-| `500` | `api_error` | 代理内部异常 | ✓ |
-| `502` | `api_error` | 所有 vendor 均不可达 | ✓ |
-| `503` | `authentication_error` | Token 获取失败 | ✓ |
-| `501` | `not_implemented` | 请求的端点无可用 vendor 处理 | ✗ |
+| HTTP 状态码 | `error.type`            | 触发场景                      | 可重试 |
+| ----------- | ----------------------- | ----------------------------- | ------ |
+| `400`       | `invalid_request_error` | 请求格式不合规、无兼容 vendor | ✗      |
+| `401`       | `authentication_error`  | 无有效认证凭证                | ✗      |
+| `403`       | `permission_error`      | 权限不足                      | ✗      |
+| `429`       | `rate_limit_error`      | 所有 vendor 均触发速率限制    | ✓      |
+| `500`       | `api_error`             | 代理内部异常                  | ✓      |
+| `502`       | `api_error`             | 所有 vendor 均不可达          | ✓      |
+| `503`       | `authentication_error`  | Token 获取失败                | ✓      |
+| `501`       | `not_implemented`       | 请求的端点无可用 vendor 处理  | ✗      |
 
 ### 2.5 请求规范化行为
 
@@ -161,22 +165,22 @@ curl -I http://127.0.0.1:8046/
 
 **自动修复（静默处理）**
 
-| 问题 | 处理方式 |
-|------|---------|
-| `tool_use_id` 格式不符（非 `toolu_` 前缀） | 自动重写为合规格式 |
-| `tool_result` 出现在 `assistant` 消息中 | 收集该 block；转发至 Anthropic tier 时执行重定位，其他 vendor 保留原位不变（首次触发 WARNING 日志） |
-| `tool_use` 缺少合法 ID | 自动生成新 ID |
+| 问题                                       | 处理方式                                                                                            |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `tool_use_id` 格式不符（非 `toolu_` 前缀） | 自动重写为合规格式                                                                                  |
+| `tool_result` 出现在 `assistant` 消息中    | 收集该 block；转发至 Anthropic tier 时执行重定位，其他 vendor 保留原位不变（首次触发 WARNING 日志） |
+| `tool_use` 缺少合法 ID                     | 自动生成新 ID                                                                                       |
 
 **致命验证错误（返回 HTTP 400）**
 
-| 场景 | 错误示例 |
-|------|---------|
-| `tool_use` block 缺少 `id` 字段 | `"tool_use block is missing 'id' field"` |
-| `tool_use` block 缺少 `name` 字段 | `"tool_use block missing name for id rewrite"` |
-| `tool_result` block 缺少 `tool_use_id` 字段 | `"tool_result block is missing 'tool_use_id' field"` |
-| `tool_result` 引用不存在的 `tool_use_id` | `"tool_result references unknown tool_use_id"` |
-| 消息角色不交替 | `"messages must alternate between user and assistant"` |
-| `messages` 末尾不是 `user` 消息 | `"last message must be from user"` |
+| 场景                                        | 错误示例                                               |
+| ------------------------------------------- | ------------------------------------------------------ |
+| `tool_use` block 缺少 `id` 字段             | `"tool_use block is missing 'id' field"`               |
+| `tool_use` block 缺少 `name` 字段           | `"tool_use block missing name for id rewrite"`         |
+| `tool_result` block 缺少 `tool_use_id` 字段 | `"tool_result block is missing 'tool_use_id' field"`   |
+| `tool_result` 引用不存在的 `tool_use_id`    | `"tool_result references unknown tool_use_id"`         |
+| 消息角色不交替                              | `"messages must alternate between user and assistant"` |
+| `messages` 末尾不是 `user` 消息             | `"last message must be from user"`                     |
 
 **Thinking Block 跨 Vendor 处理**：请求路由至非 Anthropic vendor 时，assistant 历史消息中的 `thinking` block 会被自动剥离（包含仅 Anthropic 可验证的 `signature`）。不影响当前轮次的 `thinking` 功能配置。
 
@@ -191,11 +195,11 @@ curl -X POST http://127.0.0.1:8046/v1/messages/count_tokens \
   -d '{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-| 响应码 | 说明 |
-|--------|------|
-| `200` | 成功，返回 token 计数结果 |
-| `501` | 无可用 vendor 处理此端点 |
-| `502` | 上游 API 不可达 |
+| 响应码 | 说明                      |
+| ------ | ------------------------- |
+| `200`  | 成功，返回 token 计数结果 |
+| `501`  | 无可用 vendor 处理此端点  |
+| `502`  | 上游 API 不可达           |
 
 ## 4. GET /health
 
@@ -311,8 +315,8 @@ curl -X POST http://127.0.0.1:8046/api/reauth/github
 # {"status":"reauth requested"}
 ```
 
-| 参数 | 说明 |
-|------|------|
+| 参数         | 说明                               |
+| ------------ | ---------------------------------- |
 | `{provider}` | provider 名称：`github` / `google` |
 
 返回 202 表示重认证请求已接收，用户需在浏览器中完成授权。
@@ -337,9 +341,9 @@ curl http://127.0.0.1:8046/dashboard
 curl "http://127.0.0.1:8046/api/dashboard/summary?days=7"
 ```
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `days` | int | `7` | 统计天数（1~90） |
+| 参数   | 类型 | 默认值 | 说明             |
+| ------ | ---- | ------ | ---------------- |
+| `days` | int  | `7`    | 统计天数（1~90） |
 
 **返回结构**：`version`（版本号）、`today`（今日 KPI）、`range`（区间 KPI）、`failover_stats`（故障转移统计）。
 
@@ -351,8 +355,8 @@ curl "http://127.0.0.1:8046/api/dashboard/summary?days=7"
 curl "http://127.0.0.1:8046/api/dashboard/timeline?days=30"
 ```
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `days` | int | `7` | 统计天数（1~90） |
+| 参数   | 类型 | 默认值 | 说明             |
+| ------ | ---- | ------ | ---------------- |
+| `days` | int  | `7`    | 统计天数（1~90） |
 
 **返回结构**：`period`（`"day"`）、`count`（天数）、`rows`（按天分组的用量数组）。

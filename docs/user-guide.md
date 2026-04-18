@@ -3,22 +3,22 @@
 <details>
 <summary><strong>📑 目录（点击展开）</strong></summary>
 
-- [1. 简介](#1-简介)
-  - [1.1 什么是 coding-proxy](#11-什么是-coding-proxy)
-  - [1.2 工作原理](#12-工作原理)
-  - [1.3 请求生命周期](#13-请求生命周期)
-- [2. 文档导航](#2-文档导航)
-- [3. 快速上手入门](#3-快速上手入门)
-- [4. 配置概览](#4-配置概览)
-  - [4.1 配置文件位置与加载优先级](#41-配置文件位置与加载优先级)
-  - [4.2 vendors — 供应商列表](#42-vendors--供应商列表)
-  - [4.3 tiers — 降级链路优先级](#43-tiers--降级链路优先级)
-  - [4.4 环境变量引用](#44-环境变量引用)
-  - [4.5 auth — OAuth 登录配置](#45-auth--oauth-登录配置)
-  - [4.6 server / database / logging](#46-server--database--logging)
-  - [4.7 旧 flat 格式兼容说明（已废弃）](#47-旧-flat-格式兼容说明已废弃)
-- [5. 日常操作速查](#5-日常操作速查)
-- [附录：术语对照表](#附录术语对照表)
+- [coding-proxy 用户指引](#coding-proxy-用户指引)
+  - [1. 简介](#1-简介)
+    - [1.1 什么是 coding-proxy](#11-什么是-coding-proxy)
+    - [1.2 工作原理](#12-工作原理)
+    - [1.3 请求生命周期](#13-请求生命周期)
+  - [2. 文档导航](#2-文档导航)
+  - [3. 快速上手入门](#3-快速上手入门)
+  - [4. 配置概览](#4-配置概览)
+    - [4.1 配置文件位置与加载优先级](#41-配置文件位置与加载优先级)
+    - [4.2 vendors — 供应商列表](#42-vendors--供应商列表)
+    - [4.3 tiers — 降级链路优先级](#43-tiers--降级链路优先级)
+    - [4.4 环境变量引用](#44-环境变量引用)
+    - [4.5 auth — OAuth 登录配置](#45-auth--oauth-登录配置)
+    - [4.6 server / database / logging](#46-server--database--logging)
+  - [5. 日常操作速查](#5-日常操作速查)
+  - [附录：术语对照表](#附录术语对照表)
 
 </details>
 
@@ -87,18 +87,18 @@ graph TD
 
 ## 2. 文档导航
 
-| 文档 | 说明 |
-|------|------|
-| **[快速开始](./guide/quickstart.md)** | 环境要求、安装、最小配置、启动服务、Claude Code 集成 |
-| **[供应商配置](./guide/vendors.md)** | 全部 9 种供应商配置详情、模型映射、定价 |
-| **[CLI 命令参考](./guide/cli-reference.md)** | start / status / usage / reset / auth 全部命令 |
+| 文档                                          | 说明                                                            |
+| --------------------------------------------- | --------------------------------------------------------------- |
+| **[快速开始](./guide/quickstart.md)**         | 环境要求、安装、最小配置、启动服务、Claude Code 集成            |
+| **[供应商配置](./guide/vendors.md)**          | 全部 9 种供应商配置详情、模型映射、定价                         |
+| **[CLI 命令参考](./guide/cli-reference.md)**  | start / status / usage / reset / auth 全部命令                  |
 | **[HTTP API 端点](./guide/api-reference.md)** | /v1/messages、health、status、reset、copilot、reauth、dashboard |
-| **[Dashboard 看板](./guide/dashboard.md)** | Web 可视化看板功能与操作 |
-| **[监控·运维·排查](./guide/monitoring.md)** | 日志、用量统计、性能调优、常见场景、故障排查 |
-| [配置字段参考](./arch/config-reference.md) | 所有配置参数的完整字段定义（Single Source of Truth） |
-| [架构设计文档](./arch/design-patterns.md) | 设计模式、熔断器状态机、配额守卫等架构细节 |
-| [供应商模块文档](./arch/vendors.md) | Vendor 类层次结构与实现细节 |
-| [请求路由文档](./arch/routing.md) | 路由引擎工作原理 |
+| **[Dashboard 看板](./guide/dashboard.md)**    | Web 可视化看板功能与操作                                        |
+| **[监控·运维·排查](./guide/monitoring.md)**   | 日志、用量统计、性能调优、常见场景、故障排查                    |
+| [配置字段参考](./arch/config-reference.md)    | 所有配置参数的完整字段定义（Single Source of Truth）            |
+| [架构设计文档](./arch/design-patterns.md)     | 设计模式、熔断器状态机、配额守卫等架构细节                      |
+| [供应商模块文档](./arch/vendors.md)           | Vendor 类层次结构与实现细节                                     |
+| [请求路由文档](./arch/routing.md)             | 路由引擎工作原理                                                |
 
 ---
 
@@ -142,17 +142,17 @@ curl http://127.0.0.1:8046/health
 
 `vendors` 以列表形式定义所有供应商及其弹性设施。支持 9 种供应商类型：
 
-| 类型 | 类别 | 默认状态 |
-|------|------|---------|
-| `anthropic` | 直连 Anthropic | 启用 |
-| `copilot` | 协议转换（GitHub） | 启用（需 OAuth） |
-| `antigravity` | 协议转换（Google） | 禁用 |
-| `zhipu` | 原生 Anthropic 兼容 | 启用（Tier 0） |
-| `minimax` | 原生 Anthropic 兼容 | 禁用 |
-| `alibaba` | 原生 Anthropic 兼容 | 禁用 |
-| `xiaomi` | 原生 Anthropic 兼容 | 禁用 |
-| `kimi` | 原生 Anthropic 兼容 | 禁用 |
-| `doubao` | 原生 Anthropic 兼容 | 禁用 |
+| 类型          | 类别                | 默认状态         |
+| ------------- | ------------------- | ---------------- |
+| `anthropic`   | 直连 Anthropic      | 启用             |
+| `copilot`     | 协议转换（GitHub）  | 启用（需 OAuth） |
+| `antigravity` | 协议转换（Google）  | 禁用             |
+| `zhipu`       | 原生 Anthropic 兼容 | 启用（Tier 0）   |
+| `minimax`     | 原生 Anthropic 兼容 | 禁用             |
+| `alibaba`     | 原生 Anthropic 兼容 | 禁用             |
+| `xiaomi`      | 原生 Anthropic 兼容 | 禁用             |
+| `kimi`        | 原生 Anthropic 兼容 | 禁用             |
+| `doubao`      | 原生 Anthropic 兼容 | 禁用             |
 
 > 各供应商的专属字段、弹性配置和模型映射详见 [供应商配置](./guide/vendors.md)。所有字段的完整定义参见 [配置字段参考](./arch/config-reference.md)。
 
@@ -208,31 +208,23 @@ logging:
 
 > 完整字段定义参见 [配置字段参考](./arch/config-reference.md#3-服务器配置)。
 
-### 4.7 旧 flat 格式兼容说明（已废弃）
-
-以下字段为 legacy flat 格式（已废弃，保留仅用于向后兼容）：
-
-`primary`, `copilot`, `antigravity`, `fallback`, `circuit_breaker`, `copilot_circuit_breaker`, `antigravity_circuit_breaker`, `quota_guard`, `copilot_quota_guard`, `antigravity_quota_guard`
-
-当用户配置中**同时不存在** `vendors` 和 `tiers` 字段，但包含上述旧格式字段时，系统启动时**自动迁移**至 vendors 格式并输出日志提示。建议尽快迁移至 vendors 新格式。
-
 ---
 
 ## 5. 日常操作速查
 
-| 操作 | 命令 |
-|------|------|
-| 启动代理 | `coding-proxy start` |
-| 查看状态 | `coding-proxy status` |
-| 查看用量 | `coding-proxy usage` |
-| 查看本周 | `coding-proxy usage -w 1` |
-| 查看本月 | `coding-proxy usage -m 1` |
-| 重置熔断器 | `coding-proxy reset` |
-| 提升供应商 | `coding-proxy reset -v anthropic` |
-| GitHub 登录 | `coding-proxy auth login -p github` |
-| 重认证 | `coding-proxy auth reauth github` |
-| 查看凭证 | `coding-proxy auth status` |
-| Dashboard | 浏览器访问 `http://127.0.0.1:8046/dashboard` |
+| 操作        | 命令                                         |
+| ----------- | -------------------------------------------- |
+| 启动代理    | `coding-proxy start`                         |
+| 查看状态    | `coding-proxy status`                        |
+| 查看用量    | `coding-proxy usage`                         |
+| 查看本周    | `coding-proxy usage -w 1`                    |
+| 查看本月    | `coding-proxy usage -m 1`                    |
+| 重置熔断器  | `coding-proxy reset`                         |
+| 提升供应商  | `coding-proxy reset -v anthropic`            |
+| GitHub 登录 | `coding-proxy auth login -p github`          |
+| 重认证      | `coding-proxy auth reauth github`            |
+| 查看凭证    | `coding-proxy auth status`                   |
+| Dashboard   | 浏览器访问 `http://127.0.0.1:8046/dashboard` |
 
 > 完整命令选项参见 [CLI 命令参考](./guide/cli-reference.md)。
 
@@ -240,14 +232,14 @@ logging:
 
 ## 附录：术语对照表
 
-| 术语 | 说明 |
-|------|------|
-| **Vendor（供应商）** | API 后端提供方，即 `vendors` 列表中的一个条目 |
-| **Tier（层级）** | 一个 Vendor + 其关联弹性设施的路由单元 |
-| **Terminal Tier（终端层）** | 未配置 `circuit_breaker` 的 Vendor，始终接受请求，不触发向下故障转移 |
-| **故障转移（Failover）** | 当前供应商不可用时自动切换到下一优先级供应商 |
-| **熔断器（Circuit Breaker）** | 连续失败达到阈值后暂时切断对该供应商的请求 |
-| **配额守卫（Quota Guard）** | 基于滑动窗口的 Token 用量预算管理，超限时跳过该供应商 |
-| **Rate Limit** | 基于上游响应头的精确速率限制控制 |
-| **模型映射（Model Mapping）** | 将 Claude 模型名自动转换为各供应商实际模型名 |
-| **原生 Anthropic 兼容（Native Anthropic Compatible）** | 提供 Anthropic 兼容端点的供应商，仅需 `api_key` + `base_url` |
+| 术语                                                   | 说明                                                                 |
+| ------------------------------------------------------ | -------------------------------------------------------------------- |
+| **Vendor（供应商）**                                   | API 后端提供方，即 `vendors` 列表中的一个条目                        |
+| **Tier（层级）**                                       | 一个 Vendor + 其关联弹性设施的路由单元                               |
+| **Terminal Tier（终端层）**                            | 未配置 `circuit_breaker` 的 Vendor，始终接受请求，不触发向下故障转移 |
+| **故障转移（Failover）**                               | 当前供应商不可用时自动切换到下一优先级供应商                         |
+| **熔断器（Circuit Breaker）**                          | 连续失败达到阈值后暂时切断对该供应商的请求                           |
+| **配额守卫（Quota Guard）**                            | 基于滑动窗口的 Token 用量预算管理，超限时跳过该供应商                |
+| **Rate Limit**                                         | 基于上游响应头的精确速率限制控制                                     |
+| **模型映射（Model Mapping）**                          | 将 Claude 模型名自动转换为各供应商实际模型名                         |
+| **原生 Anthropic 兼容（Native Anthropic Compatible）** | 提供 Anthropic 兼容端点的供应商，仅需 `api_key` + `base_url`         |

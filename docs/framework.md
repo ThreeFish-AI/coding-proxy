@@ -145,30 +145,30 @@ graph TD
 
 系统支持 9 种供应商类型（`VendorType`），按适配复杂度分为三组：
 
-| 分类                 | 基类                     | 适配行为                         | 供应商                                                       |
-| -------------------- | ------------------------ | -------------------------------- | ------------------------------------------------------------ |
-| **直接 Anthropic**   | `BaseVendor`             | 零适配，直接透传                 | Anthropic                                                    |
-| **协议转换**         | `BaseVendor` + Mixin     | 双向格式转换 + Token 管理        | Copilot（OpenAI）、Antigravity（Gemini）                     |
-| **原生 Anthropic 兼容** | `NativeAnthropicVendor` | 薄透传：模型映射 + API Key 替换  | Zhipu、MiniMax、Kimi、Doubao、Xiaomi、Alibaba               |
+| 分类                    | 基类                    | 适配行为                        | 供应商                                        |
+| ----------------------- | ----------------------- | ------------------------------- | --------------------------------------------- |
+| **直接 Anthropic**      | `BaseVendor`            | 零适配，直接透传                | Anthropic                                     |
+| **协议转换**            | `BaseVendor` + Mixin    | 双向格式转换 + Token 管理       | Copilot（OpenAI）、Antigravity（Gemini）      |
+| **原生 Anthropic 兼容** | `NativeAnthropicVendor` | 薄透传：模型映射 + API Key 替换 | Zhipu、MiniMax、Kimi、Doubao、Xiaomi、Alibaba |
 
 > **供应商模块完整文档**：参见 [供应商模块（vendors/）](./arch/vendors.md)
 
 ### 2.3 模块职责一览
 
-| 模块          | 路径                                           | 职责                                                                                                                                             | 专题文档                                                   |
-| ------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| **vendors**   | [`vendors/`](../src/coding/proxy/vendors/)     | **供应商适配器（主架构）**：`BaseVendor` 抽象基类 + `NativeAnthropicVendor` + 9 个具体实现                                                      | [供应商模块](./arch/vendors.md)                            |
-| **routing**   | [`routing/`](../src/coding/proxy/routing/)     | N-tier 链式路由核心（正交分解为 executor/tier/CB/QG/retry/rate_limit 等 12 个子模块）                                                           | [路由模块](./arch/routing.md)                              |
-| **compat**    | [`compat/`](../src/coding/proxy/compat/)       | 兼容性抽象系统：`CanonicalRequest` / `CompatibilityDecision` / `session_store`                                                                   |                                                            |
-| **auth**      | [`auth/`](../src/coding/proxy/auth/)           | 认证系统：OAuth providers（GitHub Device Flow / Google OAuth2）/ runtime reauth / token store                                                    |                                                            |
-| **model**     | [`model/`](../src/coding/proxy/model/)         | 数据模型正交分解：vendor / compat / constants / pricing / token / auth                                                                           |                                                            |
-| **config**    | [`config/`](../src/coding/proxy/config/)       | Pydantic v2 配置模型（正交拆分为 server/vendors/resiliency/routing/auth_schema）+ YAML 加载器                                                    | [配置参考](./arch/config-reference.md)                     |
-| **convert**   | [`convert/`](../src/coding/proxy/convert/)     | API 格式转换（Anthropic ↔ Gemini ↔ OpenAI 三向转换，含 SSE 流适配）                                                                              | [格式转换](./arch/convert.md)                              |
-| **logging**   | [`logging/`](../src/coding/proxy/logging/)     | Token 用量 SQLite 持久化（[`db.py`](../src/coding/proxy/logging/db.py)）、统计查询（[`stats.py`](../src/coding/proxy/logging/stats.py)）、Rich 格式化 | |
-| **server**    | [`server/`](../src/coding/proxy/server/)       | FastAPI 应用工厂与生命周期管理（app/factory/routes/normalizer/responses/dashboard）                                                               |                                                            |
-| **streaming** | [`streaming/`](../src/coding/proxy/streaming/) | Anthropic 兼容流式处理（[`anthropic_compat.py`](../src/coding/proxy/streaming/anthropic_compat.py)）                                             |                                                            |
-| **cli**       | [`cli/`](../src/coding/proxy/cli/)             | Typer 命令行入口（start/status/usage/reset/auth）+ Banner 显示                                                                                   |                                                            |
-| **pricing**   | [`pricing.py`](../src/coding/pricing.py)       | 定价表（`PricingTable`）：按 (vendor, model) 查询单价并计算费用                                                                                  |                                                            |
+| 模块          | 路径                                           | 职责                                                                                                                                                  | 专题文档                               |
+| ------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| **vendors**   | [`vendors/`](../src/coding/proxy/vendors/)     | **供应商适配器（主架构）**：`BaseVendor` 抽象基类 + `NativeAnthropicVendor` + 9 个具体实现                                                            | [供应商模块](./arch/vendors.md)        |
+| **routing**   | [`routing/`](../src/coding/proxy/routing/)     | N-tier 链式路由核心（正交分解为 executor/tier/CB/QG/retry/rate_limit 等 12 个子模块）                                                                 | [路由模块](./arch/routing.md)          |
+| **compat**    | [`compat/`](../src/coding/proxy/compat/)       | 兼容性抽象系统：`CanonicalRequest` / `CompatibilityDecision` / `session_store`                                                                        |                                        |
+| **auth**      | [`auth/`](../src/coding/proxy/auth/)           | 认证系统：OAuth providers（GitHub Device Flow / Google OAuth2）/ runtime reauth / token store                                                         |                                        |
+| **model**     | [`model/`](../src/coding/proxy/model/)         | 数据模型正交分解：vendor / compat / constants / pricing / token / auth                                                                                |                                        |
+| **config**    | [`config/`](../src/coding/proxy/config/)       | Pydantic v2 配置模型（正交拆分为 server/vendors/resiliency/routing/auth_schema）+ YAML 加载器                                                         | [配置参考](./arch/config-reference.md) |
+| **convert**   | [`convert/`](../src/coding/proxy/convert/)     | API 格式转换（Anthropic ↔ Gemini ↔ OpenAI 三向转换，含 SSE 流适配）                                                                                   | [格式转换](./arch/convert.md)          |
+| **logging**   | [`logging/`](../src/coding/proxy/logging/)     | Token 用量 SQLite 持久化（[`db.py`](../src/coding/proxy/logging/db.py)）、统计查询（[`stats.py`](../src/coding/proxy/logging/stats.py)）、Rich 格式化 |                                        |
+| **server**    | [`server/`](../src/coding/proxy/server/)       | FastAPI 应用工厂与生命周期管理（app/factory/routes/normalizer/responses/dashboard）                                                                   |                                        |
+| **streaming** | [`streaming/`](../src/coding/proxy/streaming/) | Anthropic 兼容流式处理（[`anthropic_compat.py`](../src/coding/proxy/streaming/anthropic_compat.py)）                                                  |                                        |
+| **cli**       | [`cli/`](../src/coding/proxy/cli/)             | Typer 命令行入口（start/status/usage/reset/auth）+ Banner 显示                                                                                        |                                        |
+| **pricing**   | [`pricing.py`](../src/coding/pricing.py)       | 定价表（`PricingTable`）：按 (vendor, model) 查询单价并计算费用                                                                                       |                                        |
 
 ---
 
@@ -304,11 +304,11 @@ flowchart TD
 
 故障转移的判定在 `BaseVendor.should_trigger_failover()` 中实现，依据三层条件（可通过配置文件自定义）：
 
-| 层级        | 条件                                       | 默认值                                                  |
-| ----------- | ------------------------------------------ | ------------------------------------------------------- |
-| HTTP 状态码 | `status_code in failover.status_codes`     | `[429, 403, 503, 500, 529]`                                  |
-| 错误类型    | `error.type in failover.error_types`       | `["rate_limit_error", "overloaded_error", "api_error"]` |
-| 错误消息    | `pattern in error.message`（不区分大小写） | `["quota", "limit exceeded", "usage cap", "capacity", "internal network failure"]`  |
+| 层级        | 条件                                       | 默认值                                                                             |
+| ----------- | ------------------------------------------ | ---------------------------------------------------------------------------------- |
+| HTTP 状态码 | `status_code in failover.status_codes`     | `[429, 403, 503, 500, 529]`                                                        |
+| 错误类型    | `error.type in failover.error_types`       | `["rate_limit_error", "overloaded_error", "api_error"]`                            |
+| 错误消息    | `pattern in error.message`（不区分大小写） | `["quota", "limit exceeded", "usage cap", "capacity", "internal network failure"]` |
 
 **特殊规则**：对于 429 和 503 状态码，即使无法解析响应体（body），也会强制触发故障转移。
 
@@ -351,30 +351,30 @@ flowchart TD
 
 数据模型正交分解，遵循单一职责原则：
 
-| 子模块        | 文件                                                     | 核心类型                                                                                                                            |
-| ------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **vendor**    | [`model/vendor.py`](../src/coding/proxy/model/vendor.py) | `UsageInfo`, `VendorResponse`, `NoCompatibleVendorError`, `RequestCapabilities`, `VendorCapabilities`, `CapabilityLossReason` |
-| **compat**    | [`model/compat.py`](../src/coding/proxy/model/compat.py) | `CanonicalRequest`, `CompatibilityDecision`, `CompatibilityProfile`, `CompatibilityStatus`, `CompatibilityTrace`                   |
-| **constants** | [`model/constants.py`](../src/coding/proxy/model/constants.py) | `PROXY_SKIP_HEADERS`, `RESPONSE_SANITIZE_SKIP_HEADERS` 等常量                                                                   |
-| **pricing**   | [`model/pricing.py`](../src/coding/proxy/model/pricing.py) | `ModelPricing`, `CostValue`, `Currency`                                                                                             |
-| **token**     | [`model/token.py`](../src/coding/proxy/model/token.py)   | Token 相关模型                                                                                                                      |
-| **auth**      | [`model/auth.py`](../src/coding/proxy/model/auth.py)     | 认证相关模型                                                                                                                        |
+| 子模块        | 文件                                                           | 核心类型                                                                                                                      |
+| ------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **vendor**    | [`model/vendor.py`](../src/coding/proxy/model/vendor.py)       | `UsageInfo`, `VendorResponse`, `NoCompatibleVendorError`, `RequestCapabilities`, `VendorCapabilities`, `CapabilityLossReason` |
+| **compat**    | [`model/compat.py`](../src/coding/proxy/model/compat.py)       | `CanonicalRequest`, `CompatibilityDecision`, `CompatibilityProfile`, `CompatibilityStatus`, `CompatibilityTrace`              |
+| **constants** | [`model/constants.py`](../src/coding/proxy/model/constants.py) | `PROXY_SKIP_HEADERS`, `RESPONSE_SANITIZE_SKIP_HEADERS` 等常量                                                                 |
+| **pricing**   | [`model/pricing.py`](../src/coding/proxy/model/pricing.py)     | `ModelPricing`, `CostValue`, `Currency`                                                                                       |
+| **token**     | [`model/token.py`](../src/coding/proxy/model/token.py)         | Token 相关模型                                                                                                                |
+| **auth**      | [`model/auth.py`](../src/coding/proxy/model/auth.py)           | 认证相关模型                                                                                                                  |
 
 ### 4.3 auth/ — 认证模块
 
-| 组件                         | 文件                                                                   | 职责                                           |
-| ---------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------- |
-| **GitHubDeviceFlowProvider** | [`providers/github.py`](../src/coding/proxy/auth/providers/github.py) | GitHub Device Authorization Grant              |
-| **GoogleOAuthProvider**      | [`providers/google.py`](../src/coding/proxy/auth/providers/google.py) | OAuth 2.0 Authorization Code + Refresh Token   |
-| **RuntimeReauthCoordinator** | [`runtime.py`](../src/coding/proxy/auth/runtime.py)                    | 运行时 OAuth 重认证协调（IDLE → PENDING → COMPLETED / FAILED） |
-| **TokenStoreManager**        | [`store.py`](../src/coding/proxy/auth/store.py)                       | Token 持久化（JSON 文件），按 provider 分区存储 |
+| 组件                         | 文件                                                                  | 职责                                                           |
+| ---------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
+| **GitHubDeviceFlowProvider** | [`providers/github.py`](../src/coding/proxy/auth/providers/github.py) | GitHub Device Authorization Grant                              |
+| **GoogleOAuthProvider**      | [`providers/google.py`](../src/coding/proxy/auth/providers/google.py) | OAuth 2.0 Authorization Code + Refresh Token                   |
+| **RuntimeReauthCoordinator** | [`runtime.py`](../src/coding/proxy/auth/runtime.py)                   | 运行时 OAuth 重认证协调（IDLE → PENDING → COMPLETED / FAILED） |
+| **TokenStoreManager**        | [`store.py`](../src/coding/proxy/auth/store.py)                       | Token 持久化（JSON 文件），按 provider 分区存储                |
 
 ### 4.4 logging/ — 日志模块
 
-| 组件              | 文件                                                           | 职责                                   |
-| ----------------- | -------------------------------------------------------------- | -------------------------------------- |
-| **TokenLogger**   | [`db.py`](../src/coding/proxy/logging/db.py)                   | SQLite 用量持久化、窗口查询、evidence 记录 |
-| **统计工具**      | [`stats.py`](../src/coding/proxy/logging/stats.py)             | 统计查询与 Rich 格式化展示             |
+| 组件            | 文件                                               | 职责                                       |
+| --------------- | -------------------------------------------------- | ------------------------------------------ |
+| **TokenLogger** | [`db.py`](../src/coding/proxy/logging/db.py)       | SQLite 用量持久化、窗口查询、evidence 记录 |
+| **统计工具**    | [`stats.py`](../src/coding/proxy/logging/stats.py) | 统计查询与 Rich 格式化展示                 |
 
 **usage_log 表结构**：
 
@@ -396,14 +396,14 @@ flowchart TD
 
 ### 4.5 server/ — 服务模块
 
-| 文件                                                                               | 职责                                                      |
-| ---------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| [`app.py`](../src/coding/proxy/server/app.py)                                      | FastAPI 应用工厂 `create_app()` + `lifespan` 生命周期管理 |
-| [`factory.py`](../src/coding/proxy/server/factory.py)                              | Vendor/Tier 构建工厂 + 凭证解析                           |
-| [`routes.py`](../src/coding/proxy/server/routes.py)                                | 路由端点按职责分组注册                                    |
-| [`request_normalizer.py`](../src/coding/proxy/server/request_normalizer.py)        | 入站请求标准化（清洗供应商私有块）                        |
-| [`responses.py`](../src/coding/proxy/server/responses.py)                          | 响应辅助工具（JSON error / stream error 构建）            |
-| [`dashboard.py`](../src/coding/proxy/server/dashboard.py)                          | 状态面板（Web Dashboard）                                 |
+| 文件                                                                        | 职责                                                      |
+| --------------------------------------------------------------------------- | --------------------------------------------------------- |
+| [`app.py`](../src/coding/proxy/server/app.py)                               | FastAPI 应用工厂 `create_app()` + `lifespan` 生命周期管理 |
+| [`factory.py`](../src/coding/proxy/server/factory.py)                       | Vendor/Tier 构建工厂 + 凭证解析                           |
+| [`routes.py`](../src/coding/proxy/server/routes.py)                         | 路由端点按职责分组注册                                    |
+| [`request_normalizer.py`](../src/coding/proxy/server/request_normalizer.py) | 入站请求标准化（清洗供应商私有块）                        |
+| [`responses.py`](../src/coding/proxy/server/responses.py)                   | 响应辅助工具（JSON error / stream error 构建）            |
+| [`dashboard.py`](../src/coding/proxy/server/dashboard.py)                   | 状态面板（Web Dashboard）                                 |
 
 **API 端点清单**：
 
@@ -477,14 +477,14 @@ model_mapping:
 
 ## 6. 文档索引
 
-| 文档                                                                   | 内容                                     |
-| ---------------------------------------------------------------------- | ---------------------------------------- |
-| [设计模式详解](./arch/design-patterns.md)                              | 13 种设计模式（Template Method / Circuit Breaker / State Machine 等）与工程模式 |
-| [供应商模块](./arch/vendors.md)                                        | 供应商分类体系、9 个具体供应商 + 2 个抽象基类、数据类型 |
-| [路由模块](./arch/routing.md)                                          | 12 个路由子模块详解（VendorTier / Executor / CB / QG / Retry 等） |
-| [配置参考](./arch/config-reference.md)                                 | 完整配置字段参考、弹性参数规范来源（SSOT）        |
-| [格式转换](./arch/convert.md)                                          | Anthropic ↔ Gemini ↔ OpenAI 三向格式转换详解     |
-| [测试策略](./arch/testing.md)                                          | 48 个测试文件按子系统分组的覆盖范围与工具链       |
+| 文档                                      | 内容                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------- |
+| [设计模式详解](./arch/design-patterns.md) | 13 种设计模式（Template Method / Circuit Breaker / State Machine 等）与工程模式 |
+| [供应商模块](./arch/vendors.md)           | 供应商分类体系、9 个具体供应商 + 2 个抽象基类、数据类型                         |
+| [路由模块](./arch/routing.md)             | 12 个路由子模块详解（VendorTier / Executor / CB / QG / Retry 等）               |
+| [配置参考](./arch/config-reference.md)    | 完整配置字段参考、弹性参数规范来源（SSOT）                                      |
+| [格式转换](./arch/convert.md)             | Anthropic ↔ Gemini ↔ OpenAI 三向格式转换详解                                    |
+| [测试策略](./arch/testing.md)             | 48 个测试文件按子系统分组的覆盖范围与工具链                                     |
 
 ---
 
