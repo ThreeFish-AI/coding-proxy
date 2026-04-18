@@ -260,23 +260,36 @@ class _RouteExecutor:
     ) -> bool:
         """判断是否需要为目标供应商触发专属转换通道.
 
-        触发信号（满足任一）:
-        1. normalization 检测到跨供应商产物
-        2. normalization 检测到 Anthropic 修复需求（misplaced tool_result / ID 重写）
-        3. 无会话追踪能力 → 安全回退
-        4. 会话历史中存在非当前供应商记录
+        anthropic 通道（宽松触发）:
+            Anthropic API 有严格的格式要求（tool pairing / thinking signature），
+            即使纯会话中也需修复。触发信号：
+            1. 跨供应商信号或 Anthropic 修复需求（Phase 1 信号）
+            2. 无会话追踪 → 安全回退
+            3. 会话历史中存在非 Anthropic 供应商
+
+        zhipu/copilot 通道（严格触发）:
+            Phase 1 信号 (has_cross_vendor_signals, has_anthropic_fixes) 不可靠——
+            纯 zhipu 会话中 zhipu 自身的产物（srvtoolu_* ID）也会触发。
+            唯一可靠指标是会话历史中存在非当前供应商。
         """
-        # Signal 1: 跨供应商信号
-        if normalization is not None and normalization.has_cross_vendor_signals:
-            return True
-        # Signal 2: Phase 1 检测到 Anthropic 修复需求
-        if normalization is not None and normalization.has_anthropic_fixes:
-            return True
-        # Signal 3: 无会话追踪 → 安全回退
-        if session_record is None:
-            return True
-        # Signal 4: 会话历史中有非当前供应商
-        if session_record.provider_state:
+        if tier_name == "anthropic":
+            # anthropic: 宽松触发
+            if normalization is not None and normalization.has_cross_vendor_signals:
+                return True
+            if normalization is not None and normalization.has_anthropic_fixes:
+                return True
+            if session_record is None:
+                return True
+            if session_record.provider_state:
+                non_current = {
+                    v for v in session_record.provider_state if v != "anthropic"
+                }
+                if non_current:
+                    return True
+            return False
+
+        # zhipu/copilot: 仅会话历史确认的跨供应商转换
+        if session_record is not None and session_record.provider_state:
             non_current = {v for v in session_record.provider_state if v != tier_name}
             if non_current:
                 return True

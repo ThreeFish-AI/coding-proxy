@@ -1556,10 +1556,16 @@ class TestExecuteMessageLastTier500RecordsFailure:
 
 
 class TestNeedsVendorChannel:
-    """验证 _RouteExecutor._needs_vendor_channel 静态方法."""
+    """验证 _RouteExecutor._needs_vendor_channel 静态方法.
 
-    def test_true_when_normalization_has_cross_vendor_signals(self):
-        """normalization 有跨供应商信号时返回 True."""
+    anthropic 采用宽松触发（Phase 1 信号 + 无会话回退 + 会话历史）；
+    zhipu/copilot 采用严格触发（仅会话历史确认的跨供应商转换）。
+    """
+
+    # ── anthropic 宽松触发 ──
+
+    def test_anthropic_true_when_cross_vendor_signals(self):
+        """Phase 1 跨供应商信号 → anthropic 通道触发."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = True
         normalization.has_anthropic_fixes = False
@@ -1573,8 +1579,8 @@ class TestNeedsVendorChannel:
             is True
         )
 
-    def test_true_when_normalization_has_anthropic_fixes(self):
-        """Phase 1 检测到 Anthropic 修复需求时返回 True."""
+    def test_anthropic_true_when_anthropic_fixes(self):
+        """Phase 1 Anthropic 修复需求 → anthropic 通道触发."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = False
         normalization.has_anthropic_fixes = True
@@ -1588,8 +1594,8 @@ class TestNeedsVendorChannel:
             is True
         )
 
-    def test_true_when_session_record_is_none(self):
-        """session_record 为 None 时安全回退到 True."""
+    def test_anthropic_true_when_no_session_record(self):
+        """无会话记录 → anthropic 通道安全回退触发."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = False
         normalization.has_anthropic_fixes = False
@@ -1599,12 +1605,12 @@ class TestNeedsVendorChannel:
             is True
         )
 
-    def test_true_when_no_normalization_and_no_session(self):
-        """normalization 和 session_record 均为 None 时返回 True."""
+    def test_anthropic_true_when_no_normalization_and_no_session(self):
+        """normalization 和 session_record 均为 None → anthropic 触发."""
         assert _RouteExecutor._needs_vendor_channel("anthropic", None, None) is True
 
-    def test_true_when_session_has_non_anthropic_vendor(self):
-        """会话历史中有非 Anthropic 供应商时返回 True."""
+    def test_anthropic_true_when_session_has_non_anthropic_vendor(self):
+        """会话历史中有非 Anthropic 供应商 → anthropic 通道触发."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = False
         normalization.has_anthropic_fixes = False
@@ -1618,8 +1624,8 @@ class TestNeedsVendorChannel:
             is True
         )
 
-    def test_false_when_anthropic_only_session(self):
-        """纯 Anthropic 会话且无跨供应商信号时返回 False."""
+    def test_anthropic_false_when_anthropic_only_session(self):
+        """纯 Anthropic 会话且无 Phase 1 信号 → anthropic 通道不触发."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = False
         normalization.has_anthropic_fixes = False
@@ -1633,8 +1639,8 @@ class TestNeedsVendorChannel:
             is False
         )
 
-    def test_false_when_empty_provider_state(self):
-        """空 provider_state（首次请求）且无跨供应商信号时返回 False."""
+    def test_anthropic_false_when_empty_provider_state(self):
+        """空 provider_state（首次请求）且无 Phase 1 信号 → anthropic 不触发."""
         normalization = MagicMock()
         normalization.has_cross_vendor_signals = False
         normalization.has_anthropic_fixes = False
@@ -1648,14 +1654,99 @@ class TestNeedsVendorChannel:
             is False
         )
 
-    def test_true_when_normalization_none_but_session_has_non_anthropic(self):
-        """normalization 为 None 但会话有非 Anthropic 供应商时返回 True."""
+    def test_anthropic_true_when_normalization_none_but_session_has_other(self):
+        """normalization 为 None 但会话有非 Anthropic 供应商 → 触发."""
         session_record = MagicMock()
         session_record.provider_state = {"copilot": {}}
 
         assert (
             _RouteExecutor._needs_vendor_channel("anthropic", None, session_record)
             is True
+        )
+
+    # ── zhipu/copilot 严格触发 ──
+
+    def test_zhipu_false_when_no_session_record(self):
+        """无会话记录 → zhipu 通道不触发（严格模式）."""
+        normalization = MagicMock()
+        normalization.has_cross_vendor_signals = True
+        normalization.has_anthropic_fixes = True
+
+        assert (
+            _RouteExecutor._needs_vendor_channel("zhipu", normalization, None) is False
+        )
+
+    def test_zhipu_false_when_cross_vendor_signals_but_pure_session(self):
+        """Phase 1 有跨供应商信号，但纯 zhipu 会话 → zhipu 通道不触发.
+
+        核心场景：zhipu 自身产物（srvtoolu_* ID）触发 has_cross_vendor_signals，
+        但实际是纯 zhipu 会话，不应错误触发通道。
+        """
+        normalization = MagicMock()
+        normalization.has_cross_vendor_signals = True
+        normalization.has_anthropic_fixes = True
+        session_record = MagicMock()
+        session_record.provider_state = {"zhipu": {}}
+
+        assert (
+            _RouteExecutor._needs_vendor_channel("zhipu", normalization, session_record)
+            is False
+        )
+
+    def test_zhipu_false_when_empty_provider_state(self):
+        """空 provider_state 且无 Phase 1 帮助 → zhipu 通道不触发."""
+        normalization = MagicMock()
+        normalization.has_cross_vendor_signals = False
+        normalization.has_anthropic_fixes = False
+        session_record = MagicMock()
+        session_record.provider_state = {}
+
+        assert (
+            _RouteExecutor._needs_vendor_channel("zhipu", normalization, session_record)
+            is False
+        )
+
+    def test_zhipu_true_when_session_has_other_vendor(self):
+        """会话历史中有 copilot → zhipu 通道触发（跨供应商转换）."""
+        normalization = MagicMock()
+        normalization.has_cross_vendor_signals = False
+        normalization.has_anthropic_fixes = False
+        session_record = MagicMock()
+        session_record.provider_state = {"copilot": {}, "zhipu": {}}
+
+        assert (
+            _RouteExecutor._needs_vendor_channel("zhipu", normalization, session_record)
+            is True
+        )
+
+    def test_copilot_true_when_session_has_other_vendor(self):
+        """会话历史中有 zhipu → copilot 通道触发（跨供应商转换）."""
+        normalization = MagicMock()
+        normalization.has_cross_vendor_signals = False
+        normalization.has_anthropic_fixes = False
+        session_record = MagicMock()
+        session_record.provider_state = {"zhipu": {}, "copilot": {}}
+
+        assert (
+            _RouteExecutor._needs_vendor_channel(
+                "copilot", normalization, session_record
+            )
+            is True
+        )
+
+    def test_copilot_false_when_pure_copilot_session(self):
+        """纯 copilot 会话即使有 Phase 1 信号也不触发."""
+        normalization = MagicMock()
+        normalization.has_cross_vendor_signals = True
+        normalization.has_anthropic_fixes = True
+        session_record = MagicMock()
+        session_record.provider_state = {"copilot": {}}
+
+        assert (
+            _RouteExecutor._needs_vendor_channel(
+                "copilot", normalization, session_record
+            )
+            is False
         )
 
 
@@ -1781,18 +1872,21 @@ class TestPrepareBodyForTierThinkingStrip:
         assert result is body  # 原始 body 直接返回
 
     def test_zhipu_tier_applies_channel_when_cross_vendor(self):
-        """zhipu tier 在跨供应商场景下应用专属转换通道."""
+        """zhipu tier 在跨供应商场景（会话历史有 copilot）下应用专属转换通道."""
         normalization = MagicMock()
-        normalization.has_cross_vendor_signals = True
+        normalization.has_cross_vendor_signals = False
         normalization.has_anthropic_fixes = False
 
         tier = MagicMock()
         tier.name = "zhipu"
 
+        session_record = MagicMock()
+        session_record.provider_state = {"copilot": {}, "zhipu": {}}
+
         exec_inst = _executor([])
         body = self._body_with_thinking()
         result = exec_inst._prepare_body_for_tier(
-            body, tier, normalization, session_record=None
+            body, tier, normalization, session_record=session_record
         )
 
         # zhipu 通道剥离 thinking blocks + 移除 thinking 参数
