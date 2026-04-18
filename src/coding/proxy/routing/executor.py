@@ -226,74 +226,58 @@ class _RouteExecutor:
         self,
         body: dict[str, Any],
         tier: VendorTier,
-        normalization: Any = None,
-        session_record: Any = None,
+        source_vendor: str | None = None,
     ) -> dict[str, Any]:
-        """为指定 tier 准备请求体，应用供应商专属转换通道 (Phase 2).
+        """为指定 tier 准备请求体，应用源→目标绑定转换通道.
 
-        通过 vendor_channels 注册表统一分发，executor 不感知具体供应商逻辑。
-        未注册通道的 tier 原样返回请求体。
+        通过 VENDOR_TRANSITIONS 注册表查表分发，executor 不感知具体供应商逻辑。
+        未注册转换的源→目标对或 source_vendor 为 None 时原样返回请求体。
         """
-        from ..convert.vendor_channels import get_channel
+        from ..convert.vendor_channels import get_transition_channel
 
-        channel_fn = get_channel(tier.name)
-        if channel_fn is None:
+        if source_vendor is None:
             return body
 
-        if not self._needs_vendor_channel(tier.name, normalization, session_record):
+        channel_fn = get_transition_channel(source_vendor, tier.name)
+        if channel_fn is None:
             return body
 
         prepared, adaptations = channel_fn(body)
         if adaptations:
             logger.debug(
-                "Applied vendor channel for tier %s: %s",
+                "Applied transition channel %s → %s: %s",
+                source_vendor,
                 tier.name,
                 ", ".join(adaptations),
             )
         return prepared
 
     @staticmethod
-    def _needs_vendor_channel(
-        tier_name: str,
-        normalization: Any,
+    def _determine_source_vendor(
+        target_name: str,
+        failed_tier_name: str | None,
         session_record: Any,
-    ) -> bool:
-        """判断是否需要为目标供应商触发专属转换通道.
+    ) -> str | None:
+        """确定跨供应商转换的源 vendor.
 
-        anthropic 通道（宽松触发）:
-            Anthropic API 有严格的格式要求（tool pairing / thinking signature），
-            即使纯会话中也需修复。触发信号：
-            1. 跨供应商信号或 Anthropic 修复需求（Phase 1 信号）
-            2. 无会话追踪 → 安全回退
-            3. 会话历史中存在非 Anthropic 供应商
-
-        zhipu/copilot 通道（严格触发）:
-            Phase 1 信号 (has_cross_vendor_signals, has_anthropic_fixes) 不可靠——
-            纯 zhipu 会话中 zhipu 自身的产物（srvtoolu_* ID）也会触发。
-            唯一可靠指标是会话历史中存在非当前供应商。
+        Priority 1: failed_tier_name（请求内故障转移，最可靠）。
+        Priority 2: session_record.provider_state 中有已注册转换的 vendor（跨请求）。
         """
-        if tier_name == "anthropic":
-            # anthropic: 宽松触发
-            if normalization is not None and normalization.has_cross_vendor_signals:
-                return True
-            if normalization is not None and normalization.has_anthropic_fixes:
-                return True
-            if session_record is None:
-                return True
-            if session_record.provider_state:
-                non_current = {
-                    v for v in session_record.provider_state if v != "anthropic"
-                }
-                if non_current:
-                    return True
-            return False
+        # 请求内：刚失败的 tier 就是源
+        if failed_tier_name and failed_tier_name != target_name:
+            return failed_tier_name
 
-        # zhipu/copilot: 仅会话历史确认的跨供应商转换
+        # 跨请求：从会话历史找有注册转换的源
         if session_record is not None and session_record.provider_state:
-            non_current = {v for v in session_record.provider_state if v != tier_name}
-            if non_current:
-                return True
-        return False
+            from ..convert.vendor_channels import get_transition_channel
+
+            for source in session_record.provider_state:
+                if source != target_name and get_transition_channel(
+                    source, target_name
+                ):
+                    return source
+
+        return None
 
     async def execute_stream(
         self,
@@ -331,9 +315,10 @@ class _RouteExecutor:
             usage: dict[str, Any] = {}
 
             try:
-                body_for_tier = self._prepare_body_for_tier(
-                    body, tier, normalization, session_record=session_record
+                source_vendor = _RouteExecutor._determine_source_vendor(
+                    tier.name, failed_tier_name, session_record
                 )
+                body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
                 async for chunk in tier.vendor.send_message_stream(
                     body_for_tier, headers
                 ):
@@ -497,9 +482,10 @@ class _RouteExecutor:
                 continue
 
             try:
-                body_for_tier = self._prepare_body_for_tier(
-                    body, tier, normalization, session_record=session_record
+                source_vendor = _RouteExecutor._determine_source_vendor(
+                    tier.name, failed_tier_name, session_record
                 )
+                body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
                 resp = await tier.vendor.send_message(body_for_tier, headers)
 
                 if resp.status_code < 400:

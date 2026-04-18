@@ -5,7 +5,8 @@
 ## [Unreleased]
 
 - fix(request-normalizer): 重设计 zhipu→anthropic 跨供应商 tool_use/tool_result 配对修复——以单遍自包含 `enforce_anthropic_tool_pairing` 替代原有多步串联管线（剥离→重定位→孤儿修复），消除步骤间隐式依赖导致的孤儿 tool_use 漏修问题，彻底根治 `tool_use ids were found without tool_result blocks` 400 异常;
-- feat(vendor-channels): 新增 zhipu/copilot 供应商专属转换通道（`prepare_for_zhipu` / `prepare_for_copilot`），在跨供应商故障转移时自动剥离 GLM-5 不兼容的 thinking 块、cache_control 字段、thinking 参数，并强制 tool_use/tool_result 配对，消除 `likely format incompatibility (400 + tool_results)` 错误;
+- refactor(vendor-channels): 将供应商转换通道从「目标 vendor 专属」重构为「源→目标绑定」模型——注册表键从 `target_vendor` 改为 `(source, target)` 二元组，通道函数从 `prepare_for_X` 重命名为 `prepare_X_to_Y`，触发逻辑从 `_needs_vendor_channel` 替换为 `_determine_source_vendor`（基于请求内 `failed_tier_name` 和会话历史推断源 vendor），未注册的转换对（如 anthropic→zhipu）不触发任何通道;
+- feat(vendor-channels): 新增 zhipu→anthropic、zhipu→copilot、copilot→zhipu 三条源→目标绑定转换通道，在跨供应商故障转移时自动清理源 vendor 产物（thinking 块、cache_control 字段、thinking 参数、tool_use/tool_result 配对），消除 `likely format incompatibility (400 + tool_results)` 错误;
 
 ## [v0.2.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.3) — 2026-04-16
 

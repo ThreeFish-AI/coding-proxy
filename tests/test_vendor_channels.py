@@ -1,11 +1,11 @@
-"""供应商专属转换通道单元测试.
+"""供应商跨供应商转换通道单元测试.
 
-覆盖 :mod:`coding.proxy.convert.vendor_channels` 的通道函数和辅助函数:
-- anthropic 通道 (prepare_for_anthropic)
-- zhipu 通道 (prepare_for_zhipu)
-- copilot 通道 (prepare_for_copilot)
+覆盖 :mod:`coding.proxy.convert.vendor_channels` 的转换通道函数和辅助函数:
+- zhipu → anthropic 转换 (prepare_zhipu_to_anthropic)
+- zhipu → copilot 转换 (prepare_zhipu_to_copilot)
+- copilot → zhipu 转换 (prepare_copilot_to_zhipu)
 - 共享辅助函数 (_strip_thinking_blocks_inplace, _strip_cache_control)
-- 通道注册表 (VENDOR_CHANNELS, get_channel)
+- 转换注册表 (VENDOR_TRANSITIONS, get_transition_channel)
 """
 
 from __future__ import annotations
@@ -13,13 +13,13 @@ from __future__ import annotations
 import copy
 
 from coding.proxy.convert.vendor_channels import (
-    VENDOR_CHANNELS,
+    VENDOR_TRANSITIONS,
     _strip_cache_control,
     _strip_thinking_blocks_inplace,
-    get_channel,
-    prepare_for_anthropic,
-    prepare_for_copilot,
-    prepare_for_zhipu,
+    get_transition_channel,
+    prepare_copilot_to_zhipu,
+    prepare_zhipu_to_anthropic,
+    prepare_zhipu_to_copilot,
 )
 
 # ── 辅助函数测试 ──────────────────────────────────────────────
@@ -208,11 +208,11 @@ class TestStripCacheControl:
         assert removed == 0
 
 
-# ── zhipu 通道测试 ────────────────────────────────────────────
+# ── copilot → zhipu 转换通道测试 ────────────────────────────────
 
 
-class TestZhipuChannel:
-    """prepare_for_zhipu 通道单元测试."""
+class TestCopilotToZhipuChannel:
+    """prepare_copilot_to_zhipu 转换通道单元测试."""
 
     def test_strips_thinking_blocks(self):
         body = {
@@ -226,7 +226,7 @@ class TestZhipuChannel:
                 },
             ],
         }
-        prepared, adaptations = prepare_for_zhipu(body)
+        prepared, adaptations = prepare_copilot_to_zhipu(body)
         assert any("thinking_blocks" in a for a in adaptations)
         assert prepared["messages"][0]["content"] == [
             {"type": "text", "text": "response"},
@@ -241,7 +241,7 @@ class TestZhipuChannel:
             ],
             "messages": [],
         }
-        prepared, adaptations = prepare_for_zhipu(body)
+        prepared, adaptations = prepare_copilot_to_zhipu(body)
         assert any("cache_control" in a for a in adaptations)
         assert "cache_control" not in prepared["system"][0]
 
@@ -251,7 +251,7 @@ class TestZhipuChannel:
             "thinking": {"type": "enabled", "budget_tokens": 10000},
             "extended_thinking": {"type": "enabled"},
         }
-        prepared, adaptations = prepare_for_zhipu(body)
+        prepared, adaptations = prepare_copilot_to_zhipu(body)
         assert "thinking" not in prepared
         assert "extended_thinking" not in prepared
         assert "removed_thinking_param" in adaptations
@@ -277,8 +277,7 @@ class TestZhipuChannel:
                 },
             ],
         }
-        prepared, adaptations = prepare_for_zhipu(body)
-        # tool_use should have a corresponding tool_result
+        prepared, adaptations = prepare_copilot_to_zhipu(body)
         user_content = prepared["messages"][1]["content"]
         tool_results = [
             b
@@ -313,17 +312,13 @@ class TestZhipuChannel:
             ],
             "thinking": {"type": "enabled", "budget_tokens": 10000},
         }
-        prepared, adaptations = prepare_for_zhipu(body)
-        # thinking blocks stripped
+        prepared, adaptations = prepare_copilot_to_zhipu(body)
         assert all(
             b.get("type") not in ("thinking", "redacted_thinking")
             for b in prepared["messages"][0]["content"]
         )
-        # cache_control removed
         assert "cache_control" not in prepared["system"][0]
-        # thinking param removed
         assert "thinking" not in prepared
-        # tool pairing enforced
         user_content = prepared["messages"][1]["content"]
         tool_results = [
             b
@@ -346,7 +341,7 @@ class TestZhipuChannel:
             "thinking": {"type": "enabled"},
         }
         original = copy.deepcopy(body)
-        prepare_for_zhipu(body)
+        prepare_copilot_to_zhipu(body)
         assert body == original
 
     def test_noop_when_clean(self):
@@ -356,7 +351,7 @@ class TestZhipuChannel:
                 {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
             ],
         }
-        prepared, adaptations = prepare_for_zhipu(body)
+        prepared, adaptations = prepare_copilot_to_zhipu(body)
         assert adaptations == []
         assert prepared == body
 
@@ -382,17 +377,17 @@ class TestZhipuChannel:
             ],
             "thinking": {"type": "enabled"},
         }
-        prepared1, adaptations1 = prepare_for_zhipu(body)
-        prepared2, adaptations2 = prepare_for_zhipu(prepared1)
+        prepared1, adaptations1 = prepare_copilot_to_zhipu(body)
+        prepared2, adaptations2 = prepare_copilot_to_zhipu(prepared1)
         assert prepared2 == prepared1
         assert adaptations2 == []
 
 
-# ── anthropic 通道测试 ────────────────────────────────────────
+# ── zhipu → anthropic 转换通道测试 ────────────────────────────────
 
 
-class TestAnthropicChannel:
-    """prepare_for_anthropic 通道单元测试."""
+class TestZhipuToAnthropicChannel:
+    """prepare_zhipu_to_anthropic 转换通道单元测试."""
 
     def test_enforces_tool_pairing(self):
         body = {
@@ -414,7 +409,7 @@ class TestAnthropicChannel:
                 },
             ],
         }
-        prepared, adaptations = prepare_for_anthropic(body)
+        prepared, adaptations = prepare_zhipu_to_anthropic(body)
         user_content = prepared["messages"][1]["content"]
         tool_results = [
             b
@@ -436,7 +431,7 @@ class TestAnthropicChannel:
                 },
             ],
         }
-        prepared, adaptations = prepare_for_anthropic(body)
+        prepared, adaptations = prepare_zhipu_to_anthropic(body)
         assert any("thinking_blocks" in a for a in adaptations)
         assert prepared["messages"][0]["content"] == [
             {"type": "text", "text": "response"}
@@ -463,13 +458,11 @@ class TestAnthropicChannel:
                 },
             ],
         }
-        prepared, adaptations = prepare_for_anthropic(body)
-        # thinking stripped
+        prepared, adaptations = prepare_zhipu_to_anthropic(body)
         assert all(
             b.get("type") not in ("thinking", "redacted_thinking")
             for b in prepared["messages"][0]["content"]
         )
-        # tool pairing enforced
         user_content = prepared["messages"][1]["content"]
         tool_results = [
             b
@@ -491,7 +484,7 @@ class TestAnthropicChannel:
             ],
         }
         original = copy.deepcopy(body)
-        prepare_for_anthropic(body)
+        prepare_zhipu_to_anthropic(body)
         assert body == original
 
     def test_noop_when_clean(self):
@@ -501,7 +494,7 @@ class TestAnthropicChannel:
                 {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
             ],
         }
-        prepared, adaptations = prepare_for_anthropic(body)
+        prepared, adaptations = prepare_zhipu_to_anthropic(body)
         assert adaptations == []
         assert prepared == body
 
@@ -526,55 +519,26 @@ class TestAnthropicChannel:
                 },
             ],
         }
-        prepared1, _ = prepare_for_anthropic(body)
-        prepared2, adaptations2 = prepare_for_anthropic(prepared1)
+        prepared1, _ = prepare_zhipu_to_anthropic(body)
+        prepared2, adaptations2 = prepare_zhipu_to_anthropic(prepared1)
         assert prepared2 == prepared1
         assert adaptations2 == []
 
     def test_preserves_thinking_param(self):
-        """anthropic 通道不移除顶层 thinking 参数（Anthropic API 支持）."""
+        """zhipu → anthropic 通道不移除顶层 thinking 参数（Anthropic API 支持）."""
         body = {
             "messages": [],
             "thinking": {"type": "enabled", "budget_tokens": 5000},
         }
-        prepared, _ = prepare_for_anthropic(body)
+        prepared, _ = prepare_zhipu_to_anthropic(body)
         assert "thinking" in prepared
 
 
-# ── 注册表测试 ────────────────────────────────────────────────
+# ── zhipu → copilot 转换通道测试 ──────────────────────────────
 
 
-class TestChannelRegistry:
-    """通道注册表 VENDOR_CHANNELS / get_channel 单元测试."""
-
-    def test_all_channels_registered(self):
-        assert "anthropic" in VENDOR_CHANNELS
-        assert "zhipu" in VENDOR_CHANNELS
-        assert "copilot" in VENDOR_CHANNELS
-
-    def test_get_channel_returns_function(self):
-        assert get_channel("anthropic") is prepare_for_anthropic
-        assert get_channel("zhipu") is prepare_for_zhipu
-        assert get_channel("copilot") is prepare_for_copilot
-
-    def test_get_channel_returns_none_for_unknown(self):
-        assert get_channel("unknown") is None
-        assert get_channel("antigravity") is None
-
-    def test_channel_functions_share_signature(self):
-        body = {"messages": []}
-        for name, fn in VENDOR_CHANNELS.items():
-            result = fn(body)
-            assert isinstance(result, tuple) and len(result) == 2
-            assert isinstance(result[0], dict)
-            assert isinstance(result[1], list)
-
-
-# ── copilot 通道测试 ──────────────────────────────────────────
-
-
-class TestCopilotChannel:
-    """prepare_for_copilot 通道单元测试."""
+class TestZhipuToCopilotChannel:
+    """prepare_zhipu_to_copilot 转换通道单元测试."""
 
     def test_strips_thinking_blocks(self):
         body = {
@@ -588,7 +552,7 @@ class TestCopilotChannel:
                 },
             ],
         }
-        prepared, adaptations = prepare_for_copilot(body)
+        prepared, adaptations = prepare_zhipu_to_copilot(body)
         assert any("thinking_blocks" in a for a in adaptations)
         assert prepared["messages"][0]["content"] == [
             {"type": "text", "text": "response"},
@@ -609,17 +573,17 @@ class TestCopilotChannel:
                 },
             ],
         }
-        prepared, adaptations = prepare_for_copilot(body)
+        prepared, adaptations = prepare_zhipu_to_copilot(body)
         assert any("cache_control" in a for a in adaptations)
         assert "cache_control" not in prepared["messages"][0]["content"][0]
 
     def test_preserves_thinking_param(self):
-        """copilot 通道不移除顶层 thinking 参数（由 converter 自行映射）."""
+        """zhipu → copilot 通道不移除顶层 thinking 参数（由 converter 自行映射）."""
         body = {
             "messages": [],
             "thinking": {"type": "enabled", "budget_tokens": 10000},
         }
-        prepared, adaptations = prepare_for_copilot(body)
+        prepared, adaptations = prepare_zhipu_to_copilot(body)
         assert "thinking" in prepared
         assert "removed_thinking_param" not in adaptations
 
@@ -643,7 +607,7 @@ class TestCopilotChannel:
                 },
             ],
         }
-        prepared, adaptations = prepare_for_copilot(body)
+        prepared, adaptations = prepare_zhipu_to_copilot(body)
         user_content = prepared["messages"][1]["content"]
         tool_results = [
             b
@@ -665,7 +629,7 @@ class TestCopilotChannel:
             ],
         }
         original = copy.deepcopy(body)
-        prepare_for_copilot(body)
+        prepare_zhipu_to_copilot(body)
         assert body == original
 
     def test_noop_when_clean(self):
@@ -675,7 +639,7 @@ class TestCopilotChannel:
                 {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
             ],
         }
-        prepared, adaptations = prepare_for_copilot(body)
+        prepared, adaptations = prepare_zhipu_to_copilot(body)
         assert adaptations == []
         assert prepared == body
 
@@ -700,8 +664,8 @@ class TestCopilotChannel:
                 },
             ],
         }
-        prepared1, _ = prepare_for_copilot(body)
-        prepared2, adaptations2 = prepare_for_copilot(prepared1)
+        prepared1, _ = prepare_zhipu_to_copilot(body)
+        prepared2, adaptations2 = prepare_zhipu_to_copilot(prepared1)
         assert prepared2 == prepared1
         assert adaptations2 == []
 
@@ -717,34 +681,68 @@ class TestCopilotChannel:
                 },
             ],
         }
-        prepared, adaptations = prepare_for_copilot(body)
+        prepared, adaptations = prepare_zhipu_to_copilot(body)
         assert any("thinking_blocks" in a for a in adaptations)
         assert prepared["messages"][0]["content"] == [
             {"type": "text", "text": "response"},
         ]
 
 
-# ── zhipu vs copilot 通道差异测试 ────────────────────────────
+# ── 转换注册表测试 ────────────────────────────────────────────
 
 
-class TestChannelDifferences:
-    """验证 zhipu 和 copilot 通道的关键行为差异."""
+class TestTransitionRegistry:
+    """VENDOR_TRANSITIONS / get_transition_channel 单元测试."""
 
-    def test_zhipu_removes_thinking_param_copilot_preserves(self):
+    def test_all_transitions_registered(self):
+        assert ("zhipu", "anthropic") in VENDOR_TRANSITIONS
+        assert ("zhipu", "copilot") in VENDOR_TRANSITIONS
+        assert ("copilot", "zhipu") in VENDOR_TRANSITIONS
+        assert len(VENDOR_TRANSITIONS) == 3
+
+    def test_get_transition_channel_returns_function(self):
+        assert (
+            get_transition_channel("zhipu", "anthropic") is prepare_zhipu_to_anthropic
+        )
+        assert get_transition_channel("zhipu", "copilot") is prepare_zhipu_to_copilot
+        assert get_transition_channel("copilot", "zhipu") is prepare_copilot_to_zhipu
+
+    def test_get_transition_channel_returns_none_for_unregistered(self):
+        assert get_transition_channel("anthropic", "zhipu") is None
+        assert get_transition_channel("copilot", "anthropic") is None
+        assert get_transition_channel("unknown", "target") is None
+        assert get_transition_channel("antigravity", "copilot") is None
+
+    def test_transition_functions_share_signature(self):
+        body = {"messages": []}
+        for key, fn in VENDOR_TRANSITIONS.items():
+            result = fn(body)
+            assert isinstance(result, tuple) and len(result) == 2
+            assert isinstance(result[0], dict)
+            assert isinstance(result[1], list)
+
+
+# ── 转换通道差异测试 ──────────────────────────────────────────
+
+
+class TestTransitionDifferences:
+    """验证不同转换通道的关键行为差异."""
+
+    def test_copilot_to_zhipu_removes_thinking_param_zhipu_to_copilot_preserves(self):
         body = {
             "messages": [],
             "thinking": {"type": "enabled", "budget_tokens": 5000},
         }
-        zhipu_result, zhipu_adapt = prepare_for_zhipu(body)
-        copilot_result, copilot_adapt = prepare_for_copilot(body)
+        copilot_to_zhipu_result, copilot_to_zhipu_adapt = prepare_copilot_to_zhipu(body)
+        zhipu_to_copilot_result, zhipu_to_copilot_adapt = prepare_zhipu_to_copilot(body)
 
-        assert "thinking" not in zhipu_result
-        assert "removed_thinking_param" in zhipu_adapt
+        assert "thinking" not in copilot_to_zhipu_result
+        assert "removed_thinking_param" in copilot_to_zhipu_adapt
 
-        assert "thinking" in copilot_result
-        assert "removed_thinking_param" not in copilot_adapt
+        assert "thinking" in zhipu_to_copilot_result
+        assert "removed_thinking_param" not in zhipu_to_copilot_adapt
 
-    def test_both_strip_thinking_blocks(self):
+    def test_all_transitions_strip_thinking_blocks(self):
         body = {
             "messages": [
                 {
@@ -756,13 +754,8 @@ class TestChannelDifferences:
                 },
             ],
         }
-        zhipu_result, _ = prepare_for_zhipu(body)
-        copilot_result, _ = prepare_for_copilot(body)
-
-        # 两者都剥离 thinking blocks
-        assert zhipu_result["messages"][0]["content"] == [
-            {"type": "text", "text": "hi"}
-        ]
-        assert copilot_result["messages"][0]["content"] == [
-            {"type": "text", "text": "hi"}
-        ]
+        for key, fn in VENDOR_TRANSITIONS.items():
+            result, adaptations = fn(body)
+            assert result["messages"][0]["content"] == [
+                {"type": "text", "text": "hi"}
+            ], f"Transition {key} failed to strip thinking blocks"
