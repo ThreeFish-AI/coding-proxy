@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- refactor(vendor-channels): 彻底收敛跨供应商兼容性逻辑——删除 `server/request_normalizer.py` 入口通用规范化层，将 `srvtoolu_*` ID 重写、`server_tool_use_delta` 私有块剥离全部迁入源→目标绑定通道（`prepare_zhipu_to_anthropic`、`prepare_zhipu_to_copilot`）；新增 `infer_source_vendor_from_body` 内容感知源推断，在无会话状态的首次请求场景下兜底识别源供应商；`_RouteExecutor._determine_source_vendor` 扩充为三级优先级（failed_tier → session_state → body inference），确保未注册转换对不触发任何清洗；
+- refactor(count-tokens): `/v1/messages/count_tokens` 端点移除无条件 `strip_thinking_blocks` 过度防御，改为基于 `infer_source_vendor_from_body` + `get_transition_channel` 的按需通道清洗，语义与 `/v1/messages` 对齐；
 - fix(request-normalizer): 重设计 zhipu→anthropic 跨供应商 tool_use/tool_result 配对修复——以单遍自包含 `enforce_anthropic_tool_pairing` 替代原有多步串联管线（剥离→重定位→孤儿修复），消除步骤间隐式依赖导致的孤儿 tool_use 漏修问题，彻底根治 `tool_use ids were found without tool_result blocks` 400 异常;
 - refactor(vendor-channels): 将供应商转换通道从「目标 vendor 专属」重构为「源→目标绑定」模型——注册表键从 `target_vendor` 改为 `(source, target)` 二元组，通道函数从 `prepare_for_X` 重命名为 `prepare_X_to_Y`，触发逻辑从 `_needs_vendor_channel` 替换为 `_determine_source_vendor`（基于请求内 `failed_tier_name` 和会话历史推断源 vendor），未注册的转换对（如 anthropic→zhipu）不触发任何通道;
 - feat(vendor-channels): 新增 zhipu→anthropic、zhipu→copilot、copilot→zhipu 三条源→目标绑定转换通道，在跨供应商故障转移时自动清理源 vendor 产物（thinking 块、cache_control 字段、thinking 参数、tool_use/tool_result 配对），消除 `likely format incompatibility (400 + tool_results)` 错误;
