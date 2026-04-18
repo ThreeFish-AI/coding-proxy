@@ -24,14 +24,10 @@ from .responses import (
 logger = logging.getLogger(__name__)
 
 
-async def _stream_proxy(
-    router: Any, body: dict, headers: dict, normalization: Any = None
-) -> Any:
+async def _stream_proxy(router: Any, body: dict, headers: dict) -> Any:
     """流式代理生成器."""
     try:
-        async for chunk, vendor_name in router.route_stream(
-            body, headers, normalization=normalization
-        ):
+        async for chunk, vendor_name in router.route_stream(body, headers):
             yield chunk
     except NoCompatibleVendorError as exc:
         yield (
@@ -82,15 +78,13 @@ def register_core_routes(app: Any, router: Any) -> None:
 
         if is_streaming:
             return StreamingResponse(
-                _stream_proxy(router, body, headers, normalization=normalization),
+                _stream_proxy(router, body, headers),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
             )
 
         try:
-            resp = await router.route_message(
-                body, headers, normalization=normalization
-            )
+            resp = await router.route_message(body, headers)
         except NoCompatibleVendorError as exc:
             return json_error_response(
                 400,
@@ -158,7 +152,7 @@ def register_core_routes(app: Any, router: Any) -> None:
 
         # count_tokens 无会话上下文，无法判断 thinking block 来源，
         # 安全剥离以防止跨供应商 signature 导致 400 错误。
-        from .request_normalizer import strip_thinking_blocks
+        from ..convert.vendor_channels import strip_thinking_blocks
 
         strip_thinking_blocks(body)
 

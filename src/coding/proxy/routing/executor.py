@@ -283,7 +283,6 @@ class _RouteExecutor:
         self,
         body: dict[str, Any],
         headers: dict[str, str],
-        normalization: Any = None,
     ) -> AsyncIterator[tuple[bytes, str]]:
         """路由流式请求，按优先级尝试各层级."""
         last_idx = len(self._tiers) - 1
@@ -453,7 +452,6 @@ class _RouteExecutor:
         self,
         body: dict[str, Any],
         headers: dict[str, str],
-        normalization: Any = None,
     ) -> VendorResponse:
         """路由非流式请求，按优先级尝试各层级."""
         last_idx = len(self._tiers) - 1
