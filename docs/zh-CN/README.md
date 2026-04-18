@@ -30,7 +30,7 @@
 ## 🌟 核心特性 (Core Features)
 
 <div align="center">
-    <img src="../../assets/dashboard-v0.2.3.png">
+    <img src="../../assets/dashboard-v0.2.4.png">
 </div>
 
 - **⛓️ N-tier 链式故障转移 (Failover)**：自主降序序列，支持 Claude 官方 Plans，以及 GitHub Copilot、Google Antigravity、智谱、MiniMax、阿里千问、小米、Kimi、豆包等的 Coding Plan。
@@ -92,13 +92,13 @@ claude
 
 `coding-proxy` 附带了强大的 CLI 工具套件，帮助您全面掌控代理状态。
 
-| 指令     | 说明                                                                              | 示例用法                                      |
-| :------- | :-------------------------------------------------------------------------------- | :-------------------------------------------- |
-| `start`  | **启动代理服务器**。支持自定义端口与配置路径。                                    | `coding-proxy start -p 8080 -c ~/config.yaml` |
+| 指令     | 说明                                                                                                                            | 示例用法                                      |
+| :------- | :------------------------------------------------------------------------------------------------------------------------------ | :-------------------------------------------- |
+| `start`  | **启动代理服务器**。支持自定义端口与配置路径。                                                                                  | `coding-proxy start -p 8080 -c ~/config.yaml` |
 | `auth`   | **管理 OAuth 登录凭证**。子命令：`login`（浏览器 OAuth 登录）、`status`（令牌状态）、`reauth`（重认证）、`logout`（清除令牌）。 | `coding-proxy auth login -p github`           |
-| `status` | **查看代理健康状态**。展示各层级熔断器（OPEN/CLOSED）与配额状态。                 | `coding-proxy status`                         |
-| `usage`  | **Token 统计看板**。按天/供应商/模型维度追踪每一次的 Token 消耗、故障转移及耗时。 | `coding-proxy usage -d 7 -v anthropic`        |
-| `reset`  | **强制一键重置**。人工确认主供应商恢复可用后，立刻初始化所有熔断器和配额状态。    | `coding-proxy reset`                          |
+| `status` | **查看代理健康状态**。展示各层级熔断器（OPEN/CLOSED）与配额状态。                                                               | `coding-proxy status`                         |
+| `usage`  | **Token 统计看板**。按天/供应商/模型维度追踪每一次的 Token 消耗、故障转移及耗时。                                               | `coding-proxy usage -d 7 -v anthropic`        |
+| `reset`  | **强制一键重置**。人工确认主供应商恢复可用后，立刻初始化所有熔断器和配额状态。                                                  | `coding-proxy reset`                          |
 
 ---
 

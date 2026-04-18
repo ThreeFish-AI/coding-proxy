@@ -30,7 +30,7 @@ When you're deeply immersed in your coding "zone" with **Claude Code** (or any A
 ## 🌟 Core Features
 
 <div align="center">
-    <img src="assets/dashboard-v0.2.3.png">
+    <img src="assets/dashboard-v0.2.4.png">
 </div>
 
 - **⛓️ N-tier Chained Failover**: Autonomous descending sequence, supporting Claude's official plans, as well as Coding Plans from GitHub Copilot, Google Antigravity, Z AI, MiniMax, Alibaba Qwen, Xiaomi, Kimi, Doubao, etc.
@@ -92,13 +92,13 @@ claude
 
 `coding-proxy` comes equipped with a badass suite of CLI tools to help you boss around your proxy state.
 
-| Command  | Description                                                                                                                                        | Example Usage                                 |
-| :------- | :------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------- |
-| `start`  | **Fire up the proxy server.** Supports custom ports and configuration paths.                                                                       | `coding-proxy start -p 8080 -c ~/config.yaml` |
+| Command  | Description                                                                                                                                          | Example Usage                                 |
+| :------- | :--------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------- |
+| `start`  | **Fire up the proxy server.** Supports custom ports and configuration paths.                                                                         | `coding-proxy start -p 8080 -c ~/config.yaml` |
 | `auth`   | **Manage OAuth credentials.** Sub-commands: `login` (browser OAuth), `status` (token validity), `reauth` (re-authenticate), `logout` (clear tokens). | `coding-proxy auth login -p github`           |
-| `status` | **Check proxy health.** Shows circuit breaker states (OPEN/CLOSED) and quota status across all tiers.                                              | `coding-proxy status`                         |
-| `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/vendor/model dimensions.                | `coding-proxy usage -d 7 -v anthropic`        |
-| `reset`  | **The emergency flush button.** Force-reset all circuit breakers and quotas instantly when you've confirmed the main vendor is back from the dead. | `coding-proxy reset`                          |
+| `status` | **Check proxy health.** Shows circuit breaker states (OPEN/CLOSED) and quota status across all tiers.                                                | `coding-proxy status`                         |
+| `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/vendor/model dimensions.                  | `coding-proxy usage -d 7 -v anthropic`        |
+| `reset`  | **The emergency flush button.** Force-reset all circuit breakers and quotas instantly when you've confirmed the main vendor is back from the dead.   | `coding-proxy reset`                          |
 
 ---
 
