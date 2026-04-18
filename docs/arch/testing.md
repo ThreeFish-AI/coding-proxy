@@ -65,6 +65,7 @@
 | `test_convert_sse.py`              | Gemini SSE→Anthropic SSE 流适配（单/多 chunk、各 finishReason、边界情况） |
 | `test_copilot_convert_request.py`  | Anthropic→OpenAI 请求格式转换                                             |
 | `test_copilot_convert_response.py` | OpenAI→Anthropic 响应格式转换                                             |
+| `test_vendor_channels.py`          | 源→目标通道：zhipu/copilot 兼容性清洗、tool_use 配对、内容感知源推断      |
 
 ### 2.5 数据模型（model）
 
@@ -95,7 +96,6 @@
 | 测试文件                     | 覆盖范围                                                |
 | ---------------------------- | ------------------------------------------------------- |
 | `test_app_routes.py`         | FastAPI 路由端点测试                                    |
-| `test_request_normalizer.py` | 请求标准化：私有块清洗、tool_use_id 重写、fatal_reasons |
 | `test_cli_usage.py`          | CLI 用量查询命令                                        |
 | `test_banner.py`             | CLI Banner 显示                                         |
 | `test_logging_dual_write.py` | 日志双写机制                                            |

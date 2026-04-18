@@ -59,22 +59,13 @@ async def _stream_proxy(router: Any, body: dict, headers: dict) -> Any:
 
 def register_core_routes(app: Any, router: Any) -> None:
     """注册核心 API 路由：消息代理与 Token 计数."""
-    from .request_normalizer import normalize_anthropic_request
 
     @app.post("/v1/messages")
     async def messages(request: Request) -> Response:
         """Anthropic Messages API 代理端点."""
         body = await request.json()
         headers = dict(request.headers)
-        normalization = normalize_anthropic_request(body)
-        body = normalization.body
         is_streaming = body.get("stream", False)
-
-        if normalization.adaptations:
-            logger.debug(
-                "Request normalized before routing: %s",
-                ", ".join(normalization.adaptations),
-            )
 
         if is_streaming:
             return StreamingResponse(
@@ -150,11 +141,25 @@ def register_core_routes(app: Any, router: Any) -> None:
         body = await request.json()
         headers = dict(request.headers)
 
-        # count_tokens 无会话上下文，无法判断 thinking block 来源，
-        # 安全剥离以防止跨供应商 signature 导致 400 错误。
-        from ..convert.vendor_channels import strip_thinking_blocks
+        # count_tokens 绕过 executor 直接调用 vendor，此处通过内容感知推断源供应商
+        # 后触发对应的 source→target 通道，使兼容性处理与 /v1/messages 保持一致。
+        from ..convert.vendor_channels import (
+            get_transition_channel,
+            infer_source_vendor_from_body,
+        )
 
-        strip_thinking_blocks(body)
+        source = infer_source_vendor_from_body(body)
+        if source:
+            channel_fn = get_transition_channel(source, target_vendor.name)
+            if channel_fn is not None:
+                body, adaptations = channel_fn(body)
+                if adaptations:
+                    logger.debug(
+                        "count_tokens channel %s → %s: %s",
+                        source,
+                        target_vendor.name,
+                        ", ".join(adaptations),
+                    )
 
         prepared_body, prepared_headers = await target_vendor._prepare_request(
             body, headers
