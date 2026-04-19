@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 from .. import __version__
 
 
-def build_banner(host: str = "127.0.0.1", port: int = 8046) -> Panel:
+def build_banner(host: str = "127.0.0.1", port: int = 3392) -> Panel:
     """构建品牌横幅 Panel.
 
     Args:
@@ -48,7 +48,7 @@ def build_banner(host: str = "127.0.0.1", port: int = 8046) -> Panel:
     return Panel(brand_text, border_style="cyan", padding=(1, 2), expand=False)
 
 
-def print_banner(console: Console, host: str = "127.0.0.1", port: int = 8046) -> None:
+def print_banner(console: Console, host: str = "127.0.0.1", port: int = 3392) -> None:
     """通过指定 Console 打印品牌横幅.
 
     Args:

@@ -70,9 +70,9 @@ uv run coding-proxy start
 # INFO:     Started server process [1403]
 # INFO:     Waiting for application startup.
 # ...
-# INFO:     coding-proxy started: host=127.0.0.1 port=8046
+# INFO:     coding-proxy started: host=127.0.0.1 port=3392
 # INFO:     Application startup complete.
-# INFO:     Uvicorn running on http://127.0.0.1:8046 (Press CTRL+C to quit)
+# INFO:     Uvicorn running on http://127.0.0.1:3392 (Press CTRL+C to quit)
 ```
 
 ### 4. 一键接入 Claude Code
@@ -80,7 +80,7 @@ uv run coding-proxy start
 打开一个新的终端标签页，启动 Claude Code 前将流量指向 coding-proxy：
 
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8046
+export ANTHROPIC_BASE_URL=http://127.0.0.1:3392
 
 # 享受如丝般顺滑、永不断连的编程心流：
 claude

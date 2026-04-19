@@ -31,7 +31,7 @@
 根路径连通性探针。Claude Code 在建立连接前发送 `HEAD /` 作为健康检查，代理返回 HTTP 200 空响应。
 
 ```bash
-curl -I http://127.0.0.1:8046/
+curl -I http://127.0.0.1:3392/
 # HTTP/1.1 200 OK
 ```
 
@@ -189,7 +189,7 @@ curl -I http://127.0.0.1:8046/
 Token 计数 API 透传。支持所有提供 Anthropic 兼容端点的供应商。
 
 ```bash
-curl -X POST http://127.0.0.1:8046/v1/messages/count_tokens \
+curl -X POST http://127.0.0.1:3392/v1/messages/count_tokens \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
   -d '{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Hello"}]}'
@@ -206,7 +206,7 @@ curl -X POST http://127.0.0.1:8046/v1/messages/count_tokens \
 健康检查。
 
 ```bash
-curl http://127.0.0.1:8046/health
+curl http://127.0.0.1:3392/health
 # {"status":"ok"}
 ```
 
@@ -215,7 +215,7 @@ curl http://127.0.0.1:8046/health
 查询所有层级的熔断器、配额守卫、周级配额守卫、Rate Limit 及诊断信息。
 
 ```bash
-curl http://127.0.0.1:8046/api/status
+curl http://127.0.0.1:3392/api/status
 ```
 
 **返回示例**：
@@ -258,15 +258,15 @@ curl http://127.0.0.1:8046/api/status
 
 ```bash
 # 仅重置（向后兼容）
-curl -X POST http://127.0.0.1:8046/api/reset
+curl -X POST http://127.0.0.1:3392/api/reset
 
 # 重置 + 提升 anthropic 到最高优先级
-curl -X POST http://127.0.0.1:8046/api/reset \
+curl -X POST http://127.0.0.1:3392/api/reset \
   -H "Content-Type: application/json" \
   -d '{"vendors": ["anthropic"]}'
 
 # 重置 + 替换整条链路顺序
-curl -X POST http://127.0.0.1:8046/api/reset \
+curl -X POST http://127.0.0.1:3392/api/reset \
   -H "Content-Type: application/json" \
   -d '{"vendors": ["zhipu", "anthropic", "copilot"]}'
 ```
@@ -282,7 +282,7 @@ curl -X POST http://127.0.0.1:8046/api/reset \
 返回 Copilot 认证与交换链路的脱敏诊断信息。
 
 ```bash
-curl http://127.0.0.1:8046/api/copilot/diagnostics
+curl http://127.0.0.1:3392/api/copilot/diagnostics
 ```
 
 若 Copilot 供应商未启用，返回 404。
@@ -292,7 +292,7 @@ curl http://127.0.0.1:8046/api/copilot/diagnostics
 按需探测当前 Copilot 会话可见的模型列表。
 
 ```bash
-curl http://127.0.0.1:8046/api/copilot/models
+curl http://127.0.0.1:3392/api/copilot/models
 ```
 
 需要有效的 Copilot 凭证；凭证无效时返回 503。
@@ -302,7 +302,7 @@ curl http://127.0.0.1:8046/api/copilot/models
 查询运行时重认证状态。
 
 ```bash
-curl http://127.0.0.1:8046/api/reauth/status
+curl http://127.0.0.1:3392/api/reauth/status
 ```
 
 ## 10. POST /api/reauth/{provider}
@@ -310,7 +310,7 @@ curl http://127.0.0.1:8046/api/reauth/status
 手动触发指定 provider 的运行时重认证。
 
 ```bash
-curl -X POST http://127.0.0.1:8046/api/reauth/github
+curl -X POST http://127.0.0.1:3392/api/reauth/github
 # HTTP/1.1 202 Accepted
 # {"status":"reauth requested"}
 ```
@@ -330,7 +330,7 @@ curl -X POST http://127.0.0.1:8046/api/reauth/github
 返回 Dashboard HTML 页面。
 
 ```bash
-curl http://127.0.0.1:8046/dashboard
+curl http://127.0.0.1:3392/dashboard
 ```
 
 ### 11.2 GET /api/dashboard/summary
@@ -338,7 +338,7 @@ curl http://127.0.0.1:8046/dashboard
 返回 Dashboard 汇总数据（今日 + 所选区间）。
 
 ```bash
-curl "http://127.0.0.1:8046/api/dashboard/summary?days=7"
+curl "http://127.0.0.1:3392/api/dashboard/summary?days=7"
 ```
 
 | 参数   | 类型 | 默认值 | 说明             |
@@ -352,7 +352,7 @@ curl "http://127.0.0.1:8046/api/dashboard/summary?days=7"
 返回按天分组的时序数据（用于图表绘制）。
 
 ```bash
-curl "http://127.0.0.1:8046/api/dashboard/timeline?days=30"
+curl "http://127.0.0.1:3392/api/dashboard/timeline?days=30"
 ```
 
 | 参数   | 类型 | 默认值 | 说明             |

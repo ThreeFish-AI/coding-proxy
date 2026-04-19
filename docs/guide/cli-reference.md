@@ -39,7 +39,7 @@ coding-proxy start
 coding-proxy start -p 9000 -c ~/my-config.yaml
 
 # 自定义监听地址和端口
-coding-proxy start --host 0.0.0.0 --port 8046
+coding-proxy start --host 0.0.0.0 --port 3392
 ```
 
 > 若启用了 Copilot 或 Antigravity 供应商但未配置凭证，启动时会自动触发 OAuth 浏览器登录流程。
@@ -54,7 +54,7 @@ coding-proxy status [OPTIONS]
 
 | 参数     | 缩写 | 说明                      |
 | -------- | ---- | ------------------------- |
-| `--port` | `-p` | 代理服务端口（默认 8046） |
+| `--port` | `-p` | 代理服务端口（默认 3392） |
 
 **输出示例**：
 
@@ -143,7 +143,7 @@ coding-proxy reset [OPTIONS]
 
 | 参数       | 缩写 | 说明                                            |
 | ---------- | ---- | ----------------------------------------------- |
-| `--port`   | `-p` | 代理服务端口（默认 8046）                       |
+| `--port`   | `-p` | 代理服务端口（默认 3392）                       |
 | `--vendor` | `-v` | 提升/重排序 vendor 优先级（单个或逗号分隔多个） |
 
 **重排序语义**：
@@ -211,7 +211,7 @@ coding-proxy auth reauth PROVIDER [OPTIONS]
 | 参数       | 缩写 | 说明                                       |
 | ---------- | ---- | ------------------------------------------ |
 | `PROVIDER` | —    | provider 名称（必填）：`github` / `google` |
-| `--port`   | `-p` | 代理服务端口（默认 8046）                  |
+| `--port`   | `-p` | 代理服务端口（默认 3392）                  |
 
 **示例**：
 

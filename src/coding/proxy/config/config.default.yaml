@@ -4,7 +4,7 @@
 
 server:
   host: "127.0.0.1"
-  port: 8046
+  port: 3392
 
 logging:
   level: "INFO"
@@ -522,3 +522,35 @@ auth:
   # google_client_id: ""
   # google_client_secret: ""
   token_store_path: "~/.coding-proxy/tokens.json"
+
+# === 原生 API 透传（/api/{openai,gemini,anthropic}/**）===
+#
+# 三家 provider 默认 enabled=true（开箱即用）。
+# 客户端将 SDK base_url 改为 http://127.0.0.1:3392/api/{openai,gemini,anthropic}
+# 即可直接触达官方上游；认证（Authorization / x-api-key / ?key=）由客户端自带，
+# proxy 不保管凭据。
+#
+# 将 base_url 指向第三方代理的两种方式（优先级：env > yaml > 内置默认）：
+#   方式 A（推荐部署/容器场景）：设置环境变量
+#     NATIVE_OPENAI_BASE_URL     / NATIVE_GEMINI_BASE_URL     / NATIVE_ANTHROPIC_BASE_URL
+#   方式 B（推荐本地开发/团队共享）：直接编辑下方 base_url 字段
+#
+# 如需禁用某家 provider，将对应 enabled 改为 false 即可。
+# base_url 字段的值与 Pydantic 内置默认保持一致（由 tests/test_native_api_base_url_override.py
+# 的 test_default_config_yaml_matches_pydantic_builtin 守护双写同步）。
+native_api:
+  openai:
+    enabled: true
+    base_url: "https://api.openai.com"
+    timeout_ms: 300000
+    connect_timeout_ms: 15000
+  gemini:
+    enabled: true
+    base_url: "https://generativelanguage.googleapis.com"
+    timeout_ms: 300000
+    connect_timeout_ms: 15000
+  anthropic:
+    enabled: true
+    base_url: "https://api.anthropic.com"
+    timeout_ms: 300000
+    connect_timeout_ms: 15000

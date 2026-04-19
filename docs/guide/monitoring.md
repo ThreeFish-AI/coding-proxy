@@ -67,17 +67,17 @@ coding-proxy usage --db /path/to/usage.db
 
 ```bash
 # 基础检查
-curl http://127.0.0.1:8046/health
+curl http://127.0.0.1:3392/health
 
 # 详细状态（所有层级的熔断器、配额守卫、Rate Limit、诊断信息）
-curl http://127.0.0.1:8046/api/status
+curl http://127.0.0.1:3392/api/status
 ```
 
 > 端点详情参见 [API 参考](./api-reference.md)。
 
 ## 4. Dashboard 监控
 
-浏览器访问 `http://127.0.0.1:8046/dashboard` 查看 Web 可视化看板。详见 [Dashboard 文档](./dashboard.md)。
+浏览器访问 `http://127.0.0.1:3392/dashboard` 查看 Web 可视化看板。详见 [Dashboard 文档](./dashboard.md)。
 
 ## 5. 数据库维护
 
@@ -138,7 +138,7 @@ coding-proxy reset -v anthropic
 coding-proxy auth reauth github
 
 # API
-curl -X POST http://127.0.0.1:8046/api/reauth/github
+curl -X POST http://127.0.0.1:3392/api/reauth/github
 ```
 
 重认证请求发出后（HTTP 202），在浏览器中完成授权即可，无需重启。
@@ -150,7 +150,7 @@ curl -X POST http://127.0.0.1:8046/api/reauth/github
 **端口占用**：
 
 ```bash
-lsof -i :8046
+lsof -i :3392
 coding-proxy start --port 8080
 ```
 
@@ -161,7 +161,7 @@ coding-proxy start --port 8080
 ### 8.2 Claude Code 无法连接代理
 
 1. 确认代理正在运行：`coding-proxy status`
-2. 确认环境变量：`echo $ANTHROPIC_BASE_URL`（应为 `http://127.0.0.1:8046`）
+2. 确认环境变量：`echo $ANTHROPIC_BASE_URL`（应为 `http://127.0.0.1:3392`）
 3. 确认端口一致
 
 ### 8.3 频繁触发故障转移
@@ -185,10 +185,10 @@ coding-proxy start --port 8080
 
 ```bash
 # 查看诊断信息
-curl http://127.0.0.1:8046/api/copilot/diagnostics
+curl http://127.0.0.1:3392/api/copilot/diagnostics
 
 # 探查可用模型
-curl http://127.0.0.1:8046/api/copilot/models
+curl http://127.0.0.1:3392/api/copilot/models
 
 # 重认证
 coding-proxy auth reauth github

@@ -17,6 +17,7 @@
     - [4.4 环境变量引用](#44-环境变量引用)
     - [4.5 auth — OAuth 登录配置](#45-auth--oauth-登录配置)
     - [4.6 server / database / logging](#46-server--database--logging)
+    - [4.7 native_api — 原生 API 透传](#47-native_api--原生-api-透传)
   - [5. 日常操作速查](#5-日常操作速查)
   - [附录：术语对照表](#附录术语对照表)
 
@@ -118,10 +119,10 @@ cp config.default.yaml config.yaml
 coding-proxy start
 
 # 4. 配置 Claude Code
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8046
+export ANTHROPIC_BASE_URL=http://127.0.0.1:3392
 
 # 5. 验证
-curl http://127.0.0.1:8046/health
+curl http://127.0.0.1:3392/health
 ```
 
 ---
@@ -194,7 +195,7 @@ auth:
 ```yaml
 server:
   host: "127.0.0.1"    # 设为 "0.0.0.0" 接受外部连接
-  port: 8046
+  port: 3392
 
 database:
   path: "~/.coding-proxy/usage.db"
@@ -207,6 +208,50 @@ logging:
 ```
 
 > 完整字段定义参见 [配置字段参考](./arch/config-reference.md#3-服务器配置)。
+
+### 4.7 native_api — 原生 API 透传
+
+`coding-proxy` 在 Claude Code 主链路 (`/v1/messages`) 之外，额外暴露 `/api/{openai,gemini,anthropic}/**` catch-all 透传通道，供直接调用 OpenAI / Gemini / Anthropic 官方 API 的客户端复用 proxy（认证头 `Authorization` / `x-api-key` / `?key=` 全部由客户端透传，proxy 不保管凭据）。
+
+```yaml
+native_api:
+  openai:
+    enabled: true                          # 默认开箱即用
+    base_url: "https://api.openai.com"     # 或填入自选第三方代理
+    timeout_ms: 300000
+    connect_timeout_ms: 15000
+  gemini:
+    enabled: true
+    base_url: "https://generativelanguage.googleapis.com"
+  anthropic:
+    enabled: true
+    base_url: "https://api.anthropic.com"
+```
+
+**上游 `base_url` 三级优先级**（env > yaml > 内置默认）由 `NativeApiConfig._apply_env_overrides` `@model_validator(mode="after")` 统一注入，空串/纯空白视作未设置：
+
+| 变量名 | 方向（谁 → 谁） | 典型值 | 备注 |
+| --- | --- | --- | --- |
+| `ANTHROPIC_BASE_URL` | client → proxy | `http://127.0.0.1:3392` | Claude Code 等客户端指向本 proxy |
+| `NATIVE_OPENAI_BASE_URL` | proxy → upstream | `https://api.openai.com` 或自选代理 | 覆写 OpenAI 上游 |
+| `NATIVE_GEMINI_BASE_URL` | proxy → upstream | `https://generativelanguage.googleapis.com` 或自选代理 | 覆写 Gemini 上游 |
+| `NATIVE_ANTHROPIC_BASE_URL` | proxy → upstream | `https://api.anthropic.com` 或自选代理 | 覆写原生 Anthropic 上游 |
+
+> `ANTHROPIC_BASE_URL` 与 `NATIVE_ANTHROPIC_BASE_URL` **方向正交**：前者是**客户端指向 proxy**（client → proxy），后者是 **proxy 指向上游**（proxy → upstream）。`NATIVE_` 前缀用于彻底切分两者语义。
+
+**客户端用法示例**：
+
+```bash
+# 1. 将 OpenAI SDK base_url 指向本 proxy
+export OPENAI_BASE_URL="http://127.0.0.1:3392/api/openai/v1"
+
+# 2. 或直接 curl
+curl http://127.0.0.1:3392/api/openai/v1/chat/completions \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"ping"}]}'
+```
+
+如需禁用某家 provider，将对应 `enabled` 改为 `false` 即可。完整字段定义参见 [配置字段参考 — NativeApiConfig](./arch/config-reference.md#10-native_api--原生-api-透传配置)。
 
 ---
 
@@ -224,7 +269,7 @@ logging:
 | GitHub 登录 | `coding-proxy auth login -p github`          |
 | 重认证      | `coding-proxy auth reauth github`            |
 | 查看凭证    | `coding-proxy auth status`                   |
-| Dashboard   | 浏览器访问 `http://127.0.0.1:8046/dashboard` |
+| Dashboard   | 浏览器访问 `http://127.0.0.1:3392/dashboard` |
 
 > 完整命令选项参见 [CLI 命令参考](./guide/cli-reference.md)。
 

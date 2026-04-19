@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
-    port: int = 8046
+    port: int = 3392
 
 
 class DatabaseConfig(BaseModel):

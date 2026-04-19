@@ -1,25 +1,38 @@
 """Native API 透传配置模型.
 
-三家 provider 的 base_url / enabled / timeout 配置；默认 ``enabled=False``
-（显式启用才暴露透传端点，避免误配导致上游流量意外透传）。
+三家 provider 的 base_url / enabled / timeout 配置；默认 ``enabled=True``
+（开箱即用：客户端只需将 SDK base_url 改为 ``http://127.0.0.1:3392/api/{provider}``
+即可直接触达官方上游；proxy 不保管凭据，认证头由客户端自带）。
 
 .. note::
     - ``base_url`` 为**纯域名前缀**（不含 ``/v1``），客户端 SDK 的
       ``base_url=http://proxy/api/openai/v1`` 将 ``rest`` 路径与上游 base 直拼；
-    - ``authorization`` / ``x-api-key`` 等认证头由客户端自带，proxy 不保管凭据。
+    - ``authorization`` / ``x-api-key`` 等认证头由客户端自带，proxy 不保管凭据；
+    - 上游 base_url 覆写优先级：**env var > YAML 显式字段 > Pydantic 内置默认**。
+      env var 命名由 :data:`_ENV_BASE_URL_MAP` 规定（``NATIVE_{PROVIDER}_BASE_URL``）。
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import os
+
+from pydantic import BaseModel, Field, model_validator
+
+# env var 命名约定：NATIVE_{PROVIDER}_BASE_URL
+# 与已有 ANTHROPIC_BASE_URL（client→proxy 方向）通过 NATIVE_ 前缀彻底切分语义。
+_ENV_BASE_URL_MAP: dict[str, str] = {
+    "openai": "NATIVE_OPENAI_BASE_URL",
+    "gemini": "NATIVE_GEMINI_BASE_URL",
+    "anthropic": "NATIVE_ANTHROPIC_BASE_URL",
+}
 
 
 class NativeProviderConfig(BaseModel):
     """单个原生 API provider 的透传配置."""
 
     enabled: bool = Field(
-        default=False,
-        description="是否启用该 provider 的原生透传端点。默认关闭，避免误配。",
+        default=True,
+        description="是否启用该 provider 的原生透传端点。默认启用（开箱即用）。",
     )
     base_url: str = Field(
         default="",
@@ -64,6 +77,19 @@ class NativeApiConfig(BaseModel):
     )
 
     model_config = {"extra": "allow"}
+
+    @model_validator(mode="after")
+    def _apply_env_overrides(self) -> NativeApiConfig:
+        """按 ``NATIVE_{PROVIDER}_BASE_URL`` 环境变量覆写上游 base_url.
+
+        优先级：env var（运行时） > YAML 显式字段（部署时） > Pydantic 内置默认（兜底）。
+        空串或纯空白视作未设置，保留上一层值，避免"未设置 env → 空串覆盖内置默认"陷阱。
+        """
+        for provider, env_name in _ENV_BASE_URL_MAP.items():
+            override = os.environ.get(env_name, "").strip()
+            if override:
+                getattr(self, provider).base_url = override
+        return self
 
     def get(self, provider: str) -> NativeProviderConfig | None:
         """按 provider 名称获取子配置（大小写不敏感）."""
