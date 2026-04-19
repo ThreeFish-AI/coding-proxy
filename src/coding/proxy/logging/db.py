@@ -166,7 +166,11 @@ CREATE TABLE IF NOT EXISTS usage_log (
     success BOOLEAN NOT NULL DEFAULT 1,
     failover BOOLEAN NOT NULL DEFAULT 0,
     failover_from TEXT DEFAULT NULL,
-    request_id TEXT DEFAULT ''
+    request_id TEXT DEFAULT '',
+    client_category TEXT NOT NULL DEFAULT 'cc',
+    operation TEXT NOT NULL DEFAULT '',
+    endpoint TEXT NOT NULL DEFAULT '',
+    extra_usage_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS usage_evidence (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -188,6 +192,8 @@ CREATE TABLE IF NOT EXISTS usage_evidence (
 _CREATE_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_log(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_vendor ON usage_log(vendor);
+CREATE INDEX IF NOT EXISTS idx_usage_client_category ON usage_log(client_category);
+CREATE INDEX IF NOT EXISTS idx_usage_operation ON usage_log(operation);
 CREATE INDEX IF NOT EXISTS idx_usage_evidence_request_id ON usage_evidence(request_id);
 CREATE INDEX IF NOT EXISTS idx_usage_evidence_vendor ON usage_evidence(vendor);
 """
@@ -196,25 +202,29 @@ CREATE INDEX IF NOT EXISTS idx_usage_evidence_vendor ON usage_evidence(vendor);
 
 _PERIOD_SQL: dict[TimePeriod, tuple[str, str, str]] = {
     # (date_expr, group_by, order_by_expr)
+    # group_by / order_by 附带 client_category, operation：
+    # 1) 新列加入 SELECT 后必须对应 GROUP BY，否则 SQLite 会返回任意未确定值；
+    # 2) 历史行默认 ('cc', '') → 对既有聚合口径零回归（同值无额外拆分）；
+    # 3) 当 client_category='api' 场景产生混合数据时，按类别 + 操作拆行可直观区分。
     TimePeriod.DAY: (
         "local_date(ts) AS date",
-        "local_date(ts), vendor, model_served",
-        "local_date(ts) DESC, vendor, model_served",
+        "local_date(ts), vendor, model_served, client_category, operation",
+        "local_date(ts) DESC, vendor, model_served, client_category, operation",
     ),
     TimePeriod.WEEK: (
         "local_week(ts) AS date",
-        "local_week(ts), vendor, model_served",
-        "local_week(ts) DESC, vendor, model_served",
+        "local_week(ts), vendor, model_served, client_category, operation",
+        "local_week(ts) DESC, vendor, model_served, client_category, operation",
     ),
     TimePeriod.MONTH: (
         "local_month(ts) AS date",
-        "local_month(ts), vendor, model_served",
-        "local_month(ts) DESC, vendor, model_served",
+        "local_month(ts), vendor, model_served, client_category, operation",
+        "local_month(ts) DESC, vendor, model_served, client_category, operation",
     ),
     TimePeriod.TOTAL: (
         "NULL AS date",
-        "vendor, model_served",
-        "vendor, model_served",
+        "vendor, model_served, client_category, operation",
+        "vendor, model_served, client_category, operation",
     ),
 }
 
@@ -236,6 +246,7 @@ class TokenLogger:
         # 迁移必须在建索引之前执行，确保 vendor 列已存在
         await self._migrate_rename_backend_to_vendor()
         await self._migrate_add_failover_from()
+        await self._migrate_add_native_columns()
         await self._db.executescript(_CREATE_INDEXES)
         # 注册时区感知的日期函数：将 UTC 时间戳转为本地时间维度
         await self._db.create_function("local_date", 1, _local_date_udf)
@@ -254,6 +265,26 @@ class TokenLogger:
                 "ALTER TABLE usage_log ADD COLUMN failover_from TEXT DEFAULT NULL"
             )
             logger.info("Migration: added failover_from column to usage_log")
+
+    async def _migrate_add_native_columns(self) -> None:
+        """幂等迁移：为已有数据库添加原生 API 透传通道所需的四列.
+
+        历史行自动得到：client_category='cc'、operation=''、endpoint=''、extra_usage_json='{}'。
+        """
+        if not self._db:
+            return
+        cursor = await self._db.execute("PRAGMA table_info(usage_log)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        specs = [
+            ("client_category", "TEXT NOT NULL DEFAULT 'cc'"),
+            ("operation", "TEXT NOT NULL DEFAULT ''"),
+            ("endpoint", "TEXT NOT NULL DEFAULT ''"),
+            ("extra_usage_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ]
+        for name, ddl in specs:
+            if name not in columns:
+                await self._db.execute(f"ALTER TABLE usage_log ADD COLUMN {name} {ddl}")
+                logger.info("Migration: added %s column to usage_log", name)
 
     async def _migrate_rename_backend_to_vendor(self) -> None:
         """幂等迁移：重命名 backend 列为 vendor."""
@@ -284,6 +315,10 @@ class TokenLogger:
         failover: bool = False,
         failover_from: str | None = None,
         request_id: str = "",
+        client_category: str = "cc",
+        operation: str = "",
+        endpoint: str = "",
+        extra_usage_json: str = "{}",
     ) -> None:
         if not self._db:
             return
@@ -292,8 +327,9 @@ class TokenLogger:
                (vendor, model_requested, model_served,
                 input_tokens, output_tokens,
                 cache_creation_tokens, cache_read_tokens,
-                duration_ms, success, failover, failover_from, request_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                duration_ms, success, failover, failover_from, request_id,
+                client_category, operation, endpoint, extra_usage_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 vendor,
                 model_requested,
@@ -307,6 +343,10 @@ class TokenLogger:
                 failover,
                 failover_from,
                 request_id,
+                client_category,
+                operation,
+                endpoint,
+                extra_usage_json,
             ),
         )
         await self._db.commit()
@@ -376,6 +416,9 @@ class TokenLogger:
         count: int = 7,
         vendor: str | list[str] | None = None,
         model: str | list[str] | None = None,
+        client_category: str | list[str] | None = None,
+        operation: str | list[str] | None = None,
+        endpoint: str | list[str] | None = None,
     ) -> list[dict]:
         """按指定时间维度聚合 Token 使用统计.
 
@@ -385,6 +428,9 @@ class TokenLogger:
                    ``TOTAL`` 维度下忽略此参数。
             vendor: 过滤供应商，支持单个字符串或字符串列表（多 vendor 过滤）。
             model: 过滤实际服务模型（model_served），支持单个字符串或字符串列表。
+            client_category: 过滤客户端类别（``'cc'`` / ``'api'``）。
+            operation: 过滤规范化操作名（``'chat'`` / ``'embedding'`` ...）。
+            endpoint: 过滤原始上游路径（``'/v1/chat/completions'`` ...）。
         """
         if not self._db:
             return []
@@ -394,6 +440,8 @@ class TokenLogger:
         sql = f"""SELECT {date_expr}, vendor,
                    GROUP_CONCAT(DISTINCT model_requested) AS model_requested,
                    model_served,
+                   client_category,
+                   operation,
                    COUNT(*) AS total_requests,
                    SUM(input_tokens) AS total_input,
                    SUM(output_tokens) AS total_output,
@@ -420,6 +468,25 @@ class TokenLogger:
             placeholders = ",".join("?" * len(models))
             sql += f" AND model_served IN ({placeholders})"
             params.extend(models)
+        if client_category:
+            cats = (
+                [client_category]
+                if isinstance(client_category, str)
+                else client_category
+            )
+            placeholders = ",".join("?" * len(cats))
+            sql += f" AND client_category IN ({placeholders})"
+            params.extend(cats)
+        if operation:
+            ops = [operation] if isinstance(operation, str) else operation
+            placeholders = ",".join("?" * len(ops))
+            sql += f" AND operation IN ({placeholders})"
+            params.extend(ops)
+        if endpoint:
+            eps = [endpoint] if isinstance(endpoint, str) else endpoint
+            placeholders = ",".join("?" * len(eps))
+            sql += f" AND endpoint IN ({placeholders})"
+            params.extend(eps)
 
         sql += f" GROUP BY {group_clause} ORDER BY {order_clause}"
 
