@@ -45,7 +45,11 @@ def _append_usage_evidence(
                 "input_tokens": next(
                     (
                         key
-                        for key in ("input_tokens", "prompt_tokens")
+                        for key in (
+                            "input_tokens",
+                            "prompt_tokens",
+                            "promptTokenCount",
+                        )
                         if key in raw_usage
                     ),
                     "",
@@ -53,7 +57,11 @@ def _append_usage_evidence(
                 "output_tokens": next(
                     (
                         key
-                        for key in ("output_tokens", "completion_tokens")
+                        for key in (
+                            "output_tokens",
+                            "completion_tokens",
+                            "candidatesTokenCount",
+                        )
                         if key in raw_usage
                     ),
                     "",
@@ -72,6 +80,7 @@ def _append_usage_evidence(
                         for key in (
                             "cache_read_input_tokens",
                             "cached_tokens",
+                            "cachedContentTokenCount",
                         )
                         if key in raw_usage
                     ),
@@ -84,6 +93,7 @@ def _append_usage_evidence(
                     "cache_creation_input_tokens",
                     "cache_read_input_tokens",
                     "cached_tokens",
+                    "cachedContentTokenCount",
                 )
             ),
         }
@@ -219,9 +229,59 @@ def parse_usage_from_chunk(
                     model_served=data.get("model"),
                 )
 
-        # request_id fallback (OpenAI 格式下 id 在顶层)
-        if "id" in data and not usage.get("request_id"):
-            usage["request_id"] = data["id"]
+        # Gemini SSE 格式: data.usageMetadata.{promptTokenCount, candidatesTokenCount, cachedContentTokenCount, thoughtsTokenCount, toolUsePromptTokenCount}
+        # Gemini 的流式响应在最后一帧（或每一帧）携带 usageMetadata；字段命名与
+        # OpenAI / Anthropic 完全不同，但同一事件数据结构稳定可靠。
+        if "usageMetadata" in data:
+            um = data["usageMetadata"]
+            if isinstance(um, dict):
+                prompt_tc = int(um.get("promptTokenCount", 0) or 0)
+                cand_tc = int(um.get("candidatesTokenCount", 0) or 0)
+                cached_tc = int(um.get("cachedContentTokenCount", 0) or 0)
+                thoughts_tc = int(um.get("thoughtsTokenCount", 0) or 0)
+                tool_use_tc = int(um.get("toolUsePromptTokenCount", 0) or 0)
+
+                _label = f" ({vendor_label})" if vendor_label else ""
+                if prompt_tc > 0:
+                    logger.debug(
+                        "Extracted Gemini prompt tokens from usageMetadata: %d%s",
+                        prompt_tc,
+                        _label,
+                    )
+                if cand_tc > 0:
+                    logger.debug(
+                        "Extracted Gemini candidates tokens from usageMetadata: %d%s",
+                        cand_tc,
+                        _label,
+                    )
+
+                _set_if_nonzero(usage, "input_tokens", prompt_tc)
+                _set_if_nonzero(usage, "output_tokens", cand_tc)
+                _set_if_nonzero(usage, "cache_read_tokens", cached_tc)
+
+                # 非规范字段以 extra_usage 字典暂存,后续由 UsageRecorder 序列化到 extra_usage_json
+                if thoughts_tc > 0 or tool_use_tc > 0:
+                    extra = usage.setdefault("extra_usage", {})
+                    if isinstance(extra, dict):
+                        if thoughts_tc > 0:
+                            extra["thoughts_tokens"] = thoughts_tc
+                        if tool_use_tc > 0:
+                            extra["tool_use_prompt_tokens"] = tool_use_tc
+
+                _append_usage_evidence(
+                    usage,
+                    evidence_kind="gemini_usage_metadata",
+                    raw_usage=dict(um),
+                    request_id=data.get("responseId") or data.get("id"),
+                    model_served=data.get("modelVersion") or data.get("model"),
+                )
+
+        # request_id fallback (OpenAI 格式下 id 在顶层, Gemini 顶层为 responseId)
+        if not usage.get("request_id"):
+            if "id" in data:
+                usage["request_id"] = data["id"]
+            elif "responseId" in data:
+                usage["request_id"] = data["responseId"]
 
 
 def has_missing_input_usage_signals(info: UsageInfo) -> bool:
