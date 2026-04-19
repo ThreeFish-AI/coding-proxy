@@ -257,3 +257,54 @@ tiers: [anthropic, copilot, zhipu]  # 显式优先级（可选）
 2. `zhipu` 字段名 → `fallback`
 3. 若无 `vendors` 字段，从 legacy flat 字段自动生成 vendors 列表
 4. 迁移时发出 INFO 日志建议迁移至新格式
+
+---
+
+## 10. native_api — 原生 API 透传配置
+
+> **定义位置**：[`native_api/config.py`](../../src/coding/proxy/native_api/config.py)
+>
+> **端点**：`/api/{openai,gemini,anthropic}/**` catch-all 透传通道；认证头由客户端自带，proxy 不保管凭据。
+
+### 10.1 NativeApiConfig 顶层字段
+
+| 字段          | 类型                   | 默认值                                 | 说明                                      |
+| ------------- | ---------------------- | -------------------------------------- | ----------------------------------------- |
+| `openai`      | `NativeProviderConfig` | 内置官方 URL，`enabled=true`           | OpenAI chat / responses / embeddings 等   |
+| `gemini`      | `NativeProviderConfig` | 内置官方 URL，`enabled=true`           | Gemini generateContent / embedContent 等  |
+| `anthropic`   | `NativeProviderConfig` | 内置官方 URL，`enabled=true`           | Anthropic messages / count_tokens / batches |
+
+### 10.2 NativeProviderConfig 字段
+
+| 字段                  | 类型 | 默认值              | 说明                                                                  |
+| --------------------- | ---- | ------------------- | --------------------------------------------------------------------- |
+| `enabled`             | bool | `true`              | 是否启用该 provider 的原生透传端点（默认启用，开箱即用）              |
+| `base_url`            | str  | 见下方内置默认      | 上游 API base_url（纯域名前缀，不含 `/v1`）                           |
+| `timeout_ms`          | int  | `300000`            | 单次请求超时（毫秒），LLM 大模型建议 ≥ 120s                           |
+| `connect_timeout_ms`  | int  | `15000`             | 连接建立超时（毫秒）                                                  |
+
+### 10.3 内置默认 `base_url`
+
+| Provider     | 内置默认                                              |
+| ------------ | ----------------------------------------------------- |
+| `openai`     | `https://api.openai.com`                              |
+| `gemini`     | `https://generativelanguage.googleapis.com`           |
+| `anthropic`  | `https://api.anthropic.com`                           |
+
+### 10.4 `base_url` 三级覆写优先级
+
+由 `NativeApiConfig._apply_env_overrides` `@model_validator(mode="after")` 注入：
+
+```text
+env var（运行时） > YAML 显式字段（部署时） > Pydantic 内置默认（兜底）
+```
+
+| 环境变量                     | 覆写目标                  |
+| ---------------------------- | ------------------------- |
+| `NATIVE_OPENAI_BASE_URL`     | `openai.base_url`         |
+| `NATIVE_GEMINI_BASE_URL`     | `gemini.base_url`         |
+| `NATIVE_ANTHROPIC_BASE_URL`  | `anthropic.base_url`      |
+
+空串或纯空白视作未设置，保留上一层值（避免"未设置 env → 空串覆盖内置默认"陷阱）。
+
+> `ANTHROPIC_BASE_URL`（client → proxy，Claude Code 使用）与 `NATIVE_ANTHROPIC_BASE_URL`（proxy → upstream，原生透传使用）方向正交，勿混用。参见 [用户指引 § 4.7 native_api](../user-guide.md#47-native_api--原生-api-透传)。
