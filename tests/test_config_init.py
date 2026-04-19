@@ -123,7 +123,7 @@ class TestAutoInitIntegration:
 
         cfg = load_config()
 
-        assert cfg.server.port == 8046
+        assert cfg.server.port == 3392
         created = home_dir / ".coding-proxy" / "config.yaml"
         assert created.exists()
 

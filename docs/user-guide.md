@@ -118,10 +118,10 @@ cp config.default.yaml config.yaml
 coding-proxy start
 
 # 4. 配置 Claude Code
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8046
+export ANTHROPIC_BASE_URL=http://127.0.0.1:3392
 
 # 5. 验证
-curl http://127.0.0.1:8046/health
+curl http://127.0.0.1:3392/health
 ```
 
 ---
@@ -194,7 +194,7 @@ auth:
 ```yaml
 server:
   host: "127.0.0.1"    # 设为 "0.0.0.0" 接受外部连接
-  port: 8046
+  port: 3392
 
 database:
   path: "~/.coding-proxy/usage.db"
@@ -224,7 +224,7 @@ logging:
 | GitHub 登录 | `coding-proxy auth login -p github`          |
 | 重认证      | `coding-proxy auth reauth github`            |
 | 查看凭证    | `coding-proxy auth status`                   |
-| Dashboard   | 浏览器访问 `http://127.0.0.1:8046/dashboard` |
+| Dashboard   | 浏览器访问 `http://127.0.0.1:3392/dashboard` |
 
 > 完整命令选项参见 [CLI 命令参考](./guide/cli-reference.md)。
 

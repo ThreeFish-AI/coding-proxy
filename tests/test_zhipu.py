@@ -142,7 +142,7 @@ class TestRequestPassthrough:
             "x-api-key": "sk-ant-api03-yyyyy",
             "anthropic-version": "2023-06-01",
             "anthropic-beta": "prompt-caching-2024-07-31",
-            "host": "localhost:8046",
+            "host": "localhost:3392",
             "content-length": "42",
         }
         _, prepared_headers = await zhipu_vendor._prepare_request(

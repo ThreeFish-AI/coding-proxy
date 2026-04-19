@@ -4,7 +4,7 @@
 
 server:
   host: "127.0.0.1"
-  port: 8046
+  port: 3392
 
 logging:
   level: "INFO"

@@ -114,7 +114,7 @@ def auth_status() -> None:
 @app.command("reauth")
 def auth_reauth(
     provider: str = typer.Argument(..., help="provider 名称 (github/google)"),
-    port: int = typer.Option(8046, "--port", "-p", help="代理服务端口"),
+    port: int = typer.Option(3392, "--port", "-p", help="代理服务端口"),
 ) -> None:
     """触发运行中代理的 OAuth 重认证."""
     import httpx as _httpx
