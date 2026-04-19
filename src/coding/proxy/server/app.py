@@ -21,8 +21,10 @@ from ..compat.session_store import CompatSessionStore
 from ..config.loader import load_config
 from ..config.schema import ProxyConfig
 from ..logging.db import TokenLogger
+from ..native_api import NativeProxyHandler
 from ..routing.router import RequestRouter
 from ..routing.tier import VendorTier
+from ..routing.usage_recorder import UsageRecorder
 from ..vendors.antigravity import AntigravityVendor
 from ..vendors.copilot import CopilotVendor
 from .factory import (  # noqa: F401
@@ -53,6 +55,15 @@ async def lifespan(app: FastAPI):
     app.state.pricing_table = pricing_table
     router.set_pricing_table(pricing_table)
 
+    # 原生 API 透传 handler：运行时注入 pricing_table（启动期创建时尚未就绪）
+    native_handler: NativeProxyHandler | None = getattr(
+        app.state, "native_handler", None
+    )
+    if native_handler is not None:
+        native_handler._pricing_table = pricing_table  # noqa: SLF001
+        if native_handler._usage_recorder is not None:  # noqa: SLF001
+            native_handler._usage_recorder.set_pricing_table(pricing_table)  # noqa: SLF001
+
     # 为每个有 QuotaGuard 的 tier 加载基线
     for tier in router.tiers:
         if tier.quota_guard and tier.quota_guard.enabled:
@@ -70,6 +81,8 @@ async def lifespan(app: FastAPI):
 
     yield
     await router.close()
+    if native_handler is not None:
+        await native_handler.aclose()
     await compat_session_store.close()
     await token_logger.close()
     logger.info("coding-proxy stopped")
@@ -151,6 +164,19 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     app.state.compat_session_store = compat_session_store
     app.state.config = config
     app.state.reauth_coordinator = reauth_coordinator
+
+    # 原生 API 透传 handler — 仅在配置中至少启用一个 provider 时实例化
+    if any(config.native_api.is_enabled(p) for p in ("openai", "gemini", "anthropic")):
+        native_usage_recorder = UsageRecorder(
+            token_logger=token_logger, pricing_table=None
+        )
+        native_handler = NativeProxyHandler(
+            config.native_api,
+            token_logger=token_logger,
+            pricing_table=None,
+            usage_recorder=native_usage_recorder,
+        )
+        app.state.native_handler = native_handler
 
     # 注册所有路由端点
     register_all_routes(app, router, reauth_coordinator)

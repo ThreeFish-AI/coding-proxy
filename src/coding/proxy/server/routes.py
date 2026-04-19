@@ -357,7 +357,12 @@ def register_reauth_routes(app: Any, reauth_coordinator: Any) -> None:
 def register_all_routes(
     app: Any, router: Any, reauth_coordinator: Any | None = None
 ) -> None:
-    """一次性注册所有路由分组."""
+    """一次性注册所有路由分组.
+
+    注意：原生 API catch-all（``/api/{openai,gemini,anthropic}/*``）必须在所有具体管理
+    路由（``/api/status`` / ``/api/copilot/*`` / ``/api/reset`` / ``/api/reauth/*``）
+    注册完成后再注册，避免 FastAPI 匹配优先级陷阱。
+    """
     register_core_routes(app, router)
     register_health_routes(app)
     register_status_route(app, router)
@@ -369,3 +374,10 @@ def register_all_routes(
     from .dashboard import register_dashboard_routes
 
     register_dashboard_routes(app)
+
+    # 原生 API 透传 catch-all — 最后注册以保证具体路由优先
+    native_handler = getattr(app.state, "native_handler", None)
+    if native_handler is not None:
+        from ..native_api import register_native_api_routes
+
+        register_native_api_routes(app, native_handler)
