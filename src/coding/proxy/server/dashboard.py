@@ -699,14 +699,15 @@ function makeExternalTooltipHandler(opts = {}) {
 
     const titleLines = tooltip.title || [];
     const dataPoints = tooltip.dataPoints || [];
+    const visiblePoints = dataPoints.filter(dp => dp.raw);
 
     let html = '';
     if (titleLines.length) {
       html += '<div id="chart-tooltip-title">' + titleLines.join('<br>') + '</div>';
     }
-    if (dataPoints.length) {
+    if (visiblePoints.length) {
       html += '<div id="chart-tooltip-items">';
-      dataPoints.forEach(dp => {
+      visiblePoints.forEach(dp => {
         // 折线图: borderColor 为字符串；甜甜圈图: backgroundColor 为数组
         const bg = dp.dataset.backgroundColor;
         const color = dp.dataset.borderColor
@@ -722,8 +723,8 @@ function makeExternalTooltipHandler(opts = {}) {
       });
       html += '</div>';
     }
-    if (showTotal && dataPoints.length > 1) {
-      const total = dataPoints.reduce((s, dp) => s + (dp.raw || 0), 0);
+    if (showTotal && visiblePoints.length > 1) {
+      const total = visiblePoints.reduce((s, dp) => s + (dp.raw || 0), 0);
       if (total > 0) {
         html += '<div id="chart-tooltip-footer">合计: ' + fmtTotalFn(total) + '</div>';
       }
