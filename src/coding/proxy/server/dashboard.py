@@ -585,6 +585,20 @@ function now() {
   return new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
 
+// ── Vendor 展示名映射 ─────────────────────────────────────
+// 规则：以 cc/api 前缀区分代理形态，屏蔽后端 -native 消歧后缀。
+// _API_VENDORS 需与后端 native_api/handler.py::_VENDOR_LABEL 对齐，
+// 新增无 -native 后缀的 native vendor 时同步更新本集合。
+const _API_VENDORS = new Set(['anthropic-native', 'openai', 'gemini']);
+function formatVendorLabel(v) {
+  if (!isValidLabel(v)) return v;
+  if (_API_VENDORS.has(v)) {
+    const name = v.endsWith('-native') ? v.slice(0, -'-native'.length) : v;
+    return 'api | ' + name;
+  }
+  return 'cc | ' + v;
+}
+
 // ── 渐变填充工具 ──────────────────────────────────────────
 function makeGradient(ctx, color) {
   const h = ctx.canvas.height;
@@ -944,7 +958,7 @@ function buildTimeline(rows, tierOrder) {
     const color = VENDOR_COLORS[i % VENDOR_COLORS.length];
     return {
       ...COMMON_LINE_DATASET,
-      label: v,
+      label: formatVendorLabel(v),
       data: dates.map(d => vendorDateMap[v][d] || 0),
       borderColor: color,
       backgroundColor: color + '30',
@@ -994,7 +1008,7 @@ function buildVendorDist(rows, tierOrder) {
   chartVendorDist = new Chart(ctx, {
     type: 'doughnut',
     data: {
-      labels,
+      labels: labels.map(formatVendorLabel),
       datasets: [{
         data,
         backgroundColor: labels.map((_,i) => VENDOR_COLORS[i % VENDOR_COLORS.length]),
@@ -1066,7 +1080,7 @@ function buildTokenTimeline(rows, tierOrder) {
     const color = VENDOR_COLORS[i % VENDOR_COLORS.length];
     return {
       ...COMMON_LINE_DATASET,
-      label: v,
+      label: formatVendorLabel(v),
       data: dates.map(d => vendorDateMap[v][d] || 0),
       borderColor: color,
       backgroundColor: color + '30',
@@ -1103,7 +1117,7 @@ function buildModelTokenTimeline(rows) {
     const v = r.vendor;
     const m = r.model_served;
     if (!isValidLabel(v) || !isValidLabel(m)) continue;
-    const key = v + ' / ' + m;
+    const key = formatVendorLabel(v) + ' / ' + m;
     const d = r.date;
     if (!d) continue;
     if (!modelDateMap[key]) modelDateMap[key] = {};
