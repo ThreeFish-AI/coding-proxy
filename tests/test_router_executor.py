@@ -1646,6 +1646,168 @@ class TestDetermineSourceVendor:
             is None
         )
 
+    # ── Priority 3: body 内容感知推断（首次请求兜底） ───────────────
+
+    def test_priority3_infers_zhipu_from_srvtoolu_id_in_body(self):
+        """Priority 3: body 含 srvtoolu_* ID → 推断源为 zhipu."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "srvtoolu_abc",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+            ],
+        }
+        # 无 session 且无 failed_tier → 走 Priority 3
+        assert (
+            _RouteExecutor._determine_source_vendor("anthropic", None, None, body)
+            == "zhipu"
+        )
+
+    def test_priority3_infers_zhipu_from_server_tool_use_delta(self):
+        """Priority 3: body 含 server_tool_use_delta 类型块 → 推断源为 zhipu."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "server_tool_use_delta", "partial_json": "{}"},
+                    ],
+                },
+            ],
+        }
+        assert (
+            _RouteExecutor._determine_source_vendor("anthropic", None, None, body)
+            == "zhipu"
+        )
+
+    def test_priority3_returns_none_for_pristine_body(self):
+        """Priority 3: body 纯净无跨供应商产物 → 返回 None."""
+        body = {
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hi"}],
+                },
+            ],
+        }
+        assert (
+            _RouteExecutor._determine_source_vendor("anthropic", None, None, body)
+            is None
+        )
+
+    def test_priority3_skips_when_target_equals_inferred(self):
+        """Priority 3: 推断出的源 == 目标时不触发转换."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_x",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+            ],
+        }
+        assert (
+            _RouteExecutor._determine_source_vendor("zhipu", None, None, body) is None
+        )
+
+    def test_priority3_skips_when_no_registered_transition(self):
+        """Priority 3: 推断的源→目标无注册通道 → 返回 None.
+
+        例如目标是未知 vendor 时即使推断出 zhipu 也不应返回.
+        """
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_x",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+            ],
+        }
+        assert (
+            _RouteExecutor._determine_source_vendor("unknown_target", None, None, body)
+            is None
+        )
+
+    def test_priority1_overrides_priority3(self):
+        """Priority 1 (failed_tier) 优先于 Priority 3 (body inference)."""
+        # body 内有 zhipu 产物，但 failed_tier 显式指定 copilot
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_x",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+            ],
+        }
+        # failed_tier=copilot → 应返回 copilot，不看 body
+        assert (
+            _RouteExecutor._determine_source_vendor("zhipu", "copilot", None, body)
+            == "copilot"
+        )
+
+    def test_priority2_overrides_priority3(self):
+        """Priority 2 (session) 优先于 Priority 3 (body inference)."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_x",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+            ],
+        }
+        session_record = MagicMock()
+        session_record.provider_state = {"copilot": {}}
+        # session 中有 copilot → copilot→zhipu 转换已注册 → 返回 copilot
+        assert (
+            _RouteExecutor._determine_source_vendor("zhipu", None, session_record, body)
+            == "copilot"
+        )
+
+    def test_body_parameter_is_optional(self):
+        """body 参数保持向后兼容，省略时不影响前两个优先级."""
+        session_record = MagicMock()
+        session_record.provider_state = {"zhipu": {}}
+        assert (
+            _RouteExecutor._determine_source_vendor("copilot", None, session_record)
+            == "zhipu"
+        )
+
 
 # ── _prepare_body_for_tier 转换通道应用测试 ────────────────────────
 

@@ -52,13 +52,13 @@ def test_default_config_when_no_file(tmp_path: Path, monkeypatch):
     # 指向不存在的 home 目录
     monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
     cfg = load_config()
-    assert cfg.server.port == 8046
+    assert cfg.server.port == 3392
 
 
 def test_missing_explicit_path_returns_default():
     """指定路径不存在时返回默认配置."""
     cfg = load_config(Path("/nonexistent/config.yaml"))
-    assert cfg.server.port == 8046
+    assert cfg.server.port == 3392
 
 
 def test_env_var_expansion(tmp_path: Path, monkeypatch):
@@ -313,14 +313,14 @@ def test_deep_merge_empty_override_preserves_defaults():
 
 def test_deep_merge_scalar_override():
     """标量值直接替换."""
-    defaults = {"port": 8046, "host": "127.0.0.1"}
+    defaults = {"port": 3392, "host": "127.0.0.1"}
     result = _deep_merge(defaults, {"port": 9000})
     assert result == {"port": 9000, "host": "127.0.0.1"}
 
 
 def test_deep_merge_nested_dict():
     """嵌套 dict 递归合并 — 仅覆盖存在的子键."""
-    defaults = {"server": {"host": "127.0.0.1", "port": 8046}, "log": "INFO"}
+    defaults = {"server": {"host": "127.0.0.1", "port": 3392}, "log": "INFO"}
     override = {"server": {"port": 9000}}
     result = _deep_merge(defaults, override)
     assert result == {"server": {"host": "127.0.0.1", "port": 9000}, "log": "INFO"}
@@ -406,7 +406,7 @@ def test_load_config_no_user_file_uses_example_defaults(tmp_path: Path, monkeypa
     cfg = load_config()
 
     # 来自 example.yaml 的完整默认值
-    assert cfg.server.port == 8046
+    assert cfg.server.port == 3392
     assert cfg.server.host == "127.0.0.1"
     # example 中定义了完整的 vendors 列表
     assert len(cfg.vendors) >= 1
@@ -480,7 +480,7 @@ def test_load_config_fallback_when_example_missing(monkeypatch):
     )
     cfg = load_config(Path("/nonexistent/path"))
     # 降级为 Pydantic 默认值
-    assert cfg.server.port == 8046
+    assert cfg.server.port == 3392
     assert cfg.copilot.enabled is False
 
 

@@ -83,10 +83,24 @@ class PricingTable:
         output_tokens: int,
         cache_creation_tokens: int,
         cache_read_tokens: int,
+        *,
+        extra_tokens: dict[str, int] | None = None,
     ) -> CostValue | None:
         """按单价计算总费用（含币种信息）.
 
-        返回 :class:`CostValue`（携带币种），若无匹配定价返回 None。
+        Args:
+            extra_tokens: 非规范 token 字段字典（如 ``{"reasoning_tokens": 128,
+                "audio_input_tokens": 32, "cache_5m_tokens": 512}``），
+                供未来 PR 追加 reasoning / audio / tiered-cache 单价计算。
+                当前版本不参与计算，仅作为前向兼容钩子保留。
+
+        Returns:
+            :class:`CostValue`（携带币种）。若无匹配定价返回 ``None``。
+
+        Note:
+            为避免本 PR 引入非预期账单变化，``extra_tokens`` 默认不参与计算；
+            当 ``ModelPricingEntry`` 新增 ``reasoning_cost_per_mtok`` 等字段后，
+            可在本方法内按需追加 ``extra_tokens.get(...) * entry.extra_cost`` 分项。
         """
         pricing = self.get_pricing(vendor, model_served)
         if pricing is None:
@@ -97,4 +111,6 @@ class PricingTable:
             + cache_creation_tokens * pricing.cache_creation_input_token_cost
             + cache_read_tokens * pricing.cache_read_input_token_cost
         )
+        # extra_tokens 预留钩子：当前 no-op 以保证既有账单完全不变
+        _ = extra_tokens
         return CostValue(amount=amount, currency=pricing.currency)

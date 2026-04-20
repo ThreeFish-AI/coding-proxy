@@ -32,11 +32,11 @@ class TestBuildBanner:
         assert __version__ in plain
 
     def test_default_host_port(self):
-        """默认参数应使用 127.0.0.1:8046."""
+        """默认参数应使用 127.0.0.1:3392."""
         panel = build_banner()
         plain = panel.renderable.plain
         assert "127.0.0.1" in plain
-        assert "8046" in plain
+        assert "3392" in plain
 
     def test_custom_host_port(self):
         """自定义 host/port 应正确渲染至横幅."""

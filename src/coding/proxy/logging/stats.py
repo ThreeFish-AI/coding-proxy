@@ -111,10 +111,21 @@ async def show_usage(
         console.print("[yellow]暂无使用记录[/yellow]")
         return
 
+    # 仅在行集存在 api 场景或非空 operation 时显示 Client/Op 列，
+    # 避免既有 cc 用户的表格视觉回归。
+    show_client_op = any(
+        (row.get("client_category") or "cc") != "cc"
+        or (row.get("operation") or "") != ""
+        for row in rows
+    )
+
     table = Table(title=_build_title(period, count))
     date_label = _PERIOD_DATE_LABELS[period]
     table.add_column(date_label, style="cyan")
     table.add_column("供应商", style="green")
+    if show_client_op:
+        table.add_column("Client", style="bright_magenta")
+        table.add_column("Op", style="bright_cyan")
     table.add_column("请求模型", style="magenta")
     table.add_column("实际模型", style="yellow")
     table.add_column("请求数", justify="right")
@@ -134,6 +145,8 @@ async def show_usage(
     sum_cache_read = 0
     weighted_duration_sum = 0.0  # Σ(avg_duration_ms × total_requests)
     cost_totals: dict = {}  # currency → float
+    # 按 client_category 维度聚合（供总计行分类展示）
+    per_category: dict[str, dict] = {}
 
     for row in rows:
         total_input = row.get("total_input", 0) or 0
@@ -174,21 +187,49 @@ async def show_usage(
             cur = cost_value.currency
             cost_totals[cur] = cost_totals.get(cur, 0.0) + cost_value.amount
 
-        date_value = row.get("date") or ""
-        table.add_row(
-            str(date_value),
-            vendor_name,
-            _format_model_display(row.get("model_requested")),
-            model_served,
-            str(total_requests_row),
-            _format_tokens(total_input),
-            _format_tokens(total_output),
-            _format_tokens(total_cache_creation),
-            _format_tokens(total_cache_read),
-            _format_tokens(total_tokens),
-            cost_str,
-            str(int(row.get("avg_duration_ms", 0) or 0)),
+        client_cat = str(row.get("client_category") or "cc")
+        op_name = str(row.get("operation") or "")
+        cat_bucket = per_category.setdefault(
+            client_cat,
+            {
+                "requests": 0,
+                "input": 0,
+                "output": 0,
+                "cache_creation": 0,
+                "cache_read": 0,
+                "cost_totals": {},
+            },
         )
+        cat_bucket["requests"] += total_requests_row
+        cat_bucket["input"] += total_input
+        cat_bucket["output"] += total_output
+        cat_bucket["cache_creation"] += total_cache_creation
+        cat_bucket["cache_read"] += total_cache_read
+        if cost_value is not None:
+            cur = cost_value.currency
+            cat_bucket["cost_totals"][cur] = (
+                cat_bucket["cost_totals"].get(cur, 0.0) + cost_value.amount
+            )
+
+        date_value = row.get("date") or ""
+        detail_row: list[str] = [str(date_value), vendor_name]
+        if show_client_op:
+            detail_row.extend([client_cat, op_name or "-"])
+        detail_row.extend(
+            [
+                _format_model_display(row.get("model_requested")),
+                model_served,
+                str(total_requests_row),
+                _format_tokens(total_input),
+                _format_tokens(total_output),
+                _format_tokens(total_cache_creation),
+                _format_tokens(total_cache_read),
+                _format_tokens(total_tokens),
+                cost_str,
+                str(int(row.get("avg_duration_ms", 0) or 0)),
+            ]
+        )
+        table.add_row(*detail_row)
 
     # ── 汇总行 ───────────────────────────────────────────────
     table.add_section()
@@ -203,20 +244,55 @@ async def show_usage(
     else:
         total_cost_str = "-"
 
-    table.add_row(
-        "[bold]总计[/bold]",
-        "",
-        "",
-        "",
-        f"[bold]{sum_requests}[/bold]",
-        f"[bold]{_format_tokens(sum_input)}[/bold]",
-        f"[bold]{_format_tokens(sum_output)}[/bold]",
-        f"[bold]{_format_tokens(sum_cache_creation)}[/bold]",
-        f"[bold]{_format_tokens(sum_cache_read)}[/bold]",
-        f"[bold]{_format_tokens(sum_tokens)}[/bold]",
-        f"[bold]{total_cost_str}[/bold]",
-        f"[bold]{avg_duration}[/bold]",
+    # 混合 client_category 场景下，先给出每类别的分项总计便于对账
+    if show_client_op and len(per_category) > 1:
+        for cat, bucket in sorted(per_category.items()):
+            cat_tokens = (
+                bucket["input"]
+                + bucket["output"]
+                + bucket["cache_creation"]
+                + bucket["cache_read"]
+            )
+            if bucket["cost_totals"]:
+                cat_cost_str = " + ".join(
+                    f"{cur.symbol}{amt:.2f}"
+                    for cur, amt in bucket["cost_totals"].items()
+                )
+            else:
+                cat_cost_str = "-"
+            cat_row = [f"[bold]{cat} 小计[/bold]", "", cat, "-", "", ""]
+            cat_row.extend(
+                [
+                    f"[bold]{bucket['requests']}[/bold]",
+                    f"[bold]{_format_tokens(bucket['input'])}[/bold]",
+                    f"[bold]{_format_tokens(bucket['output'])}[/bold]",
+                    f"[bold]{_format_tokens(bucket['cache_creation'])}[/bold]",
+                    f"[bold]{_format_tokens(bucket['cache_read'])}[/bold]",
+                    f"[bold]{_format_tokens(cat_tokens)}[/bold]",
+                    f"[bold]{cat_cost_str}[/bold]",
+                    "",
+                ]
+            )
+            table.add_row(*cat_row)
+
+    total_row: list[str] = ["[bold]总计[/bold]", ""]
+    if show_client_op:
+        total_row.extend(["", ""])
+    total_row.extend(
+        [
+            "",
+            "",
+            f"[bold]{sum_requests}[/bold]",
+            f"[bold]{_format_tokens(sum_input)}[/bold]",
+            f"[bold]{_format_tokens(sum_output)}[/bold]",
+            f"[bold]{_format_tokens(sum_cache_creation)}[/bold]",
+            f"[bold]{_format_tokens(sum_cache_read)}[/bold]",
+            f"[bold]{_format_tokens(sum_tokens)}[/bold]",
+            f"[bold]{total_cost_str}[/bold]",
+            f"[bold]{avg_duration}[/bold]",
+        ]
     )
+    table.add_row(*total_row)
 
     console.print(table)
 

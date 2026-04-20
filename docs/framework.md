@@ -69,7 +69,6 @@ graph TD
         App["<code>app.py</code><br/>应用工厂 + lifespan"]
         Routes["<code>routes.py</code><br/>路由注册"]
         Factory["<code>factory.py</code><br/>Vendor/Tier 构建工厂"]
-        Normalizer["<code>request_normalizer.py</code><br/>请求标准化"]
         Dashboard["<code>dashboard.py</code><br/>状态面板"]
     end
 
@@ -179,15 +178,8 @@ graph TD
 ```mermaid
 flowchart TD
     Client["Client POST /v1/messages"] --> Server["server.routes.messages()"]
-
-    subgraph Normalize ["请求标准化"]
-        Body["body = await request.json()"]
-        Norm["normalize_anthropic_request(body)<br/>清洗私有块 + 重写 tool_use_id"]
-        Body --> Norm
-    end
-
-    Server --> Normalize
-    Norm --> RouteType{"stream?"}
+    Server --> Body["body = await request.json()"]
+    Body --> RouteType{"stream?"}
 
     RouteType -- "true" --> StreamRoute["route_stream()"]
     RouteType -- "false" --> MsgRoute["route_message()"]
@@ -401,7 +393,6 @@ flowchart TD
 | [`app.py`](../src/coding/proxy/server/app.py)                               | FastAPI 应用工厂 `create_app()` + `lifespan` 生命周期管理 |
 | [`factory.py`](../src/coding/proxy/server/factory.py)                       | Vendor/Tier 构建工厂 + 凭证解析                           |
 | [`routes.py`](../src/coding/proxy/server/routes.py)                         | 路由端点按职责分组注册                                    |
-| [`request_normalizer.py`](../src/coding/proxy/server/request_normalizer.py) | 入站请求标准化（清洗供应商私有块）                        |
 | [`responses.py`](../src/coding/proxy/server/responses.py)                   | 响应辅助工具（JSON error / stream error 构建）            |
 | [`dashboard.py`](../src/coding/proxy/server/dashboard.py)                   | 状态面板（Web Dashboard）                                 |
 

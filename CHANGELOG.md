@@ -4,9 +4,25 @@
 
 ## [Unreleased]
 
-- fix(request-normalizer): 重设计 zhipu→anthropic 跨供应商 tool_use/tool_result 配对修复——以单遍自包含 `enforce_anthropic_tool_pairing` 替代原有多步串联管线（剥离→重定位→孤儿修复），消除步骤间隐式依赖导致的孤儿 tool_use 漏修问题，彻底根治 `tool_use ids were found without tool_result blocks` 400 异常;
-- refactor(vendor-channels): 将供应商转换通道从「目标 vendor 专属」重构为「源→目标绑定」模型——注册表键从 `target_vendor` 改为 `(source, target)` 二元组，通道函数从 `prepare_for_X` 重命名为 `prepare_X_to_Y`，触发逻辑从 `_needs_vendor_channel` 替换为 `_determine_source_vendor`（基于请求内 `failed_tier_name` 和会话历史推断源 vendor），未注册的转换对（如 anthropic→zhipu）不触发任何通道;
-- feat(vendor-channels): 新增 zhipu→anthropic、zhipu→copilot、copilot→zhipu 三条源→目标绑定转换通道，在跨供应商故障转移时自动清理源 vendor 产物（thinking 块、cache_control 字段、thinking 参数、tool_use/tool_result 配对），消除 `likely format incompatibility (400 + tool_results)` 错误;
+## [v0.3.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.3.0) — 2026-04-20
+
+> [!IMPORTANT]
+>
+> **🚀 OpenAI、Anthropic、Gemini 原生 API 进驻 Coding Proxy！**
+>
+> 服务对象不在局限 Claude Code，凡兼容 OpenAI、Anthropic、Gemini 三巨头 API 协议的客户端，出口 LLM 流量可统一收敛到 Coding Proxy。
+
+### ✨ 核心亮点
+
+- feat(native-api): 新增 `/api/{openai,gemini,anthropic}/**` 原生 LLM API 全量 catch-all 透传通道；
+- feat(dashboard): 新增实时 Web Dashboard 页面，聚合展示流量与用量统计;
+- feat(usage): `usage` 区分 Claude Code 场景（`'cc'`）与原生 API 场景（`'api'`）；
+- refactor(vendor-channels): 将供应商转换通道从目标专属重构为源→目标绑定模型;
+- docs(user-guide): 补充 POST /v1/messages 完整 API 参考文档;
+
+### 🔧 更多特性
+
+- feat(server): 默认监听端口 `8046` → `3392`，规范化 [Negentropy](https://github.com/ThreeFish-AI/negentropy) 体系端口；
 
 ## [v0.2.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.3) — 2026-04-16
 

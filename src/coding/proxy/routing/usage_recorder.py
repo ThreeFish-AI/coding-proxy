@@ -93,9 +93,37 @@ class UsageRecorder:
         failover: bool,
         failover_from: str | None = None,
         evidence_records: list[dict[str, Any]] | None = None,
+        client_category: str = "cc",
+        operation: str = "",
+        endpoint: str = "",
+        extra_usage: dict[str, Any] | None = None,
     ) -> None:
+        """记录用量到 TokenLogger.
+
+        Args:
+            client_category: 客户端类别（``cc`` = Claude Code，``api`` = 原生 API 透传）。
+                默认 ``cc`` 保持既有调用方零改动。
+            operation: 规范化操作名（``chat`` / ``embedding`` / ``generate_content`` ...）。
+            endpoint: 原始上游路径（``/v1/chat/completions`` ...），用于多维度排障。
+            extra_usage: 非规范 token 字段字典（Gemini thoughts / OpenAI reasoning 等），
+                序列化为 ``extra_usage_json`` 列供后续分析或补算单价。
+        """
         if not self._token_logger:
             return
+        extra_usage_json = "{}"
+        if extra_usage:
+            try:
+                extra_usage_json = json.dumps(
+                    extra_usage, ensure_ascii=False, sort_keys=True, default=str
+                )
+            except (TypeError, ValueError):
+                # 防御性兜底：任何序列化异常降级为空对象，避免污染主流程
+                logger.warning(
+                    "Failed to serialize extra_usage for vendor=%s operation=%s",
+                    vendor,
+                    operation,
+                )
+                extra_usage_json = "{}"
         await self._token_logger.log(
             vendor=vendor,
             model_requested=model_requested,
@@ -109,10 +137,20 @@ class UsageRecorder:
             failover=failover,
             failover_from=failover_from,
             request_id=usage.request_id,
+            client_category=client_category,
+            operation=operation,
+            endpoint=endpoint,
+            extra_usage_json=extra_usage_json,
         )
-        if not evidence_records or vendor != "copilot":
+        if not evidence_records:
             return
         if not hasattr(self._token_logger, "log_evidence"):
+            return
+        # Evidence 归档策略：
+        # - 既有 copilot 流量保持原行为（保证 copilot 相关告警/审计的字段稳定）；
+        # - client_category='api' 的原生透传流量全量归档（便于后续补算 reasoning/audio
+        #   等非规范 token 的单价与审计模型返回漂移）。
+        if vendor != "copilot" and client_category != "api":
             return
         for record in evidence_records:
             await self._token_logger.log_evidence(**record)

@@ -4,7 +4,7 @@
 
 server:
   host: "127.0.0.1"
-  port: 8046
+  port: 3392
 
 logging:
   level: "INFO"
@@ -332,6 +332,12 @@ model_mapping:
 pricing:
   # ── Anthropic Claude ──
   - vendor: anthropic
+    model: claude-opus-4-7
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: anthropic
     model: claude-opus-4-6
     input_cost_per_mtok: $5.0
     output_cost_per_mtok: $25.0
@@ -392,6 +398,93 @@ pricing:
     output_cost_per_mtok: $5
     cache_write_cost_per_mtok: $1.25
     cache_read_cost_per_mtok: $0.10
+  # -- OpenAI --
+  - vendor: openai
+    model: gpt-5.4-pro
+    input_cost_per_mtok: $30.00
+    output_cost_per_mtok: $180.00
+    cache_read_cost_per_mtok: $3.00
+  - vendor: openai
+    model: gpt-5.4-2026-03-05
+    input_cost_per_mtok: $2.50
+    output_cost_per_mtok: $15.00
+    cache_read_cost_per_mtok: $0.25
+  - vendor: openai
+    model: gpt-5.4-mini-2026-03-17
+    input_cost_per_mtok: $0.75
+    output_cost_per_mtok: $4.50
+    cache_read_cost_per_mtok: $0.07
+  - vendor: openai
+    model: gpt-5.4-nano
+    input_cost_per_mtok: $0.20
+    output_cost_per_mtok: $1.25
+    cache_read_cost_per_mtok: $0.02
+  - vendor: openai
+    model: gpt-5-mini-2025-08-07
+    input_cost_per_mtok: $0.25
+    output_cost_per_mtok: $2.00
+    cache_read_cost_per_mtok: $0.02
+  - vendor: openai
+    model: gpt-5-nano-2025-08-07
+    input_cost_per_mtok: $0.05
+    output_cost_per_mtok: $0.40
+    cache_read_cost_per_mtok: $0.01
+  - vendor: openai
+    model: text-embedding-3-large
+    input_cost_per_mtok: $0.13
+  - vendor: openai
+    model: text-embedding-3-small
+    input_cost_per_mtok: $0.02
+  - vendor: openai
+    model: text-embedding-ada-002
+    input_cost_per_mtok: $0.10
+  # -- Anthropic Native --
+  - vendor: anthropic-native
+    model: claude-opus-4-7
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: anthropic-native
+    model: claude-opus-4-6
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: anthropic-native
+    model: claude-sonnet-4-6
+    input_cost_per_mtok: $3.0
+    output_cost_per_mtok: $15.0
+    cache_write_cost_per_mtok: $3.75
+    cache_read_cost_per_mtok: $0.30
+  - vendor: anthropic-native
+    model: claude-haiku-4-5-20251001
+    input_cost_per_mtok: $1
+    output_cost_per_mtok: $5
+    cache_write_cost_per_mtok: $1.25
+    cache_read_cost_per_mtok: $0.10
+  # -- Gemini --
+  - vendor: gemini
+    model: gemini-3.1-pro-preview
+    input_cost_per_mtok: $2.00
+    output_cost_per_mtok: $12.00
+    cache_read_cost_per_mtok: $0.20
+  - vendor: gemini
+    model: gemini-3-flash-preview
+    input_cost_per_mtok: $0.50
+    output_cost_per_mtok: $3.00
+    cache_read_cost_per_mtok: $0.03
+  - vendor: gemini
+    model: gemini-2.5-flash
+    input_cost_per_mtok: $0.30
+    output_cost_per_mtok: $2.50
+    cache_read_cost_per_mtok: $0.03
+  - vendor: gemini
+    model: gemini-embedding-001
+    input_cost_per_mtok: $0.15
+  - vendor: gemini
+    model: text-embedding-004
+    input_cost_per_mtok: $0.10
   # ── Google Antigravity（参照 Anthropic 定价估算） ──
   - vendor: antigravity
     model: claude-opus-4-6-thinking
@@ -516,3 +609,35 @@ auth:
   # google_client_id: ""
   # google_client_secret: ""
   token_store_path: "~/.coding-proxy/tokens.json"
+
+# === 原生 API 透传（/api/{openai,gemini,anthropic}/**）===
+#
+# 三家 provider 默认 enabled=true（开箱即用）。
+# 客户端将 SDK base_url 改为 http://127.0.0.1:3392/api/{openai,gemini,anthropic}
+# 即可直接触达官方上游；认证（Authorization / x-api-key / ?key=）由客户端自带，
+# proxy 不保管凭据。
+#
+# 将 base_url 指向第三方代理的两种方式（优先级：env > yaml > 内置默认）：
+#   方式 A（推荐部署/容器场景）：设置环境变量
+#     NATIVE_OPENAI_BASE_URL     / NATIVE_GEMINI_BASE_URL     / NATIVE_ANTHROPIC_BASE_URL
+#   方式 B（推荐本地开发/团队共享）：直接编辑下方 base_url 字段
+#
+# 如需禁用某家 provider，将对应 enabled 改为 false 即可。
+# base_url 字段的值与 Pydantic 内置默认保持一致（由 tests/test_native_api_base_url_override.py
+# 的 test_default_config_yaml_matches_pydantic_builtin 守护双写同步）。
+native_api:
+  openai:
+    enabled: true
+    base_url: "https://api.openai.com"
+    timeout_ms: 300000
+    connect_timeout_ms: 15000
+  gemini:
+    enabled: true
+    base_url: "https://generativelanguage.googleapis.com"
+    timeout_ms: 300000
+    connect_timeout_ms: 15000
+  anthropic:
+    enabled: true
+    base_url: "https://api.anthropic.com"
+    timeout_ms: 300000
+    connect_timeout_ms: 15000

@@ -16,12 +16,24 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _THINKING_BLOCK_TYPES = {"thinking", "redacted_thinking"}
+
+# ── Anthropic 工具块 ID 规范 ───────────────────────────────────
+_ANTHROPIC_TOOL_USE_ID_RE = re.compile(r"^toolu_[A-Za-z0-9_]+$")
+_ANTHROPIC_SERVER_TOOL_USE_ID_RE = re.compile(r"^srvtoolu_[A-Za-z0-9_]+$")
+
+# Zhipu 流式响应中出现的非标准供应商私有 content block 类型.
+# Anthropic API 拒绝这些块，需要在跨 vendor 请求体中剥离.
+_ZHIPU_VENDOR_BLOCK_TYPES = {"server_tool_use_delta"}
+
+# Zhipu 内联输出非标准 content block 类型的标识（用于源供应商推断）.
+_ZHIPU_SERVER_TOOL_USE_TYPES = {"server_tool_use", "server_tool_use_delta"}
 
 # ── 转换通道注册表 ─────────────────────────────────────────────
 # (source_vendor, target_vendor) → (body) → (prepared_body, adaptations)
@@ -250,6 +262,138 @@ def _strip_cache_control(body: dict[str, Any]) -> int:
     return removed
 
 
+def _remove_vendor_blocks(body: dict[str, Any], block_types: set[str]) -> int:
+    """从 messages[].content[] 中就地移除指定 type 的内容块.
+
+    用于剥离 vendor 私有 content block 类型（如 zhipu 的 ``server_tool_use_delta``），
+    Anthropic API 会拒绝这些非标准块。
+
+    Returns:
+        被移除的块数量。
+    """
+    removed = 0
+    for message in body.get("messages", []):
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        new_content: list[Any] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in block_types:
+                removed += 1
+                continue
+            new_content.append(block)
+        if removed:
+            message["content"] = new_content
+    return removed
+
+
+def _rewrite_srvtoolu_ids(body: dict[str, Any]) -> tuple[int, dict[str, str]]:
+    """将 zhipu 的 ``server_tool_use`` + ``srvtoolu_*`` ID 改写为标准 Anthropic 形式.
+
+    Anthropic API 要求 tool_use 类型与 ``toolu_*`` 格式的 ID。Zhipu 的
+    ``server_tool_use`` + ``srvtoolu_*`` 在上游 Anthropic 兼容端点可用，但无法
+    透传至其他供应商；同时还需重写紧随其后 user 消息中 ``tool_result.tool_use_id``
+    引用，保持配对关系。
+
+    Returns:
+        (rewritten_count, id_map) — 重写次数与 {原 ID: 新 ID} 映射。
+    """
+    id_map: dict[str, str] = {}
+    counter = 0
+
+    def next_id() -> str:
+        nonlocal counter
+        counter += 1
+        return f"toolu_normalized_{counter}"
+
+    for message in body.get("messages", []):
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        role = message.get("role")
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            block_id = block.get("id")
+
+            # Case A: assistant 消息里的 server_tool_use / srvtoolu_* → 改写
+            if role == "assistant" and block_type in {"tool_use", "server_tool_use"}:
+                if isinstance(block_id, str) and _ANTHROPIC_SERVER_TOOL_USE_ID_RE.match(
+                    block_id
+                ):
+                    new_id = next_id()
+                    id_map[block_id] = new_id
+                    block["id"] = new_id
+                    block["type"] = "tool_use"
+                elif (
+                    isinstance(block_id, str)
+                    and block_id
+                    and not _ANTHROPIC_TOOL_USE_ID_RE.match(block_id)
+                    and block.get("name")
+                ):
+                    # 非标准 ID（非 toolu_ / srvtoolu_），且具备 name 可改写
+                    new_id = next_id()
+                    id_map[block_id] = new_id
+                    block["id"] = new_id
+                    block["type"] = "tool_use"
+                elif block_type == "server_tool_use" and isinstance(block_id, str):
+                    # 兜底: 类型是 server_tool_use 但 ID 已是标准 toolu_ 形式，仅纠正类型
+                    block["type"] = "tool_use"
+
+            # Case B: user 消息里的 tool_result.tool_use_id 同步重写
+            if block_type == "tool_result":
+                tool_use_id = block.get("tool_use_id")
+                if isinstance(tool_use_id, str) and tool_use_id in id_map:
+                    block["tool_use_id"] = id_map[tool_use_id]
+
+    return len(id_map), id_map
+
+
+def infer_source_vendor_from_body(body: dict[str, Any]) -> str | None:
+    """从请求 body 内容推断源供应商（仅在无会话上下文时作为兜底）.
+
+    启发式（按置信度排序）:
+    - 出现 ``srvtoolu_*`` 格式的 ``tool_use.id`` → zhipu
+    - 出现 ``server_tool_use`` / ``server_tool_use_delta`` 类型的 content block → zhipu
+
+    原则: 只读扫描不修改 body；无匹配返回 None（视作纯净无需跨供应商清洗）。
+
+    Args:
+        body: Anthropic Messages 请求体。
+
+    Returns:
+        推断的源供应商名称（当前仅支持 ``"zhipu"``），无法推断返回 None。
+    """
+    for message in body.get("messages", []):
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type in _ZHIPU_SERVER_TOOL_USE_TYPES:
+                return "zhipu"
+            block_id = block.get("id")
+            if isinstance(block_id, str) and _ANTHROPIC_SERVER_TOOL_USE_ID_RE.match(
+                block_id
+            ):
+                return "zhipu"
+            tool_use_id = block.get("tool_use_id")
+            if isinstance(tool_use_id, str) and _ANTHROPIC_SERVER_TOOL_USE_ID_RE.match(
+                tool_use_id
+            ):
+                return "zhipu"
+    return None
+
+
 # ── copilot → zhipu 转换通道 ─────────────────────────────────────
 
 
@@ -316,17 +460,27 @@ def prepare_zhipu_to_copilot(
     prepared = copy.deepcopy(body)
     adaptations: list[str] = []
 
-    # Step 1: 剥离 thinking/redacted_thinking 块
+    # Step 1: 剥离 zhipu 私有 content block 类型
+    removed_vendor_blocks = _remove_vendor_blocks(prepared, _ZHIPU_VENDOR_BLOCK_TYPES)
+    if removed_vendor_blocks:
+        adaptations.append(f"removed_{removed_vendor_blocks}_zhipu_vendor_blocks")
+
+    # Step 2: 改写 srvtoolu_* ID 与 server_tool_use 类型
+    rewritten, _ = _rewrite_srvtoolu_ids(prepared)
+    if rewritten:
+        adaptations.append(f"rewritten_{rewritten}_srvtoolu_ids")
+
+    # Step 3: 剥离 thinking/redacted_thinking 块
     stripped = strip_thinking_blocks(prepared)
     if stripped:
         adaptations.append(f"stripped_{stripped}_thinking_blocks")
 
-    # Step 2: 移除 cache_control 字段
+    # Step 4: 移除 cache_control 字段
     removed_cc = _strip_cache_control(prepared)
     if removed_cc:
         adaptations.append(f"removed_{removed_cc}_cache_control_fields")
 
-    # Step 3: 强制 tool_use/tool_result 配对
+    # Step 5: 强制 tool_use/tool_result 配对
     pairing_fixes = enforce_anthropic_tool_pairing(prepared.get("messages", []))
     if pairing_fixes:
         adaptations.extend(pairing_fixes)
@@ -343,14 +497,18 @@ def prepare_zhipu_to_anthropic(
     """zhipu → anthropic 转换: 清理 zhipu 产物以适配 Anthropic API.
 
     Anthropic API 要求:
+    - tool_use 类型与 ``toolu_*`` 格式 ID（zhipu 的 ``server_tool_use``/``srvtoolu_*`` 不兼容）
     - 每个 tool_use 必须在紧随的 user 消息中有对应 tool_result
     - thinking blocks 的 signature 必须是 Anthropic 签发（zhipu 签发的无效）
+    - 不接受 ``server_tool_use_delta`` 等 zhipu 私有流式块类型
 
-    此通道执行两项变换:
-    1. enforce_anthropic_tool_pairing: 单遍正向扫描修复配对
-    2. strip_thinking_blocks: 移除非 Anthropic 签发的 thinking 块
+    此通道按顺序执行:
+    1. 剥离 zhipu 私有 block 类型（``server_tool_use_delta``）
+    2. 改写 ``srvtoolu_*`` ID 与 ``server_tool_use`` 类型为标准 Anthropic 形式
+    3. 强制 tool_use/tool_result 配对（单遍正向扫描）
+    4. 剥离 thinking blocks（signature 无效）
 
-    两项变换均为幂等操作，安全地在已清理的请求体上重复执行。
+    所有变换均为幂等操作，安全地在已清理的请求体上重复执行。
 
     Returns:
         (prepared_body, adaptations) — adaptations 为应用的变换描述列表。
@@ -358,12 +516,22 @@ def prepare_zhipu_to_anthropic(
     prepared = copy.deepcopy(body)
     adaptations: list[str] = []
 
-    # Step 1: 强制 tool_use/tool_result 配对
+    # Step 1: 剥离 zhipu 私有 content block 类型（如 server_tool_use_delta）
+    removed_vendor_blocks = _remove_vendor_blocks(prepared, _ZHIPU_VENDOR_BLOCK_TYPES)
+    if removed_vendor_blocks:
+        adaptations.append(f"removed_{removed_vendor_blocks}_zhipu_vendor_blocks")
+
+    # Step 2: 改写 srvtoolu_* ID 与 server_tool_use 类型
+    rewritten, _ = _rewrite_srvtoolu_ids(prepared)
+    if rewritten:
+        adaptations.append(f"rewritten_{rewritten}_srvtoolu_ids")
+
+    # Step 3: 强制 tool_use/tool_result 配对
     pairing_fixes = enforce_anthropic_tool_pairing(prepared.get("messages", []))
     if pairing_fixes:
         adaptations.extend(pairing_fixes)
 
-    # Step 2: 剥离 thinking blocks（zhipu signature 无效）
+    # Step 4: 剥离 thinking blocks（zhipu signature 无效）
     stripped = strip_thinking_blocks(prepared)
     if stripped:
         adaptations.append(f"stripped_{stripped}_thinking_blocks")

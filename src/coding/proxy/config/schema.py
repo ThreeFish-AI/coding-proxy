@@ -19,6 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from ..native_api.config import NativeApiConfig  # noqa: F401
 from .auth_schema import AuthConfig  # noqa: F401
 from .resiliency import (  # noqa: F401
     CircuitBreakerConfig,
@@ -141,6 +142,14 @@ class ProxyConfig(BaseModel):
             "显式指定降级链路的优先级顺序（索引越小优先级越高）。"
             "引用的 vendor 必须在 vendors 中存在且 enabled=True。"
             "未配置时回退到 vendors 列表原始顺序。"
+        ),
+    )
+    # 原生 LLM API 透传通道 — 与 /v1/messages（Claude Code）链路正交
+    native_api: NativeApiConfig = Field(
+        default_factory=NativeApiConfig,
+        description=(
+            "OpenAI / Gemini / Anthropic 原生 API 透传配置。"
+            "三个 provider 默认 enabled=False，显式启用才暴露 /api/{provider}/* 端点。"
         ),
     )
 
@@ -320,4 +329,6 @@ __all__ = [
     "DoubaoConfig",
     "XiaomiConfig",
     "AlibabaConfig",
+    # native api passthrough
+    "NativeApiConfig",
 ]

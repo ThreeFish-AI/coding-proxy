@@ -121,7 +121,7 @@ def start(
 
 @app.command()
 def status(
-    port: int = typer.Option(8046, "--port", "-p", help="代理服务端口"),
+    port: int = typer.Option(3392, "--port", "-p", help="代理服务端口"),
 ) -> None:
     """查看代理状态和当前活跃供应商."""
     import httpx
@@ -215,7 +215,7 @@ async def _run_usage(
 
 @app.command()
 def reset(
-    port: int = typer.Option(8046, "--port", "-p", help="代理服务端口"),
+    port: int = typer.Option(3392, "--port", "-p", help="代理服务端口"),
     vendor: str | None = typer.Option(
         None,
         "--vendor",
