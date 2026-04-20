@@ -4,16 +4,25 @@
 
 ## [Unreleased]
 
-- feat(server): 默认监听端口 `8046` → `3392`，避免与常见企业端口段冲突；BREAKING: 已将端口固化进客户端 `ANTHROPIC_BASE_URL` / SDK `base_url` / 监控看板 URL 的用户需同步更新，或显式通过 `--port 8046` / `server.port: 8046` 回退到旧值；
-- feat(native-api): 原生 API 透传三家 provider (`openai` / `gemini` / `anthropic`) `enabled` 默认由 `false` → `true` 开箱即用；`config.default.yaml` 顶层追加 `native_api:` 实体配置块（首次启动自动拷贝至 `~/.coding-proxy/config.yaml`，用户直接编辑 `base_url` 即可将上游切换至第三方代理）；同时新增 `NATIVE_OPENAI_BASE_URL` / `NATIVE_GEMINI_BASE_URL` / `NATIVE_ANTHROPIC_BASE_URL` 三枚环境变量覆写通道（空串/纯空白视作未设置），三级优先级 **env > yaml > 内置默认** 由 `NativeApiConfig._apply_env_overrides` `@model_validator(mode="after")` 统一注入；BREAKING: 升级后 `/api/{openai,gemini,anthropic}/**` 默认暴露，proxy 仍不保管凭据（`Authorization` / `x-api-key` / `?key=` 均由客户端透传），如需关闭显式设置 `native_api.<provider>.enabled: false`；
-- feat(native-api): 新增 `/api/{openai,gemini,anthropic}/**` 原生 LLM API 全量 catch-all 透传通道——客户端只需改 SDK `base_url` 即可复用 proxy 链路访问 OpenAI / Gemini / Anthropic 官方 API，认证完全透传不保管凭据；核心由 `NativeProxyHandler` + `OperationClassifier` + `NativeUsageExtractor` Registry 三件套组成，与既有 `/v1/messages` Claude Code 链路正交共存、零回归；首版覆盖 chat / completions / responses / embeddings / audio / image / count_tokens / moderations / cachedContents / messages / batches 等全量端点；
-- feat(usage): `usage_log` 新增 `client_category` / `operation` / `endpoint` / `extra_usage_json` 四列（全部 `DEFAULT`、幂等迁移），区分 Claude Code 场景（`'cc'`）与原生 API 场景（`'api'`），承载规范化操作名与非规范 token 字段（reasoning / audio / thoughts / server_tool_use 等）；`query_usage` 支持按新列过滤，`_PERIOD_SQL` 聚合追加 `client_category, operation` 维度；
-- feat(usage-parser): `parse_usage_from_chunk` 扩展识别 Gemini SSE `usageMetadata.*`（promptTokenCount / candidatesTokenCount / cachedContentTokenCount / thoughtsTokenCount / toolUsePromptTokenCount），新增 `gemini_usage_metadata` evidence kind，既有 Anthropic/OpenAI 分支行为零变更；
-- refactor(vendor-channels): 彻底收敛跨供应商兼容性逻辑——删除 `server/request_normalizer.py` 入口通用规范化层，将 `srvtoolu_*` ID 重写、`server_tool_use_delta` 私有块剥离全部迁入源→目标绑定通道（`prepare_zhipu_to_anthropic`、`prepare_zhipu_to_copilot`）；新增 `infer_source_vendor_from_body` 内容感知源推断，在无会话状态的首次请求场景下兜底识别源供应商；`_RouteExecutor._determine_source_vendor` 扩充为三级优先级（failed_tier → session_state → body inference），确保未注册转换对不触发任何清洗；
-- refactor(count-tokens): `/v1/messages/count_tokens` 端点移除无条件 `strip_thinking_blocks` 过度防御，改为基于 `infer_source_vendor_from_body` + `get_transition_channel` 的按需通道清洗，语义与 `/v1/messages` 对齐；
-- fix(request-normalizer): 重设计 zhipu→anthropic 跨供应商 tool_use/tool_result 配对修复——以单遍自包含 `enforce_anthropic_tool_pairing` 替代原有多步串联管线（剥离→重定位→孤儿修复），消除步骤间隐式依赖导致的孤儿 tool_use 漏修问题，彻底根治 `tool_use ids were found without tool_result blocks` 400 异常;
-- refactor(vendor-channels): 将供应商转换通道从「目标 vendor 专属」重构为「源→目标绑定」模型——注册表键从 `target_vendor` 改为 `(source, target)` 二元组，通道函数从 `prepare_for_X` 重命名为 `prepare_X_to_Y`，触发逻辑从 `_needs_vendor_channel` 替换为 `_determine_source_vendor`（基于请求内 `failed_tier_name` 和会话历史推断源 vendor），未注册的转换对（如 anthropic→zhipu）不触发任何通道;
-- feat(vendor-channels): 新增 zhipu→anthropic、zhipu→copilot、copilot→zhipu 三条源→目标绑定转换通道，在跨供应商故障转移时自动清理源 vendor 产物（thinking 块、cache_control 字段、thinking 参数、tool_use/tool_result 配对），消除 `likely format incompatibility (400 + tool_results)` 错误;
+## [v0.3.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.3.0) — 2026-04-20
+
+> [!IMPORTANT]
+>
+> **🚀 OpenAI、Anthropic、Gemini 原生 API 进驻 Coding Proxy！**
+>
+> 服务对象不在局限 Claude Code，凡兼容 OpenAI、Anthropic、Gemini 三巨头 API 协议的客户端，出口 LLM 流量可统一收敛到 Coding Proxy。
+
+### ✨ 核心亮点
+
+- feat(native-api): 新增 `/api/{openai,gemini,anthropic}/**` 原生 LLM API 全量 catch-all 透传通道；
+- feat(dashboard): 新增实时 Web Dashboard 页面，聚合展示流量与用量统计;
+- feat(usage): `usage` 区分 Claude Code 场景（`'cc'`）与原生 API 场景（`'api'`）；
+- refactor(vendor-channels): 将供应商转换通道从目标专属重构为源→目标绑定模型;
+- docs(user-guide): 补充 POST /v1/messages 完整 API 参考文档;
+
+### 🔧 更多特性
+
+- feat(server): 默认监听端口 `8046` → `3392`，规范化 [Negentropy](https://github.com/ThreeFish-AI/negentropy) 体系端口；
 
 ## [v0.2.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.2.3) — 2026-04-16
 
