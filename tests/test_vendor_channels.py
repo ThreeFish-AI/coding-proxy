@@ -4,6 +4,7 @@
 - zhipu → anthropic 转换 (prepare_zhipu_to_anthropic)
 - zhipu → copilot 转换 (prepare_zhipu_to_copilot)
 - copilot → zhipu 转换 (prepare_copilot_to_zhipu)
+- anthropic → zhipu 转换 (prepare_anthropic_to_zhipu)
 - 共享辅助函数 (strip_thinking_blocks, _strip_cache_control, _remove_vendor_blocks,
   _rewrite_srvtoolu_ids, enforce_anthropic_tool_pairing, infer_source_vendor_from_body)
 - 转换注册表 (VENDOR_TRANSITIONS, get_transition_channel)
@@ -21,6 +22,7 @@ from coding.proxy.convert.vendor_channels import (
     enforce_anthropic_tool_pairing,
     get_transition_channel,
     infer_source_vendor_from_body,
+    prepare_anthropic_to_zhipu,
     prepare_copilot_to_zhipu,
     prepare_zhipu_to_anthropic,
     prepare_zhipu_to_copilot,
@@ -703,7 +705,8 @@ class TestTransitionRegistry:
         assert ("zhipu", "anthropic") in VENDOR_TRANSITIONS
         assert ("zhipu", "copilot") in VENDOR_TRANSITIONS
         assert ("copilot", "zhipu") in VENDOR_TRANSITIONS
-        assert len(VENDOR_TRANSITIONS) == 3
+        assert ("anthropic", "zhipu") in VENDOR_TRANSITIONS
+        assert len(VENDOR_TRANSITIONS) == 4
 
     def test_get_transition_channel_returns_function(self):
         assert (
@@ -711,9 +714,11 @@ class TestTransitionRegistry:
         )
         assert get_transition_channel("zhipu", "copilot") is prepare_zhipu_to_copilot
         assert get_transition_channel("copilot", "zhipu") is prepare_copilot_to_zhipu
+        assert (
+            get_transition_channel("anthropic", "zhipu") is prepare_anthropic_to_zhipu
+        )
 
     def test_get_transition_channel_returns_none_for_unregistered(self):
-        assert get_transition_channel("anthropic", "zhipu") is None
         assert get_transition_channel("copilot", "anthropic") is None
         assert get_transition_channel("unknown", "target") is None
         assert get_transition_channel("antigravity", "copilot") is None
@@ -826,6 +831,48 @@ class TestRemoveVendorBlocks:
         body = {"messages": [{"role": "user", "content": "hi"}]}
         removed = _remove_vendor_blocks(body, {"whatever"})
         assert removed == 0
+
+    def test_inserts_placeholder_when_all_blocks_stripped(self):
+        """assistant 消息仅含 vendor 块时插入占位 text block."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "toolu_1",
+                            "name": "ws",
+                            "input": {},
+                        },
+                    ],
+                },
+            ],
+        }
+        removed = _remove_vendor_blocks(body, {"server_tool_use"})
+        assert removed == 1
+        assert body["messages"][0]["content"] == [
+            {"type": "text", "text": "[vendor_block_removed]"},
+        ]
+
+    def test_does_not_mutate_unrelated_messages(self):
+        """仅含 vendor 块的消息被修改，其他消息不受影响."""
+        body = {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "server_tool_use_delta", "partial_json": "{}"},
+                    ],
+                },
+            ],
+        }
+        _remove_vendor_blocks(body, {"server_tool_use_delta"})
+        assert body["messages"][0]["content"] == [{"type": "text", "text": "hi"}]
+        assert body["messages"][1]["content"] == [
+            {"type": "text", "text": "[vendor_block_removed]"},
+        ]
 
 
 # ── _rewrite_srvtoolu_ids 单元测试 ─────────────────────────────────
@@ -1033,7 +1080,8 @@ class TestInferSourceVendorFromBody:
         }
         assert infer_source_vendor_from_body(body) == "zhipu"
 
-    def test_detects_zhipu_by_server_tool_use_type(self):
+    def test_detects_zhipu_by_server_tool_use_with_non_standard_id(self):
+        """server_tool_use + 非 toolu_/srvtoolu_ ID → 兜底归 zhipu."""
         body = {
             "messages": [
                 {
@@ -1041,7 +1089,7 @@ class TestInferSourceVendorFromBody:
                     "content": [
                         {
                             "type": "server_tool_use",
-                            "id": "toolu_any",
+                            "id": "custom_non_standard",
                             "name": "bash",
                             "input": {},
                         },
@@ -1145,6 +1193,44 @@ class TestInferSourceVendorFromBody:
             ],
         }
         assert infer_source_vendor_from_body(body) is None
+
+    def test_detects_anthropic_by_server_tool_use_with_toolu_id(self):
+        """server_tool_use + toolu_* ID（Anthropic beta 功能产物）→ anthropic."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "toolu_web_search_1",
+                            "name": "web_search",
+                            "input": {"query": "test"},
+                        },
+                    ],
+                },
+            ],
+        }
+        assert infer_source_vendor_from_body(body) == "anthropic"
+
+    def test_zhipu_srvtoolu_takes_priority_over_anthropic_detection(self):
+        """srvtoolu_* ID 优先识别为 zhipu（即使 block type 为 server_tool_use）."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_x",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+            ],
+        }
+        assert infer_source_vendor_from_body(body) == "zhipu"
 
 
 # ── enforce_anthropic_tool_pairing 单元测试（从 test_request_normalizer.py 迁入） ─
@@ -1729,3 +1815,253 @@ class TestZhipuToCopilotChannelFullCleanup:
         assert prepared["messages"][1]["content"][0]["tool_use_id"] == new_id
         assert any("zhipu_vendor_blocks" in a for a in adaptations)
         assert any("srvtoolu_ids" in a for a in adaptations)
+
+
+# ── anthropic → zhipu 转换通道测试 ──────────────────────────────
+
+
+class TestAnthropicToZhipuChannel:
+    """prepare_anthropic_to_zhipu 转换通道单元测试."""
+
+    def test_strips_server_tool_use_blocks(self):
+        """Anthropic 的 server_tool_use（web search, computer use）应被剥离."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Let me search..."},
+                        {
+                            "type": "server_tool_use",
+                            "id": "toolu_web_search_123",
+                            "name": "web_search",
+                            "input": {"query": "python async"},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_web_search_123",
+                            "content": "search results",
+                        },
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_anthropic_to_zhipu(body)
+        assert any("server_tool_use" in a for a in adaptations)
+        assistant_content = prepared["messages"][0]["content"]
+        assert all(b.get("type") != "server_tool_use" for b in assistant_content)
+        assert assistant_content == [{"type": "text", "text": "Let me search..."}]
+
+    def test_strips_thinking_blocks(self):
+        """Anthropic 签发的 thinking blocks 应被剥离（zhipu 可能无法验证 signature）."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "thought", "signature": "sig"},
+                        {"type": "text", "text": "response"},
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_anthropic_to_zhipu(body)
+        assert any("thinking_blocks" in a for a in adaptations)
+        assert prepared["messages"][0]["content"] == [
+            {"type": "text", "text": "response"},
+        ]
+
+    def test_removes_cache_control(self):
+        body = {
+            "system": [
+                {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}},
+            ],
+            "messages": [],
+        }
+        prepared, adaptations = prepare_anthropic_to_zhipu(body)
+        assert any("cache_control" in a for a in adaptations)
+        assert "cache_control" not in prepared["system"][0]
+
+    def test_removes_thinking_params(self):
+        body = {
+            "messages": [],
+            "thinking": {"type": "enabled", "budget_tokens": 10000},
+            "extended_thinking": {"type": "enabled"},
+        }
+        prepared, adaptations = prepare_anthropic_to_zhipu(body)
+        assert "thinking" not in prepared
+        assert "extended_thinking" not in prepared
+        assert "removed_thinking_param" in adaptations
+        assert "removed_extended_thinking_param" in adaptations
+
+    def test_enforces_tool_pairing(self):
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {"role": "user", "content": "next"},
+            ],
+        }
+        prepared, adaptations = prepare_anthropic_to_zhipu(body)
+        assert "orphaned_tool_use_repaired" in adaptations
+        user_results = [
+            b
+            for b in prepared["messages"][1]["content"]
+            if isinstance(b, dict) and b.get("type") == "tool_result"
+        ]
+        assert len(user_results) == 1
+        assert user_results[0]["tool_use_id"] == "toolu_1"
+
+    def test_preserves_original_body(self):
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "toolu_1",
+                            "name": "web_search",
+                            "input": {},
+                        },
+                        {"type": "text", "text": "hi"},
+                    ],
+                },
+            ],
+        }
+        original = copy.deepcopy(body)
+        prepare_anthropic_to_zhipu(body)
+        assert body == original
+
+    def test_noop_when_clean(self):
+        body = {
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            ],
+        }
+        prepared, adaptations = prepare_anthropic_to_zhipu(body)
+        assert adaptations == []
+        assert prepared == body
+
+    def test_idempotency(self):
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "t"},
+                        {
+                            "type": "server_tool_use",
+                            "id": "toolu_1",
+                            "name": "web_search",
+                            "input": {},
+                        },
+                    ],
+                },
+            ],
+            "thinking": {"type": "enabled"},
+        }
+        prepared1, adaptations1 = prepare_anthropic_to_zhipu(body)
+        prepared2, adaptations2 = prepare_anthropic_to_zhipu(prepared1)
+        assert prepared2 == prepared1
+        assert adaptations2 == []
+
+    def test_strips_multiple_server_tool_use_blocks(self):
+        """多个 server_tool_use 块（web search + computer use）全部剥离."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "toolu_ws_1",
+                            "name": "web_search",
+                            "input": {"query": "test"},
+                        },
+                        {
+                            "type": "server_tool_use",
+                            "id": "toolu_cu_1",
+                            "name": "computer",
+                            "input": {"action": "click"},
+                        },
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_anthropic_to_zhipu(body)
+        assert not any(
+            b.get("type") == "server_tool_use"
+            for b in prepared["messages"][0]["content"]
+        )
+        assert "removed_2_server_tool_use" in adaptations[0]
+
+    def test_inserts_placeholder_when_all_blocks_stripped(self):
+        """assistant 消息仅含 server_tool_use 时插入占位 text block."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "toolu_1",
+                            "name": "web_search",
+                            "input": {},
+                        },
+                    ],
+                },
+            ],
+        }
+        prepared, _ = prepare_anthropic_to_zhipu(body)
+        assert prepared["messages"][0]["content"] == [
+            {"type": "text", "text": "[vendor_block_removed]"},
+        ]
+
+    def test_combined_server_tool_use_and_thinking(self):
+        """server_tool_use + thinking + cache_control 的组合清洗."""
+        body = {
+            "system": [
+                {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}},
+            ],
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "t", "signature": "s"},
+                        {
+                            "type": "server_tool_use",
+                            "id": "toolu_cu_1",
+                            "name": "computer",
+                            "input": {},
+                        },
+                        {"type": "text", "text": "done"},
+                    ],
+                },
+            ],
+            "thinking": {"type": "enabled"},
+        }
+        prepared, adaptations = prepare_anthropic_to_zhipu(body)
+        assert all(
+            b.get("type") not in ("thinking", "redacted_thinking", "server_tool_use")
+            for b in prepared["messages"][0]["content"]
+        )
+        assert "cache_control" not in prepared["system"][0]
+        assert "thinking" not in prepared
+        assert any("server_tool_use" in a for a in adaptations)
+        assert any("thinking_blocks" in a for a in adaptations)
