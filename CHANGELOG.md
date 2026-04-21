@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- fix(vendor-channels): 新增 `anthropic → zhipu` 跨供应商转换通道，修复 Anthropic beta 功能（web search, computer use）产生的 `server_tool_use` 块导致 zhipu 400 错误的问题；
+- fix(error-classifier): 增强语义拒绝检测，识别 zhipu 等供应商返回的中文错误消息（如「API 调用参数有误」code=1210），确保正确触发故障转移；
+- fix(vendor-channels): `_remove_vendor_blocks` 增加空内容占位保护，防止内容块全部剥离后消息结构不合法。
+
 ## [v0.3.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.3.0) — 2026-04-20
 
 > [!IMPORTANT]

@@ -175,6 +175,44 @@ class TestIsSemanticRejection:
             is False
         )
 
+    def test_400_with_chinese_api_error(self):
+        """zhipu 返回中文「API 调用参数有误」应被识别为语义拒绝."""
+        assert (
+            is_semantic_rejection(
+                status_code=400,
+                error_message="API 调用参数有误",
+            )
+            is True
+        )
+
+    def test_400_with_chinese_validation_error(self):
+        assert (
+            is_semantic_rejection(
+                status_code=400,
+                error_message="请求参数错误",
+            )
+            is True
+        )
+
+    def test_400_with_chinese_format_error(self):
+        assert (
+            is_semantic_rejection(
+                status_code=400,
+                error_message="请求格式错误",
+            )
+            is True
+        )
+
+    def test_chinese_error_not_matched_at_non_400(self):
+        """非 400 状态码的中文错误不应被视为语义拒绝."""
+        assert (
+            is_semantic_rejection(
+                status_code=500,
+                error_message="API 调用参数有误",
+            )
+            is False
+        )
+
 
 # --- extract_error_payload_from_http_status 测试 ---
 

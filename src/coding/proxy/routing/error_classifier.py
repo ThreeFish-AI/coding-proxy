@@ -24,6 +24,17 @@ _STRUCTURAL_ERROR_MARKERS: frozenset[str] = frozenset(
     }
 )
 
+# 中文语义拒绝标记（zhipu 等供应商的 400 错误消息）。
+# 使用原始大小写匹配，因为中文无大小写之分。
+_VENDOR_CN_SEMANTIC_REJECTION_MARKERS: frozenset[str] = frozenset(
+    {
+        "API 调用参数有误",
+        "参数不合法",
+        "请求参数错误",
+        "请求格式错误",
+    }
+)
+
 
 def extract_error_payload_from_http_status(
     exc: httpx.HTTPStatusError,
@@ -91,6 +102,9 @@ def is_semantic_rejection(
             "can only be in",
             "bad request",  # 覆盖 Copilot 等返回纯文本 "Bad Request" 的场景
         )
+    ) or any(
+        marker in (error_message or "")
+        for marker in _VENDOR_CN_SEMANTIC_REJECTION_MARKERS
     )
 
 
