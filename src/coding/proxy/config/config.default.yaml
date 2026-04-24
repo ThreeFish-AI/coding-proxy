@@ -485,6 +485,9 @@ pricing:
   - vendor: gemini
     model: text-embedding-004
     input_cost_per_mtok: $0.10
+  - vendor: gemini
+    model: text-embedding-005
+    input_cost_per_mtok: $0.10
   # ── Google Antigravity（参照 Anthropic 定价估算） ──
   - vendor: antigravity
     model: claude-opus-4-6-thinking
