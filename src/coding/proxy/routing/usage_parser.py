@@ -172,10 +172,6 @@ def parse_usage_from_chunk(
         if isinstance(msg, dict) and "usage" in msg:
             u = msg["usage"]
             input_tokens = u.get("input_tokens", 0) or u.get("prompt_tokens", 0)
-            if input_tokens > 0:
-                logger.debug(
-                    "Extracted input tokens from message.usage: %d", input_tokens
-                )
             _set_if_nonzero(usage, "input_tokens", input_tokens)
             _set_if_nonzero(
                 usage, "cache_creation_tokens", u.get("cache_creation_input_tokens", 0)
@@ -204,18 +200,6 @@ def parse_usage_from_chunk(
             cache_creation_tokens = u.get("cache_creation_input_tokens", 0)
             cache_read_tokens = u.get("cache_read_input_tokens", 0)
 
-            _label = f" ({vendor_label})" if vendor_label else ""
-            if output_tokens > 0:
-                logger.debug(
-                    "Extracted output tokens from data.usage: %d%s",
-                    output_tokens,
-                    _label,
-                )
-            if input_tokens > 0:
-                logger.debug(
-                    "Extracted input tokens from data.usage: %d%s", input_tokens, _label
-                )
-
             _set_if_nonzero(usage, "output_tokens", output_tokens)
             _set_if_nonzero(usage, "input_tokens", input_tokens)
             _set_if_nonzero(usage, "cache_creation_tokens", cache_creation_tokens)
@@ -240,20 +224,6 @@ def parse_usage_from_chunk(
                 cached_tc = int(um.get("cachedContentTokenCount", 0) or 0)
                 thoughts_tc = int(um.get("thoughtsTokenCount", 0) or 0)
                 tool_use_tc = int(um.get("toolUsePromptTokenCount", 0) or 0)
-
-                _label = f" ({vendor_label})" if vendor_label else ""
-                if prompt_tc > 0:
-                    logger.debug(
-                        "Extracted Gemini prompt tokens from usageMetadata: %d%s",
-                        prompt_tc,
-                        _label,
-                    )
-                if cand_tc > 0:
-                    logger.debug(
-                        "Extracted Gemini candidates tokens from usageMetadata: %d%s",
-                        cand_tc,
-                        _label,
-                    )
 
                 _set_if_nonzero(usage, "input_tokens", prompt_tc)
                 _set_if_nonzero(usage, "output_tokens", cand_tc)
