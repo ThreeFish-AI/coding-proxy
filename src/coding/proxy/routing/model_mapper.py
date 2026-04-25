@@ -62,12 +62,6 @@ class ModelMapper:
                 continue
             if not rule.is_regex and "*" not in rule.pattern:
                 if rule.pattern == model:
-                    logger.debug(
-                        "Model mapped: %s -> %s (vendor=%s exact)",
-                        model,
-                        rule.target,
-                        display_name,
-                    )
                     return rule.target
 
         # 2. 通配符/正则匹配
@@ -77,23 +71,9 @@ class ModelMapper:
             if rule.is_regex:
                 compiled = self._compiled[rule.pattern]
                 if compiled.fullmatch(model):
-                    logger.debug(
-                        "Model mapped: %s -> %s (vendor=%s regex=%s)",
-                        model,
-                        rule.target,
-                        display_name,
-                        rule.pattern,
-                    )
                     return rule.target
             elif "*" in rule.pattern:
                 if fnmatch.fnmatch(model, rule.pattern):
-                    logger.debug(
-                        "Model mapped: %s -> %s (vendor=%s glob=%s)",
-                        model,
-                        rule.target,
-                        display_name,
-                        rule.pattern,
-                    )
                     return rule.target
 
         # 3. 默认值

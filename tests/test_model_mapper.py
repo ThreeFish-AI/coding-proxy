@@ -1,7 +1,5 @@
 """模型映射器单元测试."""
 
-import logging
-
 from coding.proxy.config.schema import ModelMappingRule
 from coding.proxy.routing.model_mapper import ModelMapper
 
@@ -95,19 +93,3 @@ def test_legacy_rule_only_applies_to_fallback():
         )
         == "claude-sonnet-4-20250514"
     )
-
-
-def test_zhipu_vendor_logs_with_original_name(caplog):
-    """zhipu 供应商传入时，日志应显示 vendor=zhipu 而非 vendor=fallback."""
-    caplog.set_level(logging.DEBUG, logger="coding.proxy.routing.model_mapper")
-    mapper = _make_mapper(
-        [
-            ModelMappingRule(pattern="claude-sonnet-*", target="glm-5.1"),
-        ]
-    )
-    result = mapper.map("claude-sonnet-4-20250514", vendor="zhipu")
-    assert result == "glm-5.1"
-
-    # 日志中应包含 vendor=zhipu 而非 vendor=fallback
-    assert any("vendor=zhipu" in r.message for r in caplog.records)
-    assert not any("vendor=fallback" in r.message for r in caplog.records)
