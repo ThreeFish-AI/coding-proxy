@@ -86,6 +86,14 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:3392
 claude
 ```
 
+### 5. 打开监控看板
+
+想实时观测 Token 消耗、延迟以及各层熔断状态？在浏览器中打开：
+
+```bash
+open http://127.0.0.1:3392/dashboard
+```
+
 ---
 
 ## 🛠️ CLI 控制台指南
