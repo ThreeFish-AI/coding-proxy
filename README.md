@@ -86,6 +86,14 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:3392
 claude
 ```
 
+### 5. Peek at the Dashboard
+
+Curious about your real-time token spend, latency, and circuit breaker pulse? Pop open your browser and head to:
+
+```bash
+open http://127.0.0.1:3392/dashboard
+```
+
 ---
 
 ## 🛠️ The CLI Console Guide
