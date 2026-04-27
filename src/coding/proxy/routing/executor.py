@@ -264,6 +264,10 @@ class _RouteExecutor:
         Priority 1: failed_tier_name（请求内故障转移，最可靠）。
         Priority 2: session_record.provider_state 中有已注册转换的 vendor（跨请求）。
         Priority 3: 从 body 内容推断（兜底首次请求无会话状态场景）。
+
+        同 vendor 自转换（source == target）仅在 ``VENDOR_TRANSITIONS`` 显式注册
+        了对应通道时启用（如 ``("zhipu","zhipu")`` 修复 zhipu 自身不接受的产物），
+        否则退化到无源行为。
         """
         from ..convert.vendor_channels import (
             get_transition_channel,
@@ -271,25 +275,23 @@ class _RouteExecutor:
         )
 
         # 请求内：刚失败的 tier 就是源
-        if failed_tier_name and failed_tier_name != target_name:
+        # 同 vendor 自转换仅在显式注册通道时生效
+        if failed_tier_name and (
+            failed_tier_name != target_name
+            or get_transition_channel(failed_tier_name, target_name) is not None
+        ):
             return failed_tier_name
 
-        # 跨请求：从会话历史找有注册转换的源
+        # 跨请求：从会话历史找有注册转换的源（含已注册自转换）
         if session_record is not None and session_record.provider_state:
             for source in session_record.provider_state:
-                if source != target_name and get_transition_channel(
-                    source, target_name
-                ):
+                if get_transition_channel(source, target_name):
                     return source
 
-        # 首次请求兜底：从 body 内容推断（识别 zhipu 产物等）
+        # 首次请求兜底：从 body 内容推断（识别 zhipu 产物等，含已注册自转换）
         if body is not None:
             inferred = infer_source_vendor_from_body(body)
-            if (
-                inferred
-                and inferred != target_name
-                and get_transition_channel(inferred, target_name)
-            ):
+            if inferred and get_transition_channel(inferred, target_name):
                 return inferred
 
         return None
