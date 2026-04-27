@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- fix(vendor-channels): 新增 zhipu 同 vendor 自清理通道，修复 GLM-5 自循环 400 + tool_results 偶发降级；
+- fix(vendor-channels): 修复 `_rewrite_srvtoolu_ids` 块顺序敏感性导致 inline tool_result 漏改名，进而 enforce 阶段 dict key 与 tool_use_ids 错位、anthropic 报 `tool_use ids without tool_result blocks immediately after` 的 cascade failover 问题（改为两遍扫描：先收集 id_map，再统一改写所有 tool_result.tool_use_id 引用）；
+- fix(vendor-channels): `enforce_anthropic_tool_pairing` 增加全局 sanity check pass，主循环边角错位让 dangling tool_use 漏过校验时兜底合成 is_error 占位并打 `pairing_sanity_repaired` 标签，避免 anthropic 二次报错；
+
 ## [v0.3.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.3.0) — 2026-04-20
 
 > [!IMPORTANT]

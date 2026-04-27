@@ -16,6 +16,7 @@ import copy
 
 from coding.proxy.convert.vendor_channels import (
     VENDOR_TRANSITIONS,
+    _enforce_pairing_sanity_pass,
     _remove_vendor_blocks,
     _rewrite_srvtoolu_ids,
     _strip_cache_control,
@@ -1315,6 +1316,84 @@ class TestRewriteSrvtooluIds:
         assert count == 0
         assert body["messages"][0]["content"][0]["tool_use_id"] == "toolu_other"
 
+    def test_rewrites_inline_tool_result_before_tool_use(self):
+        """块顺序鲁棒性回归保护: inline tool_result 在 tool_use 之前时仍正确改名.
+
+        GLM-5 偶发将 inline tool_result 输出在本消息 tool_use 之前 (流式断片).
+        若 _rewrite 用单遍扫描, 处理 inline tool_result 时 id_map 尚未填入对应
+        srvtoolu_* → 漏改名 → enforce 阶段 extracted dict key 与 tool_use_ids
+        错位 → dangling tool_use 漏报 → anthropic 报 'tool_use ids without
+        tool_result blocks immediately after'.
+
+        修复后采用两遍扫描: 先全量收集 id_map (仅处理 tool_use), 再统一改写
+        所有 tool_result.tool_use_id 引用。
+        """
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        # inline tool_result 在 server_tool_use 之前!
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "srvtoolu_X",
+                            "content": "inline-X",
+                        },
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_X",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+            ],
+        }
+        count, id_map = _rewrite_srvtoolu_ids(body)
+        assert count == 1
+        new_id = id_map["srvtoolu_X"]
+        assert new_id.startswith("toolu_normalized_")
+        # 关键断言: inline tool_result 也被改名 (即使在 tool_use 之前)
+        inline_result = body["messages"][0]["content"][0]
+        assert inline_result["type"] == "tool_result"
+        assert inline_result["tool_use_id"] == new_id
+        # tool_use 也被改名
+        tool_use_block = body["messages"][0]["content"][1]
+        assert tool_use_block["type"] == "tool_use"
+        assert tool_use_block["id"] == new_id
+
+    def test_rewrites_tool_result_in_assistant_role(self):
+        """assistant role 内的 tool_result 也应被改名 (Pass 2 全量扫描所有消息)."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_M",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "assistant",  # 异常: 连续 assistant
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "srvtoolu_M",
+                            "content": "M-result",
+                        },
+                    ],
+                },
+            ],
+        }
+        count, id_map = _rewrite_srvtoolu_ids(body)
+        new_id = id_map["srvtoolu_M"]
+        # 后续 assistant 内的 tool_result 也被改名
+        assert body["messages"][1]["content"][0]["tool_use_id"] == new_id
+
 
 # ── infer_source_vendor_from_body 单元测试 ─────────────────────────
 
@@ -1888,6 +1967,212 @@ class TestEnforceAnthropicToolPairing:
         assert messages[1]["content"][0]["type"] == "tool_result"
         assert messages[2]["role"] == "assistant"
 
+    def test_sanity_check_does_not_false_fire_on_correctly_paired_messages(self):
+        """正常配对消息走完主循环后, sanity G 段不应误触发.
+
+        主循环 F 步已正确合成/搬迁所有 tool_result 时, sanity 视角下 next_user
+        的 nu_result_ids 已覆盖全部 tool_use_ids, 走 ``if uid in nu_result_ids:
+        continue`` 分支, 不会重复合成占位、也不应打 ``pairing_sanity_repaired``
+        标签 → 验证 sanity 的幂等性 / 不重复合成保证。
+        """
+        messages = [
+            {"role": "user", "content": "task"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "bash", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_a", "content": "ok"},
+                ],
+            },
+        ]
+        _, fixes = _enforce_pairing(messages)
+        # 一切正常, sanity 不应介入
+        assert "pairing_sanity_repaired" not in fixes
+        assert "orphaned_tool_use_repaired" not in fixes
+        assert "misplaced_tool_result_relocated" not in fixes
+
+
+class TestEnforcePairingSanityPass:
+    """_enforce_pairing_sanity_pass 正向兜底路径单元测试.
+
+    主循环 F 步在当前实现下能覆盖所有 dangling tool_use, 因此 sanity 在公开
+    ``enforce_anthropic_tool_pairing`` API 调用中不会被实际触发. 抽出为独立
+    helper 后可绕过主循环, 直接对兜底合成路径建立正向回归保护, 防止 G 段
+    被未来重构「优化掉」时静默失效。
+    """
+
+    def test_synthesizes_is_error_for_dangling_tool_use(self):
+        """next_user 缺对应 tool_result 时, sanity 直接合成 is_error 占位."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_dangling",
+                        "name": "bash",
+                        "input": {},
+                    },
+                ],
+            },
+            {"role": "user", "content": []},
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == ["toolu_dangling"]
+        # next_user 已被注入 is_error 占位
+        user_content = messages[1]["content"]
+        assert len(user_content) == 1
+        placeholder = user_content[0]
+        assert placeholder["type"] == "tool_result"
+        assert placeholder["tool_use_id"] == "toolu_dangling"
+        assert placeholder["is_error"] is True
+        assert placeholder["content"] == ""
+
+    def test_inserts_user_message_when_next_is_not_user(self):
+        """assistant 后无 user 消息时, sanity 应当插入空 user 再合成占位."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_x", "name": "bash", "input": {}},
+                ],
+            },
+            # 没有后续消息 → sanity 应插入空 user 并合成占位
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == ["toolu_x"]
+        assert len(messages) == 2
+        assert messages[1]["role"] == "user"
+        results = messages[1]["content"]
+        assert len(results) == 1
+        assert results[0]["tool_use_id"] == "toolu_x"
+        assert results[0]["is_error"] is True
+
+    def test_inserts_user_message_when_next_is_assistant(self):
+        """assistant 后紧跟另一个 assistant (非 user) 时, sanity 应插入空 user."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "bash", "input": {}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "stray"}],
+            },
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == ["toolu_a"]
+        assert messages[1]["role"] == "user"  # 新插入的空 user
+        assert messages[2]["role"] == "assistant"  # 原 stray 后移
+        assert messages[1]["content"][0]["tool_use_id"] == "toolu_a"
+
+    def test_skips_when_tool_result_already_present(self):
+        """next_user 已含对应 tool_result 时不应重复合成."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "bash", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_a", "content": "ok"},
+                ],
+            },
+        ]
+        original_user_content = list(messages[1]["content"])
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == []
+        assert messages[1]["content"] == original_user_content  # 未被改动
+
+    def test_handles_string_content_in_next_user(self):
+        """next_user.content 是字符串时, sanity 先转为 text 块再合成占位."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "bash", "input": {}},
+                ],
+            },
+            {"role": "user", "content": "free text"},
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == ["toolu_a"]
+        user_content = messages[1]["content"]
+        assert isinstance(user_content, list)
+        # 原字符串保留为 text 块, 占位追加在末尾
+        assert user_content[0] == {"type": "text", "text": "free text"}
+        assert user_content[-1]["type"] == "tool_result"
+        assert user_content[-1]["tool_use_id"] == "toolu_a"
+
+    def test_partial_repair_only_synthesizes_missing_uids(self):
+        """next_user 已含部分 tool_result 时, sanity 仅为缺失的 uid 合成占位."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "bash", "input": {}},
+                    {"type": "tool_use", "id": "toolu_b", "name": "bash", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_a", "content": "ok"},
+                    # toolu_b 缺失
+                ],
+            },
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == ["toolu_b"]
+        results = messages[1]["content"]
+        assert len(results) == 2
+        # 原 toolu_a 不变
+        assert results[0]["tool_use_id"] == "toolu_a"
+        assert results[0].get("is_error") is not True
+        # 新合成 toolu_b is_error 占位
+        assert results[1]["tool_use_id"] == "toolu_b"
+        assert results[1]["is_error"] is True
+
+    def test_skips_assistant_without_tool_use(self):
+        """assistant 不含 tool_use 时 sanity 应当短路, 不插入空 user."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "just talking"}],
+            },
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == []
+        # 不应插入空 user
+        assert len(messages) == 1
+
+    def test_skips_non_assistant_messages(self):
+        """非 assistant 消息 (user/system) 不参与 sanity 检查."""
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "rules"},
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+        assert sanity_synthesized == []
+        assert len(messages) == 2  # 不被改动
+
 
 # ── 通道层端到端集成（zhipu 产物全量清洗） ───────────────────────────
 
@@ -1993,6 +2278,100 @@ class TestZhipuToAnthropicChannelFullCleanup:
         assert len(relocated) == 1
         assert relocated[0]["tool_use_id"] == new_id
         assert any("misplaced_tool_result_relocated" in a for a in adaptations)
+
+    def test_inline_tool_result_before_tool_use_pairs_correctly(self):
+        """日志现象回归保护: GLM-5 输出 [inline tool_result, tool_use] 块顺序时,
+        修复前 _rewrite 单遍扫描漏改 inline.tool_use_id, enforce 阶段 dict key
+        与 tool_use_ids 错位, 导致最终 anthropic 报 'tool_use ids without
+        tool_result blocks immediately after'.
+
+        修复后两遍扫描确保 inline tool_result 与 tool_use 同步改名, enforce 能
+        正确将 inline 搬迁到 next user, 不需合成 is_error 占位 (无 orphan 标签).
+        """
+        body = {
+            "messages": [
+                {"role": "user", "content": "task"},
+                # 上一轮完成
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_A",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "srvtoolu_A",
+                            "content": "A-ok",
+                        },
+                    ],
+                },
+                # 当前轮: inline tool_result 在 server_tool_use 之前 (流式断片)
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "...",
+                            "signature": "zhipu_sig",
+                        },
+                        # inline tool_result 在 tool_use 之前!
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "srvtoolu_B",
+                            "content": "B-inline",
+                        },
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_B",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                # 客户端没回 B 的 tool_result (因为已被 inline)
+                {"role": "user", "content": []},
+            ],
+        }
+        prepared, adaptations = prepare_zhipu_to_anthropic(body)
+
+        # 关键断言: 仅有 misplaced_tool_result_relocated, 无 orphaned_tool_use_repaired
+        # (因 inline 真实内容被正确搬迁, 无需合成 is_error 占位)
+        assert "misplaced_tool_result_relocated" in adaptations
+        assert "orphaned_tool_use_repaired" not in adaptations
+        assert "pairing_sanity_repaired" not in adaptations
+
+        # 验证 messages[3] 的 tool_use 在 messages[4] 有匹配 tool_result
+        m3 = prepared["messages"][3]
+        m4 = prepared["messages"][4]
+        m3_tool_uses = [
+            b["id"]
+            for b in m3["content"]
+            if isinstance(b, dict) and b.get("type") == "tool_use"
+        ]
+        m4_results = {
+            b.get("tool_use_id")
+            for b in m4["content"]
+            if isinstance(b, dict) and b.get("type") == "tool_result"
+        }
+        assert len(m3_tool_uses) == 1
+        assert m3_tool_uses[0] in m4_results
+
+        # 搬迁的 tool_result 应保留原始内容 ("B-inline"), 而非合成的空 is_error
+        relocated = next(
+            b
+            for b in m4["content"]
+            if isinstance(b, dict) and b.get("type") == "tool_result"
+        )
+        assert relocated["content"] == "B-inline"
+        assert relocated.get("is_error") is not True
 
 
 class TestZhipuToCopilotChannelFullCleanup:

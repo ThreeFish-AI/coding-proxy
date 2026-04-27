@@ -48,3 +48,52 @@ zhipu 自身偶发返回 400, 但错误体非 JSON 结构, 由 `_is_likely_reque
 
 - `enforce_anthropic_tool_pairing` 仅识别 `tool_use` 类型 (不含 `server_tool_use`), 因为 `server_tool_use` 由 vendor 自身执行, 不需要客户端 `tool_result`。构造测试或类似清洗逻辑时需注意此差别。
 - `_is_likely_request_format_error()` 把「400 + tool_results + 非结构化错误体」一律标记为格式不兼容并跳过 tier 不计熔断器, 这层兜底虽能维持可用性但会**掩盖** vendor 自身的间歇性问题, 让根因更难发现。处理类似 400 偶发时, 应优先看 `Applied transition channel` 日志中的 adaptations 列表, 它能精确暴露上游响应中的非标准产物。
+
+---
+
+## anthropic 报 messages.X tool_use 缺 tool_result (zhipu→anthropic 故障转移失败)
+
+**问题描述**
+
+zhipu 完成响应后, executor 故障转移至 anthropic 时反复失败 (HTTP 400):
+
+```
+DEBUG Applied transition channel zhipu → anthropic: rewritten_86_srvtoolu_ids, misplaced_tool_result_relocated, stripped_18_thinking_blocks
+WARNING anthropic stream error: status=400 ... messages.3: `tool_use` ids were found without `tool_result` blocks immediately after: toolu_normalized_3.
+INFO  Failover: anthropic → zhipu (reason: HTTP 400)
+```
+
+adaptations 列表显示 `misplaced_tool_result_relocated` 但**没有** `orphaned_tool_use_repaired`, 即 enforce 单遍扫描视角下认为所有 tool_use 都已配对; 但 anthropic 仍报 messages.X 缺 tool_result, 导致请求级 cascade failover 反复回到 zhipu。
+
+**表因**
+
+`prepare_zhipu_to_anthropic` 链路输出的请求体中, 某个 assistant 的 `tool_use` 在紧邻的 user 消息中没有匹配的 `tool_result` 块。
+
+**根因**
+
+`_rewrite_srvtoolu_ids` 采用单遍正向扫描: 在同一次循环中一边收集 srvtoolu_* → toolu_normalized_* 的 id_map, 一边改写遇到的 `tool_result.tool_use_id`。GLM-5 流式偶发将 inline tool_result 输出在本消息 `server_tool_use` 之前 (block 顺序异常), 导致:
+
+1. 处理 inline tool_result 时, id_map 尚未填入对应 srvtoolu_* → 漏改名, inline 仍保留 `srvtoolu_X`
+2. 处理本消息 server_tool_use 时, 填入 id_map 并把 tool_use 改名为 `toolu_normalized_X`
+3. 进入 `enforce_anthropic_tool_pairing` 时:
+   - A 步 extracted dict key = `srvtoolu_X` (inline 保留的旧 ID)
+   - B 步 tool_use_ids = `[toolu_normalized_X]` (已改名)
+   - F 步 `uid in extracted` 检查失败 (key 错位), 但若 next user 已含其他 stale tool_result 让 existing_result_ids "巧合" 命中, F 步会跳过 synth → 不触发 orphan 标签
+   - 最终 anthropic 看到 messages.X 真的缺 toolu_normalized_X 的 tool_result → 400
+
+**处理方式**
+
+- `_rewrite_srvtoolu_ids` 改为**两遍扫描**: Pass 1 仅遍历 assistant 消息, 收集 id_map 并改写 tool_use 自身的 id 与 type; Pass 2 全量遍历所有消息 (含 user / 异常 assistant 内联), 统一改写所有 `tool_result.tool_use_id` 引用。彻底消除 block 顺序敏感性。
+- `enforce_anthropic_tool_pairing` 主循环结束后追加**全局 sanity check pass**: 重新遍历每条 assistant, 验证其 tool_use_ids 全部在 next user 的 tool_result 中存在; 发现遗漏直接合成 is_error 占位并打 `pairing_sanity_repaired` 标签。作为防御深度抵御未来其他主循环边角错位。
+- A 步对 `tool_use_id` 缺失的破损 inline tool_result 也计入 relocated_count (避免 silent drop 影响 adaptations 标签可观测性)。
+
+**后续防范**
+
+- 任何"按出现顺序填充字典 + 同遍引用查询"的两阶段操作都应警惕**顺序耦合**问题。两遍扫描 (collect → apply) 是消除此类 bug 的标准 pattern。
+- 关键校验函数应有**主循环 + 全局 sanity check** 的双层结构, 单层校验在边角场景下容易被绕过。
+- 处理 anthropic `tool_use ids without tool_result blocks immediately after` 类 cascade failover 时, **adaptations 标签能否复现日志**是定位 root cause 的强信号: 若 enforce 视角与 anthropic 视角不一致 (有 misplaced 但无 orphan, anthropic 仍报错), 必有上游 _rewrite / id 改写阶段的隐藏漏洞。
+
+**同类问题影响与处理注意事项**
+
+- 任何对 messages 进行 ID 重写的转换链 (如 `_rewrite_srvtoolu_ids`、`anthropic_to_openai`、`anthropic_to_gemini`) 都应使用两遍扫描或一次性收集后再批量改写, 以保证 block 顺序无关性。
+- enforce 类校验函数若依赖 dict key 与 list 元素的**等同性**, 必须先确保两者在同一参考系下 (改名前 vs 改名后); 否则错位会以 "看起来 OK 实际有漏" 的方式静默泄漏到下游。
