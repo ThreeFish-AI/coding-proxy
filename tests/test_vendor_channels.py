@@ -4,6 +4,7 @@
 - zhipu → anthropic 转换 (prepare_zhipu_to_anthropic)
 - zhipu → copilot 转换 (prepare_zhipu_to_copilot)
 - copilot → zhipu 转换 (prepare_copilot_to_zhipu)
+- zhipu → zhipu 自清理 (prepare_zhipu_self_cleanup)
 - 共享辅助函数 (strip_thinking_blocks, _strip_cache_control, _remove_vendor_blocks,
   _rewrite_srvtoolu_ids, enforce_anthropic_tool_pairing, infer_source_vendor_from_body)
 - 转换注册表 (VENDOR_TRANSITIONS, get_transition_channel)
@@ -22,6 +23,7 @@ from coding.proxy.convert.vendor_channels import (
     get_transition_channel,
     infer_source_vendor_from_body,
     prepare_copilot_to_zhipu,
+    prepare_zhipu_self_cleanup,
     prepare_zhipu_to_anthropic,
     prepare_zhipu_to_copilot,
     strip_thinking_blocks,
@@ -693,6 +695,302 @@ class TestZhipuToCopilotChannel:
         ]
 
 
+# ── zhipu → zhipu 自清理通道测试 ─────────────────────────────────
+
+
+class TestZhipuSelfCleanupChannel:
+    """prepare_zhipu_self_cleanup 单元测试.
+
+    自清理通道的核心契约: **仅** 修复 zhipu 自身拒绝的产物
+    (server_tool_use_delta, 错位 tool_result), 保留所有 zhipu 原生支持
+    的特性 (srvtoolu_* ID, thinking signature, cache_control, 顶层 thinking).
+    """
+
+    def test_strips_server_tool_use_delta(self):
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "thinking..."},
+                        {"type": "server_tool_use_delta", "partial_json": "{}"},
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_zhipu_self_cleanup(body)
+        content = prepared["messages"][0]["content"]
+        assert all(b.get("type") != "server_tool_use_delta" for b in content)
+        assert any("zhipu_vendor_blocks" in a for a in adaptations)
+
+    def test_relocates_misplaced_tool_result(self):
+        """assistant 内联 tool_result 应被搬迁到下一个 user 消息."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "srvtoolu_a",
+                            "name": "bash",
+                            "input": {},
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "srvtoolu_a",
+                            "content": "ok",
+                        },
+                    ],
+                },
+                {"role": "user", "content": []},
+            ],
+        }
+        prepared, adaptations = prepare_zhipu_self_cleanup(body)
+
+        # assistant 消息中应不再包含 tool_result
+        assistant_content = prepared["messages"][0]["content"]
+        assert all(b.get("type") != "tool_result" for b in assistant_content)
+        # tool_result 已搬到下一个 user 消息
+        user_content = prepared["messages"][1]["content"]
+        assert any(
+            b.get("type") == "tool_result" and b.get("tool_use_id") == "srvtoolu_a"
+            for b in user_content
+        )
+        assert "misplaced_tool_result_relocated" in adaptations
+
+    def test_preserves_srvtoolu_ids(self):
+        """zhipu 原生 srvtoolu_* ID 与 server_tool_use 类型必须保留."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_xyz",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "srvtoolu_xyz",
+                            "content": "ok",
+                        },
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_zhipu_self_cleanup(body)
+
+        block = prepared["messages"][0]["content"][0]
+        assert block["id"] == "srvtoolu_xyz"
+        assert block["type"] == "server_tool_use"
+        # 无任何 srvtoolu 改写或 server_tool_use 类型纠正
+        assert not any("srvtoolu_ids" in a for a in adaptations)
+
+    def test_preserves_thinking_blocks(self):
+        """zhipu 自签 thinking signature 必须保留."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "let me think",
+                            "signature": "zhipu_sig_abc",
+                        },
+                        {"type": "text", "text": "answer"},
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_zhipu_self_cleanup(body)
+        content = prepared["messages"][0]["content"]
+        assert any(b.get("type") == "thinking" for b in content)
+        assert not any("thinking_blocks" in a for a in adaptations)
+
+    def test_preserves_cache_control(self):
+        """cache_control 字段必须保留 (GLM 原生支持, 已实证 cache_read)."""
+        body = {
+            "system": [
+                {
+                    "type": "text",
+                    "text": "system prompt",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "hi",
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                    ],
+                },
+            ],
+            "tools": [
+                {
+                    "name": "bash",
+                    "description": "",
+                    "input_schema": {"type": "object"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+        prepared, adaptations = prepare_zhipu_self_cleanup(body)
+        assert prepared["system"][0].get("cache_control") == {"type": "ephemeral"}
+        assert prepared["messages"][0]["content"][0].get("cache_control") == {
+            "type": "ephemeral"
+        }
+        assert prepared["tools"][0].get("cache_control") == {"type": "ephemeral"}
+        assert not any("cache_control" in a for a in adaptations)
+
+    def test_preserves_thinking_param(self):
+        """顶层 thinking / extended_thinking 参数必须保留."""
+        body = {
+            "messages": [],
+            "thinking": {"type": "enabled", "budget_tokens": 5000},
+            "extended_thinking": {"foo": "bar"},
+        }
+        prepared, _ = prepare_zhipu_self_cleanup(body)
+        assert prepared["thinking"] == {
+            "type": "enabled",
+            "budget_tokens": 5000,
+        }
+        assert prepared["extended_thinking"] == {"foo": "bar"}
+
+    def test_idempotency(self):
+        """二次调用幂等: 已清洗的 body 不再产生新 adaptations."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "srvtoolu_a",
+                            "name": "bash",
+                            "input": {},
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "srvtoolu_a",
+                            "content": "ok",
+                        },
+                        {"type": "server_tool_use_delta", "partial_json": "{}"},
+                    ],
+                },
+            ],
+        }
+        first_pass, first_adapt = prepare_zhipu_self_cleanup(body)
+        assert first_adapt  # 首次调用应产生变换
+        _, second_adapt = prepare_zhipu_self_cleanup(first_pass)
+        assert second_adapt == []
+
+    def test_noop_when_clean(self):
+        """纯净 body (无 zhipu 产物) 应不产生任何 adaptations."""
+        body = {
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hi"}],
+                },
+            ],
+        }
+        original = copy.deepcopy(body)
+        prepared, adaptations = prepare_zhipu_self_cleanup(body)
+        assert adaptations == []
+        assert prepared == original
+
+    def test_does_not_mutate_input(self):
+        """通道返回深拷贝, 输入 body 必须保持原状."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "server_tool_use_delta", "partial_json": "{}"},
+                    ],
+                },
+            ],
+        }
+        original = copy.deepcopy(body)
+        prepare_zhipu_self_cleanup(body)
+        assert body == original
+
+    def test_combined_artifacts(self):
+        """端到端: server_tool_use_delta 被剥, server_tool_use 保留, 错位 tool_result 搬迁.
+
+        典型场景: Claude Code 的客户端工具 (Bash/Read 等) 以 ``tool_use`` 形式
+        emit, 其错位的 ``tool_result`` 应被重定位; zhipu 原生 ``server_tool_use``
+        块不需要客户端 tool_result, 仅需保留原状.
+        """
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "server_tool_use_delta", "partial_json": "{}"},
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_native",
+                            "name": "web_search",
+                            "input": {},
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_bash_001",
+                            "name": "bash",
+                            "input": {"command": "ls"},
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_bash_001",
+                            "content": "ok",
+                        },
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_zhipu_self_cleanup(body)
+
+        assistant_content = prepared["messages"][0]["content"]
+        # delta 被剥离
+        assert all(b.get("type") != "server_tool_use_delta" for b in assistant_content)
+        # 错位 tool_result 被搬出 assistant
+        assert all(b.get("type") != "tool_result" for b in assistant_content)
+        # server_tool_use 与其 srvtoolu_* ID 完整保留
+        srv_block = next(
+            b for b in assistant_content if b.get("type") == "server_tool_use"
+        )
+        assert srv_block["id"] == "srvtoolu_native"
+        # tool_use ID 同样保留
+        tool_use_block = next(
+            b for b in assistant_content if b.get("type") == "tool_use"
+        )
+        assert tool_use_block["id"] == "toolu_bash_001"
+        # 后续 user 消息已被插入并包含 tool_result
+        assert prepared["messages"][1]["role"] == "user"
+        assert any(
+            b.get("type") == "tool_result" and b.get("tool_use_id") == "toolu_bash_001"
+            for b in prepared["messages"][1]["content"]
+        )
+        # 关键 adaptation 标签均出现
+        assert any("zhipu_vendor_blocks" in a for a in adaptations)
+        assert "misplaced_tool_result_relocated" in adaptations
+
+
 # ── 转换注册表测试 ────────────────────────────────────────────
 
 
@@ -703,7 +1001,8 @@ class TestTransitionRegistry:
         assert ("zhipu", "anthropic") in VENDOR_TRANSITIONS
         assert ("zhipu", "copilot") in VENDOR_TRANSITIONS
         assert ("copilot", "zhipu") in VENDOR_TRANSITIONS
-        assert len(VENDOR_TRANSITIONS) == 3
+        assert ("zhipu", "zhipu") in VENDOR_TRANSITIONS
+        assert len(VENDOR_TRANSITIONS) == 4
 
     def test_get_transition_channel_returns_function(self):
         assert (
@@ -711,12 +1010,16 @@ class TestTransitionRegistry:
         )
         assert get_transition_channel("zhipu", "copilot") is prepare_zhipu_to_copilot
         assert get_transition_channel("copilot", "zhipu") is prepare_copilot_to_zhipu
+        assert get_transition_channel("zhipu", "zhipu") is prepare_zhipu_self_cleanup
 
     def test_get_transition_channel_returns_none_for_unregistered(self):
         assert get_transition_channel("anthropic", "zhipu") is None
         assert get_transition_channel("copilot", "anthropic") is None
         assert get_transition_channel("unknown", "target") is None
         assert get_transition_channel("antigravity", "copilot") is None
+        # 未注册的同 vendor 自转换仍返回 None
+        assert get_transition_channel("anthropic", "anthropic") is None
+        assert get_transition_channel("copilot", "copilot") is None
 
     def test_transition_functions_share_signature(self):
         body = {"messages": []}
@@ -747,7 +1050,8 @@ class TestTransitionDifferences:
         assert "thinking" in zhipu_to_copilot_result
         assert "removed_thinking_param" not in zhipu_to_copilot_adapt
 
-    def test_all_transitions_strip_thinking_blocks(self):
+    def test_cross_vendor_transitions_strip_thinking_blocks(self):
+        """跨 vendor 通道一律剥离 thinking blocks（自清理通道刻意保留，故排除）."""
         body = {
             "messages": [
                 {
@@ -760,6 +1064,9 @@ class TestTransitionDifferences:
             ],
         }
         for key, fn in VENDOR_TRANSITIONS.items():
+            if key[0] == key[1]:
+                # 自转换通道（如 zhipu→zhipu）保留 thinking signature，跳过
+                continue
             result, adaptations = fn(body)
             assert result["messages"][0]["content"] == [
                 {"type": "text", "text": "hi"}
