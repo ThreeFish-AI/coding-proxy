@@ -16,6 +16,7 @@ import copy
 
 from coding.proxy.convert.vendor_channels import (
     VENDOR_TRANSITIONS,
+    _enforce_pairing_sanity_pass,
     _remove_vendor_blocks,
     _rewrite_srvtoolu_ids,
     _strip_cache_control,
@@ -1966,21 +1967,14 @@ class TestEnforceAnthropicToolPairing:
         assert messages[1]["content"][0]["type"] == "tool_result"
         assert messages[2]["role"] == "assistant"
 
-    def test_sanity_check_repairs_dangling_tool_use(self):
-        """主循环边角错位让 dangling tool_use 漏过时, sanity check 兜底修复.
+    def test_sanity_check_does_not_false_fire_on_correctly_paired_messages(self):
+        """正常配对消息走完主循环后, sanity G 段不应误触发.
 
-        构造场景: extracted dict key 与 tool_use_ids 错位 (inline tool_result
-        引用未在本消息出现的 tool_use_id). 主循环 F 步检查 existing 不命中 /
-        extracted 也不命中, 应当走 synth → orphan 标签. 这正常.
-
-        但如果 user_msg 已含 stale tool_result, F 步看 existing 命中→ 跳过 synth →
-        无 orphan 标签, 然而 anthropic 视角下 tool_result 仍可能不匹配.
-
-        本测试验证 sanity check 在主循环 F 步漏判时仍能补救 (虽 F 步本身设计
-        正确, sanity 是双保险).
+        主循环 F 步已正确合成/搬迁所有 tool_result 时, sanity 视角下 next_user
+        的 nu_result_ids 已覆盖全部 tool_use_ids, 走 ``if uid in nu_result_ids:
+        continue`` 分支, 不会重复合成占位、也不应打 ``pairing_sanity_repaired``
+        标签 → 验证 sanity 的幂等性 / 不重复合成保证。
         """
-        # 构造一个主循环 F 步检查通过, 但 sanity 仍可发现的人造场景:
-        # 简单的方式 = 主循环逻辑已正确, sanity 不应触发 → 验证幂等性
         messages = [
             {"role": "user", "content": "task"},
             {
@@ -2001,6 +1995,183 @@ class TestEnforceAnthropicToolPairing:
         assert "pairing_sanity_repaired" not in fixes
         assert "orphaned_tool_use_repaired" not in fixes
         assert "misplaced_tool_result_relocated" not in fixes
+
+
+class TestEnforcePairingSanityPass:
+    """_enforce_pairing_sanity_pass 正向兜底路径单元测试.
+
+    主循环 F 步在当前实现下能覆盖所有 dangling tool_use, 因此 sanity 在公开
+    ``enforce_anthropic_tool_pairing`` API 调用中不会被实际触发. 抽出为独立
+    helper 后可绕过主循环, 直接对兜底合成路径建立正向回归保护, 防止 G 段
+    被未来重构「优化掉」时静默失效。
+    """
+
+    def test_synthesizes_is_error_for_dangling_tool_use(self):
+        """next_user 缺对应 tool_result 时, sanity 直接合成 is_error 占位."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_dangling",
+                        "name": "bash",
+                        "input": {},
+                    },
+                ],
+            },
+            {"role": "user", "content": []},
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == ["toolu_dangling"]
+        # next_user 已被注入 is_error 占位
+        user_content = messages[1]["content"]
+        assert len(user_content) == 1
+        placeholder = user_content[0]
+        assert placeholder["type"] == "tool_result"
+        assert placeholder["tool_use_id"] == "toolu_dangling"
+        assert placeholder["is_error"] is True
+        assert placeholder["content"] == ""
+
+    def test_inserts_user_message_when_next_is_not_user(self):
+        """assistant 后无 user 消息时, sanity 应当插入空 user 再合成占位."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_x", "name": "bash", "input": {}},
+                ],
+            },
+            # 没有后续消息 → sanity 应插入空 user 并合成占位
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == ["toolu_x"]
+        assert len(messages) == 2
+        assert messages[1]["role"] == "user"
+        results = messages[1]["content"]
+        assert len(results) == 1
+        assert results[0]["tool_use_id"] == "toolu_x"
+        assert results[0]["is_error"] is True
+
+    def test_inserts_user_message_when_next_is_assistant(self):
+        """assistant 后紧跟另一个 assistant (非 user) 时, sanity 应插入空 user."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "bash", "input": {}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "stray"}],
+            },
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == ["toolu_a"]
+        assert messages[1]["role"] == "user"  # 新插入的空 user
+        assert messages[2]["role"] == "assistant"  # 原 stray 后移
+        assert messages[1]["content"][0]["tool_use_id"] == "toolu_a"
+
+    def test_skips_when_tool_result_already_present(self):
+        """next_user 已含对应 tool_result 时不应重复合成."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "bash", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_a", "content": "ok"},
+                ],
+            },
+        ]
+        original_user_content = list(messages[1]["content"])
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == []
+        assert messages[1]["content"] == original_user_content  # 未被改动
+
+    def test_handles_string_content_in_next_user(self):
+        """next_user.content 是字符串时, sanity 先转为 text 块再合成占位."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "bash", "input": {}},
+                ],
+            },
+            {"role": "user", "content": "free text"},
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == ["toolu_a"]
+        user_content = messages[1]["content"]
+        assert isinstance(user_content, list)
+        # 原字符串保留为 text 块, 占位追加在末尾
+        assert user_content[0] == {"type": "text", "text": "free text"}
+        assert user_content[-1]["type"] == "tool_result"
+        assert user_content[-1]["tool_use_id"] == "toolu_a"
+
+    def test_partial_repair_only_synthesizes_missing_uids(self):
+        """next_user 已含部分 tool_result 时, sanity 仅为缺失的 uid 合成占位."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_a", "name": "bash", "input": {}},
+                    {"type": "tool_use", "id": "toolu_b", "name": "bash", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_a", "content": "ok"},
+                    # toolu_b 缺失
+                ],
+            },
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == ["toolu_b"]
+        results = messages[1]["content"]
+        assert len(results) == 2
+        # 原 toolu_a 不变
+        assert results[0]["tool_use_id"] == "toolu_a"
+        assert results[0].get("is_error") is not True
+        # 新合成 toolu_b is_error 占位
+        assert results[1]["tool_use_id"] == "toolu_b"
+        assert results[1]["is_error"] is True
+
+    def test_skips_assistant_without_tool_use(self):
+        """assistant 不含 tool_use 时 sanity 应当短路, 不插入空 user."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "just talking"}],
+            },
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+
+        assert sanity_synthesized == []
+        # 不应插入空 user
+        assert len(messages) == 1
+
+    def test_skips_non_assistant_messages(self):
+        """非 assistant 消息 (user/system) 不参与 sanity 检查."""
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "rules"},
+        ]
+        sanity_synthesized = _enforce_pairing_sanity_pass(messages)
+        assert sanity_synthesized == []
+        assert len(messages) == 2  # 不被改动
 
 
 # ── 通道层端到端集成（zhipu 产物全量清洗） ───────────────────────────

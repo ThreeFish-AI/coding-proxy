@@ -215,9 +215,55 @@ def enforce_anthropic_tool_pairing(
 
         i += 1
 
-    # G. 最终全局 sanity check: 防御主循环的边角错位让 dangling tool_use 漏过.
-    # 例如: extracted dict key 与 _rewrite 后的 tool_use_ids 错位、user_msg
-    # 中已有 stale tool_result 让 F 步误判 existing 命中等场景。
+    # G. 最终全局 sanity check pass (抽出为独立函数便于单测验证正向兜底路径).
+    sanity_synthesized = _enforce_pairing_sanity_pass(messages_list)
+
+    if relocated_count:
+        adaptations.append("misplaced_tool_result_relocated")
+    if synthesized_ids or sanity_synthesized:
+        adaptations.append("orphaned_tool_use_repaired")
+
+    # 主循环 F 段与 sanity G 段分别打日志, 避免 main=0/sanity=N 时把 sanity
+    # 兜底误归因为主循环工作 (运维在线日志聚合时易混淆 cross-pass id-map drift).
+    if synthesized_ids:
+        logger.warning(
+            "Vendor degradation adaptation: synthesized %d tool_result block(s) "
+            "for orphaned tool_use to satisfy Anthropic pairing constraint. "
+            "Affected tool_use_ids: %s",
+            len(synthesized_ids),
+            ", ".join(synthesized_ids),
+        )
+    if sanity_synthesized:
+        adaptations.append("pairing_sanity_repaired")
+        logger.warning(
+            "Pairing sanity check repaired %d dangling tool_use(s) missed by "
+            "main pass (likely cross-pass id-map drift). Affected tool_use_ids: %s",
+            len(sanity_synthesized),
+            ", ".join(sanity_synthesized),
+        )
+
+    return adaptations
+
+
+def _enforce_pairing_sanity_pass(messages_list: list[Any]) -> list[str]:
+    """全局 sanity check pass: 防御主循环边角错位让 dangling tool_use 漏过.
+
+    例如: extracted dict key 与 _rewrite 后的 tool_use_ids 错位、user_msg
+    中已有 stale tool_result 让 F 步误判 existing 命中等场景。
+
+    扫描所有 assistant 消息, 验证每个 ``tool_use`` block ID 在紧随的 user 消息
+    中均存在对应 ``tool_result``; 漏掉的合成 ``is_error`` 占位。
+
+    抽取为独立函数的目的: 主循环 F 步在当前实现下能覆盖所有 dangling tool_use,
+    导致 sanity 实际兜底分支在公开 API 测试中无法被触发; 独立函数便于直接
+    构造「绕过主循环」的输入, 对兜底合成路径建立正向回归保护。
+
+    Args:
+        messages_list: 消息列表 (就地修改, 必要时插入空 user 消息).
+
+    Returns:
+        sanity 兜底合成的 tool_use_id 列表 (空表示主循环已完成所有配对).
+    """
     sanity_synthesized: list[str] = []
     j = 0
     while j < len(messages_list):
@@ -237,7 +283,6 @@ def enforce_anthropic_tool_pairing(
         if not tu_ids:
             j += 1
             continue
-        # 确保 next 是 user
         next_j = j + 1
         if (
             next_j < len(messages_list)
@@ -273,29 +318,7 @@ def enforce_anthropic_tool_pairing(
             )
             sanity_synthesized.append(uid)
         j += 1
-
-    if relocated_count:
-        adaptations.append("misplaced_tool_result_relocated")
-    if synthesized_ids or sanity_synthesized:
-        adaptations.append("orphaned_tool_use_repaired")
-        all_synth = synthesized_ids + sanity_synthesized
-        logger.warning(
-            "Vendor degradation adaptation: synthesized %d tool_result block(s) "
-            "for orphaned tool_use to satisfy Anthropic pairing constraint. "
-            "Affected tool_use_ids: %s",
-            len(all_synth),
-            ", ".join(all_synth),
-        )
-    if sanity_synthesized:
-        adaptations.append("pairing_sanity_repaired")
-        logger.warning(
-            "Pairing sanity check repaired %d dangling tool_use(s) missed by "
-            "main pass (likely cross-pass id-map drift). Affected tool_use_ids: %s",
-            len(sanity_synthesized),
-            ", ".join(sanity_synthesized),
-        )
-
-    return adaptations
+    return sanity_synthesized
 
 
 def _strip_cache_control(body: dict[str, Any]) -> int:
