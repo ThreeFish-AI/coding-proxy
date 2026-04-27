@@ -1006,7 +1006,7 @@ class TestTransitionRegistry:
         assert ("copilot", "zhipu") in VENDOR_TRANSITIONS
         assert ("zhipu", "zhipu") in VENDOR_TRANSITIONS
         assert ("anthropic", "zhipu") in VENDOR_TRANSITIONS
-        assert len(VENDOR_TRANSITIONS) == 4
+        assert len(VENDOR_TRANSITIONS) == 5
 
     def test_get_transition_channel_returns_function(self):
         assert (
