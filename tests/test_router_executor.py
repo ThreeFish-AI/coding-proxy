@@ -1609,17 +1609,14 @@ class TestDetermineSourceVendor:
             is None
         )
 
-    def test_returns_none_when_no_registered_transition(self):
-        """会话历史中有 vendor 但无对应已注册转换 → 无源 vendor.
-
-        例如 anthropic → zhipu 未注册，不会触发转换。
-        """
+    def test_returns_session_vendor_with_registered_transition_anthropic_to_zhipu(self):
+        """anthropic → zhipu 已注册转换，应返回 anthropic 作为源 vendor."""
         session_record = MagicMock()
         session_record.provider_state = {"anthropic": {}}
 
         assert (
             _RouteExecutor._determine_source_vendor("zhipu", None, session_record)
-            is None
+            == "anthropic"
         )
 
     def test_returns_none_when_session_is_none(self):
@@ -1975,8 +1972,8 @@ class TestPrepareBodyForTierTransition:
         assert result is body
         assert len(result["messages"][0]["content"]) == 2
 
-    def test_returns_body_for_unregistered_transition(self):
-        """未注册的转换对（如 anthropic → zhipu）→ 原样返回."""
+    def test_applies_anthropic_to_zhipu_transition(self):
+        """anthropic → zhipu 已注册转换，应清理 thinking blocks."""
         tier = MagicMock()
         tier.name = "zhipu"
 
@@ -1984,7 +1981,13 @@ class TestPrepareBodyForTierTransition:
         body = self._body_with_thinking()
         result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="anthropic")
 
-        assert result is body
+        # thinking blocks 应被剥离
+        assert result is not body
+        assert all(
+            b.get("type") not in ("thinking", "redacted_thinking")
+            for b in result["messages"][0]["content"]
+        )
+        assert len(result["messages"][0]["content"]) >= 1
 
     def test_returns_body_for_unknown_tier(self):
         """未知 tier（无注册转换）→ 原样返回."""
