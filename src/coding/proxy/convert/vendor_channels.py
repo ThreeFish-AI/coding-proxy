@@ -10,6 +10,7 @@ executor 层通过 ``get_transition_channel()`` 查表分发，无需感知具�
     zhipu → anthropic : prepare_zhipu_to_anthropic  (剥离 thinking + tool pairing)
     zhipu → copilot   : prepare_zhipu_to_copilot    (剥离 thinking + cache_control + tool pairing)
     copilot → zhipu   : prepare_copilot_to_zhipu    (剥离 thinking + cache_control + 移除 thinking 参数 + tool pairing)
+    zhipu → zhipu     : prepare_zhipu_self_cleanup  (剥离 server_tool_use_delta + tool pairing)
     anthropic → zhipu : prepare_anthropic_to_zhipu  (剥离 server_tool_use + thinking + cache_control + 移除 thinking 参数 + tool pairing)
 """
 
@@ -109,6 +110,10 @@ def enforce_anthropic_tool_pairing(
 
     此函数是一个**自包含的单遍处理**，不依赖 Phase 1 收集的 misplaced 信息。
 
+    最终在主循环之后执行一次幂等的全局 sanity check pass, 防御主循环的边角
+    错位 (如 inline tool_result 引用未在本消息出现的 tool_use_id, 导致 extracted
+    字典 key 与 tool_use_ids 集合错位) 让 dangling tool_use 漏过校验。
+
     Args:
         messages_list: 消息列表（就地修改）。
 
@@ -140,10 +145,13 @@ def enforce_anthropic_tool_pairing(
                 if tid:
                     extracted_tool_results[tid] = block
                     relocated_count += 1
+                else:
+                    # 缺 tool_use_id 的破损 tool_result 也视作错位剥离
+                    relocated_count += 1
             else:
                 retained_content.append(block)
 
-        if extracted_tool_results:
+        if extracted_tool_results or len(retained_content) != len(content):
             msg["content"] = retained_content
 
         # B. 收集所有 tool_use ID
@@ -208,10 +216,17 @@ def enforce_anthropic_tool_pairing(
 
         i += 1
 
+    # G. 最终全局 sanity check pass (抽出为独立函数便于单测验证正向兜底路径).
+    sanity_synthesized = _enforce_pairing_sanity_pass(messages_list)
+
     if relocated_count:
         adaptations.append("misplaced_tool_result_relocated")
-    if synthesized_ids:
+    if synthesized_ids or sanity_synthesized:
         adaptations.append("orphaned_tool_use_repaired")
+
+    # 主循环 F 段与 sanity G 段分别打日志, 避免 main=0/sanity=N 时把 sanity
+    # 兜底误归因为主循环工作 (运维在线日志聚合时易混淆 cross-pass id-map drift).
+    if synthesized_ids:
         logger.warning(
             "Vendor degradation adaptation: synthesized %d tool_result block(s) "
             "for orphaned tool_use to satisfy Anthropic pairing constraint. "
@@ -219,8 +234,92 @@ def enforce_anthropic_tool_pairing(
             len(synthesized_ids),
             ", ".join(synthesized_ids),
         )
+    if sanity_synthesized:
+        adaptations.append("pairing_sanity_repaired")
+        logger.warning(
+            "Pairing sanity check repaired %d dangling tool_use(s) missed by "
+            "main pass (likely cross-pass id-map drift). Affected tool_use_ids: %s",
+            len(sanity_synthesized),
+            ", ".join(sanity_synthesized),
+        )
 
     return adaptations
+
+
+def _enforce_pairing_sanity_pass(messages_list: list[Any]) -> list[str]:
+    """全局 sanity check pass: 防御主循环边角错位让 dangling tool_use 漏过.
+
+    例如: extracted dict key 与 _rewrite 后的 tool_use_ids 错位、user_msg
+    中已有 stale tool_result 让 F 步误判 existing 命中等场景。
+
+    扫描所有 assistant 消息, 验证每个 ``tool_use`` block ID 在紧随的 user 消息
+    中均存在对应 ``tool_result``; 漏掉的合成 ``is_error`` 占位。
+
+    抽取为独立函数的目的: 主循环 F 步在当前实现下能覆盖所有 dangling tool_use,
+    导致 sanity 实际兜底分支在公开 API 测试中无法被触发; 独立函数便于直接
+    构造「绕过主循环」的输入, 对兜底合成路径建立正向回归保护。
+
+    Args:
+        messages_list: 消息列表 (就地修改, 必要时插入空 user 消息).
+
+    Returns:
+        sanity 兜底合成的 tool_use_id 列表 (空表示主循环已完成所有配对).
+    """
+    sanity_synthesized: list[str] = []
+    j = 0
+    while j < len(messages_list):
+        msg_j = messages_list[j]
+        if not isinstance(msg_j, dict) or msg_j.get("role") != "assistant":
+            j += 1
+            continue
+        content_j = msg_j.get("content")
+        if not isinstance(content_j, list):
+            j += 1
+            continue
+        tu_ids = [
+            b["id"]
+            for b in content_j
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")
+        ]
+        if not tu_ids:
+            j += 1
+            continue
+        next_j = j + 1
+        if (
+            next_j < len(messages_list)
+            and isinstance(messages_list[next_j], dict)
+            and messages_list[next_j].get("role") == "user"
+        ):
+            next_user = messages_list[next_j]
+        else:
+            next_user = {"role": "user", "content": []}
+            messages_list.insert(next_j, next_user)
+        nu_content = next_user.get("content")
+        if isinstance(nu_content, str):
+            next_user["content"] = [{"type": "text", "text": nu_content}]
+        elif not isinstance(nu_content, list):
+            next_user["content"] = []
+        nu_result_ids = {
+            b["tool_use_id"]
+            for b in next_user["content"]
+            if isinstance(b, dict)
+            and b.get("type") == "tool_result"
+            and b.get("tool_use_id")
+        }
+        for uid in tu_ids:
+            if uid in nu_result_ids:
+                continue
+            next_user["content"].append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": uid,
+                    "content": "",
+                    "is_error": True,
+                }
+            )
+            sanity_synthesized.append(uid)
+        j += 1
+    return sanity_synthesized
 
 
 def _strip_cache_control(body: dict[str, Any]) -> int:
@@ -301,8 +400,12 @@ def _rewrite_srvtoolu_ids(body: dict[str, Any]) -> tuple[int, dict[str, str]]:
 
     Anthropic API 要求 tool_use 类型与 ``toolu_*`` 格式的 ID。Zhipu 的
     ``server_tool_use`` + ``srvtoolu_*`` 在上游 Anthropic 兼容端点可用，但无法
-    透传至其他供应商；同时还需重写紧随其后 user 消息中 ``tool_result.tool_use_id``
-    引用，保持配对关系。
+    透传至其他供应商；同时还需重写所有 ``tool_result.tool_use_id`` 引用，
+    保持配对关系。
+
+    采用**两遍扫描**避免块顺序敏感性: GLM-5 偶发将 inline tool_result 输出在
+    本消息 tool_use 之前, 单遍扫描会因 id_map 尚未填入而漏改 inline tool_result
+    的 tool_use_id, 导致后续 enforce 步骤无法将其与 tool_use 配对。
 
     Returns:
         (rewritten_count, id_map) — 重写次数与 {原 ID: 新 ID} 映射。
@@ -315,45 +418,59 @@ def _rewrite_srvtoolu_ids(body: dict[str, Any]) -> tuple[int, dict[str, str]]:
         counter += 1
         return f"toolu_normalized_{counter}"
 
+    # Pass 1: 收集所有 assistant tool_use / server_tool_use 的 ID 映射
+    # 不修改 tool_result, 仅建立 id_map; 同时改写 tool_use 自身的 id 与 type
     for message in body.get("messages", []):
         if not isinstance(message, dict):
             continue
         content = message.get("content")
         if not isinstance(content, list):
             continue
-        role = message.get("role")
+        if message.get("role") != "assistant":
+            continue
         for block in content:
             if not isinstance(block, dict):
                 continue
             block_type = block.get("type")
             block_id = block.get("id")
+            if block_type not in {"tool_use", "server_tool_use"}:
+                continue
 
-            # Case A: assistant 消息里的 server_tool_use / srvtoolu_* → 改写
-            if role == "assistant" and block_type in {"tool_use", "server_tool_use"}:
-                if isinstance(block_id, str) and _ANTHROPIC_SERVER_TOOL_USE_ID_RE.match(
-                    block_id
-                ):
-                    new_id = next_id()
-                    id_map[block_id] = new_id
-                    block["id"] = new_id
-                    block["type"] = "tool_use"
-                elif (
-                    isinstance(block_id, str)
-                    and block_id
-                    and not _ANTHROPIC_TOOL_USE_ID_RE.match(block_id)
-                    and block.get("name")
-                ):
-                    # 非标准 ID（非 toolu_ / srvtoolu_），且具备 name 可改写
-                    new_id = next_id()
-                    id_map[block_id] = new_id
-                    block["id"] = new_id
-                    block["type"] = "tool_use"
-                elif block_type == "server_tool_use" and isinstance(block_id, str):
-                    # 兜底: 类型是 server_tool_use 但 ID 已是标准 toolu_ 形式，仅纠正类型
-                    block["type"] = "tool_use"
+            if isinstance(block_id, str) and _ANTHROPIC_SERVER_TOOL_USE_ID_RE.match(
+                block_id
+            ):
+                new_id = next_id()
+                id_map[block_id] = new_id
+                block["id"] = new_id
+                block["type"] = "tool_use"
+            elif (
+                isinstance(block_id, str)
+                and block_id
+                and not _ANTHROPIC_TOOL_USE_ID_RE.match(block_id)
+                and block.get("name")
+            ):
+                # 非标准 ID（非 toolu_ / srvtoolu_），且具备 name 可改写
+                new_id = next_id()
+                id_map[block_id] = new_id
+                block["id"] = new_id
+                block["type"] = "tool_use"
+            elif block_type == "server_tool_use" and isinstance(block_id, str):
+                # 兜底: 类型是 server_tool_use 但 ID 已是标准 toolu_ 形式，仅纠正类型
+                block["type"] = "tool_use"
 
-            # Case B: user 消息里的 tool_result.tool_use_id 同步重写
-            if block_type == "tool_result":
+    # Pass 2: 全量同步所有 tool_result.tool_use_id 引用 (含 user/assistant 内联)
+    if id_map:
+        for message in body.get("messages", []):
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") != "tool_result":
+                    continue
                 tool_use_id = block.get("tool_use_id")
                 if isinstance(tool_use_id, str) and tool_use_id in id_map:
                     block["tool_use_id"] = id_map[tool_use_id]
@@ -619,9 +736,54 @@ def prepare_zhipu_to_anthropic(
     return prepared, adaptations
 
 
+# ── zhipu → zhipu 自清理通道 ──────────────────────────────────────
+
+
+def prepare_zhipu_self_cleanup(
+    body: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """zhipu → zhipu 自清理: 仅修复 zhipu 自身无法消化的产物.
+
+    GLM-5 偶发地在 assistant 消息中输出 ``tool_result`` 块（违反 Anthropic 规范），
+    或在流式响应中暴露 ``server_tool_use_delta`` 私有块。当 Claude Code 将这些
+    产物原样回送下一轮请求时，zhipu 的 Anthropic 兼容端点会以 400 拒绝
+    （表现为 "400 + tool_results" 偶发，进而触发到 copilot 的降级）。
+
+    本通道仅修复 zhipu 自身拒绝的两类产物，**保留** 所有 zhipu 原生支持的特性:
+
+    - ✓ ``srvtoolu_*`` ID 与 ``server_tool_use`` 类型（zhipu 原生）
+    - ✓ thinking blocks 的 zhipu 自签 signature
+    - ✓ ``cache_control`` 字段（GLM Anthropic 端点支持，cache_read 已实证）
+    - ✓ 顶层 ``thinking`` / ``extended_thinking`` 参数
+
+    清理操作（顺序、就地、幂等）:
+    1. 剥离 ``server_tool_use_delta`` 流式残块
+    2. 强制 tool_use/tool_result 配对（关键: 把 assistant 内联的 tool_result
+       搬迁到紧随的 user 消息）
+
+    Returns:
+        (prepared_body, adaptations) — adaptations 为应用的变换描述列表。
+    """
+    prepared = copy.deepcopy(body)
+    adaptations: list[str] = []
+
+    # Step 1: 剥离 zhipu 私有流式块类型（input 中不应出现）
+    removed_vendor_blocks = _remove_vendor_blocks(prepared, _ZHIPU_VENDOR_BLOCK_TYPES)
+    if removed_vendor_blocks:
+        adaptations.append(f"removed_{removed_vendor_blocks}_zhipu_vendor_blocks")
+
+    # Step 2: 强制 tool_use/tool_result 配对
+    pairing_fixes = enforce_anthropic_tool_pairing(prepared.get("messages", []))
+    if pairing_fixes:
+        adaptations.extend(pairing_fixes)
+
+    return prepared, adaptations
+
+
 # ── 注册所有转换通道 ──────────────────────────────────────────────
 
 VENDOR_TRANSITIONS[("zhipu", "anthropic")] = prepare_zhipu_to_anthropic
 VENDOR_TRANSITIONS[("zhipu", "copilot")] = prepare_zhipu_to_copilot
 VENDOR_TRANSITIONS[("copilot", "zhipu")] = prepare_copilot_to_zhipu
+VENDOR_TRANSITIONS[("zhipu", "zhipu")] = prepare_zhipu_self_cleanup
 VENDOR_TRANSITIONS[("anthropic", "zhipu")] = prepare_anthropic_to_zhipu
