@@ -265,3 +265,48 @@ def test_multiple_sse_lines_in_single_chunk():
     parse_usage_from_chunk(chunk, usage)
     assert usage["input_tokens"] == 80
     assert usage["output_tokens"] == 20
+
+
+# --- null usage 安全保护（防御上游 SSE 字段为 null 的极端格式） ---
+
+
+def test_null_usage_at_top_level_does_not_raise():
+    """data.usage 显式为 null 时应被静默忽略，不抛异常、不产生 WARNING."""
+    usage: dict = {}
+    parse_usage_from_chunk(
+        _sse('{"id":"chatcmpl-null","choices":[{"delta":{}}],"usage":null}'),
+        usage,
+    )
+    # 不应写入任何 token 字段
+    assert usage.get("input_tokens", 0) == 0
+    assert usage.get("output_tokens", 0) == 0
+
+
+def test_null_usage_in_message_does_not_raise():
+    """message.usage 显式为 null 时应被静默忽略."""
+    usage: dict = {}
+    parse_usage_from_chunk(
+        _sse('{"type":"message_start","message":{"id":"msg_null","usage":null}}'),
+        usage,
+    )
+    assert usage.get("input_tokens", 0) == 0
+
+
+def test_null_usage_does_not_break_subsequent_valid_chunks():
+    """null usage 帧之后到来的有效帧仍能正确解析."""
+    usage: dict = {}
+    # 1. null usage 帧
+    parse_usage_from_chunk(
+        _sse('{"id":"chatcmpl-1","choices":[{"delta":{"content":"hi"}}],"usage":null}'),
+        usage,
+    )
+    # 2. 有效的最终帧
+    parse_usage_from_chunk(
+        _sse(
+            '{"id":"chatcmpl-1","choices":[{"finish_reason":"stop","delta":{}}],'
+            '"usage":{"prompt_tokens":12,"completion_tokens":3}}'
+        ),
+        usage,
+    )
+    assert usage["input_tokens"] == 12
+    assert usage["output_tokens"] == 3
