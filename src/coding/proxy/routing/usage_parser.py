@@ -169,8 +169,8 @@ def parse_usage_from_chunk(
 
         # Anthropic 格式: message_start 事件 (data.message.usage)
         msg = data.get("message", {})
-        if isinstance(msg, dict) and "usage" in msg:
-            u = msg["usage"]
+        u = msg.get("usage") if isinstance(msg, dict) else None
+        if isinstance(u, dict):
             input_tokens = u.get("input_tokens", 0) or u.get("prompt_tokens", 0)
             _set_if_nonzero(usage, "input_tokens", input_tokens)
             _set_if_nonzero(
@@ -183,18 +183,17 @@ def parse_usage_from_chunk(
                 usage["request_id"] = msg["id"]
             if "model" in msg:
                 usage["model_served"] = msg["model"]
-            if isinstance(u, dict):
-                _append_usage_evidence(
-                    usage,
-                    evidence_kind="message_usage",
-                    raw_usage=dict(u),
-                    request_id=msg.get("id"),
-                    model_served=msg.get("model"),
-                )
+            _append_usage_evidence(
+                usage,
+                evidence_kind="message_usage",
+                raw_usage=dict(u),
+                request_id=msg.get("id"),
+                model_served=msg.get("model"),
+            )
 
         # Anthropic message_delta / OpenAI 最后一个 chunk (data.usage)
-        if "usage" in data:
-            u = data["usage"]
+        u = data.get("usage")
+        if isinstance(u, dict):
             output_tokens = u.get("output_tokens", 0) or u.get("completion_tokens", 0)
             input_tokens = u.get("input_tokens", 0) or u.get("prompt_tokens", 0)
             cache_creation_tokens = u.get("cache_creation_input_tokens", 0)
@@ -204,14 +203,13 @@ def parse_usage_from_chunk(
             _set_if_nonzero(usage, "input_tokens", input_tokens)
             _set_if_nonzero(usage, "cache_creation_tokens", cache_creation_tokens)
             _set_if_nonzero(usage, "cache_read_tokens", cache_read_tokens)
-            if isinstance(u, dict):
-                _append_usage_evidence(
-                    usage,
-                    evidence_kind="data_usage",
-                    raw_usage=dict(u),
-                    request_id=data.get("id"),
-                    model_served=data.get("model"),
-                )
+            _append_usage_evidence(
+                usage,
+                evidence_kind="data_usage",
+                raw_usage=dict(u),
+                request_id=data.get("id"),
+                model_served=data.get("model"),
+            )
 
         # Gemini SSE 格式: data.usageMetadata.{promptTokenCount, candidatesTokenCount, cachedContentTokenCount, thoughtsTokenCount, toolUsePromptTokenCount}
         # Gemini 的流式响应在最后一帧（或每一帧）携带 usageMetadata；字段命名与
