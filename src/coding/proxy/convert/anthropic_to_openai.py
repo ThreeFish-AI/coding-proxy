@@ -284,24 +284,34 @@ def _translate_assistant_message(message: dict[str, Any]) -> list[dict[str, Any]
         final_text_parts = text_parts
 
     if tool_uses:
+        tool_calls: list[dict[str, Any]] = []
+        for block in tool_uses:
+            raw_input = block.get("input")
+            if not isinstance(raw_input, dict):
+                logger.debug(
+                    "copilot: tool_use id=%s name=%s has non-dict input (type=%s), "
+                    "defaulting to empty dict",
+                    block.get("id", ""),
+                    block.get("name", ""),
+                    type(raw_input).__name__,
+                )
+                raw_input = {}
+            tool_calls.append(
+                {
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(raw_input, ensure_ascii=False),
+                    },
+                }
+            )
         return [
             {
                 "role": "assistant",
                 "content": "\n\n".join(part for part in final_text_parts if part)
                 or None,
-                "tool_calls": [
-                    {
-                        "id": block.get("id", ""),
-                        "type": "function",
-                        "function": {
-                            "name": block.get("name", ""),
-                            "arguments": json.dumps(
-                                block.get("input", {}), ensure_ascii=False
-                            ),
-                        },
-                    }
-                    for block in tool_uses
-                ],
+                "tool_calls": tool_calls,
             }
         ]
 
