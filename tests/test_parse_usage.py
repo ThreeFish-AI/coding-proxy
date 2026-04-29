@@ -117,6 +117,34 @@ def test_openai_zhipu_final_chunk():
     assert usage["input_tokens"] == 200
     assert usage["output_tokens"] == 80
     assert usage["request_id"] == "chatcmpl-1"
+    assert usage["model_served"] == "glm-5.1"
+
+
+def test_openai_final_chunk_with_model():
+    """OpenAI 最终 chunk 有 model 字段时应提取到 model_served."""
+    usage: dict = {}
+    parse_usage_from_chunk(
+        _sse(
+            '{"id":"chatcmpl-2","model":"gpt-4o-2024-08-06",'
+            '"usage":{"prompt_tokens":50,"completion_tokens":20}}'
+        ),
+        usage,
+    )
+    assert usage["input_tokens"] == 50
+    assert usage["output_tokens"] == 20
+    assert usage["model_served"] == "gpt-4o-2024-08-06"
+
+
+def test_openai_final_chunk_without_model():
+    """OpenAI 最终 chunk 无 model 字段时不应设置 model_served."""
+    usage: dict = {}
+    parse_usage_from_chunk(
+        _sse('{"id":"chatcmpl-3","usage":{"prompt_tokens":30,"completion_tokens":10}}'),
+        usage,
+    )
+    assert usage["input_tokens"] == 30
+    assert usage["output_tokens"] == 10
+    assert "model_served" not in usage
 
 
 def test_openai_final_chunk_with_cache_tokens():
