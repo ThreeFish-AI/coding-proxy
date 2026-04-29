@@ -572,13 +572,18 @@ def infer_source_vendor_from_body(body: dict[str, Any]) -> str | None:
 def prepare_copilot_to_zhipu(
     body: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
-    """copilot → zhipu 转换: 清理 copilot 产物以适配 GLM-5.
+    """copilot → zhipu 转换: 仅清理 copilot 产物中 zhipu 确认不支持的部分.
 
-    GLM-5 的 Anthropic 兼容端点对以下特性支持不完整:
-    - thinking / redacted_thinking 块 (signature 由非 Anthropic 签发)
-    - cache_control 字段
-    - 跨供应商产物 (misplaced tool_result, 非标准 tool_use ID)
-    - 顶层 thinking / extended_thinking 参数
+    GLM-5 的 Anthropic 兼容端点:
+    - ✗ thinking / redacted_thinking 块 (signature 由非 Anthropic 签发)
+    - ✓ cache_control 字段 (cache_read 已在生产实证)
+    - ✓ tool_result 在 assistant 消息中内联 (zhipu 自身偶发产出，可自行消化)
+    - ✗ 顶层 thinking / extended_thinking 参数
+
+    注意: 不再执行 enforce_anthropic_tool_pairing 和 _inject_tool_result_id_for_zhipu。
+    实证表明 tool_result 重定位会触发 zhipu 后端 ``'ClaudeContentBlockToolResult'
+    object has no attribute 'id'`` 500 错误；id 注入对 zhipu 的 Python 类
+    (不读取 JSON 中的 id 字段) 亦无效。详见 docs/issue.md。
 
     Returns:
         (prepared_body, adaptations) — adaptations 为应用的变换描述列表。
@@ -591,26 +596,11 @@ def prepare_copilot_to_zhipu(
     if stripped:
         adaptations.append(f"stripped_{stripped}_thinking_blocks")
 
-    # Step 2: 移除 cache_control 字段
-    removed_cc = _strip_cache_control(prepared)
-    if removed_cc:
-        adaptations.append(f"removed_{removed_cc}_cache_control_fields")
-
-    # Step 3: 移除顶层 thinking/extended_thinking 参数（GLM-5 不支持）
+    # Step 2: 移除顶层 thinking/extended_thinking 参数（GLM-5 不支持）
     for param in ("thinking", "extended_thinking"):
         if param in prepared:
             del prepared[param]
             adaptations.append(f"removed_{param}_param")
-
-    # Step 4: 强制 tool_use/tool_result 配对
-    pairing_fixes = enforce_anthropic_tool_pairing(prepared.get("messages", []))
-    if pairing_fixes:
-        adaptations.extend(pairing_fixes)
-
-    # Step 5: 为 tool_result 块注入 id 字段（zhipu 后端 bug workaround）
-    injected = _inject_tool_result_id_for_zhipu(prepared)
-    if injected:
-        adaptations.append(f"injected_{injected}_tool_result_id_fields")
 
     return prepared, adaptations
 
@@ -632,8 +622,10 @@ def prepare_anthropic_to_zhipu(
     Anthropic API 可能产生的非兼容产物:
     - ``server_tool_use`` blocks（web search / computer use 等 beta 功能）
     - ``thinking`` / ``redacted_thinking`` blocks（含 Anthropic 签发的 signature）
-    - ``cache_control`` 字段
     - 顶层 ``thinking`` / ``extended_thinking`` 参数
+
+    注意: 不再移除 cache_control (GLM-5 支持) ，不再执行 tool pairing 和
+    id 注入。原因同 prepare_copilot_to_zhipu 的 docstring。
 
     Returns:
         (prepared_body, adaptations) — adaptations 为应用的变换描述列表。
@@ -651,26 +643,11 @@ def prepare_anthropic_to_zhipu(
     if stripped:
         adaptations.append(f"stripped_{stripped}_thinking_blocks")
 
-    # Step 3: 移除 cache_control 字段
-    removed_cc = _strip_cache_control(prepared)
-    if removed_cc:
-        adaptations.append(f"removed_{removed_cc}_cache_control_fields")
-
-    # Step 4: 移除顶层 thinking/extended_thinking 参数（GLM-5 不支持）
+    # Step 3: 移除顶层 thinking/extended_thinking 参数（GLM-5 不支持）
     for param in ("thinking", "extended_thinking"):
         if param in prepared:
             del prepared[param]
             adaptations.append(f"removed_{param}_param")
-
-    # Step 5: 强制 tool_use/tool_result 配对
-    pairing_fixes = enforce_anthropic_tool_pairing(prepared.get("messages", []))
-    if pairing_fixes:
-        adaptations.extend(pairing_fixes)
-
-    # Step 6: 为 tool_result 块注入 id 字段（zhipu 后端 bug workaround）
-    injected = _inject_tool_result_id_for_zhipu(prepared)
-    if injected:
-        adaptations.append(f"injected_{injected}_tool_result_id_fields")
 
     return prepared, adaptations
 
@@ -782,25 +759,22 @@ def prepare_zhipu_to_anthropic(
 def prepare_zhipu_self_cleanup(
     body: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
-    """zhipu → zhipu 自清理: 仅修复 zhipu 自身无法消化的产物.
+    """zhipu → zhipu 自清理: 仅剥离 zhipu 自身的流式残块.
 
-    GLM-5 偶发地在 assistant 消息中输出 ``tool_result`` 块（违反 Anthropic 规范），
-    或在流式响应中暴露 ``server_tool_use_delta`` 私有块。当 Claude Code 将这些
-    产物原样回送下一轮请求时，zhipu 的 Anthropic 兼容端点会以 400 拒绝
-    （表现为 "400 + tool_results" 偶发，进而触发到 copilot 的降级）。
+    GLM-5 在流式响应中偶发暴露 ``server_tool_use_delta`` 私有块。当 Claude Code
+    将这些产物原样回送下一轮请求时，zhipu 的 Anthropic 兼容端点会拒绝。
 
-    本通道仅修复 zhipu 自身拒绝的两类产物，**保留** 所有 zhipu 原生支持的特性:
+    本通道**保留**所有 zhipu 原生支持的特性:
 
     - ✓ ``srvtoolu_*`` ID 与 ``server_tool_use`` 类型（zhipu 原生）
     - ✓ thinking blocks 的 zhipu 自签 signature
     - ✓ ``cache_control`` 字段（GLM Anthropic 端点支持，cache_read 已实证）
     - ✓ 顶层 ``thinking`` / ``extended_thinking`` 参数
+    - ✓ tool_result 在 assistant 消息中内联（zhipu 自身偶发产出，可自行消化）
 
-    清理操作（顺序、就地、幂等）:
-    1. 剥离 ``server_tool_use_delta`` 流式残块
-    2. 强制 tool_use/tool_result 配对（关键: 把 assistant 内联的 tool_result
-       搬迁到紧随的 user 消息）
-    3. 为 ``tool_result`` 块注入 ``id`` 字段（zhipu 后端错误访问 ``.id`` 属性）
+    注意: 不再执行 enforce_anthropic_tool_pairing 和 _inject_tool_result_id_for_zhipu。
+    实证表明 tool_result 重定位会触发 zhipu 后端 500 错误。
+    详见 docs/issue.md。
 
     Returns:
         (prepared_body, adaptations) — adaptations 为应用的变换描述列表。
@@ -812,16 +786,6 @@ def prepare_zhipu_self_cleanup(
     removed_vendor_blocks = _remove_vendor_blocks(prepared, _ZHIPU_VENDOR_BLOCK_TYPES)
     if removed_vendor_blocks:
         adaptations.append(f"removed_{removed_vendor_blocks}_zhipu_vendor_blocks")
-
-    # Step 2: 强制 tool_use/tool_result 配对
-    pairing_fixes = enforce_anthropic_tool_pairing(prepared.get("messages", []))
-    if pairing_fixes:
-        adaptations.extend(pairing_fixes)
-
-    # Step 3: 为 tool_result 块注入 id 字段（zhipu 后端 bug workaround）
-    injected = _inject_tool_result_id_for_zhipu(prepared)
-    if injected:
-        adaptations.append(f"injected_{injected}_tool_result_id_fields")
 
     return prepared, adaptations
 

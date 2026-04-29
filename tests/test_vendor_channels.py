@@ -244,7 +244,8 @@ class TestCopilotToZhipuChannel:
         # 原始 body 未被修改
         assert body["messages"][0]["content"][0]["type"] == "thinking"
 
-    def test_removes_cache_control(self):
+    def test_preserves_cache_control(self):
+        """copilot → zhipu 不再移除 cache_control（zhipu 原生支持）."""
         body = {
             "system": [
                 {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}},
@@ -252,8 +253,8 @@ class TestCopilotToZhipuChannel:
             "messages": [],
         }
         prepared, adaptations = prepare_copilot_to_zhipu(body)
-        assert any("cache_control" in a for a in adaptations)
-        assert "cache_control" not in prepared["system"][0]
+        assert not any("cache_control" in a for a in adaptations)
+        assert "cache_control" in prepared["system"][0]
 
     def test_removes_thinking_params(self):
         body = {
@@ -267,7 +268,8 @@ class TestCopilotToZhipuChannel:
         assert "removed_thinking_param" in adaptations
         assert "removed_extended_thinking_param" in adaptations
 
-    def test_enforces_tool_pairing(self):
+    def test_does_not_relocate_tool_results(self):
+        """copilot → zhipu 不再执行 tool pairing（避免触发 zhipu 500）."""
         body = {
             "messages": [
                 {
@@ -288,14 +290,15 @@ class TestCopilotToZhipuChannel:
             ],
         }
         prepared, adaptations = prepare_copilot_to_zhipu(body)
+        # user 消息内容不变（无 synthesized tool_result）
         user_content = prepared["messages"][1]["content"]
         tool_results = [
             b
             for b in user_content
             if isinstance(b, dict) and b.get("type") == "tool_result"
         ]
-        assert len(tool_results) == 1
-        assert tool_results[0]["tool_use_id"] == "toolu_1"
+        assert len(tool_results) == 0
+        assert not any("misplaced" in a for a in adaptations)
 
     def test_combined_transformations(self):
         body = {
@@ -327,15 +330,17 @@ class TestCopilotToZhipuChannel:
             b.get("type") not in ("thinking", "redacted_thinking")
             for b in prepared["messages"][0]["content"]
         )
-        assert "cache_control" not in prepared["system"][0]
+        # cache_control 保留
+        assert "cache_control" in prepared["system"][0]
         assert "thinking" not in prepared
+        # tool pairing 不执行（user 消息内容不变）
         user_content = prepared["messages"][1]["content"]
         tool_results = [
             b
             for b in user_content
             if isinstance(b, dict) and b.get("type") == "tool_result"
         ]
-        assert len(tool_results) == 1
+        assert len(tool_results) == 0
 
     def test_preserves_original_body(self):
         body = {
@@ -758,8 +763,8 @@ class TestZhipuSelfCleanupChannel:
         assert all(b.get("type") != "server_tool_use_delta" for b in content)
         assert any("zhipu_vendor_blocks" in a for a in adaptations)
 
-    def test_relocates_misplaced_tool_result(self):
-        """assistant 内联 tool_result 应被搬迁到下一个 user 消息."""
+    def test_preserves_inline_tool_result_in_assistant(self):
+        """assistant 内联 tool_result 保留原位（不再搬迁，避免触发 zhipu 500）."""
         body = {
             "messages": [
                 {
@@ -783,49 +788,19 @@ class TestZhipuSelfCleanupChannel:
         }
         prepared, adaptations = prepare_zhipu_self_cleanup(body)
 
-        # assistant 消息中应不再包含 tool_result
+        # assistant 消息中 tool_result 保留原位
         assistant_content = prepared["messages"][0]["content"]
-        assert all(b.get("type") != "tool_result" for b in assistant_content)
-        # tool_result 已搬到下一个 user 消息
-        user_content = prepared["messages"][1]["content"]
         assert any(
             b.get("type") == "tool_result" and b.get("tool_use_id") == "srvtoolu_a"
-            for b in user_content
+            for b in assistant_content
         )
-        assert "misplaced_tool_result_relocated" in adaptations
+        # 不应有 tool pairing 相关的 adaptations
+        assert not any("misplaced" in a for a in adaptations)
+        assert not any("orphaned" in a for a in adaptations)
+        assert not any("injected" in a for a in adaptations)
 
-    def test_injects_id_on_relocated_tool_result(self):
-        """搬迁后的 tool_result 块应具有 id 字段（zhipu 后端 bug workaround）."""
-        body = {
-            "messages": [
-                {
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "id": "toolu_001",
-                            "name": "bash",
-                            "input": {},
-                        },
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": "toolu_001",
-                            "content": "ok",
-                        },
-                    ],
-                },
-                {"role": "user", "content": []},
-            ],
-        }
-        prepared, adaptations = prepare_zhipu_self_cleanup(body)
-
-        user_content = prepared["messages"][1]["content"]
-        tr = next(b for b in user_content if b.get("type") == "tool_result")
-        assert tr["id"] == "toolu_001"
-        assert any("injected" in a and "tool_result_id" in a for a in adaptations)
-
-    def test_injects_id_on_existing_user_tool_result(self):
-        """user 消息中已有的 tool_result 也应被注入 id 字段."""
+    def test_no_id_injection(self):
+        """自清理通道不再注入 id 字段（zhipu 类不读取，注入无效）."""
         body = {
             "messages": [
                 {
@@ -2689,7 +2664,8 @@ class TestAnthropicToZhipuChannel:
             {"type": "text", "text": "response"},
         ]
 
-    def test_removes_cache_control(self):
+    def test_preserves_cache_control(self):
+        """anthropic → zhipu 不再移除 cache_control（zhipu 原生支持）."""
         body = {
             "system": [
                 {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}},
@@ -2697,8 +2673,8 @@ class TestAnthropicToZhipuChannel:
             "messages": [],
         }
         prepared, adaptations = prepare_anthropic_to_zhipu(body)
-        assert any("cache_control" in a for a in adaptations)
-        assert "cache_control" not in prepared["system"][0]
+        assert not any("cache_control" in a for a in adaptations)
+        assert "cache_control" in prepared["system"][0]
 
     def test_removes_thinking_params(self):
         body = {
@@ -2712,7 +2688,8 @@ class TestAnthropicToZhipuChannel:
         assert "removed_thinking_param" in adaptations
         assert "removed_extended_thinking_param" in adaptations
 
-    def test_enforces_tool_pairing(self):
+    def test_does_not_relocate_tool_results(self):
+        """anthropic → zhipu 不再执行 tool pairing（避免触发 zhipu 500）."""
         body = {
             "messages": [
                 {
@@ -2730,14 +2707,13 @@ class TestAnthropicToZhipuChannel:
             ],
         }
         prepared, adaptations = prepare_anthropic_to_zhipu(body)
-        assert "orphaned_tool_use_repaired" in adaptations
+        assert not any("orphaned" in a for a in adaptations)
         user_results = [
             b
             for b in prepared["messages"][1]["content"]
             if isinstance(b, dict) and b.get("type") == "tool_result"
         ]
-        assert len(user_results) == 1
-        assert user_results[0]["tool_use_id"] == "toolu_1"
+        assert len(user_results) == 0
 
     def test_preserves_original_body(self):
         body = {
