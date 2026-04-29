@@ -1,6 +1,6 @@
 [project]
 name = "coding-proxy"
-version = "0.3.1a4"
+version = "0.3.1a5"
 description = "A High-Availability, Transparent, and Smart Multi-Vendor Proxy for Claude Code. Support Claude Plans, GitHub Copilot, Google Antigravity, ZAI/GLM, MiniMax, Qwen, Xiaomi, Kimi, Doubao..."
 readme = "README.md"
 requires-python = ">=3.12"
