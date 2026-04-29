@@ -52,6 +52,7 @@
   1. **Python**: 严禁使用 pip/poetry，**必须**统一使用 `uv` 进行包管理与脚本执行（如 `uv run`）；
   2. **JavaScript/TypeScript**: 严禁使用 npm/yarn，**必须**统一使用 `pnpm` 进行包管理与脚本执行。
 - **Database Management**: 谨慎操作，数据迁移、测试等操作严禁将现有数据删除，谨慎操作数据迁移的回滚，防止数据被清理。
+- **In-depth and close to the facts**：系统且全面地进行问题的分析，深入贴近事实，如有疑问，需先发问，不要乱做决定。
 
 ## Documentation Standards (文档规范)
 
