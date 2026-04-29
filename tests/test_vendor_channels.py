@@ -392,6 +392,38 @@ class TestCopilotToZhipuChannel:
         assert prepared2 == prepared1
         assert adaptations2 == []
 
+    def test_injects_id_on_tool_result_for_zhipu(self):
+        """copilot → zhipu 转换后 tool_result 应包含 id 字段."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_001",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_001",
+                            "content": "ok",
+                        },
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_copilot_to_zhipu(body)
+        tr = prepared["messages"][1]["content"][0]
+        assert tr["id"] == "toolu_001"
+        assert any("injected" in a and "tool_result_id" in a for a in adaptations)
+
 
 # ── zhipu → anthropic 转换通道测试 ────────────────────────────────
 
@@ -761,6 +793,101 @@ class TestZhipuSelfCleanupChannel:
             for b in user_content
         )
         assert "misplaced_tool_result_relocated" in adaptations
+
+    def test_injects_id_on_relocated_tool_result(self):
+        """搬迁后的 tool_result 块应具有 id 字段（zhipu 后端 bug workaround）."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_001",
+                            "name": "bash",
+                            "input": {},
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_001",
+                            "content": "ok",
+                        },
+                    ],
+                },
+                {"role": "user", "content": []},
+            ],
+        }
+        prepared, adaptations = prepare_zhipu_self_cleanup(body)
+
+        user_content = prepared["messages"][1]["content"]
+        tr = next(b for b in user_content if b.get("type") == "tool_result")
+        assert tr["id"] == "toolu_001"
+        assert any("injected" in a and "tool_result_id" in a for a in adaptations)
+
+    def test_injects_id_on_existing_user_tool_result(self):
+        """user 消息中已有的 tool_result 也应被注入 id 字段."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_001",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_001",
+                            "content": "ok",
+                        },
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_zhipu_self_cleanup(body)
+
+        tr = prepared["messages"][1]["content"][0]
+        assert tr["id"] == "toolu_001"
+        assert any("injected" in a and "tool_result_id" in a for a in adaptations)
+
+    def test_skips_id_injection_when_already_present(self):
+        """tool_result 已有 id 字段时不应重复注入."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_001",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_001",
+                            "id": "toolu_001",
+                            "content": "ok",
+                        },
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_zhipu_self_cleanup(body)
+        # 不应产生注入 adaptation（id 已存在）
+        assert not any("injected" in a for a in adaptations)
 
     def test_preserves_srvtoolu_ids(self):
         """zhipu 原生 srvtoolu_* ID 与 server_tool_use 类型必须保留."""
@@ -2751,3 +2878,35 @@ class TestAnthropicToZhipuChannel:
         assert "thinking" not in prepared
         assert any("server_tool_use" in a for a in adaptations)
         assert any("thinking_blocks" in a for a in adaptations)
+
+    def test_injects_id_on_tool_result_for_zhipu(self):
+        """anthropic → zhipu 转换后 tool_result 应包含 id 字段."""
+        body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_001",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_001",
+                            "content": "ok",
+                        },
+                    ],
+                },
+            ],
+        }
+        prepared, adaptations = prepare_anthropic_to_zhipu(body)
+        tr = prepared["messages"][1]["content"][0]
+        assert tr["id"] == "toolu_001"
+        assert any("injected" in a and "tool_result_id" in a for a in adaptations)
