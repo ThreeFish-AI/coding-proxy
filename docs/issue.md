@@ -152,30 +152,58 @@ zhipu GLM-5 在处理含 `tool_result` 块的会话时持续返回 500 错误，
 
 ```
 WARNING zhipu stream error: status=500 body='...message":"\'ClaudeContentBlockToolResult\' object has no attribute \'id\'"}'
-WARNING Tier zhipu zhipu tool_result format error (500), treating as format incompatibility without circuit breaker penalty
-INFO  Failover: zhipu → copilot (reason: HTTP 500)
 ```
 
 **表因**
 
-zhipu 后端在解析 `tool_result` 内容块时错误地访问 `.id` 属性。但 Anthropic API 规范中 `tool_result` 块只有 `tool_use_id` 字段（用于关联对应的 `tool_use`），没有 `id` 字段（`id` 是 `tool_use` 块的属性）。
+zhipu 后端在解析 `tool_result` 内容块时错误地访问 `.id` 属性。但 Anthropic API 规范中 `tool_result` 块只有 `tool_use_id` 字段（用于关联对应的 `tool_use`），没有 `id` 字段。
 
-**根因**
+**根因**（2026-04-29 复盘更新）
 
-所有 targeting zhipu 的转换通道（`prepare_zhipu_self_cleanup`、`prepare_copilot_to_zhipu`、`prepare_anthropic_to_zhipu`）在完成 `enforce_anthropic_tool_pairing` 后，没有为 `tool_result` 块补上 zhipu 后端期望的 `id` 字段。搬迁或合成的 `tool_result` 块仅有 `tool_use_id`，缺少 `id`。
+**初始诊断**（已推翻）：认为 zhipu 后端期望 `tool_result` 有 `id` 字段，通过 `_inject_tool_result_id_for_zhipu` 注入 `id = tool_use_id` 可绕过。
 
-**处理方式**
+**实际根因**：转换通道本身引入的问题。具体因果链：
 
-- 在 `vendor_channels.py` 新增 `_inject_tool_result_id_for_zhipu` 辅助函数：扫描所有消息中的 `tool_result` 块，将 `tool_use_id` 值复制为 `id` 字段（仅注入尚无 `id` 的块，保持幂等）
-- 在三个 targeting zhipu 的转换通道末尾统一调用此辅助函数
-- 保留 executor 中已有的 500 错误检测作为纵深防御
+1. **转换前**：zhipu 偶发在 assistant 消息中内联输出 `tool_result`（违反 Anthropic 规范），但 zhipu 后端对 assistant 消息中内联的 `tool_result` **不做 `.id` 属性访问**，因此不触发 500。
+2. **转换后**：所有 zhipu 目标通道执行 `enforce_anthropic_tool_pairing`，将 assistant 内联的 `tool_result` 搬迁到紧随的 user 消息。zhipu 后端对 user 消息中的 `tool_result` **执行 `.id` 属性访问**（代码路径不同），触发 `AttributeError` → 500。
+3. **`_inject_tool_result_id_for_zhipu` 无效**：该函数往 JSON dict 注入 `"id": tool_use_id`，但 zhipu 后端的 `ClaudeContentBlockToolResult` Python 类不从 JSON 读取 `id` 字段（类定义中无此属性），注入的值在反序列化时被丢弃。
+
+**实证依据**：用户确认「转换通道之前 zhipu 正常，转换通道之后才出现 500 错误」。
+
+**处理方式**（2026-04-29 更新）
+
+从所有 zhipu 目标转换通道中移除以下三个步骤：
+
+| 移除项 | 原因 |
+|--------|------|
+| `enforce_anthropic_tool_pairing` | 搬迁 `tool_result` 到 user 消息触发 zhipu 500 |
+| `_inject_tool_result_id_for_zhipu` | zhipu 类不读取注入的 `id`，无效且可能干扰 |
+| `_strip_cache_control` | zhipu 原生支持 `cache_control`（cache_read 已实证），剥离反损性能 |
+
+保留的必要步骤：
+
+| 保留项 | 原因 |
+|--------|------|
+| `strip_thinking_blocks` | copilot/anthropic 的 thinking 签名 zhipu 无法验证 |
+| 移除 `thinking`/`extended_thinking` 顶层参数 | zhipu 不支持 |
+| `_remove_vendor_blocks(server_tool_use_delta)` | zhipu 自身流式残块 |
+| `_remove_vendor_blocks(server_tool_use)` | Anthropic beta 块，zhipu 不支持 |
+
+**涉及变更的转换通道**：
+- `prepare_copilot_to_zhipu` — 移除 cache_control / tool pairing / id 注入
+- `prepare_anthropic_to_zhipu` — 移除 cache_control / tool pairing / id 注入
+- `prepare_zhipu_self_cleanup` — 移除 tool pairing / id 注入
+
+**注意**: `prepare_zhipu_to_anthropic` 和 `prepare_zhipu_to_copilot` 不受影响（目标是 anthropic/copilot，不是 zhipu），仍保留 `enforce_anthropic_tool_pairing`。
 
 **后续防范**
 
-- 其他 `NativeAnthropicVendor` 子类若出现类似的「后端期望非标准字段」问题，可参考此模式在对应的转换通道中注入兼容字段。
-- 当 zhipu 后端修复此 bug（不再访问 `.id`）后，此 workaround 仍安全保留（多一个 `id` 字段不影响 Anthropic API 语义）。
+- **转换通道的「最小干预」原则**：跨供应商转换应仅清理目标供应商**确认不支持**的特性。未经验证的「预防性清理」（如剥离 cache_control）可能误伤供应商原生支持的功能，甚至引入新的故障。
+- **workaround 须验证有效**：`_inject_tool_result_id_for_zhipu` 虽有注释说明目的，但未经验证其有效性即合入。后续 workaround 须附带验证证据（如 curl 复现、上游确认）。
+- **zhipu 后端 bug 跟踪**：`ClaudeContentBlockToolResult` 类缺少 `id` 属性是 zhipu 上游 bug。若 zhipu 修复此 bug，可考虑恢复 tool pairing 以获得更严格的消息结构校验。
 
 **同类问题影响与处理注意事项**
 
-- `enforce_anthropic_tool_pairing` 合成的 `is_error=True` 占位块只有 `tool_use_id`，同样需要 `id` 注入——辅助函数在配对后统一处理，无需在合成逻辑中单独添加。
-- `tool_result.id` 的值设为与 `tool_use_id` 相同，语义上可视为「内容块标识符」，对 zhipu 后端足够区分不同 tool_result 块。
+- `NativeAnthropicVendor` 子类的自清理通道应**精确剪裁**：仅修复 vendor 自身拒绝的产物，不做跨供应商的全量清理。
+- 当 zhipu 后端出现新的 400 拒绝（如 inline tool_result 再次被拒），应优先调查是 zhipu 后端变更还是请求格式问题，而非立即加回 tool pairing（可能重新触发 500）。
+- `_inject_tool_result_id_for_zhipu` 函数暂时保留在代码中（未删除），标记为 deprecated，待确认不需要后清理。
