@@ -322,6 +322,36 @@ def _enforce_pairing_sanity_pass(messages_list: list[Any]) -> list[str]:
     return sanity_synthesized
 
 
+def _inject_tool_result_id_for_zhipu(body: dict[str, Any]) -> int:
+    """为 tool_result 块注入 ``id`` 字段以兼容 zhipu GLM-5 后端.
+
+    zhipu 的 Anthropic 兼容端点在解析 ``tool_result`` 块时会访问 ``.id`` 属性，
+    但 Anthropic API 规范中 ``tool_result`` 只有 ``tool_use_id`` 字段而没有 ``id``。
+    此函数在所有 ``tool_result`` 块上补设 ``id``（值等于 ``tool_use_id``），
+    避免触发 ``'ClaudeContentBlockToolResult' object has no attribute 'id'`` 500 错误。
+
+    Returns:
+        被注入 ``id`` 字段的 tool_result 块数量。
+    """
+    injected = 0
+    for message in body.get("messages", []):
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_result"
+                and "id" not in block
+                and block.get("tool_use_id")
+            ):
+                block["id"] = block["tool_use_id"]
+                injected += 1
+    return injected
+
+
 def _strip_cache_control(body: dict[str, Any]) -> int:
     """从 system/messages/tools 中移除 cache_control 字段（就地）.
 
@@ -577,6 +607,11 @@ def prepare_copilot_to_zhipu(
     if pairing_fixes:
         adaptations.extend(pairing_fixes)
 
+    # Step 5: 为 tool_result 块注入 id 字段（zhipu 后端 bug workaround）
+    injected = _inject_tool_result_id_for_zhipu(prepared)
+    if injected:
+        adaptations.append(f"injected_{injected}_tool_result_id_fields")
+
     return prepared, adaptations
 
 
@@ -631,6 +666,11 @@ def prepare_anthropic_to_zhipu(
     pairing_fixes = enforce_anthropic_tool_pairing(prepared.get("messages", []))
     if pairing_fixes:
         adaptations.extend(pairing_fixes)
+
+    # Step 6: 为 tool_result 块注入 id 字段（zhipu 后端 bug workaround）
+    injected = _inject_tool_result_id_for_zhipu(prepared)
+    if injected:
+        adaptations.append(f"injected_{injected}_tool_result_id_fields")
 
     return prepared, adaptations
 
@@ -760,6 +800,7 @@ def prepare_zhipu_self_cleanup(
     1. 剥离 ``server_tool_use_delta`` 流式残块
     2. 强制 tool_use/tool_result 配对（关键: 把 assistant 内联的 tool_result
        搬迁到紧随的 user 消息）
+    3. 为 ``tool_result`` 块注入 ``id`` 字段（zhipu 后端错误访问 ``.id`` 属性）
 
     Returns:
         (prepared_body, adaptations) — adaptations 为应用的变换描述列表。
@@ -776,6 +817,11 @@ def prepare_zhipu_self_cleanup(
     pairing_fixes = enforce_anthropic_tool_pairing(prepared.get("messages", []))
     if pairing_fixes:
         adaptations.extend(pairing_fixes)
+
+    # Step 3: 为 tool_result 块注入 id 字段（zhipu 后端 bug workaround）
+    injected = _inject_tool_result_id_for_zhipu(prepared)
+    if injected:
+        adaptations.append(f"injected_{injected}_tool_result_id_fields")
 
     return prepared, adaptations
 
