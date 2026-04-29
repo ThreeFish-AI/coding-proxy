@@ -35,6 +35,7 @@ def test_gemini_usage_metadata_basic_fields():
     assert usage["output_tokens"] == 42
     assert usage.get("cache_read_tokens", 0) == 0
     assert usage["request_id"] == "resp_abc"
+    assert usage["model_served"] == "gemini-2.0-flash"
 
 
 def test_gemini_usage_metadata_with_cached_content():
@@ -194,3 +195,18 @@ def test_gemini_partial_fields_ok():
     )
     assert usage["input_tokens"] == 77
     assert "output_tokens" not in usage
+
+
+def test_gemini_model_fallback_to_data_model():
+    """当 modelVersion 不存在时，应回退到 data.model."""
+    usage: dict = {}
+    parse_usage_from_chunk(
+        _sse(
+            '{"usageMetadata":{"promptTokenCount":80,"candidatesTokenCount":20},'
+            '"model":"gemini-1.5-flash"}'
+        ),
+        usage,
+    )
+    assert usage["input_tokens"] == 80
+    assert usage["output_tokens"] == 20
+    assert usage["model_served"] == "gemini-1.5-flash"
