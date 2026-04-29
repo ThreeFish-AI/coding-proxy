@@ -362,3 +362,75 @@ def test_string_content_not_image():
 def test_empty_messages():
     caps = build_request_capabilities({"model": "m", "messages": []})
     assert caps.has_images is False
+    assert caps.has_tool_results is False
+
+
+def test_tool_results_in_user_message():
+    caps = build_request_capabilities(
+        {
+            "model": "m",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "ok",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    assert caps.has_tool_results is True
+
+
+def test_tool_results_in_assistant_message():
+    caps = build_request_capabilities(
+        {
+            "model": "m",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "bash",
+                            "input": {},
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "ok",
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    assert caps.has_tool_results is True
+
+
+def test_no_tool_results():
+    caps = build_request_capabilities(
+        {
+            "model": "m",
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "bash",
+                            "input": {},
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    assert caps.has_tool_results is False

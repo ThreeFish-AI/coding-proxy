@@ -99,6 +99,7 @@ class CapabilityLossReason(Enum):
     IMAGES = "images"
     VENDOR_TOOLS = "vendor_tools"
     METADATA = "metadata"
+    TOOL_RESULTS = "tool_results"
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,7 @@ class RequestCapabilities:
     has_thinking: bool = False
     has_images: bool = False
     has_metadata: bool = False
+    has_tool_results: bool = False
 
 
 @dataclass(frozen=True)

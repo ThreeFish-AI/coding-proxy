@@ -158,29 +158,35 @@ WARNING zhipu stream error: status=500 body='...message":"\'ClaudeContentBlockTo
 
 zhipu 后端在解析 `tool_result` 内容块时错误地访问 `.id` 属性。但 Anthropic API 规范中 `tool_result` 块只有 `tool_use_id` 字段（用于关联对应的 `tool_use`），没有 `id` 字段。
 
-**根因**（2026-04-29 复盘更新）
+**根因**（2026-04-29 第二次复盘更新）
 
-**初始诊断**（已推翻）：认为 zhipu 后端期望 `tool_result` 有 `id` 字段，通过 `_inject_tool_result_id_for_zhipu` 注入 `id = tool_use_id` 可绕过。
+**第一次诊断**（已推翻）：认为 `_inject_tool_result_id_for_zhipu` 注入 `id` 可绕过。实证：注入 114 个块后 500 依旧。
 
-**实际根因**：转换通道本身引入的问题。具体因果链：
+**第二次诊断**（已推翻）：认为 `enforce_anthropic_tool_pairing` 搬迁 tool_result 到 user 消息是触发条件。实证：移除 tool pairing 后 500 依旧（日志显示 `copilot → zhipu: stripped_19_thinking_blocks, removed_thinking_param`，无 `misplaced_tool_result_relocated`）。
 
-1. **转换前**：zhipu 偶发在 assistant 消息中内联输出 `tool_result`（违反 Anthropic 规范），但 zhipu 后端对 assistant 消息中内联的 `tool_result` **不做 `.id` 属性访问**，因此不触发 500。
-2. **转换后**：所有 zhipu 目标通道执行 `enforce_anthropic_tool_pairing`，将 assistant 内联的 `tool_result` 搬迁到紧随的 user 消息。zhipu 后端对 user 消息中的 `tool_result` **执行 `.id` 属性访问**（代码路径不同），触发 `AttributeError` → 500。
-3. **`_inject_tool_result_id_for_zhipu` 无效**：该函数往 JSON dict 注入 `"id": tool_use_id`，但 zhipu 后端的 `ClaudeContentBlockToolResult` Python 类不从 JSON 读取 `id` 字段（类定义中无此属性），注入的值在反序列化时被丢弃。
+**实际根因**：zhipu 后端的 `ClaudeContentBlockToolResult` Python 类**没有 `id` 属性**，但 zhipu 代码在处理**所有** `tool_result` 块时都访问 `obj.id`，无论块位于 assistant 还是 user 消息。三层因果链：
 
-**实证依据**：用户确认「转换通道之前 zhipu 正常，转换通道之后才出现 500 错误」。
+1. **zhipu 后端 Bug**（不可修复 — 上游代码）：`ClaudeContentBlockToolResult` 类缺少 `id` 属性，zhipu 代码访问时触发 `AttributeError` → 500。
+2. **JSON 注入无效**（已实证）：`_inject_tool_result_id_for_zhipu` 往 JSON dict 注入 `id = tool_use_id`，但 zhipu 反序列化框架不读取此字段，Python 对象仍无 `id` 属性。
+3. **无预防机制**（proxy 层可修复）：tier 门控系统不检查请求是否含 `tool_result` 块 → 每次请求先发 zhipu → 必然 500 → failover → 额外 ~2 秒延迟。
 
-**处理方式**（2026-04-29 更新）
+**实证依据**：
+- 有注入（114 个块）→ 500；无注入 → 500。结论：注入无效。
+- 有 tool pairing → 500；无 tool pairing → 500。结论：tool pairing 不是触发条件。
+- 首次请求（无 tool_result 块）→ zhipu 正常。结论：500 由 tool_result 块本身触发。
 
-从所有 zhipu 目标转换通道中移除以下三个步骤：
+**处理方式**（2026-04-29 第二次更新）
 
-| 移除项 | 原因 |
+在 `ZhipuVendor.supports_request` 中增加 `has_tool_results` 门控：当请求包含 `tool_result` 块时主动拒绝 zhipu tier，避免「尝试 → 500 → failover」的无效延迟。
+
+| 变更项 | 说明 |
 |--------|------|
-| `enforce_anthropic_tool_pairing` | 搬迁 `tool_result` 到 user 消息触发 zhipu 500 |
-| `_inject_tool_result_id_for_zhipu` | zhipu 类不读取注入的 `id`，无效且可能干扰 |
-| `_strip_cache_control` | zhipu 原生支持 `cache_control`（cache_read 已实证），剥离反损性能 |
+| `RequestCapabilities.has_tool_results` | 新增字段，检测请求中是否含 `tool_result` 块 |
+| `CapabilityLossReason.TOOL_RESULTS` | 新增枚举值，标记 tool_result 兼容性问题 |
+| `ZhipuVendor.supports_request` | 覆写方法，`has_tool_results=True` 时拒绝请求 |
+| `build_request_capabilities` | 扩展 tool_result 块检测逻辑 |
 
-保留的必要步骤：
+保留的 zhipu 目标转换通道精简步骤：
 
 | 保留项 | 原因 |
 |--------|------|
