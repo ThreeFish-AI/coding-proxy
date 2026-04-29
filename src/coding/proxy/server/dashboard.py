@@ -415,7 +415,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       z-index: 1000;
       opacity: 0;
       transition: opacity .15s ease;
-      max-width: 360px;
+      max-width: 520px;
       max-height: 60vh;
       overflow-y: auto;
       backdrop-filter: blur(8px);
@@ -429,8 +429,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     #chart-tooltip-items { display: flex; flex-direction: column; gap: 3px; }
     .tt-item { display: flex; align-items: center; gap: 8px; line-height: 1.4; }
     .tt-color { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .tt-label { flex: 1; color: var(--text-primary); }
-    .tt-value { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-secondary); }
+    .tt-label { flex: 1; color: var(--text-primary); white-space: nowrap; }
+    .tt-value { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
     #chart-tooltip-footer {
       margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle);
       font-weight: 500; font-size: 12px; color: var(--text-secondary);
