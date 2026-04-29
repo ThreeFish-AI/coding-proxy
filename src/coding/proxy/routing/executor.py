@@ -135,6 +135,10 @@ def _is_likely_request_format_error(
         # 非结构化响应体（非 JSON）
         if not trimmed.startswith("{") and len(trimmed) < 200:
             return True
+        # 结构化 JSON 400 但含 tool_call 格式错误码 → 格式不兼容
+        # （如 Copilot 返回 {"error":{"code":"invalid_tool_call_format",...}}）
+        if "invalid_tool_call_format" in trimmed:
+            return True
     return False
 
 
@@ -794,6 +798,27 @@ class _RouteExecutor:
                     "trying next tier without recording failure",
                     tier.name,
                 )
+
+            # 补充检测：zhipu 500 — tool_result 块触发上游 AttributeError
+            # zhipu 后端在 tool_result 块上错误访问 .id 属性（应为 .tool_use_id），
+            # 此为已知的上游格式缺陷，应视为 format incompatibility 而非真实服务器故障。
+            if (
+                not semantic_rejection
+                and exc.response.status_code == 500
+                and request_body is not None
+                and _has_tool_results(request_body)
+            ):
+                err_text = (exc.response.text or "")[:500]
+                if (
+                    "'ClaudeContentBlockToolResult'" in err_text
+                    and "has no attribute 'id'" in err_text
+                ):
+                    semantic_rejection = True
+                    logger.warning(
+                        "Tier %s zhipu tool_result format error (500), "
+                        "treating as format incompatibility without circuit breaker penalty",
+                        tier.name,
+                    )
 
             if semantic_rejection and not is_last:
                 return True, tier.name, exc

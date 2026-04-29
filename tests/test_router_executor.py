@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from coding.proxy.compat.canonical import (
@@ -1229,6 +1230,31 @@ class TestIsLikelyRequestFormatError:
             is False
         )
 
+    def test_returns_true_for_invalid_tool_call_format(self):
+        """400 + 结构化 JSON 含 invalid_tool_call_format + tool_result → 格式不兼容."""
+        json_body = '{"error":{"message":"Invalid JSON format in tool call arguments","code":"invalid_tool_call_format"}}'
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text=json_body,
+                body=self._body_with_tool_results(),
+            )
+            is True
+        )
+
+    def test_returns_false_for_invalid_tool_call_format_without_tool_results(self):
+        """invalid_tool_call_format 但无 tool_result → 不应匹配."""
+        json_body = '{"error":{"message":"Invalid JSON format in tool call arguments","code":"invalid_tool_call_format"}}'
+        body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text=json_body,
+                body=body,
+            )
+            is False
+        )
+
 
 # ── TokenAcquireError 永久性凭证错误测试 ────────────────────
 
@@ -2101,3 +2127,157 @@ class TestPrepareBodyForTierSelfTransition:
             b for b in result["messages"][0]["content"] if b.get("type") == "thinking"
         )
         assert thinking_block["signature"] == "zhipu_sig"
+
+
+# ── zhipu 500 tool_result 格式错误检测测试 ──────────────────────
+
+
+class TestZhipu500ToolResultFormatError:
+    """验证 _handle_http_error 对 zhipu 500 'ClaudeContentBlockToolResult' 错误的处理.
+
+    zhipu 后端在 tool_result 块上错误访问 .id 属性（应为 .tool_use_id），
+    此为已知的上游格式缺陷，应视为 format incompatibility（semantic rejection）
+    而非真实服务器故障，不应计入熔断器。
+    """
+
+    @pytest.mark.asyncio
+    async def test_zhipu_500_tool_result_error_triggers_semantic_rejection(self):
+        """zhipu 500 + 'ClaudeContentBlockToolResult' + tool_result → semantic rejection."""
+        from coding.proxy.routing.circuit_breaker import CircuitBreaker
+
+        vendor = _mock_vendor("zhipu")
+        error_body = (
+            b'{"error":{"code":"500","message":"\'ClaudeContentBlockToolResult\' '
+            b"object has no attribute 'id'\"}}"
+        )
+        response = httpx.Response(
+            status_code=500,
+            content=error_body,
+            request=httpx.Request("POST", "https://example.com"),
+        )
+        exc = httpx.HTTPStatusError(
+            "zhipu API error: 500", request=response.request, response=response
+        )
+
+        cb = CircuitBreaker(failure_threshold=3)
+        tier = _make_tier(vendor, circuit_breaker=cb)
+        exec_inst = _executor([tier, _make_tier(_mock_vendor("copilot"))])
+
+        body = {
+            "model": "claude-opus-4-6",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": "result",
+                        }
+                    ],
+                },
+            ],
+        }
+
+        should_continue, failed_name, _ = await exec_inst._handle_http_error(
+            tier,
+            exc,
+            is_last=False,
+            failed_tier_name=None,
+            last_exc=None,
+            is_stream=True,
+            request_body=body,
+        )
+
+        assert should_continue is True
+        assert failed_name == "zhipu"
+        # 不应计入熔断器
+        assert cb.get_info()["failure_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_zhipu_500_generic_error_records_failure(self):
+        """zhipu 500 但非 tool_result 格式错误 → 正常记录熔断器."""
+        from coding.proxy.routing.circuit_breaker import CircuitBreaker
+
+        vendor = _mock_vendor("zhipu")
+        error_body = b'{"error":{"code":"500","message":"Internal Server Error"}}'
+        response = httpx.Response(
+            status_code=500,
+            content=error_body,
+            request=httpx.Request("POST", "https://example.com"),
+        )
+        exc = httpx.HTTPStatusError(
+            "zhipu API error: 500", request=response.request, response=response
+        )
+
+        cb = CircuitBreaker(failure_threshold=3)
+        tier = _make_tier(vendor, circuit_breaker=cb)
+        exec_inst = _executor([tier])
+
+        body = {
+            "model": "claude-opus-4-6",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": "result",
+                        }
+                    ],
+                },
+            ],
+        }
+
+        should_continue, _, _ = await exec_inst._handle_http_error(
+            tier,
+            exc,
+            is_last=True,
+            failed_tier_name=None,
+            last_exc=None,
+            is_stream=True,
+            request_body=body,
+        )
+
+        # 非 last tier 时 should_continue=False，且应记录熔断器失败
+        assert should_continue is False
+        assert cb.get_info()["failure_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_zhipu_500_tool_result_error_without_tool_results_body(self):
+        """zhipu 500 tool_result 错误但请求体无 tool_result → 不触发特殊处理."""
+        from coding.proxy.routing.circuit_breaker import CircuitBreaker
+
+        vendor = _mock_vendor("zhipu")
+        error_body = (
+            b'{"error":{"code":"500","message":"\'ClaudeContentBlockToolResult\' '
+            b"object has no attribute 'id'\"}}"
+        )
+        response = httpx.Response(
+            status_code=500,
+            content=error_body,
+            request=httpx.Request("POST", "https://example.com"),
+        )
+        exc = httpx.HTTPStatusError(
+            "zhipu API error: 500", request=response.request, response=response
+        )
+
+        cb = CircuitBreaker(failure_threshold=3)
+        tier = _make_tier(vendor, circuit_breaker=cb)
+        exec_inst = _executor([tier])
+
+        body = {"model": "test", "messages": [{"role": "user", "content": "hello"}]}
+
+        should_continue, _, _ = await exec_inst._handle_http_error(
+            tier,
+            exc,
+            is_last=True,
+            failed_tier_name=None,
+            last_exc=None,
+            is_stream=True,
+            request_body=body,
+        )
+
+        assert should_continue is False
+        assert cb.get_info()["failure_count"] == 1
