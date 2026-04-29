@@ -397,8 +397,8 @@ class TestCopilotToZhipuChannel:
         assert prepared2 == prepared1
         assert adaptations2 == []
 
-    def test_injects_id_on_tool_result_for_zhipu(self):
-        """copilot → zhipu 转换后 tool_result 应包含 id 字段."""
+    def test_no_id_injection_on_tool_result(self):
+        """copilot → zhipu 转换不再注入 id 字段（zhipu 类不读取，注入无效）."""
         body = {
             "messages": [
                 {
@@ -426,8 +426,8 @@ class TestCopilotToZhipuChannel:
         }
         prepared, adaptations = prepare_copilot_to_zhipu(body)
         tr = prepared["messages"][1]["content"][0]
-        assert tr["id"] == "toolu_001"
-        assert any("injected" in a and "tool_result_id" in a for a in adaptations)
+        assert "id" not in tr
+        assert not any("injected" in a for a in adaptations)
 
 
 # ── zhipu → anthropic 转换通道测试 ────────────────────────────────
@@ -829,11 +829,11 @@ class TestZhipuSelfCleanupChannel:
         prepared, adaptations = prepare_zhipu_self_cleanup(body)
 
         tr = prepared["messages"][1]["content"][0]
-        assert tr["id"] == "toolu_001"
-        assert any("injected" in a and "tool_result_id" in a for a in adaptations)
+        assert "id" not in tr
+        assert not any("injected" in a for a in adaptations)
 
-    def test_skips_id_injection_when_already_present(self):
-        """tool_result 已有 id 字段时不应重复注入."""
+    def test_preserves_existing_id(self):
+        """tool_result 已有 id 字段时应原样保留，不被修改."""
         body = {
             "messages": [
                 {
@@ -853,7 +853,7 @@ class TestZhipuSelfCleanupChannel:
                         {
                             "type": "tool_result",
                             "tool_use_id": "toolu_001",
-                            "id": "toolu_001",
+                            "id": "original_id",
                             "content": "ok",
                         },
                     ],
@@ -861,7 +861,8 @@ class TestZhipuSelfCleanupChannel:
             ],
         }
         prepared, adaptations = prepare_zhipu_self_cleanup(body)
-        # 不应产生注入 adaptation（id 已存在）
+        tr = prepared["messages"][1]["content"][0]
+        assert tr["id"] == "original_id"
         assert not any("injected" in a for a in adaptations)
 
     def test_preserves_srvtoolu_ids(self):
@@ -1035,11 +1036,11 @@ class TestZhipuSelfCleanupChannel:
         assert body == original
 
     def test_combined_artifacts(self):
-        """端到端: server_tool_use_delta 被剥, server_tool_use 保留, 错位 tool_result 搬迁.
+        """端到端: server_tool_use_delta 被剥, 其余保留原位.
 
-        典型场景: Claude Code 的客户端工具 (Bash/Read 等) 以 ``tool_use`` 形式
-        emit, 其错位的 ``tool_result`` 应被重定位; zhipu 原生 ``server_tool_use``
-        块不需要客户端 tool_result, 仅需保留原状.
+        典型场景: zhipu 偶发在 assistant 消息中产出多种块。
+        server_tool_use_delta 被剥离，其余块（含 inline tool_result）保留原位，
+        不再做 tool pairing 和 id 注入。
         """
         body = {
             "messages": [
@@ -1073,8 +1074,11 @@ class TestZhipuSelfCleanupChannel:
         assistant_content = prepared["messages"][0]["content"]
         # delta 被剥离
         assert all(b.get("type") != "server_tool_use_delta" for b in assistant_content)
-        # 错位 tool_result 被搬出 assistant
-        assert all(b.get("type") != "tool_result" for b in assistant_content)
+        # inline tool_result 保留在 assistant 中（不再搬迁）
+        assert any(
+            b.get("type") == "tool_result" and b.get("tool_use_id") == "toolu_bash_001"
+            for b in assistant_content
+        )
         # server_tool_use 与其 srvtoolu_* ID 完整保留
         srv_block = next(
             b for b in assistant_content if b.get("type") == "server_tool_use"
@@ -1085,15 +1089,13 @@ class TestZhipuSelfCleanupChannel:
             b for b in assistant_content if b.get("type") == "tool_use"
         )
         assert tool_use_block["id"] == "toolu_bash_001"
-        # 后续 user 消息已被插入并包含 tool_result
-        assert prepared["messages"][1]["role"] == "user"
-        assert any(
-            b.get("type") == "tool_result" and b.get("tool_use_id") == "toolu_bash_001"
-            for b in prepared["messages"][1]["content"]
-        )
-        # 关键 adaptation 标签均出现
+        # 不插入额外 user 消息
+        assert len(prepared["messages"]) == 1
+        # 关键 adaptation 标签
         assert any("zhipu_vendor_blocks" in a for a in adaptations)
-        assert "misplaced_tool_result_relocated" in adaptations
+        # 不应有 tool pairing / id 注入 相关 adaptation
+        assert not any("misplaced" in a for a in adaptations)
+        assert not any("injected" in a for a in adaptations)
 
 
 # ── 转换注册表测试 ────────────────────────────────────────────
@@ -2823,7 +2825,7 @@ class TestAnthropicToZhipuChannel:
         ]
 
     def test_combined_server_tool_use_and_thinking(self):
-        """server_tool_use + thinking + cache_control 的组合清洗."""
+        """server_tool_use + thinking 的组合清洗, cache_control 保留."""
         body = {
             "system": [
                 {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}},
@@ -2850,13 +2852,14 @@ class TestAnthropicToZhipuChannel:
             b.get("type") not in ("thinking", "redacted_thinking", "server_tool_use")
             for b in prepared["messages"][0]["content"]
         )
-        assert "cache_control" not in prepared["system"][0]
+        # cache_control 保留（zhipu 原生支持）
+        assert "cache_control" in prepared["system"][0]
         assert "thinking" not in prepared
         assert any("server_tool_use" in a for a in adaptations)
         assert any("thinking_blocks" in a for a in adaptations)
 
-    def test_injects_id_on_tool_result_for_zhipu(self):
-        """anthropic → zhipu 转换后 tool_result 应包含 id 字段."""
+    def test_no_id_injection_on_tool_result(self):
+        """anthropic → zhipu 转换不再注入 id 字段（zhipu 类不读取，注入无效）."""
         body = {
             "messages": [
                 {
@@ -2884,5 +2887,5 @@ class TestAnthropicToZhipuChannel:
         }
         prepared, adaptations = prepare_anthropic_to_zhipu(body)
         tr = prepared["messages"][1]["content"][0]
-        assert tr["id"] == "toolu_001"
-        assert any("injected" in a and "tool_result_id" in a for a in adaptations)
+        assert "id" not in tr
+        assert not any("injected" in a for a in adaptations)
