@@ -408,7 +408,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .session-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .session-table tr:hover td { background: var(--bg-card-hover); }
-    .session-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-blue); cursor: default; white-space: normal; overflow: visible; }
+    .session-table .session-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-blue); cursor: default; white-space: normal; overflow: visible; }
     .session-id { line-height: 1.4; word-break: break-all; }
     .session-meta { font-size: 10px; color: var(--text-tertiary); line-height: 1.2; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .session-tag {
