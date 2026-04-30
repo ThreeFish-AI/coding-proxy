@@ -425,6 +425,21 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(63,185,80,.08); border-color: rgba(63,185,80,.15);
     }
     .session-table td.cell-success { overflow: visible; text-overflow: clip; }
+    /* ── 展开行 ── */
+    .session-table tr.row-detail { display: none; }
+    .session-table tr.row-detail.open { display: table-row; }
+    .session-table tr.row-detail td { padding: 0; }
+    .detail-card {
+      padding: 14px 20px; margin: 4px 0;
+      background: rgba(18,22,30,.9); border: 1px solid var(--border);
+      border-radius: 10px; display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 10px 24px; font-size: 13px;
+    }
+    .detail-card .detail-item { display: flex; flex-direction: column; gap: 2px; }
+    .detail-card .detail-label { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .3px; }
+    .detail-card .detail-value { color: var(--text-primary); line-height: 1.4; word-break: break-all; }
+    .session-table tbody tr[data-row]:not(.row-detail) { cursor: pointer; }
     .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.06); display: inline-block; vertical-align: middle; margin-left: 6px; }
     .success-bar-fill { height: 100%; border-radius: 2px; }
     /* ── Vendor Bind 选择器 ── */
@@ -735,6 +750,14 @@ function copyText(btn, text) {
     btn.textContent = '✓';
     setTimeout(function() { btn.classList.remove('copied'); btn.textContent = '⧉'; }, 1500);
   });
+}
+function toggleRow(tr) {
+  var detail = tr.nextElementSibling;
+  if (!detail || !detail.classList.contains('row-detail')) return;
+  var wasOpen = detail.classList.contains('open');
+  // close all open rows first
+  document.querySelectorAll('.session-table tr.row-detail.open').forEach(function(r) { r.classList.remove('open'); });
+  if (!wasOpen) detail.classList.add('open');
 }
 function isValidLabel(s) { return typeof s === 'string' && s !== 'undefined' && s !== 'null' && s.trim() !== ''; }
 function fmtDuration(ms) {
@@ -1544,8 +1567,11 @@ function renderSessionPage() {
       var parsed = parseSessionKey(s.session_key);
       var boundVendors = sessionBindMap[s.session_key];
       var selectHtml = buildBindSelect(s.session_key, boundVendors, sessionAvailableVendors);
-      return '<tr>' +
-        '<td class="session-key">' +
+      var modelsFull = (s.models || '').split(',').map(function(c){return c.trim();});
+      var vendorsFull = (s.vendors || '').split(',').map(function(v){return formatVendorLabel(v.trim());});
+      var sr = s.success_rate != null ? Math.round(s.success_rate) : null;
+      return '<tr data-row onclick="toggleRow(this)">' +
+        '<td class="session-key" onclick="event.stopPropagation()">' +
           '<div class="session-id" title="' + escapeHtml(s.session_key) + '">' +
             '<span class="session-id-text">' + escapeHtml(parsed.session_id || s.session_key) + '</span>' +
             '<button class="copy-btn" onclick="copyText(this,\'' + escapeHtml(s.session_key) + '\')" title="Copy Session ID">⧉</button>' +
@@ -1557,13 +1583,26 @@ function renderSessionPage() {
         '<td>' + relativeTime(s.last_active_ts) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtNum(s.total_requests) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtTokens(s.total_tokens) + '</td>' +
-        '<td title="' + escapeHtml((s.models || '').split(',').map(function(c){return c.trim();}).join(', ')) + '">' + formatSessionTags(s.models, 3) + '</td>' +
-        '<td title="' + escapeHtml((s.vendors || '').split(',').map(function(v){return formatVendorLabel(v.trim());}).join(', ')) + '">' + formatVendorTags(s.vendors) + '</td>' +
+        '<td title="' + escapeHtml(modelsFull.join(', ')) + '">' + formatSessionTags(s.models, 3) + '</td>' +
+        '<td title="' + escapeHtml(vendorsFull.join(', ')) + '">' + formatVendorTags(s.vendors) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtDuration(s.avg_duration_ms) + '</td>' +
         '<td class="cell-success">' + successBarHtml(s.success_rate) + '</td>' +
-        '<td>' + selectHtml + '</td>' +
+        '<td onclick="event.stopPropagation()">' + selectHtml + '</td>' +
         '<td>' + formatCategories(s.client_categories) + '</td>' +
-        '</tr>';
+        '</tr>' +
+        '<tr class="row-detail"><td colspan="10"><div class="detail-card">' +
+          '<div class="detail-item"><div class="detail-label">Session ID</div><div class="detail-value" style="font-family:JetBrains Mono,monospace;font-size:12px">' + escapeHtml(s.session_key) + '</div></div>' +
+          '<div class="detail-item"><div class="detail-label">Device</div><div class="detail-value" style="font-family:JetBrains Mono,monospace;font-size:12px">' + escapeHtml(parsed.device_id || '–') + '</div></div>' +
+          '<div class="detail-item"><div class="detail-label">Account</div><div class="detail-value" style="font-family:JetBrains Mono,monospace;font-size:12px">' + escapeHtml(parsed.account_uuid || '–') + '</div></div>' +
+          '<div class="detail-item"><div class="detail-label">Last Active</div><div class="detail-value">' + relativeTime(s.last_active_ts) + '</div></div>' +
+          '<div class="detail-item"><div class="detail-label">Requests</div><div class="detail-value">' + fmtNum(s.total_requests) + '</div></div>' +
+          '<div class="detail-item"><div class="detail-label">Tokens</div><div class="detail-value">' + fmtTokens(s.total_tokens) + '</div></div>' +
+          '<div class="detail-item"><div class="detail-label">Models</div><div class="detail-value">' + (modelsFull.length ? modelsFull.map(function(m){return '<span class="session-tag">' + escapeHtml(m) + '</span>';}).join(' ') : '–') + '</div></div>' +
+          '<div class="detail-item"><div class="detail-label">Vendors</div><div class="detail-value">' + (vendorsFull.length ? vendorsFull.map(function(v){return '<span class="session-tag">' + escapeHtml(v) + '</span>';}).join(' ') : '–') + '</div></div>' +
+          '<div class="detail-item"><div class="detail-label">Avg Latency</div><div class="detail-value">' + fmtDuration(s.avg_duration_ms) + '</div></div>' +
+          '<div class="detail-item"><div class="detail-label">Success Rate</div><div class="detail-value">' + (sr != null ? sr + '%' : '–') + '</div></div>' +
+          '<div class="detail-item"><div class="detail-label">Client</div><div class="detail-value">' + escapeHtml(s.client_categories || '–') + '</div></div>' +
+        '</div></td></tr>';
     }).join('');
   }
 
