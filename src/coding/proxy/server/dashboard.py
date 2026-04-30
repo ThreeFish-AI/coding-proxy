@@ -397,8 +397,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: .5; }
     /* ── Sessions Panel ── */
     .sessions-card { grid-column: 1 / -1; animation-delay: .1s; }
-    .session-table-wrap { overflow-x: auto; max-height: 480px; overflow-y: auto; }
-    .session-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .session-table-wrap { overflow: hidden; }
+    .session-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
     .session-table th {
       position: sticky; top: 0; z-index: 1;
       background: var(--bg-card); padding: 10px 12px;
@@ -406,9 +406,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       color: var(--text-secondary); text-transform: uppercase; letter-spacing: .5px;
       border-bottom: 1px solid var(--border);
     }
-    .session-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
+    .session-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .session-table tr:hover td { background: var(--bg-card-hover); }
-    .session-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-blue); cursor: default; }
+    .session-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-blue); cursor: default; white-space: normal; overflow: visible; }
+    .session-id { line-height: 1.4; word-break: break-all; }
+    .session-meta { font-size: 10px; color: var(--text-tertiary); line-height: 1.2; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .session-tag {
       display: inline-block; font-size: 11px; padding: 2px 7px;
       border-radius: 8px; margin: 1px 2px;
@@ -430,6 +432,21 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .bind-select:hover { border-color: rgba(88,166,255,.4); color: var(--text-primary); }
     .bind-select:focus { border-color: rgba(88,166,255,.6); box-shadow: 0 0 0 2px rgba(88,166,255,.1); }
     .bind-select option { background: var(--bg-card); color: var(--text-primary); }
+    /* ── 分页 ── */
+    .session-pagination {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; border-top: 1px solid var(--border-subtle);
+      font-size: 12px; color: var(--text-secondary);
+    }
+    .page-btn {
+      padding: 4px 10px; border-radius: 6px;
+      background: rgba(48,54,61,.4); border: 1px solid rgba(255,255,255,.08);
+      color: var(--text-secondary); font-size: 12px; cursor: pointer;
+      transition: all .15s ease;
+    }
+    .page-btn:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--text-primary); border-color: rgba(88,166,255,.3); }
+    .page-btn:disabled { opacity: .35; cursor: default; }
+    .page-info { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
     /* ── 加载态 ── */
     .loading { opacity: .4; pointer-events: none; }
     /* ── 图表标签截断 ── */
@@ -623,9 +640,21 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
     <div class="session-table-wrap" id="sessions-table-wrap">
       <table class="session-table">
+        <colgroup>
+          <col style="width:22%">
+          <col style="width:8%">
+          <col style="width:7%">
+          <col style="width:7%">
+          <col style="width:14%">
+          <col style="width:12%">
+          <col style="width:8%">
+          <col style="width:8%">
+          <col style="width:8%">
+          <col style="width:6%">
+        </colgroup>
         <thead>
           <tr>
-            <th>Session</th>
+            <th>Session ID</th>
             <th>Last Active</th>
             <th>Requests</th>
             <th>Tokens</th>
@@ -641,6 +670,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           <tr><td colspan="10" class="empty">Loading...</td></tr>
         </tbody>
       </table>
+      <div class="session-pagination" id="session-pagination">
+        <span class="page-info" id="page-info"></span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="page-btn" id="btn-prev" onclick="changePage(-1)">Prev</button>
+          <span class="page-info" id="page-num"></span>
+          <button class="page-btn" id="btn-next" onclick="changePage(1)">Next</button>
+        </div>
+      </div>
     </div>
   </div>
   </section>
@@ -1385,6 +1422,11 @@ function truncateKey(key, maxLen) {
   if (!key || key.length <= maxLen) return escapeHtml(key) || '–';
   return escapeHtml(key.slice(0, maxLen - 3)) + '…';
 }
+function parseSessionKey(raw) {
+  try { var o = JSON.parse(raw); return { device_id: o.device_id||'', account_uuid: o.account_uuid||'', session_id: o.session_id||'' }; }
+  catch(e) { return { device_id:'', account_uuid:'', session_id: raw || '' }; }
+}
+function shortId(s, n) { return s ? (s.length <= n ? s : s.slice(0, n) + '…') : ''; }
 function successBarHtml(pct) {
   if (pct == null) return '–';
   var p = Math.round(pct);
@@ -1415,10 +1457,17 @@ function formatVendorTags(vendors) {
     return '<span class="session-tag">' + formatVendorLabel(v.trim()) + '</span>';
   }).join('');
 }
+// ── Sessions Pagination State ──
+var allSessions = [];
+var sessionPage = 0;
+var sessionPageSize = 30;
+var sessionBindMap = {};
+var sessionAvailableVendors = [];
+
 async function updateSessions() {
   try {
     var results = await Promise.allSettled([
-      fetchJSON('/api/dashboard/sessions?hours=24&limit=20'),
+      fetchJSON('/api/dashboard/sessions?hours=24&limit=200'),
       fetchJSON('/api/session-vendor'),
       fetchJSON('/api/status'),
     ]);
@@ -1426,24 +1475,41 @@ async function updateSessions() {
     var data = results[0].value;
     var bindData = results[1].status === 'fulfilled' ? results[1].value : {bindings: []};
     var statusData = results[2].status === 'fulfilled' ? results[2].value : {tiers: []};
-    var sessions = data.sessions || [];
-    var bindings = bindData.bindings || [];
-    var availableVendors = (statusData.tiers || []).map(function(t) { return t.name; });
-    var tbody = document.getElementById('sessions-tbody');
+    allSessions = data.sessions || [];
+    sessionBindMap = {};
+    (bindData.bindings || []).forEach(function(b) { sessionBindMap[b.session_key] = b.vendors; });
+    sessionAvailableVendors = (statusData.tiers || []).map(function(t) { return t.name; });
     var subtitle = document.getElementById('sessions-subtitle');
     if (subtitle) subtitle.textContent = 'Last ' + data.hours + 'h';
-    if (!sessions.length) {
-      tbody.innerHTML = '<tr><td colspan="10" class="empty"><div class="empty-icon">📭</div>No session data</td></tr>';
-      return;
-    }
-    // Build binding lookup: session_key → vendors list
-    var bindMap = {};
-    bindings.forEach(function(b) { bindMap[b.session_key] = b.vendors; });
-    tbody.innerHTML = sessions.map(function(s) {
-      var boundVendors = bindMap[s.session_key];
-      var selectHtml = buildBindSelect(s.session_key, boundVendors, availableVendors);
+    sessionPage = 0;
+    renderSessionPage();
+  } catch (e) {
+    console.error('Sessions refresh error:', e);
+  }
+}
+
+function renderSessionPage() {
+  var total = allSessions.length;
+  var totalPages = Math.max(1, Math.ceil(total / sessionPageSize));
+  if (sessionPage >= totalPages) sessionPage = totalPages - 1;
+  var start = sessionPage * sessionPageSize;
+  var page = allSessions.slice(start, start + sessionPageSize);
+  var tbody = document.getElementById('sessions-tbody');
+
+  if (!total) {
+    tbody.innerHTML = '<tr><td colspan="10" class="empty"><div class="empty-icon">📭</div>No session data</td></tr>';
+  } else {
+    tbody.innerHTML = page.map(function(s) {
+      var parsed = parseSessionKey(s.session_key);
+      var boundVendors = sessionBindMap[s.session_key];
+      var selectHtml = buildBindSelect(s.session_key, boundVendors, sessionAvailableVendors);
       return '<tr>' +
-        '<td class="session-key" title="' + escapeHtml(s.session_key) + '">' + truncateKey(s.session_key, 22) + '</td>' +
+        '<td class="session-key">' +
+          '<div class="session-id" title="' + escapeHtml(s.session_key) + '">' + escapeHtml(parsed.session_id || s.session_key) + '</div>' +
+          '<div class="session-meta" title="device: ' + escapeHtml(parsed.device_id) + ' | account: ' + escapeHtml(parsed.account_uuid) + '">' +
+            'dev:' + escapeHtml(shortId(parsed.device_id, 8)) + ' · acct:' + escapeHtml(shortId(parsed.account_uuid, 8)) +
+          '</div>' +
+        '</td>' +
         '<td>' + relativeTime(s.last_active_ts) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtNum(s.total_requests) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtTokens(s.total_tokens) + '</td>' +
@@ -1455,9 +1521,18 @@ async function updateSessions() {
         '<td>' + formatCategories(s.client_categories) + '</td>' +
         '</tr>';
     }).join('');
-  } catch (e) {
-    console.error('Sessions refresh error:', e);
   }
+
+  document.getElementById('page-info').textContent = total + ' sessions';
+  document.getElementById('page-num').textContent = (sessionPage + 1) + ' / ' + totalPages;
+  document.getElementById('btn-prev').disabled = (sessionPage === 0);
+  document.getElementById('btn-next').disabled = (sessionPage >= totalPages - 1);
+}
+
+function changePage(delta) {
+  var totalPages = Math.max(1, Math.ceil(allSessions.length / sessionPageSize));
+  sessionPage = Math.max(0, Math.min(totalPages - 1, sessionPage + delta));
+  renderSessionPage();
 }
 
 function buildBindSelect(sessionKey, boundVendors, availableVendors) {
@@ -1807,7 +1882,7 @@ def register_dashboard_routes(app: Any) -> None:
                 media_type="application/json",
             )
         hours = max(1.0, min(hours, 168.0))
-        limit = max(1, min(limit, 100))
+        limit = max(1, min(limit, 200))
         try:
             sessions = await token_logger.query_recent_sessions(
                 limit=limit, hours=hours
