@@ -67,6 +67,7 @@ def test_request_capabilities_defaults():
     assert caps.has_thinking is False
     assert caps.has_images is False
     assert caps.has_metadata is False
+    assert caps.has_tool_results is False
 
 
 def test_request_capabilities_immutable():
