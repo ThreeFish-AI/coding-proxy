@@ -457,6 +457,34 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle);
       font-weight: 500; font-size: 12px; color: var(--text-secondary);
     }
+    /* ── Tabs ─────────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+      padding: 0 2px;
+    }
+    .tab-btn {
+      appearance: none;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 10px 16px;
+      margin-bottom: -1px;
+      transition: color .15s ease, border-color .15s ease, background .15s ease;
+      border-radius: 6px 6px 0 0;
+    }
+    .tab-btn:hover { color: var(--text-primary); background: var(--bg-card-hover); }
+    .tab-btn.active { color: var(--text-primary); border-bottom-color: var(--accent-blue); }
+    .tab-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
   </style>
 </head>
 <body>
@@ -473,6 +501,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 </header>
 
 <main>
+  <!-- 页签导航 -->
+  <nav class="tabs" role="tablist" aria-label="Dashboard sections">
+    <button type="button" class="tab-btn active" id="tab-btn-overview" role="tab" aria-controls="tab-pane-overview" aria-selected="true" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+    <button type="button" class="tab-btn" id="tab-btn-sessions" role="tab" aria-controls="tab-pane-sessions" aria-selected="false" data-tab="sessions" onclick="switchTab('sessions')">Recent Active Sessions</button>
+  </nav>
+
+  <!-- Overview 页签 -->
+  <section class="tab-pane active" id="tab-pane-overview" role="tabpanel" aria-labelledby="tab-btn-overview" data-tab="overview">
   <!-- 时间区间选择器 -->
   <div class="time-range-bar">
     <span class="time-range-label">时间区间</span>
@@ -562,7 +598,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="html-legend-wrap" id="model-token-legend" style="display:none"></div>
     </div>
   </div>
+  </section>
 
+  <!-- Recent Active Sessions 页签 -->
+  <section class="tab-pane" id="tab-pane-sessions" role="tabpanel" aria-labelledby="tab-btn-sessions" data-tab="sessions">
   <!-- Recent Active Sessions -->
   <div class="card sessions-card">
     <div class="card-title">
@@ -590,6 +629,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </table>
     </div>
   </div>
+  </section>
 
 </main>
 
@@ -1390,48 +1430,119 @@ async function updateSessions() {
   }
 }
 
-// ── 主刷新逻辑 ────────────────────────────────────────────
+// ── 主刷新逻辑（按 Tab 分发） ──────────────────────────────
 let refreshing = false;
+let currentTab = 'overview';
+const tabLoaded = { overview: false, sessions: false };
+const TAB_LABELS = { overview: 'Overview', sessions: 'Recent Active Sessions' };
+
+async function refreshOverview() {
+  const days = currentDays > 0 ? currentDays : 7;
+  const [summary, timeline, status] = await Promise.all([
+    fetchJSON('/api/dashboard/summary?days=' + days),
+    fetchJSON('/api/dashboard/timeline?days=' + days),
+    fetchJSON('/api/status'),
+  ]);
+
+  if (summary.version) {
+    document.getElementById('version-badge').textContent = 'v' + summary.version;
+  }
+
+  updateKPI(summary);
+  updateVendorStatus(status);
+  updateChartTitles(days);
+
+  const rows = timeline.rows || [];
+  const tierOrder = (status.tiers || []).map(t => t.name);
+  buildTimeline(rows, tierOrder);
+  buildVendorDist(rows, tierOrder);
+  buildTokenTimeline(rows, tierOrder);
+  buildModelTokenTimeline(rows);
+}
+
+async function refreshSessions() {
+  await updateSessions();
+}
+
 async function refresh() {
   if (refreshing) return;
   refreshing = true;
-  document.getElementById('refresh-time').textContent = '刷新中…';
   try {
-    const days = currentDays > 0 ? currentDays : 7;
-    const [summary, timeline, status] = await Promise.all([
-      fetchJSON('/api/dashboard/summary?days=' + days),
-      fetchJSON('/api/dashboard/timeline?days=' + days),
-      fetchJSON('/api/status'),
-    ]);
-
-    if (summary.version) {
-      document.getElementById('version-badge').textContent = 'v' + summary.version;
+    // 循环：若 await 期间用户切到了尚未加载的另一页签，补一次刷新，避免 tabLoaded 错位。
+    while (true) {
+      const tab = currentTab;
+      document.getElementById('refresh-time').textContent = '刷新中…';
+      try {
+        if (tab === 'sessions') {
+          await refreshSessions();
+        } else {
+          await refreshOverview();
+        }
+        tabLoaded[tab] = true;
+        if (tab === currentTab) {
+          document.getElementById('refresh-time').textContent =
+            '上次刷新: ' + now() + '（' + TAB_LABELS[tab] + '）';
+        }
+      } catch (e) {
+        console.error('Dashboard refresh error:', e);
+        document.getElementById('refresh-time').textContent = '刷新失败 ' + now();
+      }
+      if (currentTab !== tab && !tabLoaded[currentTab]) continue;
+      break;
     }
-
-    updateKPI(summary);
-    updateVendorStatus(status);
-    updateChartTitles(days);
-
-    const rows = timeline.rows || [];
-    const tierOrder = (status.tiers || []).map(t => t.name);
-    buildTimeline(rows, tierOrder);
-    buildVendorDist(rows, tierOrder);
-    buildTokenTimeline(rows, tierOrder);
-    buildModelTokenTimeline(rows);
-    updateSessions();
-
-    document.getElementById('refresh-time').textContent = '上次刷新: ' + now();
-  } catch (e) {
-    console.error('Dashboard refresh error:', e);
-    document.getElementById('refresh-time').textContent = '刷新失败 ' + now();
   } finally {
     refreshing = false;
   }
 }
 
-// 页面加载 + 每 30 秒自动刷新
-refresh();
-setInterval(refresh, 600000);
+// ── 页签切换（懒加载 + URL 同步） ─────────────────────────
+function syncTabUrl(name) {
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('tab') === name) return;
+    url.searchParams.set('tab', name);
+    window.history.replaceState({}, '', url);
+  } catch (e) { /* no-op */ }
+}
+
+function applyTabState(name) {
+  document.querySelectorAll('.tab-btn').forEach(function (b) {
+    const active = b.getAttribute('data-tab') === name;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('.tab-pane').forEach(function (p) {
+    p.classList.toggle('active', p.getAttribute('data-tab') === name);
+  });
+}
+
+function switchTab(name) {
+  if (name !== 'overview' && name !== 'sessions') name = 'overview';
+  if (name === currentTab) {
+    syncTabUrl(name);
+    return;
+  }
+  currentTab = name;
+  applyTabState(name);
+  syncTabUrl(name);
+  if (!tabLoaded[name]) {
+    refresh();
+  }
+}
+
+// ── 初始化 ────────────────────────────────────────────────
+(function bootstrap() {
+  let initial = 'overview';
+  try {
+    const t = new URL(window.location.href).searchParams.get('tab');
+    if (t === 'sessions') initial = 'sessions';
+  } catch (e) { /* no-op */ }
+  currentTab = initial;
+  applyTabState(initial);
+  syncTabUrl(initial);
+  refresh();                     // 仅加载初始页签的数据
+  setInterval(refresh, 600000);  // 每 10 分钟刷新当前页签
+})();
 </script>
 </body>
 </html>
