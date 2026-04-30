@@ -644,3 +644,31 @@ native_api:
     base_url: "https://api.anthropic.com"
     timeout_ms: 300000
     connect_timeout_ms: 15000
+
+# === Session 级别路由策略（可选）===
+#
+# 为特定 Session 或客户端类别定制 vendor 优先级顺序。
+# 匹配策略按定义顺序求值，首次匹配生效。
+#
+# 支持的匹配条件（OR 语义，满足任一即匹配）：
+#   session_keys:    精确匹配的 session key 列表
+#   client_category: 按客户端类别匹配（"cc" = Claude Code，"api" = 原生 API 透传）
+#
+# tiers: 覆盖全局 tier 顺序的供应商优先级列表（未提及的 vendor 保持在末尾）
+#
+# 示例 1：为特定 session 绑定专属 vendor 组合
+#   session_policies:
+#     - name: "vip-session"
+#       match:
+#         session_keys: ["my-specific-session-id"]
+#       tiers: ["anthropic", "copilot", "zhipu"]
+#
+# 示例 2：Claude Code 请求优先走 Copilot
+#   session_policies:
+#     - name: "claude-code-preferred"
+#       match:
+#         client_category: "cc"
+#       tiers: ["copilot", "anthropic", "zhipu"]
+#
+# 未配置时（默认），所有 Session 使用全局 tiers 顺序。
+session_policies: []

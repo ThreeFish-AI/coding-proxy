@@ -395,6 +395,28 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       color: var(--text-tertiary); font-size: 14px;
     }
     .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: .5; }
+    /* ── Sessions Panel ── */
+    .sessions-card { grid-column: 1 / -1; animation-delay: .1s; }
+    .session-table-wrap { overflow-x: auto; max-height: 480px; overflow-y: auto; }
+    .session-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .session-table th {
+      position: sticky; top: 0; z-index: 1;
+      background: var(--bg-card); padding: 10px 12px;
+      text-align: left; font-weight: 600; font-size: 12px;
+      color: var(--text-secondary); text-transform: uppercase; letter-spacing: .5px;
+      border-bottom: 1px solid var(--border);
+    }
+    .session-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
+    .session-table tr:hover td { background: var(--bg-card-hover); }
+    .session-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-blue); cursor: default; }
+    .session-tag {
+      display: inline-block; font-size: 11px; padding: 2px 7px;
+      border-radius: 8px; margin: 1px 2px;
+      background: rgba(88,166,255,.08); border: 1px solid rgba(88,166,255,.15);
+      color: var(--text-secondary);
+    }
+    .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.06); display: inline-block; vertical-align: middle; margin-left: 6px; }
+    .success-bar-fill { height: 100%; border-radius: 2px; }
     /* ── 加载态 ── */
     .loading { opacity: .4; pointer-events: none; }
     /* ── 图表标签截断 ── */
@@ -538,6 +560,34 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <canvas id="chart-model-token-timeline"></canvas>
       </div>
       <div class="html-legend-wrap" id="model-token-legend" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- Recent Active Sessions -->
+  <div class="card sessions-card">
+    <div class="card-title">
+      <span>Recent Active Sessions</span>
+      <span style="font-size:12px;color:var(--text-tertiary)" id="sessions-subtitle">Last 24h</span>
+    </div>
+    <div class="session-table-wrap" id="sessions-table-wrap">
+      <table class="session-table">
+        <thead>
+          <tr>
+            <th>Session</th>
+            <th>Last Active</th>
+            <th>Requests</th>
+            <th>Tokens</th>
+            <th>Models</th>
+            <th>Vendors</th>
+            <th>Avg Latency</th>
+            <th>Success</th>
+            <th>Client</th>
+          </tr>
+        </thead>
+        <tbody id="sessions-tbody">
+          <tr><td colspan="9" class="empty">Loading...</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -1263,6 +1313,79 @@ function updateChartTitles(days) {
   if (mt) mt.textContent = label + ' Token 用量（按 Vendor / 模型）';
 }
 
+// ── Sessions Panel ──────────────────────────────────────────────
+function relativeTime(tsStr) {
+  if (!tsStr) return '–';
+  var d = new Date(tsStr.replace('Z', '+00:00'));
+  var diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+function truncateKey(key, maxLen) {
+  if (!key || key.length <= maxLen) return key || '–';
+  return key.slice(0, maxLen - 3) + '…';
+}
+function successBarHtml(pct) {
+  if (pct == null) return '–';
+  var p = Math.round(pct);
+  var color = p >= 95 ? 'var(--accent-green)' : (p >= 80 ? 'var(--accent-yellow)' : 'var(--accent-red)');
+  return '<span style="font-family:JetBrains Mono,monospace;font-size:12px">' + p + '%</span>' +
+    '<span class="success-bar"><span class="success-bar-fill" style="width:' + p + '%;background:' + color + '"></span></span>';
+}
+function formatSessionTags(str, max) {
+  if (!str) return '–';
+  var list = str.split(',');
+  var html = list.slice(0, max).map(function(c) {
+    return '<span class="session-tag">' + c.trim() + '</span>';
+  }).join('');
+  if (list.length > max) html += '<span class="session-tag">+' + (list.length - max) + '</span>';
+  return html;
+}
+function formatCategories(cats) {
+  if (!cats) return '–';
+  return cats.split(',').map(function(c) {
+    var t = c.trim();
+    var label = t === 'cc' ? 'Claude Code' : (t === 'api' ? 'API' : t);
+    return '<span class="session-tag">' + label + '</span>';
+  }).join('');
+}
+function formatVendorTags(vendors) {
+  if (!vendors) return '–';
+  return vendors.split(',').map(function(v) {
+    return '<span class="session-tag">' + formatVendorLabel(v.trim()) + '</span>';
+  }).join('');
+}
+async function updateSessions() {
+  try {
+    var data = await fetchJSON('/api/dashboard/sessions?hours=24&limit=20');
+    var sessions = data.sessions || [];
+    var tbody = document.getElementById('sessions-tbody');
+    var subtitle = document.getElementById('sessions-subtitle');
+    if (subtitle) subtitle.textContent = 'Last ' + data.hours + 'h';
+    if (!sessions.length) {
+      tbody.innerHTML = '<tr><td colspan="9" class="empty"><div class="empty-icon">📭</div>No session data</td></tr>';
+      return;
+    }
+    tbody.innerHTML = sessions.map(function(s) {
+      return '<tr>' +
+        '<td class="session-key" title="' + (s.session_key || '') + '">' + truncateKey(s.session_key, 22) + '</td>' +
+        '<td>' + relativeTime(s.last_active_ts) + '</td>' +
+        '<td style="font-family:JetBrains Mono,monospace">' + fmtNum(s.total_requests) + '</td>' +
+        '<td style="font-family:JetBrains Mono,monospace">' + fmtTokens(s.total_tokens) + '</td>' +
+        '<td>' + formatSessionTags(s.models, 2) + '</td>' +
+        '<td>' + formatVendorTags(s.vendors) + '</td>' +
+        '<td style="font-family:JetBrains Mono,monospace">' + (s.avg_duration_ms ? Math.round(s.avg_duration_ms) + 'ms' : '–') + '</td>' +
+        '<td>' + successBarHtml(s.success_rate) + '</td>' +
+        '<td>' + formatCategories(s.client_categories) + '</td>' +
+        '</tr>';
+    }).join('');
+  } catch (e) {
+    console.error('Sessions refresh error:', e);
+  }
+}
+
 // ── 主刷新逻辑 ────────────────────────────────────────────
 let refreshing = false;
 async function refresh() {
@@ -1291,6 +1414,7 @@ async function refresh() {
     buildVendorDist(rows, tierOrder);
     buildTokenTimeline(rows, tierOrder);
     buildModelTokenTimeline(rows);
+    updateSessions();
 
     document.getElementById('refresh-time').textContent = '上次刷新: ' + now();
   } catch (e) {
@@ -1468,6 +1592,38 @@ def register_dashboard_routes(app: Any) -> None:
             "count": days,
             "rows": rows,
         }
+        return Response(
+            content=json.dumps(result, ensure_ascii=False).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    @app.get("/api/dashboard/sessions")
+    async def dashboard_sessions(
+        request: Request, hours: float = 24.0, limit: int = 20
+    ) -> Response:
+        """返回近期活跃会话聚合数据."""
+        token_logger = getattr(request.app.state, "token_logger", None)
+        if token_logger is None:
+            return Response(
+                content=b'{"error":"token_logger not available"}',
+                status_code=503,
+                media_type="application/json",
+            )
+        hours = max(1.0, min(hours, 168.0))
+        limit = max(1, min(limit, 100))
+        try:
+            sessions = await token_logger.query_recent_sessions(
+                limit=limit, hours=hours
+            )
+        except Exception as exc:
+            logger.error("dashboard_sessions query error: %s", exc, exc_info=True)
+            return Response(
+                content=b'{"error":"query failed"}',
+                status_code=500,
+                media_type="application/json",
+            )
+        result = {"sessions": sessions, "hours": hours}
         return Response(
             content=json.dumps(result, ensure_ascii=False).encode(),
             status_code=200,
