@@ -1462,11 +1462,13 @@ async function updateSessions() {
 
 function buildBindSelect(sessionKey, boundVendors, availableVendors) {
   var isBound = boundVendors && boundVendors.length > 0;
+  var multiBound = isBound && boundVendors.length > 1;
   var selected = isBound ? boundVendors[0] : '';
   var html = '<select class="bind-select" data-session-key="' + escapeHtml(sessionKey) + '">';
   html += '<option value=""' + (!isBound ? ' selected' : '') + '>Default</option>';
   availableVendors.forEach(function(v) {
-    html += '<option value="' + escapeHtml(v) + '"' + (v === selected ? ' selected' : '') + '>' + escapeHtml(v) + '</option>';
+    var label = multiBound && v === selected ? escapeHtml(v) + ' (+' + (boundVendors.length - 1) + ')' : escapeHtml(v);
+    html += '<option value="' + escapeHtml(v) + '"' + (v === selected ? ' selected' : '') + '>' + label + '</option>';
   });
   html += '</select>';
   return html;

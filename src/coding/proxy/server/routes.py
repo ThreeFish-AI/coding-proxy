@@ -333,10 +333,17 @@ def register_session_vendor_routes(app: Any, router: Any) -> None:
     @app.put("/api/session-vendor")
     async def bind_session_vendor(request: Request) -> Response:
         """为指定 session key 绑定 vendor 优先级列表."""
-        body = await request.json()
-        if not isinstance(body, dict):
+        try:
+            body = await request.json()
+        except Exception:
             return json_error_response(
                 400, error_type="invalid_request_error", message="body must be JSON"
+            )
+        if not isinstance(body, dict):
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="body must be a JSON object",
             )
         session_key = body.get("session_key", "").strip()
         vendors = body.get("vendors", [])
