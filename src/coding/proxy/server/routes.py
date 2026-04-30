@@ -327,6 +327,96 @@ def register_admin_routes(app: Any, router: Any) -> None:
         )
 
 
+def register_session_vendor_routes(app: Any, router: Any) -> None:
+    """注册 Session-Vendor 运行时绑定路由."""
+
+    @app.put("/api/session-vendor")
+    async def bind_session_vendor(request: Request) -> Response:
+        """为指定 session key 绑定 vendor 优先级列表."""
+        try:
+            body = await request.json()
+        except Exception:
+            return json_error_response(
+                400, error_type="invalid_request_error", message="body must be JSON"
+            )
+        if not isinstance(body, dict):
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="body must be a JSON object",
+            )
+        session_key = body.get("session_key", "").strip()
+        vendors = body.get("vendors", [])
+        if not session_key:
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="session_key is required",
+            )
+        if not isinstance(vendors, list) or not vendors:
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="vendors must be a non-empty list",
+            )
+        vendors = [str(v).strip() for v in vendors]
+        available = set(router.get_vendor_names())
+        unknown = [v for v in vendors if v not in available]
+        if unknown:
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message=(
+                    f"unknown vendor(s): {', '.join(unknown)}; "
+                    f"available: {', '.join(sorted(available))}"
+                ),
+            )
+        resolver = router._executor._policy_resolver  # noqa: SLF001
+        resolver.upsert(session_key, vendors)
+        return Response(
+            content=json.dumps(
+                {"status": "ok", "session_key": session_key, "vendors": vendors},
+                ensure_ascii=False,
+            ).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    @app.delete("/api/session-vendor/{session_key}")
+    async def unbind_session_vendor(session_key: str) -> Response:
+        """解除指定 session key 的 vendor 绑定."""
+        resolver = router._executor._policy_resolver  # noqa: SLF001
+        removed = resolver.remove(session_key)
+        if not removed:
+            return Response(
+                content=json.dumps(
+                    {"status": "not_found", "session_key": session_key},
+                    ensure_ascii=False,
+                ).encode(),
+                status_code=404,
+                media_type="application/json",
+            )
+        return Response(
+            content=json.dumps(
+                {"status": "removed", "session_key": session_key},
+                ensure_ascii=False,
+            ).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    @app.get("/api/session-vendor")
+    async def list_session_vendors() -> Response:
+        """列出所有运行时 session-vendor 绑定."""
+        resolver = router._executor._policy_resolver  # noqa: SLF001
+        bindings = resolver.list_runtime_bindings()
+        return Response(
+            content=json.dumps({"bindings": bindings}, ensure_ascii=False).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+
 def register_reauth_routes(app: Any, reauth_coordinator: Any) -> None:
     """注册重认证路由."""
 
@@ -368,6 +458,7 @@ def register_all_routes(
     register_status_route(app, router)
     register_copilot_routes(app, router)
     register_admin_routes(app, router)
+    register_session_vendor_routes(app, router)
     if reauth_coordinator:
         register_reauth_routes(app, reauth_coordinator)
 
