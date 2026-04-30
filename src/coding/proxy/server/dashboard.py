@@ -431,11 +431,12 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .session-table tr.row-detail.open { display: table-row; }
     .session-table tr.row-detail td { padding: 0; }
     .detail-card {
-      padding: 14px 20px; margin: 4px 0;
-      background: rgba(18,22,30,.9); border: 1px solid var(--border);
-      border-radius: 10px; display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 10px 24px; font-size: 13px;
+      padding: 16px 24px; margin: 6px 0;
+      background: linear-gradient(135deg, rgba(30,37,54,.95), rgba(22,28,40,.95));
+      border: 1px solid rgba(88,166,255,.15); border-radius: 12px;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 14px 28px; font-size: 13px;
+      box-shadow: 0 4px 16px rgba(0,0,0,.3);
     }
     .detail-card .detail-item { display: flex; flex-direction: column; gap: 2px; }
     .detail-card .detail-label { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .3px; }
@@ -745,7 +746,8 @@ function fmtTokens(n) {
   return String(n);
 }
 function fmtNum(n) { return n == null ? '–' : n.toLocaleString(); }
-function copyText(btn, text) {
+function copyFromParent(btn) {
+  var text = btn.parentElement.getAttribute('data-key') || btn.parentElement.getAttribute('title') || '';
   navigator.clipboard.writeText(text).then(function() {
     btn.classList.add('copied');
     btn.textContent = '✓';
@@ -1573,9 +1575,9 @@ function renderSessionPage() {
       var sr = s.success_rate != null ? Math.round(s.success_rate) : null;
       return '<tr data-row onclick="toggleRow(this)">' +
         '<td class="session-key" onclick="event.stopPropagation()">' +
-          '<div class="session-id" title="' + escapeHtml(s.session_key) + '">' +
+          '<div class="session-id" data-key="' + escapeHtml(s.session_key) + '" title="' + escapeHtml(s.session_key) + '">' +
             '<span class="session-id-text">' + escapeHtml(parsed.session_id || s.session_key) + '</span>' +
-            '<button class="copy-btn" onclick="copyText(this,\'' + escapeHtml(s.session_key) + '\')" title="Copy Session ID">⧉</button>' +
+            '<button class="copy-btn" onclick="copyFromParent(this)" title="Copy Session ID">⧉</button>' +
           '</div>' +
           '<div class="session-meta" title="device: ' + escapeHtml(parsed.device_id) + ' | account: ' + escapeHtml(parsed.account_uuid) + '">' +
             'dev:' + escapeHtml(shortId(parsed.device_id, 8)) + ' · acct:' + escapeHtml(shortId(parsed.account_uuid, 8)) +
@@ -1780,6 +1782,10 @@ function switchTab(name) {
   currentTab = initial;
   applyTabState(initial);
   syncTabUrl(initial);
+  // Load version immediately regardless of active tab
+  fetchJSON('/api/dashboard/summary?days=7').then(function(s) {
+    if (s && s.version) document.getElementById('version-badge').textContent = 'v' + s.version;
+  }).catch(function(){});
   refresh();                     // 仅加载初始页签的数据
   setInterval(refresh, 600000);  // 每 10 分钟刷新当前页签
 })();
