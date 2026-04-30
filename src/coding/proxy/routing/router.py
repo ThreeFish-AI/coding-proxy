@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from .executor import _RouteExecutor
 from .session_manager import RouteSessionManager
+from .session_policy import SessionPolicyResolver
 from .tier import VendorTier
 
 # 向后兼容别名
@@ -36,6 +37,7 @@ class RequestRouter:
         token_logger: TokenLogger | None = None,
         reauth_coordinator: Any | None = None,
         compat_session_store: CompatSessionStore | None = None,
+        session_policy_resolver: SessionPolicyResolver | None = None,
     ) -> None:
         if not tiers:
             raise ValueError("至少需要一个供应商层级")
@@ -53,6 +55,7 @@ class RequestRouter:
             usage_recorder=self._recorder,
             session_manager=self._session_mgr,
             reauth_coordinator=reauth_coordinator,
+            session_policy_resolver=session_policy_resolver,
         )
 
     def set_pricing_table(self, table: PricingTable) -> None:

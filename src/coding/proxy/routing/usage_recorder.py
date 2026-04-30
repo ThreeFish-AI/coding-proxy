@@ -97,6 +97,7 @@ class UsageRecorder:
         operation: str = "",
         endpoint: str = "",
         extra_usage: dict[str, Any] | None = None,
+        session_key: str = "",
     ) -> None:
         """记录用量到 TokenLogger.
 
@@ -141,6 +142,7 @@ class UsageRecorder:
             operation=operation,
             endpoint=endpoint,
             extra_usage_json=extra_usage_json,
+            session_key=session_key,
         )
         if not evidence_records:
             return

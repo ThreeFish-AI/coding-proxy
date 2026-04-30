@@ -23,6 +23,7 @@ from ..config.schema import ProxyConfig
 from ..logging.db import TokenLogger
 from ..native_api import NativeProxyHandler
 from ..routing.router import RequestRouter
+from ..routing.session_policy import SessionPolicyResolver
 from ..routing.tier import VendorTier
 from ..routing.usage_recorder import UsageRecorder
 from ..vendors.antigravity import AntigravityVendor
@@ -155,7 +156,11 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         )
 
     router = RequestRouter(
-        tiers, token_logger, reauth_coordinator, compat_session_store
+        tiers,
+        token_logger,
+        reauth_coordinator,
+        compat_session_store,
+        session_policy_resolver=SessionPolicyResolver(config.session_policies.policies),
     )
 
     app = FastAPI(title="coding-proxy", version=__version__, lifespan=lifespan)

@@ -44,6 +44,7 @@ from .routing import (  # noqa: F401
 
 # ── 子模块 re-export ────────────────────────────────────────────
 from .server import DatabaseConfig, LoggingConfig, ServerConfig  # noqa: F401
+from .session_policy import SessionPoliciesConfig  # noqa: F401
 from .vendors import (  # noqa: F401
     AlibabaConfig,
     AnthropicConfig,
@@ -152,11 +153,19 @@ class ProxyConfig(BaseModel):
             "三个 provider 默认 enabled=False，显式启用才暴露 /api/{provider}/* 端点。"
         ),
     )
+    # Session 级别路由策略
+    session_policies: SessionPoliciesConfig = Field(
+        default_factory=SessionPoliciesConfig,
+        description=(
+            "Session 级别的路由策略配置。"
+            "可为特定 Session 或客户端类别定制 vendor 优先级顺序。"
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
     def _migrate_legacy_fields(cls, data: Any) -> Any:
-        """向后兼容迁移（legacy flat 格式 → vendors 列表格式）.
+        """向后兼容迁移（legacy flat 格式 → vendors 列表格式）+ session_policies 规范化.
 
         迁移规则：
         1. ``anthropic`` / ``zhipu`` 字段名自动映射为 ``primary`` / ``fallback``
@@ -164,6 +173,12 @@ class ProxyConfig(BaseModel):
         """
         if not isinstance(data, dict):
             return data
+
+        # session_policies 规范化：YAML 中 session_policies: [] 解析为 list，
+        # 需转为 dict 包装以匹配 SessionPoliciesConfig 模型
+        sp = data.get("session_policies")
+        if isinstance(sp, list):
+            data["session_policies"] = {"policies": sp}
 
         # 1. 字段别名迁移
         if "anthropic" in data and "primary" not in data:
@@ -331,4 +346,6 @@ __all__ = [
     "AlibabaConfig",
     # native api passthrough
     "NativeApiConfig",
+    # session policy
+    "SessionPoliciesConfig",
 ]

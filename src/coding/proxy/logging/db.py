@@ -170,7 +170,8 @@ CREATE TABLE IF NOT EXISTS usage_log (
     client_category TEXT NOT NULL DEFAULT 'cc',
     operation TEXT NOT NULL DEFAULT '',
     endpoint TEXT NOT NULL DEFAULT '',
-    extra_usage_json TEXT NOT NULL DEFAULT '{}'
+    extra_usage_json TEXT NOT NULL DEFAULT '{}',
+    session_key TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS usage_evidence (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -194,6 +195,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_log(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_vendor ON usage_log(vendor);
 CREATE INDEX IF NOT EXISTS idx_usage_client_category ON usage_log(client_category);
 CREATE INDEX IF NOT EXISTS idx_usage_operation ON usage_log(operation);
+CREATE INDEX IF NOT EXISTS idx_usage_session_key ON usage_log(session_key);
 CREATE INDEX IF NOT EXISTS idx_usage_evidence_request_id ON usage_evidence(request_id);
 CREATE INDEX IF NOT EXISTS idx_usage_evidence_vendor ON usage_evidence(vendor);
 """
@@ -247,6 +249,7 @@ class TokenLogger:
         await self._migrate_rename_backend_to_vendor()
         await self._migrate_add_failover_from()
         await self._migrate_add_native_columns()
+        await self._migrate_add_session_key()
         await self._db.executescript(_CREATE_INDEXES)
         # 注册时区感知的日期函数：将 UTC 时间戳转为本地时间维度
         await self._db.create_function("local_date", 1, _local_date_udf)
@@ -286,6 +289,18 @@ class TokenLogger:
                 await self._db.execute(f"ALTER TABLE usage_log ADD COLUMN {name} {ddl}")
                 logger.info("Migration: added %s column to usage_log", name)
 
+    async def _migrate_add_session_key(self) -> None:
+        """幂等迁移：为已有数据库添加 session_key 列."""
+        if not self._db:
+            return
+        cursor = await self._db.execute("PRAGMA table_info(usage_log)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        if "session_key" not in columns:
+            await self._db.execute(
+                "ALTER TABLE usage_log ADD COLUMN session_key TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("Migration: added session_key column to usage_log")
+
     async def _migrate_rename_backend_to_vendor(self) -> None:
         """幂等迁移：重命名 backend 列为 vendor."""
         if not self._db:
@@ -319,6 +334,7 @@ class TokenLogger:
         operation: str = "",
         endpoint: str = "",
         extra_usage_json: str = "{}",
+        session_key: str = "",
     ) -> None:
         if not self._db:
             return
@@ -328,8 +344,8 @@ class TokenLogger:
                 input_tokens, output_tokens,
                 cache_creation_tokens, cache_read_tokens,
                 duration_ms, success, failover, failover_from, request_id,
-                client_category, operation, endpoint, extra_usage_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                client_category, operation, endpoint, extra_usage_json, session_key)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 vendor,
                 model_requested,
@@ -347,6 +363,7 @@ class TokenLogger:
                 operation,
                 endpoint,
                 extra_usage_json,
+                session_key,
             ),
         )
         await self._db.commit()
@@ -572,6 +589,63 @@ class TokenLogger:
         )
         row = await cursor.fetchone()
         return row["total"] if row else 0
+
+    async def query_recent_sessions(
+        self,
+        limit: int = 20,
+        hours: float = 24.0,
+    ) -> list[dict]:
+        """按 session_key 聚合近期活跃会话统计."""
+        if not self._db:
+            return []
+        cutoff_iso = _hours_ago_utc_iso(hours)
+        cursor = await self._db.execute(
+            """SELECT session_key,
+                      MIN(ts) AS first_seen_ts,
+                      MAX(ts) AS last_active_ts,
+                      COUNT(*) AS total_requests,
+                      SUM(input_tokens + output_tokens) AS total_tokens,
+                      SUM(input_tokens) AS total_input,
+                      SUM(output_tokens) AS total_output,
+                      GROUP_CONCAT(DISTINCT model_served) AS models,
+                      GROUP_CONCAT(DISTINCT vendor) AS vendors,
+                      AVG(duration_ms) AS avg_duration_ms,
+                      SUM(CASE WHEN success THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS success_rate,
+                      GROUP_CONCAT(DISTINCT client_category) AS client_categories
+               FROM usage_log
+               WHERE session_key != '' AND ts >= ?
+               GROUP BY session_key
+               ORDER BY last_active_ts DESC
+               LIMIT ?""",
+            (cutoff_iso, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    async def query_session_profile(self, session_key: str) -> dict | None:
+        """查询单个会话的完整聚合数据."""
+        if not self._db:
+            return None
+        cursor = await self._db.execute(
+            """SELECT session_key,
+                      MIN(ts) AS first_seen_ts,
+                      MAX(ts) AS last_active_ts,
+                      COUNT(*) AS total_requests,
+                      SUM(input_tokens + output_tokens) AS total_tokens,
+                      SUM(input_tokens) AS total_input,
+                      SUM(output_tokens) AS total_output,
+                      GROUP_CONCAT(DISTINCT model_served) AS models,
+                      GROUP_CONCAT(DISTINCT vendor) AS vendors,
+                      AVG(duration_ms) AS avg_duration_ms,
+                      SUM(CASE WHEN success THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS success_rate,
+                      GROUP_CONCAT(DISTINCT client_category) AS client_categories
+               FROM usage_log
+               WHERE session_key = ?
+               GROUP BY session_key""",
+            (session_key,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
 
     async def close(self) -> None:
         if self._db:
