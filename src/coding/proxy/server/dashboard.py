@@ -1323,9 +1323,13 @@ function relativeTime(tsStr) {
   if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
   return Math.floor(diff / 86400) + 'd ago';
 }
+function escapeHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 function truncateKey(key, maxLen) {
-  if (!key || key.length <= maxLen) return key || '–';
-  return key.slice(0, maxLen - 3) + '…';
+  if (!key || key.length <= maxLen) return escapeHtml(key) || '–';
+  return escapeHtml(key.slice(0, maxLen - 3)) + '…';
 }
 function successBarHtml(pct) {
   if (pct == null) return '–';
@@ -1338,7 +1342,7 @@ function formatSessionTags(str, max) {
   if (!str) return '–';
   var list = str.split(',');
   var html = list.slice(0, max).map(function(c) {
-    return '<span class="session-tag">' + c.trim() + '</span>';
+    return '<span class="session-tag">' + escapeHtml(c.trim()) + '</span>';
   }).join('');
   if (list.length > max) html += '<span class="session-tag">+' + (list.length - max) + '</span>';
   return html;
@@ -1347,7 +1351,7 @@ function formatCategories(cats) {
   if (!cats) return '–';
   return cats.split(',').map(function(c) {
     var t = c.trim();
-    var label = t === 'cc' ? 'Claude Code' : (t === 'api' ? 'API' : t);
+    var label = t === 'cc' ? 'Claude Code' : (t === 'api' ? 'API' : escapeHtml(t));
     return '<span class="session-tag">' + label + '</span>';
   }).join('');
 }
@@ -1370,7 +1374,7 @@ async function updateSessions() {
     }
     tbody.innerHTML = sessions.map(function(s) {
       return '<tr>' +
-        '<td class="session-key" title="' + (s.session_key || '') + '">' + truncateKey(s.session_key, 22) + '</td>' +
+        '<td class="session-key" title="' + escapeHtml(s.session_key) + '">' + truncateKey(s.session_key, 22) + '</td>' +
         '<td>' + relativeTime(s.last_active_ts) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtNum(s.total_requests) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtTokens(s.total_tokens) + '</td>' +

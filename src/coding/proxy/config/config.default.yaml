@@ -652,7 +652,7 @@ native_api:
 #
 # 支持的匹配条件（OR 语义，满足任一即匹配）：
 #   session_keys:    精确匹配的 session key 列表
-#   client_category: 按客户端类别匹配（"cc" = Claude Code，"api" = 原生 API 透传）
+#   client_category: 按客户端类别匹配（⚠️ 预留字段，当前版本暂未生效，后续版本支持）
 #
 # tiers: 覆盖全局 tier 顺序的供应商优先级列表（未提及的 vendor 保持在末尾）
 #

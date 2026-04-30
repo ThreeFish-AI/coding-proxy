@@ -14,7 +14,11 @@ class SessionPolicyMatch(BaseModel):
     )
     client_category: str | None = Field(
         default=None,
-        description="按客户端类别匹配（'cc' 或 'api'）",
+        description=(
+            "按客户端类别匹配（'cc' 或 'api'）。"
+            "⚠️ 预留字段，当前路由执行链路未传入 client_category，"
+            "配置此条件不会生效。后续版本将支持。"
+        ),
     )
 
 
