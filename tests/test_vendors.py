@@ -362,34 +362,6 @@ def test_zhipu_supports_tools_and_thinking():
     assert reasons == []
 
 
-def test_zhipu_accepts_tool_results():
-    """ZhipuVendor 应接受含 tool_result 的请求（由转换通道展平处理）."""
-    from coding.proxy.vendors.base import RequestCapabilities
-
-    mapper = ModelMapper([])
-    zhipu_vendor = ZhipuVendor(ZhipuConfig(), mapper)
-
-    supported, reasons = zhipu_vendor.supports_request(
-        RequestCapabilities(has_tool_results=True)
-    )
-    assert supported is True
-    assert reasons == []
-
-
-def test_zhipu_accepts_without_tool_results():
-    """ZhipuVendor 应接受不含 tool_result 的请求."""
-    from coding.proxy.vendors.base import RequestCapabilities
-
-    mapper = ModelMapper([])
-    zhipu_vendor = ZhipuVendor(ZhipuConfig(), mapper)
-
-    supported, reasons = zhipu_vendor.supports_request(
-        RequestCapabilities(has_tools=True, has_tool_results=False)
-    )
-    assert supported is True
-    assert reasons == []
-
-
 # 兼容性画像应全部为 NATIVE
 def test_zhipu_compatibility_profile_native():
     from coding.proxy.compat.canonical import CompatibilityStatus

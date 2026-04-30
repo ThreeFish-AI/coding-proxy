@@ -111,22 +111,15 @@ def is_semantic_rejection(
 def build_request_capabilities(body: dict[str, Any]) -> RequestCapabilities:
     """从请求体提取能力画像."""
     has_images = False
-    has_tool_results = False
     for msg in body.get("messages", []):
         content = msg.get("content")
         if not isinstance(content, list):
             continue
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            block_type = block.get("type")
-            if block_type == "image" and not has_images:
-                has_images = True
-            elif block_type == "tool_result" and not has_tool_results:
-                has_tool_results = True
-            if has_images and has_tool_results:
-                break
-        if has_images and has_tool_results:
+        if any(
+            isinstance(block, dict) and block.get("type") == "image"
+            for block in content
+        ):
+            has_images = True
             break
 
     return RequestCapabilities(
@@ -134,5 +127,4 @@ def build_request_capabilities(body: dict[str, Any]) -> RequestCapabilities:
         has_thinking=bool(body.get("thinking") or body.get("extended_thinking")),
         has_images=has_images,
         has_metadata=bool(body.get("metadata")),
-        has_tool_results=has_tool_results,
     )
