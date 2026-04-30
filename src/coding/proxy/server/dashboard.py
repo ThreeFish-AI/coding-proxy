@@ -407,6 +407,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border-bottom: 1px solid var(--border);
     }
     .session-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .session-table td.cell-tags { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.8; vertical-align: middle; }
     .session-table tr:hover td { background: var(--bg-card-hover); }
     .session-table .session-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-blue); cursor: default; white-space: normal; overflow: visible; }
     .session-id { line-height: 1.4; word-break: break-all; }
@@ -416,6 +417,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border-radius: 8px; margin: 1px 2px;
       background: rgba(88,166,255,.08); border: 1px solid rgba(88,166,255,.15);
       color: var(--text-secondary);
+    }
+    .session-tag-cc {
+      background: rgba(63,185,80,.08); border-color: rgba(63,185,80,.15);
     }
     .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.06); display: inline-block; vertical-align: middle; margin-left: 6px; }
     .success-bar-fill { height: 100%; border-radius: 2px; }
@@ -641,16 +645,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="session-table-wrap" id="sessions-table-wrap">
       <table class="session-table">
         <colgroup>
-          <col style="width:22%">
-          <col style="width:8%">
+          <col style="width:16%">
           <col style="width:7%">
-          <col style="width:7%">
-          <col style="width:14%">
-          <col style="width:12%">
-          <col style="width:8%">
-          <col style="width:8%">
-          <col style="width:8%">
           <col style="width:6%">
+          <col style="width:6%">
+          <col style="width:16%">
+          <col style="width:14%">
+          <col style="width:7%">
+          <col style="width:8%">
+          <col style="width:10%">
+          <col style="width:10%">
         </colgroup>
         <thead>
           <tr>
@@ -731,12 +735,15 @@ function now() {
 // _API_VENDORS 需与后端 native_api/handler.py::_VENDOR_LABEL 对齐，
 // 新增无 -native 后缀的 native vendor 时同步更新本集合。
 const _API_VENDORS = new Set(['anthropic-native', 'openai', 'gemini']);
+function isApiVendor(v) { return _API_VENDORS.has(v); }
+function vendorShortName(v) {
+  if (!isValidLabel(v)) return v;
+  if (isApiVendor(v)) return v.endsWith('-native') ? v.slice(0, -'-native'.length) : v;
+  return v;
+}
 function formatVendorLabel(v) {
   if (!isValidLabel(v)) return v;
-  if (_API_VENDORS.has(v)) {
-    const name = v.endsWith('-native') ? v.slice(0, -'-native'.length) : v;
-    return 'api | ' + name;
-  }
+  if (isApiVendor(v)) return 'api | ' + vendorShortName(v);
   return 'cc | ' + v;
 }
 
@@ -1440,7 +1447,10 @@ function formatSessionTags(str, max) {
   var html = list.slice(0, max).map(function(c) {
     return '<span class="session-tag">' + escapeHtml(c.trim()) + '</span>';
   }).join('');
-  if (list.length > max) html += '<span class="session-tag">+' + (list.length - max) + '</span>';
+  if (list.length > max) {
+    var fullList = list.map(function(c) { return c.trim(); }).join(', ');
+    html += '<span class="session-tag" title="' + escapeHtml(fullList) + '">+' + (list.length - max) + '</span>';
+  }
   return html;
 }
 function formatCategories(cats) {
@@ -1453,9 +1463,20 @@ function formatCategories(cats) {
 }
 function formatVendorTags(vendors) {
   if (!vendors) return '–';
-  return vendors.split(',').map(function(v) {
-    return '<span class="session-tag">' + formatVendorLabel(v.trim()) + '</span>';
+  var list = vendors.split(',');
+  var max = 4;
+  var html = list.slice(0, max).map(function(v) {
+    var vt = v.trim();
+    var name = vendorShortName(vt);
+    var fullLabel = formatVendorLabel(vt);
+    var cls = isApiVendor(vt) ? 'session-tag' : 'session-tag session-tag-cc';
+    return '<span class="' + cls + '" title="' + escapeHtml(fullLabel) + '">' + escapeHtml(name) + '</span>';
   }).join('');
+  if (list.length > max) {
+    var fullList = list.map(function(v) { return formatVendorLabel(v.trim()); }).join(', ');
+    html += '<span class="session-tag" title="' + escapeHtml(fullList) + '">+' + (list.length - max) + '</span>';
+  }
+  return html;
 }
 // ── Sessions Pagination State ──
 var allSessions = [];
@@ -1513,8 +1534,8 @@ function renderSessionPage() {
         '<td>' + relativeTime(s.last_active_ts) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtNum(s.total_requests) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtTokens(s.total_tokens) + '</td>' +
-        '<td>' + formatSessionTags(s.models, 2) + '</td>' +
-        '<td>' + formatVendorTags(s.vendors) + '</td>' +
+        '<td class="cell-tags">' + formatSessionTags(s.models, 3) + '</td>' +
+        '<td class="cell-tags">' + formatVendorTags(s.vendors) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + (s.avg_duration_ms ? Math.round(s.avg_duration_ms) + 'ms' : '–') + '</td>' +
         '<td>' + successBarHtml(s.success_rate) + '</td>' +
         '<td>' + selectHtml + '</td>' +
