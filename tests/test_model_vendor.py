@@ -116,7 +116,7 @@ class TestCapabilityLossReason:
 
     def test_member_count(self):
         """枚举成员数量."""
-        assert len(CapabilityLossReason) == 6
+        assert len(CapabilityLossReason) == 5
 
     def test_can_iterate(self):
         """可遍历所有成员."""
@@ -127,7 +127,6 @@ class TestCapabilityLossReason:
             "IMAGES",
             "VENDOR_TOOLS",
             "METADATA",
-            "TOOL_RESULTS",
         }
 
     def test_lookup_by_value(self):
@@ -151,7 +150,6 @@ class TestRequestCapabilities:
         assert caps.has_thinking is False
         assert caps.has_images is False
         assert caps.has_metadata is False
-        assert caps.has_tool_results is False
 
     def test_custom_true_values(self):
         """自定义构造: 指定 True 的字段正确赋值."""
@@ -160,7 +158,6 @@ class TestRequestCapabilities:
         assert caps.has_images is True
         assert caps.has_thinking is False
         assert caps.has_metadata is False
-        assert caps.has_tool_results is False
 
     def test_frozen_immutable(self):
         """frozen dataclass: 赋值操作抛 AttributeError."""

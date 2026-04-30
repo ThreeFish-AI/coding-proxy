@@ -268,34 +268,38 @@ class _RouteExecutor:
         Priority 1: failed_tier_name（请求内故障转移，最可靠）。
         Priority 2: session_record.provider_state 中有已注册转换的 vendor（跨请求）。
         Priority 3: 从 body 内容推断（兜底首次请求无会话状态场景）。
-
-        同 vendor 自转换（source == target）仅在 ``VENDOR_TRANSITIONS`` 显式注册
-        了对应通道时启用（如 ``("zhipu","zhipu")`` 修复 zhipu 自身不接受的产物），
-        否则退化到无源行为。
         """
         from ..convert.vendor_channels import (
             get_transition_channel,
             infer_source_vendor_from_body,
         )
 
-        # 请求内：刚失败的 tier 就是源
-        # 同 vendor 自转换仅在显式注册通道时生效
-        if failed_tier_name and (
-            failed_tier_name != target_name
-            or get_transition_channel(failed_tier_name, target_name) is not None
+        # 请求内：刚失败的 tier 就是源（仅当存在已注册的转换通道时）
+        # 修复：原逻辑仅检查 failed_tier != target 就无条件返回，
+        # 导致无注册通道的 failed_tier（如 copilot→anthropic）阻断降级到
+        # Priority 2/3，原始 body 中的 server_tool_use 等非标准块未被清理。
+        if (
+            failed_tier_name
+            and get_transition_channel(failed_tier_name, target_name) is not None
         ):
             return failed_tier_name
 
-        # 跨请求：从会话历史找有注册转换的源（含已注册自转换）
+        # 跨请求：从会话历史找有注册转换的源
         if session_record is not None and session_record.provider_state:
             for source in session_record.provider_state:
-                if get_transition_channel(source, target_name):
+                if source != target_name and get_transition_channel(
+                    source, target_name
+                ):
                     return source
 
-        # 首次请求兜底：从 body 内容推断（识别 zhipu 产物等，含已注册自转换）
+        # 首次请求兜底：从 body 内容推断（识别 zhipu 产物等）
         if body is not None:
             inferred = infer_source_vendor_from_body(body)
-            if inferred and get_transition_channel(inferred, target_name):
+            if (
+                inferred
+                and inferred != target_name
+                and get_transition_channel(inferred, target_name)
+            ):
                 return inferred
 
         return None
@@ -798,27 +802,6 @@ class _RouteExecutor:
                     "trying next tier without recording failure",
                     tier.name,
                 )
-
-            # 补充检测：zhipu 500 — tool_result 块触发上游 AttributeError
-            # zhipu 后端在 tool_result 块上错误访问 .id 属性（应为 .tool_use_id），
-            # 此为已知的上游格式缺陷，应视为 format incompatibility 而非真实服务器故障。
-            if (
-                not semantic_rejection
-                and exc.response.status_code == 500
-                and request_body is not None
-                and _has_tool_results(request_body)
-            ):
-                err_text = (exc.response.text or "")[:500]
-                if (
-                    "'ClaudeContentBlockToolResult'" in err_text
-                    and "has no attribute 'id'" in err_text
-                ):
-                    semantic_rejection = True
-                    logger.warning(
-                        "Tier %s zhipu tool_result format error (500), "
-                        "treating as format incompatibility without circuit breaker penalty",
-                        tier.name,
-                    )
 
             if semantic_rejection and not is_last:
                 return True, tier.name, exc
