@@ -442,7 +442,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .detail-card .detail-label { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .3px; }
     .detail-card .detail-value { color: var(--text-primary); line-height: 1.4; word-break: break-all; }
     .session-table tbody tr[data-row]:not(.row-detail) { cursor: pointer; }
-    .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.06); display: inline-block; vertical-align: middle; margin-left: 6px; }
+    .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.12); display: inline-block; vertical-align: middle; margin-left: 6px; }
     .success-bar-fill { height: 100%; border-radius: 2px; }
     /* ── Vendor Bind 选择器 ── */
     .bind-select {
