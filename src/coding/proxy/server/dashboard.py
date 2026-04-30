@@ -407,10 +407,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border-bottom: 1px solid var(--border);
     }
     .session-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .session-table td.cell-tags { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.8; vertical-align: middle; }
     .session-table tr:hover td { background: var(--bg-card-hover); }
-    .session-table .session-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-blue); cursor: default; white-space: normal; overflow: visible; }
-    .session-id { line-height: 1.4; word-break: break-all; }
+    .session-table .session-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-blue); cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .session-id { display: flex; align-items: center; gap: 4px; }
+    .session-id-text { overflow: hidden; text-overflow: ellipsis; }
+    .copy-btn { background: none; border: none; color: var(--text-tertiary); cursor: pointer; padding: 2px; border-radius: 4px; font-size: 12px; line-height: 1; opacity: .5; flex-shrink: 0; }
+    .copy-btn:hover { opacity: 1; color: var(--accent-blue); background: rgba(88,166,255,.1); }
+    .copy-btn.copied { color: var(--accent-green); opacity: 1; }
     .session-meta { font-size: 10px; color: var(--text-tertiary); line-height: 1.2; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .session-tag {
       display: inline-block; font-size: 11px; padding: 2px 7px;
@@ -421,6 +424,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .session-tag-cc {
       background: rgba(63,185,80,.08); border-color: rgba(63,185,80,.15);
     }
+    .session-table td.cell-success { overflow: visible; text-overflow: clip; }
     .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.06); display: inline-block; vertical-align: middle; margin-left: 6px; }
     .success-bar-fill { height: 100%; border-radius: 2px; }
     /* ── Vendor Bind 选择器 ── */
@@ -645,16 +649,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="session-table-wrap" id="sessions-table-wrap">
       <table class="session-table">
         <colgroup>
-          <col style="width:16%">
+          <col style="width:12%">
           <col style="width:7%">
           <col style="width:6%">
           <col style="width:6%">
-          <col style="width:16%">
-          <col style="width:14%">
+          <col style="width:17%">
+          <col style="width:12%">
           <col style="width:7%">
-          <col style="width:8%">
-          <col style="width:10%">
-          <col style="width:10%">
+          <col style="width:9%">
+          <col style="width:12%">
+          <col style="width:12%">
         </colgroup>
         <thead>
           <tr>
@@ -725,6 +729,13 @@ function fmtTokens(n) {
   return String(n);
 }
 function fmtNum(n) { return n == null ? '–' : n.toLocaleString(); }
+function copyText(btn, text) {
+  navigator.clipboard.writeText(text).then(function() {
+    btn.classList.add('copied');
+    btn.textContent = '✓';
+    setTimeout(function() { btn.classList.remove('copied'); btn.textContent = '⧉'; }, 1500);
+  });
+}
 function isValidLabel(s) { return typeof s === 'string' && s !== 'undefined' && s !== 'null' && s.trim() !== ''; }
 function now() {
   return new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -1526,7 +1537,10 @@ function renderSessionPage() {
       var selectHtml = buildBindSelect(s.session_key, boundVendors, sessionAvailableVendors);
       return '<tr>' +
         '<td class="session-key">' +
-          '<div class="session-id" title="' + escapeHtml(s.session_key) + '">' + escapeHtml(parsed.session_id || s.session_key) + '</div>' +
+          '<div class="session-id" title="' + escapeHtml(s.session_key) + '">' +
+            '<span class="session-id-text">' + escapeHtml(parsed.session_id || s.session_key) + '</span>' +
+            '<button class="copy-btn" onclick="copyText(this,\'' + escapeHtml(s.session_key) + '\')" title="Copy Session ID">⧉</button>' +
+          '</div>' +
           '<div class="session-meta" title="device: ' + escapeHtml(parsed.device_id) + ' | account: ' + escapeHtml(parsed.account_uuid) + '">' +
             'dev:' + escapeHtml(shortId(parsed.device_id, 8)) + ' · acct:' + escapeHtml(shortId(parsed.account_uuid, 8)) +
           '</div>' +
@@ -1534,10 +1548,10 @@ function renderSessionPage() {
         '<td>' + relativeTime(s.last_active_ts) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtNum(s.total_requests) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtTokens(s.total_tokens) + '</td>' +
-        '<td class="cell-tags">' + formatSessionTags(s.models, 3) + '</td>' +
-        '<td class="cell-tags">' + formatVendorTags(s.vendors) + '</td>' +
+        '<td title="' + escapeHtml((s.models || '').split(',').map(function(c){return c.trim();}).join(', ')) + '">' + formatSessionTags(s.models, 3) + '</td>' +
+        '<td title="' + escapeHtml((s.vendors || '').split(',').map(function(v){return formatVendorLabel(v.trim());}).join(', ')) + '">' + formatVendorTags(s.vendors) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + (s.avg_duration_ms ? Math.round(s.avg_duration_ms) + 'ms' : '–') + '</td>' +
-        '<td>' + successBarHtml(s.success_rate) + '</td>' +
+        '<td class="cell-success">' + successBarHtml(s.success_rate) + '</td>' +
         '<td>' + selectHtml + '</td>' +
         '<td>' + formatCategories(s.client_categories) + '</td>' +
         '</tr>';
