@@ -434,13 +434,25 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       padding: 16px 24px; margin: 6px 0;
       background: linear-gradient(135deg, rgba(30,37,54,.95), rgba(22,28,40,.95));
       border: 1px solid rgba(88,166,255,.15); border-radius: 12px;
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 14px 28px; font-size: 13px;
+      font-size: 13px;
+      white-space: normal; overflow: hidden;
       box-shadow: 0 4px 16px rgba(0,0,0,.3);
     }
-    .detail-card .detail-item { display: flex; flex-direction: column; gap: 2px; }
+    .detail-card .detail-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .detail-card .detail-label { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .3px; }
-    .detail-card .detail-value { color: var(--text-primary); line-height: 1.4; word-break: break-all; }
+    .detail-card .detail-value { color: var(--text-primary); line-height: 1.4; word-break: break-all; overflow-wrap: break-word; }
+    .detail-identity-row {
+      display: flex; gap: 16px;
+      padding-bottom: 10px; margin-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .detail-identity-row .detail-item { flex: 1 1 0; }
+    .detail-identity-row .detail-value { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+    .detail-metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 10px 20px;
+    }
     .session-table tbody tr[data-row]:not(.row-detail) { cursor: pointer; }
     .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.12); display: inline-block; vertical-align: middle; margin-left: 6px; }
     .success-bar-fill { height: 100%; border-radius: 2px; }
@@ -1592,17 +1604,21 @@ function renderSessionPage() {
         '<td>' + formatCategories(s.client_categories) + '</td>' +
         '</tr>' +
         '<tr class="row-detail"><td colspan="10"><div class="detail-card">' +
-          '<div class="detail-item"><div class="detail-label">Session ID</div><div class="detail-value" style="font-family:JetBrains Mono,monospace;font-size:12px">' + escapeHtml(s.session_key) + '</div></div>' +
-          '<div class="detail-item"><div class="detail-label">Device</div><div class="detail-value" style="font-family:JetBrains Mono,monospace;font-size:12px">' + escapeHtml(parsed.device_id || '–') + '</div></div>' +
-          '<div class="detail-item"><div class="detail-label">Account</div><div class="detail-value" style="font-family:JetBrains Mono,monospace;font-size:12px">' + escapeHtml(parsed.account_uuid || '–') + '</div></div>' +
-          '<div class="detail-item"><div class="detail-label">Last Active</div><div class="detail-value">' + relativeTime(s.last_active_ts) + '</div></div>' +
-          '<div class="detail-item"><div class="detail-label">Requests</div><div class="detail-value">' + fmtNum(s.total_requests) + '</div></div>' +
-          '<div class="detail-item"><div class="detail-label">Tokens</div><div class="detail-value">' + fmtTokens(s.total_tokens) + '</div></div>' +
-          '<div class="detail-item"><div class="detail-label">Models</div><div class="detail-value">' + (modelsFull.length ? modelsFull.map(function(m){return '<span class="session-tag">' + escapeHtml(m) + '</span>';}).join(' ') : '–') + '</div></div>' +
-          '<div class="detail-item"><div class="detail-label">Vendors</div><div class="detail-value">' + (vendorsFull.length ? vendorsFull.map(function(v){return '<span class="session-tag">' + escapeHtml(v) + '</span>';}).join(' ') : '–') + '</div></div>' +
-          '<div class="detail-item"><div class="detail-label">Avg Latency</div><div class="detail-value">' + fmtDuration(s.avg_duration_ms) + '</div></div>' +
-          '<div class="detail-item"><div class="detail-label">Success Rate</div><div class="detail-value">' + (sr != null ? sr + '%' : '–') + '</div></div>' +
-          '<div class="detail-item"><div class="detail-label">Client</div><div class="detail-value">' + escapeHtml(s.client_categories || '–') + '</div></div>' +
+          '<div class="detail-identity-row">' +
+            '<div class="detail-item"><div class="detail-label">Session ID</div><div class="detail-value" title="' + escapeHtml(s.session_key) + '">' + escapeHtml(parsed.session_id || s.session_key) + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Device</div><div class="detail-value" title="' + escapeHtml(parsed.device_id || '') + '">' + (parsed.device_id ? escapeHtml(parsed.device_id) : '–') + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Account</div><div class="detail-value" title="' + escapeHtml(parsed.account_uuid || '') + '">' + (parsed.account_uuid ? escapeHtml(parsed.account_uuid) : '–') + '</div></div>' +
+          '</div>' +
+          '<div class="detail-metrics-grid">' +
+            '<div class="detail-item"><div class="detail-label">Last Active</div><div class="detail-value">' + relativeTime(s.last_active_ts) + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Requests</div><div class="detail-value">' + fmtNum(s.total_requests) + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Tokens</div><div class="detail-value">' + fmtTokens(s.total_tokens) + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Models</div><div class="detail-value">' + (modelsFull.length ? modelsFull.map(function(m){return '<span class="session-tag">' + escapeHtml(m) + '</span>';}).join(' ') : '–') + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Vendors</div><div class="detail-value">' + (vendorsFull.length ? vendorsFull.map(function(v){return '<span class="session-tag">' + escapeHtml(v) + '</span>';}).join(' ') : '–') + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Avg Latency</div><div class="detail-value">' + fmtDuration(s.avg_duration_ms) + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Success Rate</div><div class="detail-value">' + (sr != null ? sr + '%' : '–') + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Client</div><div class="detail-value">' + escapeHtml(s.client_categories || '–') + '</div></div>' +
+          '</div>' +
         '</div></td></tr>';
     }).join('');
   }
