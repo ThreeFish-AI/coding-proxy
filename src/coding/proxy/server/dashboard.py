@@ -559,7 +559,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <!-- 页签导航 -->
   <nav class="tabs" role="tablist" aria-label="Dashboard sections">
     <button type="button" class="tab-btn active" id="tab-btn-overview" role="tab" aria-controls="tab-pane-overview" aria-selected="true" data-tab="overview" onclick="switchTab('overview')">Overview</button>
-    <button type="button" class="tab-btn" id="tab-btn-sessions" role="tab" aria-controls="tab-pane-sessions" aria-selected="false" data-tab="sessions" onclick="switchTab('sessions')">Recent Active Sessions</button>
+    <button type="button" class="tab-btn" id="tab-btn-sessions" role="tab" aria-controls="tab-pane-sessions" aria-selected="false" data-tab="sessions" onclick="switchTab('sessions')">Sessions</button>
   </nav>
 
   <!-- Overview 页签 -->
@@ -655,12 +655,12 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
   </section>
 
-  <!-- Recent Active Sessions 页签 -->
+  <!-- Sessions 页签 -->
   <section class="tab-pane" id="tab-pane-sessions" role="tabpanel" aria-labelledby="tab-btn-sessions" data-tab="sessions">
-  <!-- Recent Active Sessions -->
+  <!-- Sessions -->
   <div class="card sessions-card">
     <div class="card-title">
-      <span>Recent Active Sessions</span>
+      <span>Sessions</span>
       <span style="font-size:12px;color:var(--text-tertiary)" id="sessions-subtitle">Last 24h</span>
     </div>
     <div class="session-table-wrap" id="sessions-table-wrap">
@@ -1676,7 +1676,7 @@ sessionsTbody.addEventListener('change', function(e) {
 let refreshing = false;
 let currentTab = 'overview';
 const tabLoaded = { overview: false, sessions: false };
-const TAB_LABELS = { overview: 'Overview', sessions: 'Recent Active Sessions' };
+const TAB_LABELS = { overview: 'Overview', sessions: 'Sessions' };
 
 async function refreshOverview() {
   const days = currentDays > 0 ? currentDays : 7;
