@@ -1419,7 +1419,7 @@ async function updateSessions() {
 function buildBindSelect(sessionKey, boundVendors, availableVendors) {
   var isBound = boundVendors && boundVendors.length > 0;
   var selected = isBound ? boundVendors[0] : '';
-  var html = '<select class="bind-select" onchange="handleBindChange(this, \'' + escapeHtml(sessionKey).replace(/'/g, "\\'") + '\')">';
+  var html = '<select class="bind-select" data-session-key="' + escapeHtml(sessionKey) + '">';
   html += '<option value=""' + (!isBound ? ' selected' : '') + '>Default</option>';
   availableVendors.forEach(function(v) {
     html += '<option value="' + escapeHtml(v) + '"' + (v === selected ? ' selected' : '') + '>' + escapeHtml(v) + '</option>';
@@ -1428,22 +1428,42 @@ function buildBindSelect(sessionKey, boundVendors, availableVendors) {
   return html;
 }
 
-async function handleBindChange(sel, sessionKey) {
+async function handleBindChange(sel) {
+  var sessionKey = sel.getAttribute('data-session-key');
   var vendor = sel.value;
+  var previousValue = sel.getAttribute('data-previous') || '';
   try {
+    var resp;
     if (vendor) {
-      await fetch('/api/session-vendor', {
+      resp = await fetch('/api/session-vendor', {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({session_key: sessionKey, vendors: [vendor]}),
       });
     } else {
-      await fetch('/api/session-vendor/' + encodeURIComponent(sessionKey), {method: 'DELETE'});
+      resp = await fetch('/api/session-vendor/' + encodeURIComponent(sessionKey), {method: 'DELETE'});
+    }
+    if (!resp.ok) {
+      sel.value = previousValue;
+      console.error('Bind change rejected:', resp.status, await resp.text());
     }
   } catch (e) {
+    sel.value = previousValue;
     console.error('Bind change failed:', e);
   }
 }
+
+var sessionsTbody = document.getElementById('sessions-tbody');
+sessionsTbody.addEventListener('focus', function(e) {
+  if (e.target.classList.contains('bind-select')) {
+    e.target.setAttribute('data-previous', e.target.value);
+  }
+}, true);
+sessionsTbody.addEventListener('change', function(e) {
+  if (e.target.classList.contains('bind-select')) {
+    handleBindChange(e.target);
+  }
+});
 
 // ── 主刷新逻辑 ────────────────────────────────────────────
 let refreshing = false;

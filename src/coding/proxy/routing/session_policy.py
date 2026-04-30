@@ -52,7 +52,11 @@ class SessionPolicyResolver:
     def resolve(
         self, session_key: str, client_category: str = "cc"
     ) -> SessionPolicy | None:
-        """返回匹配的策略，优先精确 session_key 匹配，其次 category 匹配."""
+        """返回匹配的策略，优先精确 session_key 匹配，其次 category 匹配.
+
+        返回的 SessionPolicy 对象应为不可变引用；调用方不应修改其内部属性，
+        否则在并发 upsert/remove 场景下可能产生竞态。
+        """
         with self._lock:
             policy = self._key_index.get(session_key)
         if policy:
