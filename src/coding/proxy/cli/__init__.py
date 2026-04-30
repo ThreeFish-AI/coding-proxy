@@ -312,11 +312,13 @@ def session_unbind(
     port: int = typer.Option(3392, "--port", "-p", help="代理服务端口"),
 ) -> None:
     """解除指定 Session 的 vendor 绑定."""
+    from urllib.parse import quote
+
     import httpx as _httpx
 
     try:
         resp = _httpx.delete(
-            f"http://127.0.0.1:{port}/api/session-vendor/{key}",
+            f"http://127.0.0.1:{port}/api/session-vendor/{quote(key, safe='')}",
             timeout=5,
         )
         if resp.status_code == 200:

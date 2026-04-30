@@ -94,7 +94,7 @@ class SessionPolicyResolver:
         logger.info("Session vendor binding removed: session_key=%s", session_key)
         return True
 
-    def list_runtime_bindings(self) -> list[dict[str, list[str]]]:
+    def list_runtime_bindings(self) -> list[dict[str, str | list[str]]]:
         """返回所有运行时注入的绑定快照（仅 API 创建的，不含配置文件驱动的）."""
         with self._lock:
             return [
