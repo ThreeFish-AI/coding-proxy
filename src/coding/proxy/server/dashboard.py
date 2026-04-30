@@ -737,6 +737,15 @@ function copyText(btn, text) {
   });
 }
 function isValidLabel(s) { return typeof s === 'string' && s !== 'undefined' && s !== 'null' && s.trim() !== ''; }
+function fmtDuration(ms) {
+  if (ms == null) return '–';
+  var s = ms / 1000;
+  if (s < 1) return Math.round(ms) + 'ms';
+  if (s < 60) return s.toFixed(1).replace(/\\.0$/, '') + 's';
+  var m = Math.floor(s / 60);
+  var sec = Math.round(s % 60);
+  return sec > 0 ? m + 'min ' + sec + 's' : m + 'min';
+}
 function now() {
   return new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
@@ -1550,7 +1559,7 @@ function renderSessionPage() {
         '<td style="font-family:JetBrains Mono,monospace">' + fmtTokens(s.total_tokens) + '</td>' +
         '<td title="' + escapeHtml((s.models || '').split(',').map(function(c){return c.trim();}).join(', ')) + '">' + formatSessionTags(s.models, 3) + '</td>' +
         '<td title="' + escapeHtml((s.vendors || '').split(',').map(function(v){return formatVendorLabel(v.trim());}).join(', ')) + '">' + formatVendorTags(s.vendors) + '</td>' +
-        '<td style="font-family:JetBrains Mono,monospace">' + (s.avg_duration_ms ? Math.round(s.avg_duration_ms) + 'ms' : '–') + '</td>' +
+        '<td style="font-family:JetBrains Mono,monospace">' + fmtDuration(s.avg_duration_ms) + '</td>' +
         '<td class="cell-success">' + successBarHtml(s.success_rate) + '</td>' +
         '<td>' + selectHtml + '</td>' +
         '<td>' + formatCategories(s.client_categories) + '</td>' +
