@@ -268,8 +268,8 @@ class TestCopilotToZhipuChannel:
         assert "removed_thinking_param" in adaptations
         assert "removed_extended_thinking_param" in adaptations
 
-    def test_does_not_relocate_tool_results(self):
-        """copilot → zhipu 不再执行 tool pairing（避免触发 zhipu 500）."""
+    def test_flattens_tool_use_blocks(self):
+        """copilot → zhipu 将 tool_use 展平为 text 块."""
         body = {
             "messages": [
                 {
@@ -279,7 +279,7 @@ class TestCopilotToZhipuChannel:
                             "type": "tool_use",
                             "id": "toolu_1",
                             "name": "bash",
-                            "input": {},
+                            "input": {"command": "ls"},
                         },
                     ],
                 },
@@ -290,15 +290,15 @@ class TestCopilotToZhipuChannel:
             ],
         }
         prepared, adaptations = prepare_copilot_to_zhipu(body)
-        # user 消息内容不变（无 synthesized tool_result）
-        user_content = prepared["messages"][1]["content"]
-        tool_results = [
-            b
-            for b in user_content
-            if isinstance(b, dict) and b.get("type") == "tool_result"
-        ]
-        assert len(tool_results) == 0
-        assert not any("misplaced" in a for a in adaptations)
+        assert any("flattened" in a for a in adaptations)
+        # tool_use 被转为 text
+        assistant_content = prepared["messages"][0]["content"]
+        assert all(b.get("type") != "tool_use" for b in assistant_content)
+        assert any(
+            "Tool Call: bash" in b.get("text", "")
+            for b in assistant_content
+            if b.get("type") == "text"
+        )
 
     def test_combined_transformations(self):
         body = {
@@ -333,14 +333,9 @@ class TestCopilotToZhipuChannel:
         # cache_control 保留
         assert "cache_control" in prepared["system"][0]
         assert "thinking" not in prepared
-        # tool pairing 不执行（user 消息内容不变）
-        user_content = prepared["messages"][1]["content"]
-        tool_results = [
-            b
-            for b in user_content
-            if isinstance(b, dict) and b.get("type") == "tool_result"
-        ]
-        assert len(tool_results) == 0
+        # tool_use 被展平为 text
+        assistant_content = prepared["messages"][0]["content"]
+        assert all(b.get("type") != "tool_use" for b in assistant_content)
 
     def test_preserves_original_body(self):
         body = {
@@ -397,8 +392,8 @@ class TestCopilotToZhipuChannel:
         assert prepared2 == prepared1
         assert adaptations2 == []
 
-    def test_no_id_injection_on_tool_result(self):
-        """copilot → zhipu 转换不再注入 id 字段（zhipu 类不读取，注入无效）."""
+    def test_flattens_tool_result_in_user_message(self):
+        """copilot → zhipu 将 user 消息中的 tool_result 展平为 text."""
         body = {
             "messages": [
                 {
@@ -425,9 +420,10 @@ class TestCopilotToZhipuChannel:
             ],
         }
         prepared, adaptations = prepare_copilot_to_zhipu(body)
-        tr = prepared["messages"][1]["content"][0]
-        assert "id" not in tr
-        assert not any("injected" in a for a in adaptations)
+        # tool_result 被展平为 text
+        user_content = prepared["messages"][1]["content"]
+        assert all(b.get("type") != "tool_result" for b in user_content)
+        assert any("flattened" in a for a in adaptations)
 
 
 # ── zhipu → anthropic 转换通道测试 ────────────────────────────────
@@ -764,7 +760,7 @@ class TestZhipuSelfCleanupChannel:
         assert any("zhipu_vendor_blocks" in a for a in adaptations)
 
     def test_preserves_inline_tool_result_in_assistant(self):
-        """assistant 内联 tool_result 保留原位（不再搬迁，避免触发 zhipu 500）."""
+        """assistant 内联 tool_result 和 tool_use 被展平为 text 块."""
         body = {
             "messages": [
                 {
@@ -788,19 +784,15 @@ class TestZhipuSelfCleanupChannel:
         }
         prepared, adaptations = prepare_zhipu_self_cleanup(body)
 
-        # assistant 消息中 tool_result 保留原位
+        # tool_use 和 tool_result 均被展平为 text
         assistant_content = prepared["messages"][0]["content"]
-        assert any(
-            b.get("type") == "tool_result" and b.get("tool_use_id") == "srvtoolu_a"
-            for b in assistant_content
+        assert all(
+            b.get("type") not in ("tool_use", "tool_result") for b in assistant_content
         )
-        # 不应有 tool pairing 相关的 adaptations
-        assert not any("misplaced" in a for a in adaptations)
-        assert not any("orphaned" in a for a in adaptations)
-        assert not any("injected" in a for a in adaptations)
+        assert any("flattened" in a for a in adaptations)
 
-    def test_no_id_injection(self):
-        """自清理通道不再注入 id 字段（zhipu 类不读取，注入无效）."""
+    def test_tool_result_flattened_to_text(self):
+        """自清理通道将 tool_result 展平为 text 块."""
         body = {
             "messages": [
                 {
@@ -827,13 +819,13 @@ class TestZhipuSelfCleanupChannel:
             ],
         }
         prepared, adaptations = prepare_zhipu_self_cleanup(body)
+        # tool_result 被展平为 text
+        user_content = prepared["messages"][1]["content"]
+        assert all(b.get("type") != "tool_result" for b in user_content)
+        assert any("flattened" in a for a in adaptations)
 
-        tr = prepared["messages"][1]["content"][0]
-        assert "id" not in tr
-        assert not any("injected" in a for a in adaptations)
-
-    def test_preserves_existing_id(self):
-        """tool_result 已有 id 字段时应原样保留，不被修改."""
+    def test_flattens_tool_result_with_existing_id(self):
+        """自清理通道将含 id 的 tool_result 也展平为 text."""
         body = {
             "messages": [
                 {
@@ -861,9 +853,10 @@ class TestZhipuSelfCleanupChannel:
             ],
         }
         prepared, adaptations = prepare_zhipu_self_cleanup(body)
-        tr = prepared["messages"][1]["content"][0]
-        assert tr["id"] == "original_id"
-        assert not any("injected" in a for a in adaptations)
+        # tool_result 被展平为 text，不再保留原结构
+        user_content = prepared["messages"][1]["content"]
+        assert all(b.get("type") != "tool_result" for b in user_content)
+        assert any("flattened" in a for a in adaptations)
 
     def test_preserves_srvtoolu_ids(self):
         """zhipu 原生 srvtoolu_* ID 与 server_tool_use 类型必须保留."""
@@ -1074,25 +1067,25 @@ class TestZhipuSelfCleanupChannel:
         assistant_content = prepared["messages"][0]["content"]
         # delta 被剥离
         assert all(b.get("type") != "server_tool_use_delta" for b in assistant_content)
-        # inline tool_result 保留在 assistant 中（不再搬迁）
-        assert any(
-            b.get("type") == "tool_result" and b.get("tool_use_id") == "toolu_bash_001"
-            for b in assistant_content
-        )
+        # tool_use / tool_result 被 flatten 为 text 块
+        assert not any(b.get("type") == "tool_use" for b in assistant_content)
+        assert not any(b.get("type") == "tool_result" for b in assistant_content)
         # server_tool_use 与其 srvtoolu_* ID 完整保留
         srv_block = next(
             b for b in assistant_content if b.get("type") == "server_tool_use"
         )
         assert srv_block["id"] == "srvtoolu_native"
-        # tool_use ID 同样保留
-        tool_use_block = next(
-            b for b in assistant_content if b.get("type") == "tool_use"
-        )
-        assert tool_use_block["id"] == "toolu_bash_001"
+        # flatten 后应包含 tool_use 和 tool_result 对应的 text 块
+        text_contents = [
+            b.get("text", "") for b in assistant_content if b.get("type") == "text"
+        ]
+        assert any("Tool Call: bash" in t for t in text_contents)
+        assert any("Tool Result for toolu_bash_001" in t for t in text_contents)
         # 不插入额外 user 消息
         assert len(prepared["messages"]) == 1
         # 关键 adaptation 标签
         assert any("zhipu_vendor_blocks" in a for a in adaptations)
+        assert any("flattened" in a and "tool_blocks" in a for a in adaptations)
         # 不应有 tool pairing / id 注入 相关 adaptation
         assert not any("misplaced" in a for a in adaptations)
         assert not any("injected" in a for a in adaptations)
@@ -2858,8 +2851,8 @@ class TestAnthropicToZhipuChannel:
         assert any("server_tool_use" in a for a in adaptations)
         assert any("thinking_blocks" in a for a in adaptations)
 
-    def test_no_id_injection_on_tool_result(self):
-        """anthropic → zhipu 转换不再注入 id 字段（zhipu 类不读取，注入无效）."""
+    def test_flattens_tool_result_in_user_message(self):
+        """anthropic → zhipu 将 tool_result 展平为 text 块."""
         body = {
             "messages": [
                 {
@@ -2886,6 +2879,7 @@ class TestAnthropicToZhipuChannel:
             ],
         }
         prepared, adaptations = prepare_anthropic_to_zhipu(body)
-        tr = prepared["messages"][1]["content"][0]
-        assert "id" not in tr
-        assert not any("injected" in a for a in adaptations)
+        # tool_result 被展平为 text
+        user_content = prepared["messages"][1]["content"]
+        assert all(b.get("type") != "tool_result" for b in user_content)
+        assert any("flattened" in a for a in adaptations)

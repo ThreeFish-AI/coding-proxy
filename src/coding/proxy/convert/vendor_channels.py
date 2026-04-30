@@ -352,6 +352,92 @@ def _inject_tool_result_id_for_zhipu(body: dict[str, Any]) -> int:
     return injected
 
 
+def _extract_text_from_content(content: Any) -> str:
+    """从 tool_result 的 content 字段提取可读文本."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+        return " ".join(parts)
+    return ""
+
+
+def _flatten_tool_blocks(body: dict[str, Any]) -> int:
+    """将 messages 中的 tool_use 和 tool_result 块转为 text 块.
+
+    zhipu GLM-5 后端的 ``ClaudeContentBlockToolResult`` 类缺少 ``id`` 属性，
+    导致处理 tool_result 块时触发 ``AttributeError`` → HTTP 500。
+    此函数将所有 tool_use / tool_result 块转为纯文本表示，
+    让 zhipu 以普通文本对话处理，彻底规避反序列化缺陷。
+
+    Returns:
+        被转换的 tool_use + tool_result 块总数。
+    """
+    import json as _json
+
+    converted = 0
+    for message in body.get("messages", []):
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+
+        new_blocks: list[dict[str, Any]] = []
+        for block in content:
+            if not isinstance(block, dict):
+                new_blocks.append(block)
+                continue
+
+            block_type = block.get("type")
+
+            if block_type == "tool_use":
+                name = block.get("name", "unknown")
+                input_data = block.get("input", {})
+                try:
+                    args_text = _json.dumps(input_data, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    args_text = str(input_data)
+                # 截断过长参数
+                if len(args_text) > 2000:
+                    args_text = args_text[:1997] + "..."
+                new_blocks.append(
+                    {"type": "text", "text": f"[Tool Call: {name}({args_text})]"}
+                )
+                converted += 1
+
+            elif block_type == "tool_result":
+                tool_use_id = block.get("tool_use_id", "?")
+                is_error = block.get("is_error", False)
+                result_text = _extract_text_from_content(block.get("content"))
+                if len(result_text) > 2000:
+                    result_text = result_text[:1997] + "..."
+                prefix = "[ERROR] " if is_error else ""
+                new_blocks.append(
+                    {
+                        "type": "text",
+                        "text": f"{prefix}[Tool Result for {tool_use_id}: {result_text}]",
+                    }
+                )
+                converted += 1
+
+            else:
+                new_blocks.append(block)
+
+        # 如果 content 为空则插入占位
+        if not new_blocks:
+            new_blocks = [{"type": "text", "text": "..."}]
+
+        message["content"] = new_blocks
+
+    return converted
+
+
 def _strip_cache_control(body: dict[str, Any]) -> int:
     """从 system/messages/tools 中移除 cache_control 字段（就地）.
 
@@ -602,6 +688,11 @@ def prepare_copilot_to_zhipu(
             del prepared[param]
             adaptations.append(f"removed_{param}_param")
 
+    # Step 3: 展平 tool_use/tool_result 为 text 块
+    flattened = _flatten_tool_blocks(prepared)
+    if flattened:
+        adaptations.append(f"flattened_{flattened}_tool_blocks")
+
     return prepared, adaptations
 
 
@@ -648,6 +739,11 @@ def prepare_anthropic_to_zhipu(
         if param in prepared:
             del prepared[param]
             adaptations.append(f"removed_{param}_param")
+
+    # Step 4: 展平 tool_use/tool_result 为 text 块
+    flattened = _flatten_tool_blocks(prepared)
+    if flattened:
+        adaptations.append(f"flattened_{flattened}_tool_blocks")
 
     return prepared, adaptations
 
@@ -786,6 +882,11 @@ def prepare_zhipu_self_cleanup(
     removed_vendor_blocks = _remove_vendor_blocks(prepared, _ZHIPU_VENDOR_BLOCK_TYPES)
     if removed_vendor_blocks:
         adaptations.append(f"removed_{removed_vendor_blocks}_zhipu_vendor_blocks")
+
+    # Step 2: 展平 tool_use/tool_result 为 text 块
+    flattened = _flatten_tool_blocks(prepared)
+    if flattened:
+        adaptations.append(f"flattened_{flattened}_tool_blocks")
 
     return prepared, adaptations
 

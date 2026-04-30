@@ -2034,12 +2034,7 @@ class TestPrepareBodyForTierSelfTransition:
     """验证 zhipu → zhipu 自转换通道在 _prepare_body_for_tier 中的应用行为."""
 
     def test_applies_zhipu_self_cleanup(self):
-        """source=zhipu, target=zhipu → 仅剥离 server_tool_use_delta.
-
-        不再做 tool pairing（搬迁 tool_result 会触发 zhipu 500），
-        也不做 id 注入（zhipu 类不读取 JSON 中的 id）。
-        inline tool_result 保留在 assistant 消息中，zhipu 可自行消化。
-        """
+        """source=zhipu, target=zhipu → 剥离 server_tool_use_delta 并展平 tool 块."""
         tier = MagicMock()
         tier.name = "zhipu"
 
@@ -2075,13 +2070,10 @@ class TestPrepareBodyForTierSelfTransition:
         # delta 块被剥离
         assistant_content = result["messages"][0]["content"]
         assert all(b.get("type") != "server_tool_use_delta" for b in assistant_content)
-        # inline tool_result 保留在 assistant 中（不再搬迁）
-        assert any(
-            b.get("type") == "tool_result" and b.get("tool_use_id") == "srvtoolu_a"
-            for b in assistant_content
+        # tool_use 和 tool_result 被展平为 text
+        assert all(
+            b.get("type") not in ("tool_use", "tool_result") for b in assistant_content
         )
-        # 不应插入额外的 user 消息
-        assert len(result["messages"]) == 1
 
     def test_self_cleanup_preserves_srvtoolu_ids(self):
         """回归保护: 自清理通道不得改写 zhipu 原生 srvtoolu_* ID."""

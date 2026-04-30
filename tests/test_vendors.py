@@ -362,9 +362,8 @@ def test_zhipu_supports_tools_and_thinking():
     assert reasons == []
 
 
-def test_zhipu_rejects_tool_results():
-    """ZhipuVendor 应拒绝含 tool_result 的请求（上游 Bug 规避）."""
-    from coding.proxy.model.vendor import CapabilityLossReason
+def test_zhipu_accepts_tool_results():
+    """ZhipuVendor 应接受含 tool_result 的请求（由转换通道展平处理）."""
     from coding.proxy.vendors.base import RequestCapabilities
 
     mapper = ModelMapper([])
@@ -373,8 +372,8 @@ def test_zhipu_rejects_tool_results():
     supported, reasons = zhipu_vendor.supports_request(
         RequestCapabilities(has_tool_results=True)
     )
-    assert supported is False
-    assert CapabilityLossReason.TOOL_RESULTS in reasons
+    assert supported is True
+    assert reasons == []
 
 
 def test_zhipu_accepts_without_tool_results():
