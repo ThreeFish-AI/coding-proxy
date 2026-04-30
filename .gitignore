@@ -23,5 +23,8 @@ config.yaml
 .claude/.prompts.md
 .python-version
 
+# Playwright MCP
+.playwright-mcp/
+
 # Log files (dual-write logging)
 coding-proxy.log*
