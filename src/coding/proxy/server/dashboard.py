@@ -1377,11 +1377,15 @@ function formatVendorTags(vendors) {
 }
 async function updateSessions() {
   try {
-    var [data, bindData, statusData] = await Promise.all([
+    var results = await Promise.allSettled([
       fetchJSON('/api/dashboard/sessions?hours=24&limit=20'),
       fetchJSON('/api/session-vendor'),
       fetchJSON('/api/status'),
     ]);
+    if (results[0].status === 'rejected') throw results[0].reason;
+    var data = results[0].value;
+    var bindData = results[1].status === 'fulfilled' ? results[1].value : {bindings: []};
+    var statusData = results[2].status === 'fulfilled' ? results[2].value : {tiers: []};
     var sessions = data.sessions || [];
     var bindings = bindData.bindings || [];
     var availableVendors = (statusData.tiers || []).map(function(t) { return t.name; });

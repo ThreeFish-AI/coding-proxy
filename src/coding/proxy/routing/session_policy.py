@@ -24,6 +24,7 @@ class SessionPolicyResolver:
         self._policies = policies or []
         self._key_index: dict[str, SessionPolicy] = {}
         self._category_index: dict[str, SessionPolicy] = {}
+        self._config_key_backup: dict[str, SessionPolicy] = {}
         self._lock = threading.Lock()
         self._build_index()
 
@@ -76,6 +77,9 @@ class SessionPolicyResolver:
             tiers=tier_names,
         )
         with self._lock:
+            existing = self._key_index.get(session_key)
+            if existing and not existing.name.startswith("runtime:"):
+                self._config_key_backup[session_key] = existing
             self._key_index[session_key] = policy
         logger.info(
             "Session vendor binding upserted: session_key=%s → %s",
@@ -95,6 +99,10 @@ class SessionPolicyResolver:
             if policy is None or not policy.name.startswith("runtime:"):
                 return False
             del self._key_index[session_key]
+            # 恢复被运行时绑定覆盖的配置策略
+            backup = self._config_key_backup.pop(session_key, None)
+            if backup is not None:
+                self._key_index[session_key] = backup
         logger.info("Session vendor binding removed: session_key=%s", session_key)
         return True
 

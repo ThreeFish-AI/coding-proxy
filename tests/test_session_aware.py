@@ -499,6 +499,18 @@ def test_runtime_upsert_overrides_config_policy():
     assert policy.name.startswith("runtime:")
 
 
+def test_runtime_remove_restores_config_policy():
+    p = _make_policy("config-policy", keys=["shared-key"], tiers=["anthropic"])
+    resolver = SessionPolicyResolver([p])
+    resolver.upsert("shared-key", ["copilot"])
+    assert resolver.resolve("shared-key").tiers == ["copilot"]
+    # 移除运行时绑定后应恢复原配置策略
+    assert resolver.remove("shared-key") is True
+    restored = resolver.resolve("shared-key")
+    assert restored is p
+    assert restored.tiers == ["anthropic"]
+
+
 def test_list_runtime_bindings():
     resolver = SessionPolicyResolver()
     p = _make_policy("config-policy", keys=["config-key"], tiers=["anthropic"])
