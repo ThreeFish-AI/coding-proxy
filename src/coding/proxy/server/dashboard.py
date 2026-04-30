@@ -515,28 +515,28 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     /* ── Tabs ─────────────────────────────────────────────────── */
     .tabs {
       display: flex;
-      gap: 4px;
-      margin-bottom: 16px;
-      border-bottom: 1px solid var(--border);
-      padding: 0 2px;
+      gap: 2px;
+      padding: 0;
     }
     .tab-btn {
       appearance: none;
       background: transparent;
-      border: none;
-      border-bottom: 2px solid transparent;
+      border: 1px solid transparent;
       color: var(--text-secondary);
       cursor: pointer;
       font-family: inherit;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 500;
-      padding: 10px 16px;
-      margin-bottom: -1px;
-      transition: color .15s ease, border-color .15s ease, background .15s ease;
-      border-radius: 6px 6px 0 0;
+      padding: 4px 12px;
+      transition: color .15s ease, background .15s ease, border-color .15s ease;
+      border-radius: var(--radius-sm);
     }
     .tab-btn:hover { color: var(--text-primary); background: var(--bg-card-hover); }
-    .tab-btn.active { color: var(--text-primary); border-bottom-color: var(--accent-blue); }
+    .tab-btn.active {
+      color: var(--text-primary);
+      background: rgba(88,166,255,.1);
+      border-color: rgba(88,166,255,.2);
+    }
     .tab-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
@@ -550,18 +550,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <span class="badge" id="version-badge">v-.-.-</span>
   </div>
   <div class="header-right">
+    <nav class="tabs" role="tablist" aria-label="Dashboard sections">
+      <button type="button" class="tab-btn active" id="tab-btn-overview" role="tab" aria-controls="tab-pane-overview" aria-selected="true" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+      <button type="button" class="tab-btn" id="tab-btn-sessions" role="tab" aria-controls="tab-pane-sessions" aria-selected="false" data-tab="sessions" onclick="switchTab('sessions')">Sessions</button>
+    </nav>
     <span class="refresh-time" id="refresh-time">正在加载…</span>
     <button class="btn-refresh" onclick="refresh()">⟳ 刷新</button>
   </div>
 </header>
 
 <main>
-  <!-- 页签导航 -->
-  <nav class="tabs" role="tablist" aria-label="Dashboard sections">
-    <button type="button" class="tab-btn active" id="tab-btn-overview" role="tab" aria-controls="tab-pane-overview" aria-selected="true" data-tab="overview" onclick="switchTab('overview')">Overview</button>
-    <button type="button" class="tab-btn" id="tab-btn-sessions" role="tab" aria-controls="tab-pane-sessions" aria-selected="false" data-tab="sessions" onclick="switchTab('sessions')">Sessions</button>
-  </nav>
-
   <!-- Overview 页签 -->
   <section class="tab-pane active" id="tab-pane-overview" role="tabpanel" aria-labelledby="tab-btn-overview" data-tab="overview">
   <!-- 时间区间选择器 -->
