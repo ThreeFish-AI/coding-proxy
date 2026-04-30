@@ -417,6 +417,19 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.06); display: inline-block; vertical-align: middle; margin-left: 6px; }
     .success-bar-fill { height: 100%; border-radius: 2px; }
+    /* ── Vendor Bind 选择器 ── */
+    .bind-select {
+      padding: 3px 6px; border-radius: 6px;
+      background: rgba(48,54,61,.6); border: 1px solid rgba(255,255,255,.1);
+      color: var(--text-secondary); font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer; outline: none;
+      transition: all .2s ease;
+      max-width: 120px;
+    }
+    .bind-select:hover { border-color: rgba(88,166,255,.4); color: var(--text-primary); }
+    .bind-select:focus { border-color: rgba(88,166,255,.6); box-shadow: 0 0 0 2px rgba(88,166,255,.1); }
+    .bind-select option { background: var(--bg-card); color: var(--text-primary); }
     /* ── 加载态 ── */
     .loading { opacity: .4; pointer-events: none; }
     /* ── 图表标签截断 ── */
@@ -581,11 +594,12 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <th>Vendors</th>
             <th>Avg Latency</th>
             <th>Success</th>
+            <th>Vendor Bind</th>
             <th>Client</th>
           </tr>
         </thead>
         <tbody id="sessions-tbody">
-          <tr><td colspan="9" class="empty">Loading...</td></tr>
+          <tr><td colspan="10" class="empty">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -1363,16 +1377,27 @@ function formatVendorTags(vendors) {
 }
 async function updateSessions() {
   try {
-    var data = await fetchJSON('/api/dashboard/sessions?hours=24&limit=20');
+    var [data, bindData, statusData] = await Promise.all([
+      fetchJSON('/api/dashboard/sessions?hours=24&limit=20'),
+      fetchJSON('/api/session-vendor'),
+      fetchJSON('/api/status'),
+    ]);
     var sessions = data.sessions || [];
+    var bindings = bindData.bindings || [];
+    var availableVendors = (statusData.tiers || []).map(function(t) { return t.name; });
     var tbody = document.getElementById('sessions-tbody');
     var subtitle = document.getElementById('sessions-subtitle');
     if (subtitle) subtitle.textContent = 'Last ' + data.hours + 'h';
     if (!sessions.length) {
-      tbody.innerHTML = '<tr><td colspan="9" class="empty"><div class="empty-icon">📭</div>No session data</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" class="empty"><div class="empty-icon">📭</div>No session data</td></tr>';
       return;
     }
+    // Build binding lookup: session_key → vendors list
+    var bindMap = {};
+    bindings.forEach(function(b) { bindMap[b.session_key] = b.vendors; });
     tbody.innerHTML = sessions.map(function(s) {
+      var boundVendors = bindMap[s.session_key];
+      var selectHtml = buildBindSelect(s.session_key, boundVendors, availableVendors);
       return '<tr>' +
         '<td class="session-key" title="' + escapeHtml(s.session_key) + '">' + truncateKey(s.session_key, 22) + '</td>' +
         '<td>' + relativeTime(s.last_active_ts) + '</td>' +
@@ -1382,11 +1407,41 @@ async function updateSessions() {
         '<td>' + formatVendorTags(s.vendors) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + (s.avg_duration_ms ? Math.round(s.avg_duration_ms) + 'ms' : '–') + '</td>' +
         '<td>' + successBarHtml(s.success_rate) + '</td>' +
+        '<td>' + selectHtml + '</td>' +
         '<td>' + formatCategories(s.client_categories) + '</td>' +
         '</tr>';
     }).join('');
   } catch (e) {
     console.error('Sessions refresh error:', e);
+  }
+}
+
+function buildBindSelect(sessionKey, boundVendors, availableVendors) {
+  var isBound = boundVendors && boundVendors.length > 0;
+  var selected = isBound ? boundVendors[0] : '';
+  var html = '<select class="bind-select" onchange="handleBindChange(this, \'' + escapeHtml(sessionKey).replace(/'/g, "\\'") + '\')">';
+  html += '<option value=""' + (!isBound ? ' selected' : '') + '>Default</option>';
+  availableVendors.forEach(function(v) {
+    html += '<option value="' + escapeHtml(v) + '"' + (v === selected ? ' selected' : '') + '>' + escapeHtml(v) + '</option>';
+  });
+  html += '</select>';
+  return html;
+}
+
+async function handleBindChange(sel, sessionKey) {
+  var vendor = sel.value;
+  try {
+    if (vendor) {
+      await fetch('/api/session-vendor', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({session_key: sessionKey, vendors: [vendor]}),
+      });
+    } else {
+      await fetch('/api/session-vendor/' + encodeURIComponent(sessionKey), {method: 'DELETE'});
+    }
+  } catch (e) {
+    console.error('Bind change failed:', e);
   }
 }
 

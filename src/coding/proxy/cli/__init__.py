@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 # 注册 Auth 子应用
 app.add_typer(auth_app, name="auth")
 
+# 注册 Session 子应用
+session_app = typer.Typer(name="session", help="管理 Session-Vendor 运行时绑定")
+app.add_typer(session_app, name="session")
+
 
 def _build_token_store(cfg_path: Path | None = None):
     """按配置解析 Token Store 路径并完成加载."""
@@ -261,6 +265,95 @@ def reset(
                 msg = resp.text
             console.print(f"[red]重置失败: {msg}[/red]")
     except httpx.ConnectError:
+        console.print("[red]代理服务未运行[/red]")
+
+
+# ── Session 子命令 ───────────────────────────────────────────────
+
+
+@session_app.command("bind")
+def session_bind(
+    key: str = typer.Option(..., "--key", "-k", help="Session key"),
+    vendor: str = typer.Option(
+        ..., "--vendor", "-v", help="绑定 vendor（逗号分隔多个）"
+    ),
+    port: int = typer.Option(3392, "--port", "-p", help="代理服务端口"),
+) -> None:
+    """为指定 Session 绑定 vendor 优先级."""
+    import httpx as _httpx
+
+    vendors = [v.strip() for v in vendor.split(",") if v.strip()]
+    try:
+        resp = _httpx.put(
+            f"http://127.0.0.1:{port}/api/session-vendor",
+            json={"session_key": key, "vendors": vendors},
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            console.print(
+                f"[green]绑定成功:[/] session [cyan]{key[:16]}…[/cyan] → "
+                + " → ".join(data.get("vendors", vendors))
+            )
+        else:
+            try:
+                err = resp.json()
+                msg = err.get("error", {}).get("message", resp.text)
+            except Exception:
+                msg = resp.text
+            console.print(f"[red]绑定失败: {msg}[/red]")
+    except _httpx.ConnectError:
+        console.print("[red]代理服务未运行[/red]")
+
+
+@session_app.command("unbind")
+def session_unbind(
+    key: str = typer.Option(..., "--key", "-k", help="Session key"),
+    port: int = typer.Option(3392, "--port", "-p", help="代理服务端口"),
+) -> None:
+    """解除指定 Session 的 vendor 绑定."""
+    import httpx as _httpx
+
+    try:
+        resp = _httpx.delete(
+            f"http://127.0.0.1:{port}/api/session-vendor/{key}",
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            console.print(f"[green]已解除绑定:[/] session [cyan]{key[:16]}…[/cyan]")
+        elif resp.status_code == 404:
+            console.print(f"[yellow]未找到绑定:[/] session [cyan]{key[:16]}…[/cyan]")
+        else:
+            console.print(f"[red]解除失败: {resp.status_code} {resp.text}[/red]")
+    except _httpx.ConnectError:
+        console.print("[red]代理服务未运行[/red]")
+
+
+@session_app.command("list")
+def session_list(
+    port: int = typer.Option(3392, "--port", "-p", help="代理服务端口"),
+) -> None:
+    """列出所有运行时 Session-Vendor 绑定."""
+    import httpx as _httpx
+
+    try:
+        resp = _httpx.get(
+            f"http://127.0.0.1:{port}/api/session-vendor",
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            bindings = data.get("bindings", [])
+            if not bindings:
+                console.print("[dim]当前无运行时绑定[/dim]")
+                return
+            for b in bindings:
+                key = b.get("session_key", "?")
+                vendors = b.get("vendors", [])
+                console.print(f"  [cyan]{key[:24]}…[/cyan] → " + " → ".join(vendors))
+        else:
+            console.print(f"[red]查询失败: {resp.status_code} {resp.text}[/red]")
+    except _httpx.ConnectError:
         console.print("[red]代理服务未运行[/red]")
 
 

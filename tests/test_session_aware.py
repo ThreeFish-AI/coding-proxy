@@ -449,3 +449,132 @@ def test_config_parse():
     assert config.policies[0].name == "vip"
     assert config.policies[0].match.session_keys == ["key-1"]
     assert config.policies[0].tiers == ["anthropic", "copilot"]
+
+
+# ── 9. SessionPolicyResolver 运行时可变性 ────────────────────────
+
+
+def test_runtime_upsert_and_resolve():
+    resolver = SessionPolicyResolver()
+    assert resolver.resolve("my-session") is None
+
+    resolver.upsert("my-session", ["anthropic", "copilot"])
+    policy = resolver.resolve("my-session")
+    assert policy is not None
+    assert policy.tiers == ["anthropic", "copilot"]
+    assert policy.name.startswith("runtime:")
+
+
+def test_runtime_upsert_overwrites():
+    resolver = SessionPolicyResolver()
+    resolver.upsert("my-session", ["anthropic"])
+    resolver.upsert("my-session", ["copilot", "zhipu"])
+    policy = resolver.resolve("my-session")
+    assert policy.tiers == ["copilot", "zhipu"]
+
+
+def test_runtime_remove():
+    resolver = SessionPolicyResolver()
+    resolver.upsert("my-session", ["anthropic"])
+    assert resolver.remove("my-session") is True
+    assert resolver.resolve("my-session") is None
+    assert resolver.remove("my-session") is False
+
+
+def test_runtime_remove_does_not_affect_config_policy():
+    p = _make_policy("config-policy", keys=["config-key"], tiers=["anthropic"])
+    resolver = SessionPolicyResolver([p])
+    # Cannot remove config-driven policy via runtime API
+    assert resolver.remove("config-key") is False
+    assert resolver.resolve("config-key") is p
+
+
+def test_runtime_upsert_overrides_config_policy():
+    p = _make_policy("config-policy", keys=["shared-key"], tiers=["anthropic"])
+    resolver = SessionPolicyResolver([p])
+    resolver.upsert("shared-key", ["copilot"])
+    # Runtime binding takes precedence (replaces in key_index)
+    policy = resolver.resolve("shared-key")
+    assert policy.tiers == ["copilot"]
+    assert policy.name.startswith("runtime:")
+
+
+def test_list_runtime_bindings():
+    resolver = SessionPolicyResolver()
+    p = _make_policy("config-policy", keys=["config-key"], tiers=["anthropic"])
+    resolver = SessionPolicyResolver([p])
+    resolver.upsert("runtime-1", ["copilot"])
+    resolver.upsert("runtime-2", ["zhipu", "anthropic"])
+
+    bindings = resolver.list_runtime_bindings()
+    assert len(bindings) == 2
+    keys = {b["session_key"] for b in bindings}
+    assert keys == {"runtime-1", "runtime-2"}
+    # Config-driven policy should not appear
+    assert "config-key" not in keys
+
+
+def test_runtime_upsert_integrates_with_executor():
+    from coding.proxy.routing.executor import _RouteExecutor
+    from coding.proxy.routing.tier import VendorTier
+    from coding.proxy.vendors.base import BaseVendor
+
+    class FakeVendor(BaseVendor):
+        def __init__(self, name):
+            self._name = name
+
+        def get_name(self):
+            return self._name
+
+        async def _prepare_request(self, body, headers):
+            return body, headers
+
+        async def send_message_stream(self, body, headers):
+            yield b"", ""
+
+        async def send_message(self, body, headers):
+            return None
+
+        def supports_request(self, caps):
+            return True, []
+
+        def map_model(self, model):
+            return model
+
+    tiers = [
+        VendorTier(vendor=FakeVendor("zhipu")),
+        VendorTier(vendor=FakeVendor("anthropic")),
+        VendorTier(vendor=FakeVendor("copilot")),
+    ]
+
+    resolver = SessionPolicyResolver()
+    executor = _RouteExecutor(
+        router=None,
+        tiers=tiers,
+        usage_recorder=None,
+        session_manager=None,
+        session_policy_resolver=resolver,
+    )
+
+    # Before binding: default order
+    assert [t.name for t in executor._resolve_effective_tiers("test")] == [
+        "zhipu",
+        "anthropic",
+        "copilot",
+    ]
+
+    # After binding: anthropic first, copilot second, zhipu last
+    resolver.upsert("test", ["anthropic", "copilot"])
+    assert [t.name for t in executor._resolve_effective_tiers("test")] == [
+        "anthropic",
+        "copilot",
+        "zhipu",
+    ]
+
+    # After unbind: back to default
+    resolver.remove("test")
+    assert [t.name for t in executor._resolve_effective_tiers("test")] == [
+        "zhipu",
+        "anthropic",
+        "copilot",
+    ]
