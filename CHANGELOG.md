@@ -4,16 +4,27 @@
 
 ## [Unreleased]
 
-- fix(vendor-channels): 为所有 targeting zhipu 的转换通道（zhipu→zhipu、copilot→zhipu、anthropic→zhipu）新增 `tool_result.id` 字段注入，修复 zhipu GLM-5 后端错误访问 `.id` 属性（`'ClaudeContentBlockToolResult' object has no attribute 'id'`）导致的 500 错误，使 zhipu 可完全承接含 tool_result 的会话；
-- fix(vendor-channels): 新增 zhipu 同 vendor 自清理通道，修复 GLM-5 自循环 400 + tool_results 偶发降级；
-- fix(vendor-channels): 修复 `_rewrite_srvtoolu_ids` 块顺序敏感性导致 inline tool_result 漏改名，进而 enforce 阶段 dict key 与 tool_use_ids 错位、anthropic 报 `tool_use ids without tool_result blocks immediately after` 的 cascade failover 问题（改为两遍扫描：先收集 id_map，再统一改写所有 tool_result.tool_use_id 引用）；
-- fix(vendor-channels): `enforce_anthropic_tool_pairing` 增加全局 sanity check pass，主循环边角错位让 dangling tool_use 漏过校验时兜底合成 is_error 占位并打 `pairing_sanity_repaired` 标签，避免 anthropic 二次报错；
+## [v0.4.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.4.0) — 2026-05-01
 
-### Bug Fixes
+> [!IMPORTANT]
+>
+> **🚀 Session 级专属路由策略！**
+>
+> 给每个 Session 指定专属的 vendor，动态调节不同 vendors 间的 LLM 流量。
 
-- fix(vendor-channels): 新增 `anthropic → zhipu` 跨供应商转换通道，修复 Anthropic beta 功能（web search, computer use）产生的 `server_tool_use` 块导致 zhipu 400 错误的问题；
-- fix(error-classifier): 增强语义拒绝检测，识别 zhipu 等供应商返回的中文错误消息（如「API 调用参数有误」code=1210），确保正确触发故障转移；
-- fix(vendor-channels): `_remove_vendor_blocks` 增加空内容占位保护，防止内容块全部剥离后消息结构不合法。
+![session](assets/session-v0.4.0.png)
+
+### ✨ 核心亮点
+
+- feat(session-policy): 新增 Session 级专属路由策略 (#219)
+- feat(dashboard): 新增会话活动面板 (#222)
+
+### 🔧 更多特性
+
+- refactor(logging): 移除已被 ModelCall 汇总行覆盖的冗余 DEBUG 日志 (#203)
+- style(dashboard): 加宽图表 tooltip 令模型名称与用量值单行显示 (#211)
+- fix(usage-parser): 补充 OpenAI/Gemini SSE 流式分支的 model_served 提取 (#214)
+- fix(usage-parser): 兼容 SSE chunk 中 usage 字段为 null 的极端格式 (#212)
 
 ## [v0.3.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.3.0) — 2026-04-20
 
