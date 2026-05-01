@@ -310,6 +310,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .vendor-name { font-weight: 600; font-size: 14px; }
     .vendor-badges { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+    .quota-group { display: flex; align-items: center; gap: 6px; }
     .status-badge {
       font-size: 11px; padding: 2px 7px;
       border-radius: 10px;
@@ -319,7 +320,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .sb-warn { background: rgba(210,153,34,.12); color: var(--accent-yellow); border: 1px solid rgba(210,153,34,.2); }
     .sb-err { background: rgba(248,81,73,.12); color: var(--accent-red); border: 1px solid rgba(248,81,73,.2); }
     .sb-info { background: rgba(88,166,255,.12); color: var(--accent-blue); border: 1px solid rgba(88,166,255,.2); }
-    .quota-bar-wrap { flex: 1; margin: 0 10px; max-width: 100px; }
+    .quota-bar-wrap { flex: 1; min-width: 40px; max-width: 100px; }
     .quota-bar-bg {
       height: 4px; border-radius: 2px;
       background: rgba(255,255,255,.06);
@@ -1089,10 +1090,11 @@ function renderQuotaBar(qg) {
   if (!qg || qg.usage_percent == null) return '';
   const pct = Math.round(qg.usage_percent);
   const label = quotaWindowLabel(qg.window_hours);
-  return `<span class="status-badge ${quotaClass(pct)}">${label} ${pct}%</span>` +
+  return `<div class="quota-group">` +
+    `<span class="status-badge ${quotaClass(pct)}">${label} ${pct}%</span>` +
     `<div class="quota-bar-wrap"><div class="quota-bar-bg">` +
     `<div class="quota-bar-fill" style="width:${Math.min(pct,100)}%;background:${quotaBarColor(pct)}"></div>` +
-    `</div></div>`;
+    `</div></div></div>`;
 }
 
 function updateVendorStatus(status) {
