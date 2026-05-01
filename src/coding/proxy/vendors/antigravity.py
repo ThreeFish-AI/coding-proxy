@@ -141,7 +141,14 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
             config.refresh_token,
         )
         TokenBackendMixin.__init__(self, token_manager)
-        BaseVendor.__init__(self, config.base_url, config.timeout_ms, failover_config)
+        # v1internal 模式：base_url 需要去除 /v1internal 路径后缀，
+        # 因为 endpoint 使用完整路径 /v1internal:generateContent（冒号格式）。
+        # httpx 会将 base_url path 与 endpoint path 拼接，
+        # 如果 base_url 含 /v1internal 会导致路径重复。
+        init_base_url = config.base_url
+        if init_base_url.rstrip("/").endswith("/v1internal"):
+            init_base_url = init_base_url.rstrip("/").removesuffix("/v1internal")
+        BaseVendor.__init__(self, init_base_url, config.timeout_ms, failover_config)
         self._model_endpoint = config.model_endpoint
         self._model_mapper = model_mapper
         self._default_model = config.model_endpoint.removeprefix("models/")
@@ -149,6 +156,7 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         self._safety_settings = config.safety_settings
         # v1internal 协议字段
         self._project_id: str = config.project_id
+        self._v1internal_enabled: bool = "v1internal" in config.base_url
         self._session_id: str = uuid.uuid4().hex[:16]
         self._message_count: int = 0
         # project_id 自动发现状态
@@ -159,8 +167,11 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         return "antigravity"
 
     def _is_v1internal_mode(self) -> bool:
-        """检测是否启用 v1internal 协议模式（与 Antigravity-Manager 对齐）."""
-        return bool(self._effective_project_id) and "v1internal" in self._base_url
+        """检测是否启用 v1internal 协议模式（与 Antigravity-Manager 对齐）.
+
+        v1internal 协议由原始配置的 base_url 路径或 project_id 自动发现触发。
+        """
+        return self._v1internal_enabled
 
     @property
     def _effective_project_id(self) -> str:
@@ -229,7 +240,11 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
                 return ""
 
             # 发现成功：原子性切换到 v1internal 模式
-            self._base_url = _V1INTERNAL_BASE_URL
+            # base_url 只保留域名部分（去除 /v1internal 路径后缀）
+            self._base_url = _V1INTERNAL_BASE_URL.rstrip("/").removesuffix(
+                "/v1internal"
+            )
+            self._v1internal_enabled = True
             self._project_id_discovered = project_id
 
             # 重建 HTTP 客户端（base_url 是初始化参数）
@@ -339,8 +354,13 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         self._last_request_adaptations = converted.adaptations
         token = await self._token_manager.get_token()
 
-        # 懒加载：未配置 project_id 时自动发现并切换 v1internal 模式
-        if not self._project_id and not self._project_discovery_attempted:
+        # 懒加载：未配置 project_id 时尝试自动发现（仅标准 GLA 模式需要）
+        # v1internal 模式（base_url 含 v1internal）不依赖 project_id
+        if (
+            not self._project_id
+            and not self._project_discovery_attempted
+            and "v1internal" not in self._base_url
+        ):
             discovered = await self._discover_project_id(token)
             if discovered:
                 logger.info(
@@ -450,11 +470,11 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
         resolved_model = self._last_resolved_model
-        endpoint = (
-            ":generateContent"
-            if self._is_v1internal_mode()
-            else f"/models/{resolved_model}:generateContent"
-        )
+        if self._is_v1internal_mode():
+            # v1internal 端点需要完整路径（冒号格式）覆盖 base_url 的 path 部分
+            endpoint = "/v1internal:generateContent"
+        else:
+            endpoint = f"/models/{resolved_model}:generateContent"
 
         logger.debug("send_message: POST %s", endpoint)
         response = await client.post(endpoint, json=body, headers=prepared_headers)
@@ -496,11 +516,10 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         body, prepared_headers = await self._prepare_request(request_body, headers)
         client = self._get_client()
         resolved_model = self._last_resolved_model
-        endpoint = (
-            ":streamGenerateContent?alt=sse"
-            if self._is_v1internal_mode()
-            else f"/models/{resolved_model}:streamGenerateContent?alt=sse"
-        )
+        if self._is_v1internal_mode():
+            endpoint = "/v1internal:streamGenerateContent?alt=sse"
+        else:
+            endpoint = f"/models/{resolved_model}:streamGenerateContent?alt=sse"
 
         logger.debug("send_message_stream: POST %s", endpoint)
 
