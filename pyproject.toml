@@ -84,7 +84,10 @@ docstring-code-format = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not e2e'"
+markers = [
+    "e2e: marks tests as end-to-end (deselect with '-m \"not e2e\"')",
+]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
