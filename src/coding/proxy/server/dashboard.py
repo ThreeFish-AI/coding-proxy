@@ -1780,9 +1780,7 @@ function switchTab(name) {
   currentTab = name;
   applyTabState(name);
   syncTabUrl(name);
-  if (!tabLoaded[name]) {
-    refresh();
-  }
+  refresh();
 }
 
 // ── 初始化 ────────────────────────────────────────────────
