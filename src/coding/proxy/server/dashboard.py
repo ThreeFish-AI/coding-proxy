@@ -447,16 +447,19 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       padding-bottom: 10px; margin-bottom: 10px;
       border-bottom: 1px solid var(--border);
     }
-    .detail-identity-row .detail-item { flex: 1 1 0; }
+    .detail-identity-row .detail-item { flex: 3 1 0; }
+    .detail-identity-row .detail-item:first-child { flex: 2 1 0; }
     .detail-identity-row .detail-value { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
     .detail-metrics-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
       gap: 10px 20px;
     }
+    .detail-inline-pair { display: flex; gap: 16px; }
+    .detail-inline-pair > div { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .session-table tbody tr[data-row]:not(.row-detail) { cursor: pointer; }
     .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.12); display: inline-block; vertical-align: middle; margin-left: 6px; }
-    .success-bar-fill { height: 100%; border-radius: 2px; }
+    .success-bar-fill { height: 100%; border-radius: 2px; display: block; }
     /* ── Vendor Bind 选择器 ── */
     .bind-select {
       padding: 3px 6px; border-radius: 6px;
@@ -670,10 +673,6 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <section class="tab-pane" id="tab-pane-sessions" role="tabpanel" aria-labelledby="tab-btn-sessions" data-tab="sessions">
   <!-- Sessions -->
   <div class="card sessions-card">
-    <div class="card-title">
-      <span>Sessions</span>
-      <span style="font-size:12px;color:var(--text-tertiary)" id="sessions-subtitle">Last 24h</span>
-    </div>
     <div class="session-table-wrap" id="sessions-table-wrap">
       <table class="session-table">
         <colgroup>
@@ -1558,8 +1557,6 @@ async function updateSessions() {
     sessionBindMap = {};
     (bindData.bindings || []).forEach(function(b) { sessionBindMap[b.session_key] = b.vendors; });
     sessionAvailableVendors = (statusData.tiers || []).map(function(t) { return t.name; });
-    var subtitle = document.getElementById('sessions-subtitle');
-    if (subtitle) subtitle.textContent = 'Last ' + data.hours + 'h';
     sessionPage = 0;
     renderSessionPage();
   } catch (e) {
@@ -1618,8 +1615,10 @@ function renderSessionPage() {
             '<div class="detail-item"><div class="detail-label">Models</div><div class="detail-value">' + (modelsFull.length ? modelsFull.map(function(m){return '<span class="session-tag">' + escapeHtml(m) + '</span>';}).join(' ') : '–') + '</div></div>' +
             '<div class="detail-item"><div class="detail-label">Vendors</div><div class="detail-value">' + (vendorsFull.length ? vendorsFull.map(function(v){return '<span class="session-tag">' + escapeHtml(v) + '</span>';}).join(' ') : '–') + '</div></div>' +
             '<div class="detail-item"><div class="detail-label">Avg Latency</div><div class="detail-value">' + fmtDuration(s.avg_duration_ms) + '</div></div>' +
-            '<div class="detail-item"><div class="detail-label">Success Rate</div><div class="detail-value">' + (sr != null ? sr + '%' : '–') + '</div></div>' +
-            '<div class="detail-item"><div class="detail-label">Client</div><div class="detail-value">' + escapeHtml(s.client_categories || '–') + '</div></div>' +
+            '<div class="detail-item" style="grid-column:span 2"><div class="detail-inline-pair">' +
+              '<div><div class="detail-label">Success Rate</div><div class="detail-value">' + (sr != null ? sr + '%' : '–') + '</div></div>' +
+              '<div><div class="detail-label">Client</div><div class="detail-value">' + escapeHtml(s.client_categories || '–') + '</div></div>' +
+            '</div></div>' +
           '</div>' +
         '</div></td></tr>';
     }).join('');
