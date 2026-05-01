@@ -115,13 +115,19 @@ class TestCapabilityLossReason:
         assert CapabilityLossReason.METADATA.value == "metadata"
 
     def test_member_count(self):
-        """枚举成员数量固定为 5."""
+        """枚举成员数量."""
         assert len(CapabilityLossReason) == 5
 
     def test_can_iterate(self):
         """可遍历所有成员."""
         names = {m.name for m in CapabilityLossReason}
-        assert names == {"TOOLS", "THINKING", "IMAGES", "VENDOR_TOOLS", "METADATA"}
+        assert names == {
+            "TOOLS",
+            "THINKING",
+            "IMAGES",
+            "VENDOR_TOOLS",
+            "METADATA",
+        }
 
     def test_lookup_by_value(self):
         """可通过 value 反查成员."""

@@ -31,6 +31,7 @@ from .rate_limit import (
     parse_rate_limit_headers,
 )
 from .session_manager import RouteSessionManager
+from .session_policy import SessionPolicyResolver
 from .tier import VendorTier
 from .usage_parser import (
     build_usage_evidence_records,
@@ -135,6 +136,10 @@ def _is_likely_request_format_error(
         # 非结构化响应体（非 JSON）
         if not trimmed.startswith("{") and len(trimmed) < 200:
             return True
+        # 结构化 JSON 400 但含 tool_call 格式错误码 → 格式不兼容
+        # （如 Copilot 返回 {"error":{"code":"invalid_tool_call_format",...}}）
+        if "invalid_tool_call_format" in trimmed:
+            return True
     return False
 
 
@@ -207,12 +212,14 @@ class _RouteExecutor:
         usage_recorder: UsageRecorder,
         session_manager: RouteSessionManager,
         reauth_coordinator: Any | None = None,
+        session_policy_resolver: SessionPolicyResolver | None = None,
     ) -> None:
         self._router = router
         self._tiers = tiers
         self._recorder = usage_recorder
         self._session_mgr = session_manager
         self._reauth_coordinator = reauth_coordinator
+        self._policy_resolver = session_policy_resolver or SessionPolicyResolver()
 
         # Tier 名称 → OAuth provider 名称的映射
         self._tier_provider_map: dict[str, str] = {
@@ -221,6 +228,30 @@ class _RouteExecutor:
         }
 
     # ── 公开执行入口 ──────────────────────────────────────
+
+    def _resolve_effective_tiers(self, session_key: str) -> list[VendorTier]:
+        """根据 Session Policy 解析生效的 tier 顺序.
+
+        策略指定的 vendor 按其顺序排列在头部，未提及的保持在末尾。
+        无策略时返回全局默认顺序。
+        """
+        policy = self._policy_resolver.resolve(session_key)
+        if not policy or not policy.tiers:
+            return self._tiers
+
+        name_to_tier = {t.name: t for t in self._tiers}
+        ordered: list[VendorTier] = []
+        seen: set[str] = set()
+        for name in policy.tiers:
+            tier = name_to_tier.get(name)
+            if tier and name not in seen:
+                ordered.append(tier)
+                seen.add(name)
+        for tier in self._tiers:
+            if tier.name not in seen:
+                ordered.append(tier)
+                seen.add(tier.name)
+        return ordered
 
     def _prepare_body_for_tier(
         self,
@@ -264,34 +295,38 @@ class _RouteExecutor:
         Priority 1: failed_tier_name（请求内故障转移，最可靠）。
         Priority 2: session_record.provider_state 中有已注册转换的 vendor（跨请求）。
         Priority 3: 从 body 内容推断（兜底首次请求无会话状态场景）。
-
-        同 vendor 自转换（source == target）仅在 ``VENDOR_TRANSITIONS`` 显式注册
-        了对应通道时启用（如 ``("zhipu","zhipu")`` 修复 zhipu 自身不接受的产物），
-        否则退化到无源行为。
         """
         from ..convert.vendor_channels import (
             get_transition_channel,
             infer_source_vendor_from_body,
         )
 
-        # 请求内：刚失败的 tier 就是源
-        # 同 vendor 自转换仅在显式注册通道时生效
-        if failed_tier_name and (
-            failed_tier_name != target_name
-            or get_transition_channel(failed_tier_name, target_name) is not None
+        # 请求内：刚失败的 tier 就是源（仅当存在已注册的转换通道时）
+        # 修复：原逻辑仅检查 failed_tier != target 就无条件返回，
+        # 导致无注册通道的 failed_tier（如 copilot→anthropic）阻断降级到
+        # Priority 2/3，原始 body 中的 server_tool_use 等非标准块未被清理。
+        if (
+            failed_tier_name
+            and get_transition_channel(failed_tier_name, target_name) is not None
         ):
             return failed_tier_name
 
-        # 跨请求：从会话历史找有注册转换的源（含已注册自转换）
+        # 跨请求：从会话历史找有注册转换的源
         if session_record is not None and session_record.provider_state:
             for source in session_record.provider_state:
-                if get_transition_channel(source, target_name):
+                if source != target_name and get_transition_channel(
+                    source, target_name
+                ):
                     return source
 
-        # 首次请求兜底：从 body 内容推断（识别 zhipu 产物等，含已注册自转换）
+        # 首次请求兜底：从 body 内容推断（识别 zhipu 产物等）
         if body is not None:
             inferred = infer_source_vendor_from_body(body)
-            if inferred and get_transition_channel(inferred, target_name):
+            if (
+                inferred
+                and inferred != target_name
+                and get_transition_channel(inferred, target_name)
+            ):
                 return inferred
 
         return None
@@ -302,7 +337,6 @@ class _RouteExecutor:
         headers: dict[str, str],
     ) -> AsyncIterator[tuple[bytes, str]]:
         """路由流式请求，按优先级尝试各层级."""
-        last_idx = len(self._tiers) - 1
         last_exc: Exception | None = None
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
@@ -312,8 +346,10 @@ class _RouteExecutor:
             canonical_request.trace_id,
         )
         incompatible_reasons: list[str] = []
+        effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
+        last_idx = len(effective_tiers) - 1
 
-        for i, tier in enumerate(self._tiers):
+        for i, tier in enumerate(effective_tiers):
             is_last = i == last_idx
 
             gate = await self._try_gate_tier(
@@ -396,6 +432,7 @@ class _RouteExecutor:
                         model_served=model_served,
                         request_id=info.request_id,
                     ),
+                    session_key=canonical_request.session_key,
                 )
                 self._router._active_vendor_name = tier.name  # 更新活跃供应商
                 return
@@ -471,7 +508,6 @@ class _RouteExecutor:
         headers: dict[str, str],
     ) -> VendorResponse:
         """路由非流式请求，按优先级尝试各层级."""
-        last_idx = len(self._tiers) - 1
         start = time.monotonic()
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
@@ -481,8 +517,10 @@ class _RouteExecutor:
             canonical_request.trace_id,
         )
         incompatible_reasons: list[str] = []
+        effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
+        last_idx = len(effective_tiers) - 1
 
-        for i, tier in enumerate(self._tiers):
+        for i, tier in enumerate(effective_tiers):
             is_last = i == last_idx
 
             gate = await self._try_gate_tier(
@@ -537,6 +575,7 @@ class _RouteExecutor:
                             model_served=model_served,
                             usage=resp.usage,
                         ),
+                        session_key=canonical_request.session_key,
                     )
                     self._router._active_vendor_name = tier.name  # 更新活跃供应商
                     return resp
@@ -620,6 +659,7 @@ class _RouteExecutor:
                     evidence_records=self._recorder.build_nonstream_evidence_records(
                         vendor=tier.name, model_served=model_served, usage=resp.usage
                     ),
+                    session_key=canonical_request.session_key,
                 )
                 return resp
 

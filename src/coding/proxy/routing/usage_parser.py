@@ -210,6 +210,9 @@ def parse_usage_from_chunk(
                 request_id=data.get("id"),
                 model_served=data.get("model"),
             )
+            model_name = data.get("model")
+            if model_name:
+                usage["model_served"] = model_name
 
         # Gemini SSE 格式: data.usageMetadata.{promptTokenCount, candidatesTokenCount, cachedContentTokenCount, thoughtsTokenCount, toolUsePromptTokenCount}
         # Gemini 的流式响应在最后一帧（或每一帧）携带 usageMetadata；字段命名与
@@ -243,6 +246,9 @@ def parse_usage_from_chunk(
                     request_id=data.get("responseId") or data.get("id"),
                     model_served=data.get("modelVersion") or data.get("model"),
                 )
+                model_name = data.get("modelVersion") or data.get("model")
+                if model_name:
+                    usage["model_served"] = model_name
 
         # request_id fallback (OpenAI 格式下 id 在顶层, Gemini 顶层为 responseId)
         if not usage.get("request_id"):

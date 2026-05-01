@@ -472,3 +472,132 @@ def test_image_block_converted_to_image_url():
     image_part = [p for p in user_msg["content"] if p.get("type") == "image_url"]
     assert len(image_part) == 1
     assert "data:image/png;base64,abc123" in image_part[0]["image_url"]["url"]
+
+
+# === Defensive tool_use.input serialization ===
+
+
+def test_tool_use_input_none_defaults_to_empty_dict():
+    """input=None 应被降级为 {} 而非序列化为 'null'."""
+    body = {
+        "model": "claude-sonnet-4-20250514",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_001",
+                        "name": "read_file",
+                        "input": None,
+                    }
+                ],
+            }
+        ],
+    }
+    result = convert_request(body)
+    assistant_msgs = [m for m in result["messages"] if m["role"] == "assistant"]
+    assert len(assistant_msgs) == 1
+    assert "tool_calls" in assistant_msgs[0]
+    tc = assistant_msgs[0]["tool_calls"][0]
+    assert tc["function"]["arguments"] == "{}"
+
+
+def test_tool_use_input_string_defaults_to_empty_dict():
+    """input='some string' 应被降级为 {} 而非序列化为 '"some string"'."""
+    body = {
+        "model": "claude-sonnet-4-20250514",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_002",
+                        "name": "run_cmd",
+                        "input": "not a dict",
+                    }
+                ],
+            }
+        ],
+    }
+    result = convert_request(body)
+    assistant_msgs = [m for m in result["messages"] if m["role"] == "assistant"]
+    tc = assistant_msgs[0]["tool_calls"][0]
+    assert tc["function"]["arguments"] == "{}"
+
+
+def test_tool_use_input_missing_defaults_to_empty_dict():
+    """input key 不存在时，block.get('input') 返回 None，应降级为 {}."""
+    body = {
+        "model": "claude-sonnet-4-20250514",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_003",
+                        "name": "search",
+                    }
+                ],
+            }
+        ],
+    }
+    result = convert_request(body)
+    assistant_msgs = [m for m in result["messages"] if m["role"] == "assistant"]
+    tc = assistant_msgs[0]["tool_calls"][0]
+    assert tc["function"]["arguments"] == "{}"
+
+
+def test_tool_use_input_int_defaults_to_empty_dict():
+    """input=42 应被降级为 {} 而非序列化为 '42'."""
+    body = {
+        "model": "claude-sonnet-4-20250514",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_004",
+                        "name": "calc",
+                        "input": 42,
+                    }
+                ],
+            }
+        ],
+    }
+    result = convert_request(body)
+    assistant_msgs = [m for m in result["messages"] if m["role"] == "assistant"]
+    tc = assistant_msgs[0]["tool_calls"][0]
+    assert tc["function"]["arguments"] == "{}"
+
+
+def test_tool_use_valid_dict_input_preserved():
+    """正常 dict input 应保持原样."""
+    body = {
+        "model": "claude-sonnet-4-20250514",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_005",
+                        "name": "read_file",
+                        "input": {"path": "/tmp/test.txt", "offset": 10},
+                    }
+                ],
+            }
+        ],
+    }
+    result = convert_request(body)
+    assistant_msgs = [m for m in result["messages"] if m["role"] == "assistant"]
+    tc = assistant_msgs[0]["tool_calls"][0]
+    import json
+
+    assert json.loads(tc["function"]["arguments"]) == {
+        "path": "/tmp/test.txt",
+        "offset": 10,
+    }

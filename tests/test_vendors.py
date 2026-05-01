@@ -340,7 +340,6 @@ def test_zhipu_never_triggers_failover():
 
 def test_zhipu_supports_tools_and_thinking():
     """ZhipuVendor 应声明全部能力为 NATIVE（原生 Anthropic 兼容端点）."""
-    from coding.proxy.compat.canonical import CompatibilityStatus
     from coding.proxy.vendors.base import RequestCapabilities
 
     mapper = ModelMapper([])
@@ -361,7 +360,14 @@ def test_zhipu_supports_tools_and_thinking():
     )
     assert supported is True
     assert reasons == []
-    # 兼容性画像应全部为 NATIVE
+
+
+# 兼容性画像应全部为 NATIVE
+def test_zhipu_compatibility_profile_native():
+    from coding.proxy.compat.canonical import CompatibilityStatus
+
+    mapper = ModelMapper([])
+    zhipu_vendor = ZhipuVendor(ZhipuConfig(), mapper)
     profile = zhipu_vendor.get_compatibility_profile()
     assert profile.thinking is CompatibilityStatus.NATIVE
     assert profile.tool_calling is CompatibilityStatus.NATIVE

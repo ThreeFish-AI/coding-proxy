@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from coding.proxy.compat.canonical import (
@@ -347,7 +348,6 @@ class TestExecuteMessage:
     @pytest.mark.asyncio
     async def test_last_tier_propagates_http_error(self):
         """最后一层的 HTTP 错误直接抛出."""
-        import httpx
 
         vendor = _mock_vendor()
         vendor.send_message.side_effect = httpx.ConnectError("unreachable")
@@ -369,7 +369,6 @@ class TestExecuteMessage:
     @pytest.mark.asyncio
     async def test_non_last_tier_continues_on_connect_error(self):
         """非最后一层连接失败时继续尝试下一层."""
-        import httpx
 
         bad = _mock_vendor("bad")
         bad.send_message.side_effect = httpx.ConnectError("down")
@@ -460,7 +459,6 @@ class TestExecuteStream:
     @pytest.mark.asyncio
     async def test_stream_http_error_raises_on_last_tier(self):
         """最后一层流式 HTTP 错误直接抛出."""
-        import httpx
 
         vendor = _mock_vendor()
 
@@ -1229,6 +1227,31 @@ class TestIsLikelyRequestFormatError:
             is False
         )
 
+    def test_returns_true_for_invalid_tool_call_format(self):
+        """400 + 结构化 JSON 含 invalid_tool_call_format + tool_result → 格式不兼容."""
+        json_body = '{"error":{"message":"Invalid JSON format in tool call arguments","code":"invalid_tool_call_format"}}'
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text=json_body,
+                body=self._body_with_tool_results(),
+            )
+            is True
+        )
+
+    def test_returns_false_for_invalid_tool_call_format_without_tool_results(self):
+        """invalid_tool_call_format 但无 tool_result → 不应匹配."""
+        json_body = '{"error":{"message":"Invalid JSON format in tool call arguments","code":"invalid_tool_call_format"}}'
+        body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
+        assert (
+            _is_likely_request_format_error(
+                status_code=400,
+                error_body_text=json_body,
+                body=body,
+            )
+            is False
+        )
+
 
 # ── TokenAcquireError 永久性凭证错误测试 ────────────────────
 
@@ -1610,13 +1633,13 @@ class TestDetermineSourceVendor:
         )
 
     def test_returns_session_vendor_with_registered_transition_anthropic_to_zhipu(self):
-        """anthropic → zhipu 已注册转换，应返回 anthropic 作为源 vendor."""
+        """anthropic → zhipu 未注册转换，应回退到无源行为."""
         session_record = MagicMock()
         session_record.provider_state = {"anthropic": {}}
 
         assert (
             _RouteExecutor._determine_source_vendor("zhipu", None, session_record)
-            == "anthropic"
+            is None
         )
 
     def test_returns_none_when_session_is_none(self):
@@ -1760,8 +1783,8 @@ class TestDetermineSourceVendor:
         )
 
     def test_priority1_overrides_priority3(self):
-        """Priority 1 (failed_tier) 优先于 Priority 3 (body inference)."""
-        # body 内有 zhipu 产物，但 failed_tier 显式指定 copilot
+        """Priority 1 (failed_tier) 优先于 Priority 3 (body inference) — 仅当通道已注册."""
+        # body 内有 zhipu 产物，failed_tier=zhipu, target=copilot → zhipu→copilot 已注册
         body = {
             "messages": [
                 {
@@ -1777,10 +1800,26 @@ class TestDetermineSourceVendor:
                 },
             ],
         }
-        # failed_tier=copilot → 应返回 copilot，不看 body
+        # failed_tier=zhipu, target=copilot → (zhipu,copilot) 已注册 → 返回 zhipu
         assert (
-            _RouteExecutor._determine_source_vendor("zhipu", "copilot", None, body)
-            == "copilot"
+            _RouteExecutor._determine_source_vendor("copilot", "zhipu", None, body)
+            == "zhipu"
+        )
+
+    def test_priority1_falls_through_when_no_registered_transition(self):
+        """Priority 1: failed_tier 无已注册转换通道 → 降级到 Priority 2.
+
+        核心修复场景: copilot 失败后降级到 anthropic 时, (copilot,anthropic)
+        未注册 → 通过 session history 找到 zhipu → 应用 zhipu→anthropic 转换.
+        """
+        session_record = MagicMock()
+        session_record.provider_state = {"zhipu": {}}
+        # copilot → anthropic 未注册, 但 session 中有 zhipu → zhipu→anthropic 已注册
+        assert (
+            _RouteExecutor._determine_source_vendor(
+                "anthropic", "copilot", session_record
+            )
+            == "zhipu"
         )
 
     def test_priority2_overrides_priority3(self):
@@ -1814,79 +1853,6 @@ class TestDetermineSourceVendor:
         session_record.provider_state = {"zhipu": {}}
         assert (
             _RouteExecutor._determine_source_vendor("copilot", None, session_record)
-            == "zhipu"
-        )
-
-
-# ── _determine_source_vendor 自转换通道测试 ─────────────────────────
-
-
-class TestDetermineSourceVendorSelfTransition:
-    """验证已注册的同 vendor 自转换 (如 zhipu → zhipu) 在三条优先级中均能命中.
-
-    自转换通道用于修复 vendor 自身无法消化的产物 (如 zhipu 不接受输入中的
-    server_tool_use_delta 与 assistant 内联 tool_result).
-    """
-
-    def test_priority1_self_transition_when_registered(self):
-        """Priority 1: failed_tier == target 且通道已注册 → 返回 target 作为源."""
-        # zhipu 自转换通道已在 vendor_channels 注册
-        assert (
-            _RouteExecutor._determine_source_vendor("zhipu", "zhipu", None) == "zhipu"
-        )
-
-    def test_priority1_self_transition_blocked_when_unregistered(self):
-        """Priority 1: failed_tier == target 但通道未注册 → 返回 None.
-
-        anthropic 未注册自转换通道, 保持原有「同 vendor 无源」行为.
-        """
-        assert (
-            _RouteExecutor._determine_source_vendor("anthropic", "anthropic", None)
-            is None
-        )
-
-    def test_priority2_self_transition_via_session(self):
-        """Priority 2: 会话历史中只有目标 vendor, 但其自转换通道已注册 → 命中."""
-        session_record = MagicMock()
-        session_record.provider_state = {"zhipu": {}}
-        assert (
-            _RouteExecutor._determine_source_vendor("zhipu", None, session_record)
-            == "zhipu"
-        )
-
-    def test_priority2_session_unregistered_self_returns_none(self):
-        """Priority 2: 会话只有未注册自转换的 vendor → None."""
-        session_record = MagicMock()
-        session_record.provider_state = {"anthropic": {}}
-        assert (
-            _RouteExecutor._determine_source_vendor("anthropic", None, session_record)
-            is None
-        )
-
-    def test_priority3_self_transition_when_registered(self):
-        """Priority 3: 首次请求 body 含 zhipu 产物且目标也是 zhipu → 命中自清理.
-
-        这是修复 「zhipu 400 + tool_results 偶发」 的核心兜底场景:
-        Claude Code 把上一轮 zhipu 响应原样回送, 命中 zhipu 主 tier 时
-        可识别并应用自清理通道。
-        """
-        body = {
-            "messages": [
-                {
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "server_tool_use",
-                            "id": "srvtoolu_x",
-                            "name": "bash",
-                            "input": {},
-                        },
-                    ],
-                },
-            ],
-        }
-        assert (
-            _RouteExecutor._determine_source_vendor("zhipu", None, None, body)
             == "zhipu"
         )
 
@@ -1972,23 +1938,6 @@ class TestPrepareBodyForTierTransition:
         assert result is body
         assert len(result["messages"][0]["content"]) == 2
 
-    def test_applies_anthropic_to_zhipu_transition(self):
-        """anthropic → zhipu 已注册转换，应清理 thinking blocks."""
-        tier = MagicMock()
-        tier.name = "zhipu"
-
-        exec_inst = _executor([])
-        body = self._body_with_thinking()
-        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="anthropic")
-
-        # thinking blocks 应被剥离
-        assert result is not body
-        assert all(
-            b.get("type") not in ("thinking", "redacted_thinking")
-            for b in result["messages"][0]["content"]
-        )
-        assert len(result["messages"][0]["content"]) >= 1
-
     def test_returns_body_for_unknown_tier(self):
         """未知 tier（无注册转换）→ 原样返回."""
         tier = MagicMock()
@@ -1999,105 +1948,3 @@ class TestPrepareBodyForTierTransition:
         result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="zhipu")
 
         assert result is body
-
-
-# ── _prepare_body_for_tier 自转换通道测试 ───────────────────────────
-
-
-class TestPrepareBodyForTierSelfTransition:
-    """验证 zhipu → zhipu 自转换通道在 _prepare_body_for_tier 中的应用行为."""
-
-    def test_applies_zhipu_self_cleanup(self):
-        """source=zhipu, target=zhipu → 剥离 server_tool_use_delta + tool pairing."""
-        tier = MagicMock()
-        tier.name = "zhipu"
-
-        body = {
-            "model": "claude-opus-4-6",
-            "messages": [
-                {
-                    "role": "assistant",
-                    "content": [
-                        {"type": "server_tool_use_delta", "partial_json": "{}"},
-                        {
-                            "type": "tool_use",
-                            "id": "srvtoolu_a",
-                            "name": "bash",
-                            "input": {},
-                        },
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": "srvtoolu_a",
-                            "content": "ok",
-                        },
-                    ],
-                },
-            ],
-        }
-        exec_inst = _executor([])
-        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="zhipu")
-
-        # 深拷贝（不修改原始 body）
-        assert result is not body
-        assert len(body["messages"][0]["content"]) == 3
-
-        # delta 块被剥离, tool_result 被搬迁出 assistant
-        assistant_content = result["messages"][0]["content"]
-        assert all(
-            b.get("type") not in ("server_tool_use_delta", "tool_result")
-            for b in assistant_content
-        )
-        # tool_result 已搬到下一个 user 消息
-        assert result["messages"][1]["role"] == "user"
-        assert any(
-            b.get("type") == "tool_result" and b.get("tool_use_id") == "srvtoolu_a"
-            for b in result["messages"][1]["content"]
-        )
-
-    def test_self_cleanup_preserves_srvtoolu_ids(self):
-        """回归保护: 自清理通道不得改写 zhipu 原生 srvtoolu_* ID."""
-        tier = MagicMock()
-        tier.name = "zhipu"
-
-        body = {
-            "messages": [
-                {
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "server_tool_use",
-                            "id": "srvtoolu_keep_me",
-                            "name": "bash",
-                            "input": {},
-                        },
-                        {
-                            "type": "thinking",
-                            "thinking": "...",
-                            "signature": "zhipu_sig",
-                        },
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": "srvtoolu_keep_me",
-                            "content": "ok",
-                        },
-                    ],
-                },
-            ],
-        }
-        exec_inst = _executor([])
-        result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="zhipu")
-
-        # ID 与 server_tool_use 类型必须保留
-        first_block = result["messages"][0]["content"][0]
-        assert first_block["id"] == "srvtoolu_keep_me"
-        assert first_block["type"] == "server_tool_use"
-        # thinking signature 也必须保留
-        thinking_block = next(
-            b for b in result["messages"][0]["content"] if b.get("type") == "thinking"
-        )
-        assert thinking_block["signature"] == "zhipu_sig"

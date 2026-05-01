@@ -159,7 +159,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .kpi-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
+      gap: 5px;
       margin-bottom: 24px;
     }
     .kpi-card {
@@ -310,6 +310,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .vendor-name { font-weight: 600; font-size: 14px; }
     .vendor-badges { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+    .quota-group { display: flex; align-items: center; gap: 6px; }
     .status-badge {
       font-size: 11px; padding: 2px 7px;
       border-radius: 10px;
@@ -319,7 +320,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .sb-warn { background: rgba(210,153,34,.12); color: var(--accent-yellow); border: 1px solid rgba(210,153,34,.2); }
     .sb-err { background: rgba(248,81,73,.12); color: var(--accent-red); border: 1px solid rgba(248,81,73,.2); }
     .sb-info { background: rgba(88,166,255,.12); color: var(--accent-blue); border: 1px solid rgba(88,166,255,.2); }
-    .quota-bar-wrap { flex: 1; margin: 0 10px; max-width: 100px; }
+    .quota-bar-wrap { flex: 1; min-width: 40px; max-width: 100px; }
     .quota-bar-bg {
       height: 4px; border-radius: 2px;
       background: rgba(255,255,255,.06);
@@ -395,6 +396,98 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       color: var(--text-tertiary); font-size: 14px;
     }
     .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: .5; }
+    /* ── Sessions Panel ── */
+    .sessions-card { grid-column: 1 / -1; animation-delay: .1s; }
+    .session-table-wrap { overflow: hidden; }
+    .session-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+    .session-table th {
+      position: sticky; top: 0; z-index: 1;
+      background: var(--bg-card); padding: 10px 12px;
+      text-align: left; font-weight: 600; font-size: 12px;
+      color: var(--text-secondary); text-transform: uppercase; letter-spacing: .5px;
+      border-bottom: 1px solid var(--border);
+    }
+    .session-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .session-table td.cell-tags { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.8; vertical-align: middle; }
+    .session-table tr:hover td { background: var(--bg-card-hover); }
+    .session-table .session-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-blue); cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .session-id { display: flex; align-items: center; gap: 4px; }
+    .session-id-text { overflow: hidden; text-overflow: ellipsis; }
+    .copy-btn { background: none; border: none; color: var(--text-tertiary); cursor: pointer; padding: 2px; border-radius: 4px; font-size: 12px; line-height: 1; opacity: .5; flex-shrink: 0; }
+    .copy-btn:hover { opacity: 1; color: var(--accent-blue); background: rgba(88,166,255,.1); }
+    .copy-btn.copied { color: var(--accent-green); opacity: 1; }
+    .session-meta { font-size: 10px; color: var(--text-tertiary); line-height: 1.2; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .session-tag {
+      display: inline-block; font-size: 11px; padding: 2px 7px;
+      border-radius: 8px; margin: 1px 2px;
+      background: rgba(88,166,255,.08); border: 1px solid rgba(88,166,255,.15);
+      color: var(--text-secondary);
+    }
+    .session-tag-cc {
+      background: rgba(63,185,80,.08); border-color: rgba(63,185,80,.15);
+    }
+    .session-table td.cell-success { overflow: visible; text-overflow: clip; }
+    /* ── 展开行 ── */
+    .session-table tr.row-detail { display: none; }
+    .session-table tr.row-detail.open { display: table-row; }
+    .session-table tr.row-detail td { padding: 0; }
+    .detail-card {
+      padding: 16px 24px; margin: 6px 0;
+      background: linear-gradient(135deg, rgba(30,37,54,.95), rgba(22,28,40,.95));
+      border: 1px solid rgba(88,166,255,.15); border-radius: 12px;
+      font-size: 13px;
+      white-space: normal; overflow: hidden;
+      box-shadow: 0 4px 16px rgba(0,0,0,.3);
+    }
+    .detail-card .detail-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .detail-card .detail-label { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .3px; }
+    .detail-card .detail-value { color: var(--text-primary); line-height: 1.4; word-break: break-all; overflow-wrap: break-word; }
+    .detail-identity-row {
+      display: flex; gap: 16px;
+      padding-bottom: 10px; margin-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .detail-identity-row .detail-item { flex: 3 1 0; }
+    .detail-identity-row .detail-item:first-child { flex: 2 1 0; }
+    .detail-identity-row .detail-value { font-family: 'JetBrains Mono', monospace; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; word-break: normal; }
+    .detail-metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 10px 16px;
+    }
+    .detail-inline-pair { display: flex; gap: 16px; }
+    .detail-inline-pair > div { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .session-table tbody tr[data-row]:not(.row-detail) { cursor: pointer; }
+    .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.12); display: inline-block; vertical-align: middle; margin-left: 6px; }
+    .success-bar-fill { height: 100%; border-radius: 2px; display: block; }
+    /* ── Vendor Bind 选择器 ── */
+    .bind-select {
+      padding: 3px 6px; border-radius: 6px;
+      background: rgba(48,54,61,.6); border: 1px solid rgba(255,255,255,.1);
+      color: var(--text-secondary); font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer; outline: none;
+      transition: all .2s ease;
+      max-width: 120px;
+    }
+    .bind-select:hover { border-color: rgba(88,166,255,.4); color: var(--text-primary); }
+    .bind-select:focus { border-color: rgba(88,166,255,.6); box-shadow: 0 0 0 2px rgba(88,166,255,.1); }
+    .bind-select option { background: var(--bg-card); color: var(--text-primary); }
+    /* ── 分页 ── */
+    .session-pagination {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; border-top: 1px solid var(--border-subtle);
+      font-size: 12px; color: var(--text-secondary);
+    }
+    .page-btn {
+      padding: 4px 10px; border-radius: 6px;
+      background: rgba(48,54,61,.4); border: 1px solid rgba(255,255,255,.08);
+      color: var(--text-secondary); font-size: 12px; cursor: pointer;
+      transition: all .15s ease;
+    }
+    .page-btn:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--text-primary); border-color: rgba(88,166,255,.3); }
+    .page-btn:disabled { opacity: .35; cursor: default; }
+    .page-info { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
     /* ── 加载态 ── */
     .loading { opacity: .4; pointer-events: none; }
     /* ── 图表标签截断 ── */
@@ -435,6 +528,34 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle);
       font-weight: 500; font-size: 12px; color: var(--text-secondary);
     }
+    /* ── Tabs ─────────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      gap: 2px;
+      padding: 0;
+    }
+    .tab-btn {
+      appearance: none;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 4px 12px;
+      transition: color .15s ease, background .15s ease, border-color .15s ease;
+      border-radius: var(--radius-sm);
+    }
+    .tab-btn:hover { color: var(--text-primary); background: var(--bg-card-hover); }
+    .tab-btn.active {
+      color: var(--text-primary);
+      background: rgba(88,166,255,.1);
+      border-color: rgba(88,166,255,.2);
+    }
+    .tab-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
   </style>
 </head>
 <body>
@@ -445,12 +566,18 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <span class="badge" id="version-badge">v-.-.-</span>
   </div>
   <div class="header-right">
+    <nav class="tabs" role="tablist" aria-label="Dashboard sections">
+      <button type="button" class="tab-btn active" id="tab-btn-overview" role="tab" aria-controls="tab-pane-overview" aria-selected="true" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+      <button type="button" class="tab-btn" id="tab-btn-sessions" role="tab" aria-controls="tab-pane-sessions" aria-selected="false" data-tab="sessions" onclick="switchTab('sessions')">Sessions</button>
+    </nav>
     <span class="refresh-time" id="refresh-time">正在加载…</span>
     <button class="btn-refresh" onclick="refresh()">⟳ 刷新</button>
   </div>
 </header>
 
 <main>
+  <!-- Overview 页签 -->
+  <section class="tab-pane active" id="tab-pane-overview" role="tabpanel" aria-labelledby="tab-btn-overview" data-tab="overview">
   <!-- 时间区间选择器 -->
   <div class="time-range-bar">
     <span class="time-range-label">时间区间</span>
@@ -540,6 +667,55 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="html-legend-wrap" id="model-token-legend" style="display:none"></div>
     </div>
   </div>
+  </section>
+
+  <!-- Sessions 页签 -->
+  <section class="tab-pane" id="tab-pane-sessions" role="tabpanel" aria-labelledby="tab-btn-sessions" data-tab="sessions">
+  <!-- Sessions -->
+  <div class="card sessions-card">
+    <div class="session-table-wrap" id="sessions-table-wrap">
+      <table class="session-table">
+        <colgroup>
+          <col style="width:12%">
+          <col style="width:7%">
+          <col style="width:6%">
+          <col style="width:6%">
+          <col style="width:17%">
+          <col style="width:12%">
+          <col style="width:7%">
+          <col style="width:9%">
+          <col style="width:12%">
+          <col style="width:12%">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Session ID</th>
+            <th>Last Active</th>
+            <th>Requests</th>
+            <th>Tokens</th>
+            <th>Models</th>
+            <th>Vendors</th>
+            <th>Avg Latency</th>
+            <th>Success</th>
+            <th>Vendor Bind</th>
+            <th>Client</th>
+          </tr>
+        </thead>
+        <tbody id="sessions-tbody">
+          <tr><td colspan="10" class="empty">Loading...</td></tr>
+        </tbody>
+      </table>
+      <div class="session-pagination" id="session-pagination">
+        <span class="page-info" id="page-info"></span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="page-btn" id="btn-prev" onclick="changePage(-1)">Prev</button>
+          <span class="page-info" id="page-num"></span>
+          <button class="page-btn" id="btn-next" onclick="changePage(1)">Next</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  </section>
 
 </main>
 
@@ -580,7 +756,32 @@ function fmtTokens(n) {
   return String(n);
 }
 function fmtNum(n) { return n == null ? '–' : n.toLocaleString(); }
+function copyFromParent(btn) {
+  var text = btn.parentElement.getAttribute('data-key') || btn.parentElement.getAttribute('title') || '';
+  navigator.clipboard.writeText(text).then(function() {
+    btn.classList.add('copied');
+    btn.textContent = '✓';
+    setTimeout(function() { btn.classList.remove('copied'); btn.textContent = '⧉'; }, 1500);
+  });
+}
+function toggleRow(tr) {
+  var detail = tr.nextElementSibling;
+  if (!detail || !detail.classList.contains('row-detail')) return;
+  var wasOpen = detail.classList.contains('open');
+  // close all open rows first
+  document.querySelectorAll('.session-table tr.row-detail.open').forEach(function(r) { r.classList.remove('open'); });
+  if (!wasOpen) detail.classList.add('open');
+}
 function isValidLabel(s) { return typeof s === 'string' && s !== 'undefined' && s !== 'null' && s.trim() !== ''; }
+function fmtDuration(ms) {
+  if (ms == null) return '–';
+  var s = ms / 1000;
+  if (s < 1) return Math.round(ms) + 'ms';
+  if (s < 60) return s.toFixed(1).replace(/\\.0$/, '') + 's';
+  var m = Math.floor(s / 60);
+  var sec = Math.round(s % 60);
+  return sec > 0 ? m + 'min ' + sec + 's' : m + 'min';
+}
 function now() {
   return new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
@@ -590,12 +791,15 @@ function now() {
 // _API_VENDORS 需与后端 native_api/handler.py::_VENDOR_LABEL 对齐，
 // 新增无 -native 后缀的 native vendor 时同步更新本集合。
 const _API_VENDORS = new Set(['anthropic-native', 'openai', 'gemini']);
+function isApiVendor(v) { return _API_VENDORS.has(v); }
+function vendorShortName(v) {
+  if (!isValidLabel(v)) return v;
+  if (isApiVendor(v)) return v.endsWith('-native') ? v.slice(0, -'-native'.length) : v;
+  return v;
+}
 function formatVendorLabel(v) {
   if (!isValidLabel(v)) return v;
-  if (_API_VENDORS.has(v)) {
-    const name = v.endsWith('-native') ? v.slice(0, -'-native'.length) : v;
-    return 'api | ' + name;
-  }
+  if (isApiVendor(v)) return 'api | ' + vendorShortName(v);
   return 'cc | ' + v;
 }
 
@@ -886,10 +1090,11 @@ function renderQuotaBar(qg) {
   if (!qg || qg.usage_percent == null) return '';
   const pct = Math.round(qg.usage_percent);
   const label = quotaWindowLabel(qg.window_hours);
-  return `<span class="status-badge ${quotaClass(pct)}">${label} ${pct}%</span>` +
+  return `<div class="quota-group">` +
+    `<span class="status-badge ${quotaClass(pct)}">${label} ${pct}%</span>` +
     `<div class="quota-bar-wrap"><div class="quota-bar-bg">` +
     `<div class="quota-bar-fill" style="width:${Math.min(pct,100)}%;background:${quotaBarColor(pct)}"></div>` +
-    `</div></div>`;
+    `</div></div></div>`;
 }
 
 function updateVendorStatus(status) {
@@ -1263,47 +1468,340 @@ function updateChartTitles(days) {
   if (mt) mt.textContent = label + ' Token 用量（按 Vendor / 模型）';
 }
 
-// ── 主刷新逻辑 ────────────────────────────────────────────
+// ── Sessions Panel ──────────────────────────────────────────────
+function relativeTime(tsStr) {
+  if (!tsStr) return '–';
+  var d = new Date(tsStr.replace('Z', '+00:00'));
+  var diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+function escapeHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function truncateKey(key, maxLen) {
+  if (!key || key.length <= maxLen) return escapeHtml(key) || '–';
+  return escapeHtml(key.slice(0, maxLen - 3)) + '…';
+}
+function parseSessionKey(raw) {
+  try { var o = JSON.parse(raw); return { device_id: o.device_id||'', account_uuid: o.account_uuid||'', session_id: o.session_id||'' }; }
+  catch(e) { return { device_id:'', account_uuid:'', session_id: raw || '' }; }
+}
+function shortId(s, n) { return s ? (s.length <= n ? s : s.slice(0, n) + '…') : ''; }
+function successBarHtml(pct) {
+  if (pct == null) return '–';
+  var p = Math.round(pct);
+  var color = p >= 95 ? 'var(--accent-green)' : (p >= 80 ? 'var(--accent-yellow)' : 'var(--accent-red)');
+  return '<span style="font-family:JetBrains Mono,monospace;font-size:12px">' + p + '%</span>' +
+    '<span class="success-bar"><span class="success-bar-fill" style="width:' + p + '%;background:' + color + '"></span></span>';
+}
+function formatSessionTags(str, max) {
+  if (!str) return '–';
+  var list = str.split(',');
+  var html = list.slice(0, max).map(function(c) {
+    return '<span class="session-tag">' + escapeHtml(c.trim()) + '</span>';
+  }).join('');
+  if (list.length > max) {
+    var fullList = list.map(function(c) { return c.trim(); }).join(', ');
+    html += '<span class="session-tag" title="' + escapeHtml(fullList) + '">+' + (list.length - max) + '</span>';
+  }
+  return html;
+}
+function formatCategories(cats) {
+  if (!cats) return '–';
+  return cats.split(',').map(function(c) {
+    var t = c.trim();
+    var label = t === 'cc' ? 'Claude Code' : (t === 'api' ? 'API' : escapeHtml(t));
+    return '<span class="session-tag">' + label + '</span>';
+  }).join('');
+}
+function formatVendorTags(vendors) {
+  if (!vendors) return '–';
+  var list = vendors.split(',');
+  var max = 4;
+  var html = list.slice(0, max).map(function(v) {
+    var vt = v.trim();
+    var name = vendorShortName(vt);
+    var fullLabel = formatVendorLabel(vt);
+    var cls = isApiVendor(vt) ? 'session-tag' : 'session-tag session-tag-cc';
+    return '<span class="' + cls + '" title="' + escapeHtml(fullLabel) + '">' + escapeHtml(name) + '</span>';
+  }).join('');
+  if (list.length > max) {
+    var fullList = list.map(function(v) { return formatVendorLabel(v.trim()); }).join(', ');
+    html += '<span class="session-tag" title="' + escapeHtml(fullList) + '">+' + (list.length - max) + '</span>';
+  }
+  return html;
+}
+// ── Sessions Pagination State ──
+var allSessions = [];
+var sessionPage = 0;
+var sessionPageSize = 30;
+var sessionBindMap = {};
+var sessionAvailableVendors = [];
+
+async function updateSessions() {
+  try {
+    var results = await Promise.allSettled([
+      fetchJSON('/api/dashboard/sessions?hours=24&limit=200'),
+      fetchJSON('/api/session-vendor'),
+      fetchJSON('/api/status'),
+    ]);
+    if (results[0].status === 'rejected') throw results[0].reason;
+    var data = results[0].value;
+    var bindData = results[1].status === 'fulfilled' ? results[1].value : {bindings: []};
+    var statusData = results[2].status === 'fulfilled' ? results[2].value : {tiers: []};
+    allSessions = data.sessions || [];
+    sessionBindMap = {};
+    (bindData.bindings || []).forEach(function(b) { sessionBindMap[b.session_key] = b.vendors; });
+    sessionAvailableVendors = (statusData.tiers || []).map(function(t) { return t.name; });
+    sessionPage = 0;
+    renderSessionPage();
+  } catch (e) {
+    console.error('Sessions refresh error:', e);
+  }
+}
+
+function renderSessionPage() {
+  var total = allSessions.length;
+  var totalPages = Math.max(1, Math.ceil(total / sessionPageSize));
+  if (sessionPage >= totalPages) sessionPage = totalPages - 1;
+  var start = sessionPage * sessionPageSize;
+  var page = allSessions.slice(start, start + sessionPageSize);
+  var tbody = document.getElementById('sessions-tbody');
+
+  if (!total) {
+    tbody.innerHTML = '<tr><td colspan="10" class="empty"><div class="empty-icon">📭</div>No session data</td></tr>';
+  } else {
+    tbody.innerHTML = page.map(function(s) {
+      var parsed = parseSessionKey(s.session_key);
+      var boundVendors = sessionBindMap[s.session_key];
+      var selectHtml = buildBindSelect(s.session_key, boundVendors, sessionAvailableVendors);
+      var modelsFull = (s.models || '').split(',').map(function(c){return c.trim();});
+      var vendorsFull = (s.vendors || '').split(',').map(function(v){return formatVendorLabel(v.trim());});
+      var sr = s.success_rate != null ? Math.round(s.success_rate) : null;
+      return '<tr data-row onclick="toggleRow(this)">' +
+        '<td class="session-key" onclick="event.stopPropagation()">' +
+          '<div class="session-id" data-key="' + escapeHtml(s.session_key) + '" title="' + escapeHtml(s.session_key) + '">' +
+            '<span class="session-id-text">' + escapeHtml(parsed.session_id || s.session_key) + '</span>' +
+            '<button class="copy-btn" onclick="copyFromParent(this)" title="Copy Session ID">⧉</button>' +
+          '</div>' +
+          '<div class="session-meta" title="device: ' + escapeHtml(parsed.device_id) + ' | account: ' + escapeHtml(parsed.account_uuid) + '">' +
+            'dev:' + escapeHtml(shortId(parsed.device_id, 8)) + ' · acct:' + escapeHtml(shortId(parsed.account_uuid, 8)) +
+          '</div>' +
+        '</td>' +
+        '<td>' + relativeTime(s.last_active_ts) + '</td>' +
+        '<td style="font-family:JetBrains Mono,monospace">' + fmtNum(s.total_requests) + '</td>' +
+        '<td style="font-family:JetBrains Mono,monospace">' + fmtTokens(s.total_tokens) + '</td>' +
+        '<td title="' + escapeHtml(modelsFull.join(', ')) + '">' + formatSessionTags(s.models, 3) + '</td>' +
+        '<td title="' + escapeHtml(vendorsFull.join(', ')) + '">' + formatVendorTags(s.vendors) + '</td>' +
+        '<td style="font-family:JetBrains Mono,monospace">' + fmtDuration(s.avg_duration_ms) + '</td>' +
+        '<td class="cell-success">' + successBarHtml(s.success_rate) + '</td>' +
+        '<td onclick="event.stopPropagation()">' + selectHtml + '</td>' +
+        '<td>' + formatCategories(s.client_categories) + '</td>' +
+        '</tr>' +
+        '<tr class="row-detail"><td colspan="10"><div class="detail-card">' +
+          '<div class="detail-identity-row">' +
+            '<div class="detail-item"><div class="detail-label">Session ID</div><div class="detail-value" title="' + escapeHtml(s.session_key) + '">' + escapeHtml(parsed.session_id || s.session_key) + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Device</div><div class="detail-value" title="' + escapeHtml(parsed.device_id || '') + '">' + (parsed.device_id ? escapeHtml(parsed.device_id) : '–') + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Account</div><div class="detail-value" title="' + escapeHtml(parsed.account_uuid || '') + '">' + (parsed.account_uuid ? escapeHtml(parsed.account_uuid) : '–') + '</div></div>' +
+          '</div>' +
+          '<div class="detail-metrics-grid">' +
+            '<div class="detail-item"><div class="detail-label">Last Active</div><div class="detail-value">' + relativeTime(s.last_active_ts) + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Requests</div><div class="detail-value">' + fmtNum(s.total_requests) + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Tokens</div><div class="detail-value">' + fmtTokens(s.total_tokens) + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Models</div><div class="detail-value">' + (modelsFull.length ? modelsFull.map(function(m){return '<span class="session-tag">' + escapeHtml(m) + '</span>';}).join(' ') : '–') + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Vendors</div><div class="detail-value">' + (vendorsFull.length ? vendorsFull.map(function(v){return '<span class="session-tag">' + escapeHtml(v) + '</span>';}).join(' ') : '–') + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Avg Latency</div><div class="detail-value">' + fmtDuration(s.avg_duration_ms) + '</div></div>' +
+            '<div class="detail-item" style="grid-column:span 2"><div class="detail-inline-pair">' +
+              '<div><div class="detail-label">Success Rate</div><div class="detail-value">' + (sr != null ? sr + '%' : '–') + '</div></div>' +
+              '<div><div class="detail-label">Client</div><div class="detail-value">' + escapeHtml(s.client_categories || '–') + '</div></div>' +
+            '</div></div>' +
+          '</div>' +
+        '</div></td></tr>';
+    }).join('');
+  }
+
+  document.getElementById('page-info').textContent = total + ' sessions';
+  document.getElementById('page-num').textContent = (sessionPage + 1) + ' / ' + totalPages;
+  document.getElementById('btn-prev').disabled = (sessionPage === 0);
+  document.getElementById('btn-next').disabled = (sessionPage >= totalPages - 1);
+}
+
+function changePage(delta) {
+  var totalPages = Math.max(1, Math.ceil(allSessions.length / sessionPageSize));
+  sessionPage = Math.max(0, Math.min(totalPages - 1, sessionPage + delta));
+  renderSessionPage();
+}
+
+function buildBindSelect(sessionKey, boundVendors, availableVendors) {
+  var isBound = boundVendors && boundVendors.length > 0;
+  var multiBound = isBound && boundVendors.length > 1;
+  var selected = isBound ? boundVendors[0] : '';
+  var html = '<select class="bind-select" data-session-key="' + escapeHtml(sessionKey) + '">';
+  html += '<option value=""' + (!isBound ? ' selected' : '') + '>Default</option>';
+  availableVendors.forEach(function(v) {
+    var label = multiBound && v === selected ? escapeHtml(v) + ' (+' + (boundVendors.length - 1) + ')' : escapeHtml(v);
+    html += '<option value="' + escapeHtml(v) + '"' + (v === selected ? ' selected' : '') + '>' + label + '</option>';
+  });
+  html += '</select>';
+  return html;
+}
+
+async function handleBindChange(sel) {
+  var sessionKey = sel.getAttribute('data-session-key');
+  var vendor = sel.value;
+  var previousValue = sel.getAttribute('data-previous') || '';
+  try {
+    var resp;
+    if (vendor) {
+      resp = await fetch('/api/session-vendor', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({session_key: sessionKey, vendors: [vendor]}),
+      });
+    } else {
+      resp = await fetch('/api/session-vendor/' + encodeURIComponent(sessionKey), {method: 'DELETE'});
+    }
+    if (!resp.ok) {
+      sel.value = previousValue;
+      console.error('Bind change rejected:', resp.status, await resp.text());
+    }
+  } catch (e) {
+    sel.value = previousValue;
+    console.error('Bind change failed:', e);
+  }
+}
+
+var sessionsTbody = document.getElementById('sessions-tbody');
+sessionsTbody.addEventListener('focus', function(e) {
+  if (e.target.classList.contains('bind-select')) {
+    e.target.setAttribute('data-previous', e.target.value);
+  }
+}, true);
+sessionsTbody.addEventListener('change', function(e) {
+  if (e.target.classList.contains('bind-select')) {
+    handleBindChange(e.target);
+  }
+});
+
+// ── 主刷新逻辑（按 Tab 分发） ──────────────────────────────
 let refreshing = false;
+let currentTab = 'overview';
+const tabLoaded = { overview: false, sessions: false };
+const TAB_LABELS = { overview: 'Overview', sessions: 'Sessions' };
+
+async function refreshOverview() {
+  const days = currentDays > 0 ? currentDays : 7;
+  const [summary, timeline, status] = await Promise.all([
+    fetchJSON('/api/dashboard/summary?days=' + days),
+    fetchJSON('/api/dashboard/timeline?days=' + days),
+    fetchJSON('/api/status'),
+  ]);
+
+  if (summary.version) {
+    document.getElementById('version-badge').textContent = 'v' + summary.version;
+  }
+
+  updateKPI(summary);
+  updateVendorStatus(status);
+  updateChartTitles(days);
+
+  const rows = timeline.rows || [];
+  const tierOrder = (status.tiers || []).map(t => t.name);
+  buildTimeline(rows, tierOrder);
+  buildVendorDist(rows, tierOrder);
+  buildTokenTimeline(rows, tierOrder);
+  buildModelTokenTimeline(rows);
+}
+
+async function refreshSessions() {
+  await updateSessions();
+}
+
 async function refresh() {
   if (refreshing) return;
   refreshing = true;
-  document.getElementById('refresh-time').textContent = '刷新中…';
   try {
-    const days = currentDays > 0 ? currentDays : 7;
-    const [summary, timeline, status] = await Promise.all([
-      fetchJSON('/api/dashboard/summary?days=' + days),
-      fetchJSON('/api/dashboard/timeline?days=' + days),
-      fetchJSON('/api/status'),
-    ]);
-
-    if (summary.version) {
-      document.getElementById('version-badge').textContent = 'v' + summary.version;
+    // 循环：若 await 期间用户切到了尚未加载的另一页签，补一次刷新，避免 tabLoaded 错位。
+    while (true) {
+      const tab = currentTab;
+      document.getElementById('refresh-time').textContent = '刷新中…';
+      try {
+        if (tab === 'sessions') {
+          await refreshSessions();
+        } else {
+          await refreshOverview();
+        }
+        tabLoaded[tab] = true;
+        if (tab === currentTab) {
+          document.getElementById('refresh-time').textContent =
+            '上次刷新: ' + now() + '（' + TAB_LABELS[tab] + '）';
+        }
+      } catch (e) {
+        console.error('Dashboard refresh error:', e);
+        document.getElementById('refresh-time').textContent = '刷新失败 ' + now();
+      }
+      if (currentTab !== tab && !tabLoaded[currentTab]) continue;
+      break;
     }
-
-    updateKPI(summary);
-    updateVendorStatus(status);
-    updateChartTitles(days);
-
-    const rows = timeline.rows || [];
-    const tierOrder = (status.tiers || []).map(t => t.name);
-    buildTimeline(rows, tierOrder);
-    buildVendorDist(rows, tierOrder);
-    buildTokenTimeline(rows, tierOrder);
-    buildModelTokenTimeline(rows);
-
-    document.getElementById('refresh-time').textContent = '上次刷新: ' + now();
-  } catch (e) {
-    console.error('Dashboard refresh error:', e);
-    document.getElementById('refresh-time').textContent = '刷新失败 ' + now();
   } finally {
     refreshing = false;
   }
 }
 
-// 页面加载 + 每 30 秒自动刷新
-refresh();
-setInterval(refresh, 600000);
+// ── 页签切换（懒加载 + URL 同步） ─────────────────────────
+function syncTabUrl(name) {
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('tab') === name) return;
+    url.searchParams.set('tab', name);
+    window.history.replaceState({}, '', url);
+  } catch (e) { /* no-op */ }
+}
+
+function applyTabState(name) {
+  document.querySelectorAll('.tab-btn').forEach(function (b) {
+    const active = b.getAttribute('data-tab') === name;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('.tab-pane').forEach(function (p) {
+    p.classList.toggle('active', p.getAttribute('data-tab') === name);
+  });
+}
+
+function switchTab(name) {
+  if (name !== 'overview' && name !== 'sessions') name = 'overview';
+  if (name === currentTab) {
+    syncTabUrl(name);
+    return;
+  }
+  currentTab = name;
+  applyTabState(name);
+  syncTabUrl(name);
+  refresh();
+}
+
+// ── 初始化 ────────────────────────────────────────────────
+(function bootstrap() {
+  let initial = 'overview';
+  try {
+    const t = new URL(window.location.href).searchParams.get('tab');
+    if (t === 'sessions') initial = 'sessions';
+  } catch (e) { /* no-op */ }
+  currentTab = initial;
+  applyTabState(initial);
+  syncTabUrl(initial);
+  // Load version immediately regardless of active tab
+  fetchJSON('/api/dashboard/summary?days=7').then(function(s) {
+    if (s && s.version) document.getElementById('version-badge').textContent = 'v' + s.version;
+  }).catch(function(){});
+  refresh();                     // 仅加载初始页签的数据
+  setInterval(refresh, 600000);  // 每 10 分钟刷新当前页签
+})();
 </script>
 </body>
 </html>
@@ -1468,6 +1966,38 @@ def register_dashboard_routes(app: Any) -> None:
             "count": days,
             "rows": rows,
         }
+        return Response(
+            content=json.dumps(result, ensure_ascii=False).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    @app.get("/api/dashboard/sessions")
+    async def dashboard_sessions(
+        request: Request, hours: float = 24.0, limit: int = 20
+    ) -> Response:
+        """返回近期活跃会话聚合数据."""
+        token_logger = getattr(request.app.state, "token_logger", None)
+        if token_logger is None:
+            return Response(
+                content=b'{"error":"token_logger not available"}',
+                status_code=503,
+                media_type="application/json",
+            )
+        hours = max(1.0, min(hours, 168.0))
+        limit = max(1, min(limit, 200))
+        try:
+            sessions = await token_logger.query_recent_sessions(
+                limit=limit, hours=hours
+            )
+        except Exception as exc:
+            logger.error("dashboard_sessions query error: %s", exc, exc_info=True)
+            return Response(
+                content=b'{"error":"query failed"}',
+                status_code=500,
+                media_type="application/json",
+            )
+        result = {"sessions": sessions, "hours": hours}
         return Response(
             content=json.dumps(result, ensure_ascii=False).encode(),
             status_code=200,
