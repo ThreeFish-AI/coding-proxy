@@ -449,11 +449,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .detail-identity-row .detail-item { flex: 3 1 0; }
     .detail-identity-row .detail-item:first-child { flex: 2 1 0; }
-    .detail-identity-row .detail-value { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+    .detail-identity-row .detail-value { font-family: 'JetBrains Mono', monospace; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; word-break: normal; }
     .detail-metrics-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-      gap: 10px 20px;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 10px 16px;
     }
     .detail-inline-pair { display: flex; gap: 16px; }
     .detail-inline-pair > div { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
