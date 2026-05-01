@@ -6,9 +6,6 @@ import json
 
 import pytest
 
-if True:  # 延迟导入避免模块级 side effects
-    pass
-
 # Claude Code 发送的典型 headers
 CLAUDE_CODE_HEADERS = {
     "anthropic-version": "2023-06-01",
