@@ -355,11 +355,11 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         token = await self._token_manager.get_token()
 
         # 懒加载：未配置 project_id 时尝试自动发现（仅标准 GLA 模式需要）
-        # v1internal 模式（base_url 含 v1internal）不依赖 project_id
+        # v1internal 模式不依赖 project_id，跳过发现
         if (
             not self._project_id
             and not self._project_discovery_attempted
-            and "v1internal" not in self._base_url
+            and not self._v1internal_enabled
         ):
             discovered = await self._discover_project_id(token)
             if discovered:
