@@ -159,7 +159,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .kpi-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
+      gap: 5px;
       margin-bottom: 24px;
     }
     .kpi-card {
