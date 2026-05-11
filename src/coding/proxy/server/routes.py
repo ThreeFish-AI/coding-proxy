@@ -150,14 +150,15 @@ def register_core_routes(app: Any, router: Any) -> None:
 
         source = infer_source_vendor_from_body(body)
         if source:
-            channel_fn = get_transition_channel(source, target_vendor.name)
+            target_name = target_vendor.get_name()
+            channel_fn = get_transition_channel(source, target_name)
             if channel_fn is not None:
                 body, adaptations = channel_fn(body)
                 if adaptations:
                     logger.debug(
                         "count_tokens channel %s → %s: %s",
                         source,
-                        target_vendor.name,
+                        target_name,
                         ", ".join(adaptations),
                     )
 

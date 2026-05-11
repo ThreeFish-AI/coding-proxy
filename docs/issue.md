@@ -90,3 +90,45 @@ Zhipu GLM-5 流式响应偶发将 inline `tool_result` 块输出在**对应的 `
 - 历史教训: commit `9061cd0` 曾经实现"两遍扫描 + sanity helper"修复了正是这类问题, 但 commit `2bac9a7` revert 至 v0.3.0 时**连带回滚**了它 — revert 的真实目标是去除 `f497077` / `fdd4a92` / `43488a1` 引入的"zhipu 自清理通道"和"tool_result.id 注入"副作用, 两遍扫描属无辜方。**后续若再次需要 revert `vendor_channels.py`**, 必须先 `grep _enforce_pairing_sanity_pass` 与 `Pass 1` / `Pass 2` 注释, 确认这两段是核心修复而非可以一起回滚的实验性代码。
 - 类似 "vendor 私有 ID 跨消息体改写" 场景 (如 doubao、minimax 未来若引入类似机制), 实现时同样应当遵循"先全局收集 id_map、后统一改写"的两阶段模式。
 - 单元测试覆盖"块顺序敏感"类 bug 时, 建议在用例命名中显式标注顺序条件 (如 `test_two_pass_handles_inline_tool_result_before_server_tool_use`), 让未来 reviewer 一眼看出测试的边界价值。
+
+---
+
+## count_tokens 路由 `AttributeError: 'ZhipuVendor' object has no attribute 'name'`
+
+**问题描述**
+
+后台日志反复出现 `POST /v1/messages/count_tokens?beta=true 500 Internal Server Error`，并伴随：
+
+```
+File ".../coding/proxy/server/routes.py", line 153, in count_tokens
+    channel_fn = get_transition_channel(source, target_vendor.name)
+AttributeError: 'ZhipuVendor' object has no attribute 'name'
+```
+
+同一时间窗口内大量请求 200 OK、少量请求 500，呈"间歇性"故障特征。
+
+**表因**
+
+`src/coding/proxy/server/routes.py` 的 `count_tokens` 在 153 / 160 两处访问 `target_vendor.name`，触发 `AttributeError` 被 ASGI 中间件捕获返回 500。
+
+**根因**
+
+`BaseVendor` 仅暴露**抽象方法** `get_name() -> str`（`src/coding/proxy/vendors/base.py:75-77`），所有派生类（`AnthropicVendor`、`ZhipuVendor`、`CopilotVendor`、`MinimaxVendor`、`DoubaoVendor`、`KimiVendor` 等）均通过 `_vendor_name` 类属性配合 `get_name()` 返回名称 —— **并无 `name` 实例属性**。该错误访问在 lint/类型检查阶段无告警（因 `BaseVendor` 未在类型系统中约束 `name` 字段），仅在运行时触发。
+
+间歇性原因：第 152 行 `if source:` 是守卫；`source` 由 `infer_source_vendor_from_body(body)`（`src/coding/proxy/convert/vendor_channels.py:357-394`）从请求体启发式推断，仅当出现 zhipu 私有产物（`srvtoolu_*` 形式的 `tool_use.id` 或 `server_tool_use` / `server_tool_use_delta` 类型 content block）时返回 `"zhipu"`，否则 `None`。纯净的首轮 count_tokens 请求 `source is None` 自然绕过 153 行，因此 200/500 共存。
+
+**处理方式**
+
+1. `routes.py:153,160` 将 `target_vendor.name` 改为 `target_vendor.get_name()`，并将结果提取到局部变量 `target_name` 复用，避免重复方法调用与日志/调用点不一致风险。
+2. `tests/test_app_routes.py` 新增 `test_count_tokens_triggers_zhipu_to_target_channel`：通过注入 `server_tool_use` + `srvtoolu_*` 让 `infer_source_vendor_from_body` 返回 `"zhipu"`，断言返回 200 且 debug 日志含 `"count_tokens channel zhipu → anthropic"`，证明通道被实际触发。此前 6 个 count_tokens 测试的请求体都是纯净的、未触达该分支，是 bug 长期漏过的根因。
+
+**后续防范**
+
+- 跨模块引用 Vendor 实例字段时，**统一通过 `BaseVendor` 暴露的方法**（`get_name()`、`map_model()` 等），避免直接访问派生类未定义的"假属性"。
+- 长期演进可考虑在 `BaseVendor` 增加 `@property name` 指向 `get_name()`，将契约前移到类型系统由 mypy / pyright 拦截 —— 该重构属"演进式设计"范畴，不在本次最小干预范围内。
+- 测试覆盖原则：路由层涉及"内容感知"分支（如 `infer_source_vendor_from_body`）时，至少补一个让分支命中的最小用例，避免守卫掩盖代码缺陷。
+
+**同类问题影响与处理注意事项**
+
+- 已 `grep -rn "vendor\.name\b" src/` 全仓扫描，确认 `target_vendor.name | vendor.name` 误用仅 routes.py 的这两处，已随本次修复一并消除。`/v1/messages` 主链路在 executor 中调用 `tier.name`（`Tier` 对象的合法 dataclass 属性），与 vendor 实例 `name` 无关，不受影响。
+- 若未来新增 Vendor 子类，仍只需实现 `get_name()` 抽象方法；外部调用方应遵循同一契约，本档案的修复模式可作为参考。
