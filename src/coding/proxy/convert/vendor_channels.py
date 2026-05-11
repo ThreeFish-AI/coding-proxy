@@ -219,7 +219,112 @@ def enforce_anthropic_tool_pairing(
             ", ".join(synthesized_ids),
         )
 
+    # 纵深防御: sanity 兜底，捕获主循环未覆盖的边角配对漏洞
+    adaptations.extend(_enforce_pairing_sanity_pass(messages_list))
+
     return adaptations
+
+
+def _enforce_pairing_sanity_pass(
+    messages_list: list[dict[str, Any]],
+) -> list[str]:
+    """``enforce_anthropic_tool_pairing`` 主循环之后的纯检测兜底 helper.
+
+    职责正交于主循环（不剥离 tool_result、不插入新 user 消息），仅做两件事:
+
+    1. 遍历每个 ``role == "assistant"`` 且包含 ``tool_use`` 块的消息，
+       检查 ``messages[i+1]`` 是否为 ``user`` 且包含所有 ``tool_use.id`` 对应
+       ``tool_result.tool_use_id``。
+    2. 缺失项在该 user 消息末尾追加 ``is_error=True`` 占位块；如果 next 消息根本
+       不是 user（主循环未触达此分支的退化场景），同样不做插入，仅记录 WARNING
+       供运维定位 —— 该路径正常情况下永不命中（主循环已保证 next user 存在）。
+
+    本 helper 单独抽出的目的有两个:
+
+    - 直接构造"绕过主循环"的输入做单元测试，确保 sanity 分支具备**正向回归保护**
+      （历史教训: ``9061cd0`` 引入两遍扫描+sanity 后被 ``2bac9a7`` 连带回滚，
+      重要原因之一是缺乏对兜底路径的独立单测）。
+    - 在主循环 A-F 步骤未来重构时，sanity 仍能稳定守住 Anthropic 配对约束。
+
+    Args:
+        messages_list: 消息列表（就地修改）。
+
+    Returns:
+        新增的 adaptation 标签列表（命中则为 ``["pairing_sanity_repaired"]``，否则空列表）。
+    """
+    repaired: list[tuple[int, str]] = []
+
+    for i, msg in enumerate(messages_list):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        tool_use_ids = [
+            b["id"]
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")
+        ]
+        if not tool_use_ids:
+            continue
+
+        next_idx = i + 1
+        if (
+            next_idx >= len(messages_list)
+            or not isinstance(messages_list[next_idx], dict)
+            or messages_list[next_idx].get("role") != "user"
+        ):
+            # 主循环正常情况下已保证 next 为 user；此处仅日志告警，不做隐式插入
+            # 以避免与主循环职责重叠。
+            logger.warning(
+                "Sanity pass: assistant at messages[%d] has tool_use without "
+                "user next message (tool_use_ids=%s). Main enforce loop may have a regression.",
+                i,
+                ", ".join(tool_use_ids),
+            )
+            continue
+
+        user_msg = messages_list[next_idx]
+        user_content = user_msg.get("content")
+        if not isinstance(user_content, list):
+            # 主循环 D 步已将 string content 归一化为 list；这里防御性兜底
+            user_msg["content"] = (
+                [{"type": "text", "text": user_content}]
+                if isinstance(user_content, str)
+                else []
+            )
+            user_content = user_msg["content"]
+
+        existing_result_ids = {
+            b["tool_use_id"]
+            for b in user_content
+            if isinstance(b, dict)
+            and b.get("type") == "tool_result"
+            and b.get("tool_use_id")
+        }
+        for uid in tool_use_ids:
+            if uid in existing_result_ids:
+                continue
+            user_content.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": uid,
+                    "content": "",
+                    "is_error": True,
+                }
+            )
+            repaired.append((i, uid))
+
+    if not repaired:
+        return []
+
+    logger.warning(
+        "Sanity pass repaired %d unpaired tool_use(s) missed by main enforce loop. "
+        "Affected: %s",
+        len(repaired),
+        ", ".join(f"messages[{idx}]:{uid}" for idx, uid in repaired),
+    )
+    return ["pairing_sanity_repaired"]
 
 
 def _strip_cache_control(body: dict[str, Any]) -> int:
@@ -294,8 +399,22 @@ def _rewrite_srvtoolu_ids(body: dict[str, Any]) -> tuple[int, dict[str, str]]:
 
     Anthropic API 要求 tool_use 类型与 ``toolu_*`` 格式的 ID。Zhipu 的
     ``server_tool_use`` + ``srvtoolu_*`` 在上游 Anthropic 兼容端点可用，但无法
-    透传至其他供应商；同时还需重写紧随其后 user 消息中 ``tool_result.tool_use_id``
-    引用，保持配对关系。
+    透传至其他供应商；同时还需重写所有 ``tool_result.tool_use_id`` 引用，保持配对关系。
+
+    **两遍扫描（消除块顺序敏感性）**:
+
+    - Pass 1: 仅遍历 ``role == "assistant"`` 的消息，按 assistant 出现顺序为每个
+      待改写的 tool_use 分配 ``toolu_normalized_N`` 新 ID，建立完整 ``id_map``。
+    - Pass 2: 全量遍历消息，对任意 ``tool_result.tool_use_id ∈ id_map`` 的块
+      原地改写为新 ID（不分 user / assistant，覆盖 misplaced 与跨消息边界场景）。
+
+    单遍方案在 GLM-5 偶发将 inline ``tool_result`` 输出在对应 ``server_tool_use``
+    之前的乱序场景下，会因 Case B 时 ``id_map`` 尚未填入而漏改 ``tool_use_id``，
+    导致 ``enforce_anthropic_tool_pairing`` 后 ``extracted_tool_results`` 的 key
+    与 ``tool_use_ids`` 不一致，进而把本应配对的 misplaced tool_result 默默丢弃，
+    最终触发 Anthropic ``messages.x: tool_use ids were found without tool_result
+    blocks immediately after`` 400 错误。两遍扫描以"先建表、后改写"的次序消除该
+    时序耦合。
 
     Returns:
         (rewritten_count, id_map) — 重写次数与 {原 ID: 新 ID} 映射。
@@ -308,45 +427,56 @@ def _rewrite_srvtoolu_ids(body: dict[str, Any]) -> tuple[int, dict[str, str]]:
         counter += 1
         return f"toolu_normalized_{counter}"
 
+    # Pass 1: 扫描 assistant 消息，改写 tool_use / server_tool_use 的 id 与 type，
+    # 按出现顺序填充 id_map（保持与单遍版本相同的序号分配，避免破坏既有断言）。
     for message in body.get("messages", []):
-        if not isinstance(message, dict):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
         content = message.get("content")
         if not isinstance(content, list):
             continue
-        role = message.get("role")
         for block in content:
             if not isinstance(block, dict):
                 continue
             block_type = block.get("type")
+            if block_type not in {"tool_use", "server_tool_use"}:
+                continue
             block_id = block.get("id")
+            if isinstance(block_id, str) and _ANTHROPIC_SERVER_TOOL_USE_ID_RE.match(
+                block_id
+            ):
+                new_id = next_id()
+                id_map[block_id] = new_id
+                block["id"] = new_id
+                block["type"] = "tool_use"
+            elif (
+                isinstance(block_id, str)
+                and block_id
+                and not _ANTHROPIC_TOOL_USE_ID_RE.match(block_id)
+                and block.get("name")
+            ):
+                # 非标准 ID（非 toolu_ / srvtoolu_），且具备 name 可改写
+                new_id = next_id()
+                id_map[block_id] = new_id
+                block["id"] = new_id
+                block["type"] = "tool_use"
+            elif block_type == "server_tool_use" and isinstance(block_id, str):
+                # 兜底: 类型是 server_tool_use 但 ID 已是标准 toolu_ 形式，仅纠正类型
+                block["type"] = "tool_use"
 
-            # Case A: assistant 消息里的 server_tool_use / srvtoolu_* → 改写
-            if role == "assistant" and block_type in {"tool_use", "server_tool_use"}:
-                if isinstance(block_id, str) and _ANTHROPIC_SERVER_TOOL_USE_ID_RE.match(
-                    block_id
-                ):
-                    new_id = next_id()
-                    id_map[block_id] = new_id
-                    block["id"] = new_id
-                    block["type"] = "tool_use"
-                elif (
-                    isinstance(block_id, str)
-                    and block_id
-                    and not _ANTHROPIC_TOOL_USE_ID_RE.match(block_id)
-                    and block.get("name")
-                ):
-                    # 非标准 ID（非 toolu_ / srvtoolu_），且具备 name 可改写
-                    new_id = next_id()
-                    id_map[block_id] = new_id
-                    block["id"] = new_id
-                    block["type"] = "tool_use"
-                elif block_type == "server_tool_use" and isinstance(block_id, str):
-                    # 兜底: 类型是 server_tool_use 但 ID 已是标准 toolu_ 形式，仅纠正类型
-                    block["type"] = "tool_use"
-
-            # Case B: user 消息里的 tool_result.tool_use_id 同步重写
-            if block_type == "tool_result":
+    # Pass 2: 全量扫描，对任意 tool_result.tool_use_id 命中 id_map 的块同步改写。
+    if id_map:
+        for message in body.get("messages", []):
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") != "tool_result":
+                    continue
                 tool_use_id = block.get("tool_use_id")
                 if isinstance(tool_use_id, str) and tool_use_id in id_map:
                     block["tool_use_id"] = id_map[tool_use_id]
