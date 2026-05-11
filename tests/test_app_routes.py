@@ -286,6 +286,76 @@ def test_count_tokens_falls_back_to_tiers0_on_cold_start():
             assert resp.json()["input_tokens"] == 88
 
 
+def test_count_tokens_triggers_zhipu_to_target_channel(caplog):
+    """count_tokens 请求体含 zhipu 私有产物时，应触发跨供应商通道并返回 200.
+
+    回归测试：routes.py 历史上错误访问 target_vendor.name（BaseVendor 仅暴露 get_name()
+    方法，并无 name 属性），当 infer_source_vendor_from_body() 推断出非空 source 时
+    会抛 AttributeError 返回 500。本用例通过注入 zhipu 私有产物（srvtoolu_* id 与
+    server_tool_use 块）触发该路径，断言 200 且 adaptations 日志被打印。
+    """
+    config = ProxyConfig(
+        tiers=[
+            {"vendor": "anthropic", "enabled": True, "api_key": "sk-ant-test"},
+        ],
+        database={"path": "/tmp/test-count-tokens-zhipu-channel.db"},
+    )
+    app = create_app(config)
+
+    mock_response = MagicMock()
+    mock_response.content = b'{"input_tokens": 99}'
+    mock_response.status_code = 200
+
+    body_with_zhipu_artifact = {
+        "model": "claude-sonnet-4-20250514",
+        "messages": [
+            {"role": "user", "content": "Hello"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_abc123",
+                        "name": "web_search",
+                        "input": {"query": "test"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "srvtoolu_abc123",
+                        "content": "result",
+                    },
+                ],
+            },
+        ],
+    }
+
+    with TestClient(app) as client:
+        with patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            with caplog.at_level(logging.DEBUG, logger="coding.proxy.server.routes"):
+                resp = client.post(
+                    "/v1/messages/count_tokens?beta=true",
+                    json=body_with_zhipu_artifact,
+                    headers={"authorization": "Bearer sk-test"},
+                )
+            assert resp.status_code == 200
+            assert resp.json()["input_tokens"] == 99
+            # 通道被实际触发的证据：debug 日志含 "count_tokens channel zhipu → anthropic"
+            assert any(
+                "count_tokens channel zhipu" in record.message
+                for record in caplog.records
+            ), "expected zhipu→anthropic channel adaptation log"
+
+
 def test_status_exposes_vendor_diagnostics():
     """状态接口暴露供应商诊断信息，便于排查凭证交换异常."""
     config = ProxyConfig(
