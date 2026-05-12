@@ -18,6 +18,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
+from urllib.parse import unquote
 
 import httpx
 
@@ -172,8 +173,16 @@ class NativeProxyHandler:
             )
 
         method = request.method.upper()
-        operation = OperationClassifier.classify(provider, method, rest_path)
-        endpoint = rest_path if rest_path.startswith("/") else f"/{rest_path}"
+        # 防御性 URL 解码：确保 %3A → : 以兼容 Gemini :verb 路径语法。
+        # ASGI 规范要求 scope["path"] 已解码，但部分服务器/反向代理对
+        # 合法路径字符（如冒号）可能保留编码形态。
+        decoded_rest_path = unquote(rest_path)
+        operation = OperationClassifier.classify(provider, method, decoded_rest_path)
+        endpoint = (
+            decoded_rest_path
+            if decoded_rest_path.startswith("/")
+            else f"/{decoded_rest_path}"
+        )
 
         upstream_headers = _filter_request_headers(dict(request.headers))
         # 强制 identity —— 阻止上游压缩（httpx 默认会自动补 gzip,deflate;
