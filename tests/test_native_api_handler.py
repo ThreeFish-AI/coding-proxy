@@ -372,3 +372,74 @@ def test_http_method_coverage(method: str) -> None:
         r = client.request(method, "/api/openai/v1/files/abc")
         assert r.status_code == 200
         assert captured[0].method == method
+
+
+# ── Gemini batchEmbedContents 端到端 ─────────────────────────────
+
+
+def test_gemini_batch_embed_forwards_correctly() -> None:
+    """Gemini batchEmbedContents 端点（字面冒号）正确转发."""
+
+    def route(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"embeddings": [{"values": [0.1, 0.2]}]},
+        )
+
+    def factory(make_transport):
+        cfg = NativeApiConfig(
+            gemini=NativeProviderConfig(
+                enabled=True, base_url="https://generativelanguage.googleapis.com"
+            ),
+        )
+        transport = make_transport(route)
+        return NativeProxyHandler(cfg, transport=transport), transport
+
+    for client, captured in _make_app(factory):
+        r = client.post(
+            "/api/gemini/v1beta/models/gemini-embedding-001:batchEmbedContents?key=secret123",
+            json={
+                "requests": [
+                    {
+                        "model": "models/gemini-embedding-001",
+                        "content": {"parts": [{"text": "hello"}]},
+                    }
+                ]
+            },
+        )
+        assert r.status_code == 200
+        assert r.json()["embeddings"][0]["values"] == [0.1, 0.2]
+        upstream = captured[0]
+        # 上游 URL 必须含字面冒号，不含 %3A
+        upstream_str = str(upstream.url)
+        assert ":batchEmbedContents" in upstream_str
+        assert "%3A" not in upstream_str
+        assert upstream.url.params.get("key") == "secret123"
+
+
+def test_gemini_url_encoded_colon_decoded_for_upstream() -> None:
+    """当 %3A 到达代理时，上游必须收到字面冒号."""
+
+    def route(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    def factory(make_transport):
+        cfg = NativeApiConfig(
+            gemini=NativeProviderConfig(
+                enabled=True, base_url="https://generativelanguage.googleapis.com"
+            ),
+        )
+        transport = make_transport(route)
+        return NativeProxyHandler(cfg, transport=transport), transport
+
+    for client, captured in _make_app(factory):
+        r = client.post(
+            "/api/gemini/v1beta/models/gemini-embedding-001%3AbatchEmbedContents?key=k",
+            json={"requests": []},
+        )
+        assert r.status_code == 200
+        upstream = captured[0]
+        upstream_str = str(upstream.url)
+        # 上游 URL 必须含字面冒号，不含 %3A
+        assert "%3A" not in upstream_str
+        assert ":batchEmbedContents" in upstream_str
