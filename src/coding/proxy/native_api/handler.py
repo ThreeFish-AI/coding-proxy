@@ -553,7 +553,15 @@ class NativeProxyHandler:
                 content=vertex_body,
                 headers=upstream_headers,
             )
-            resp = await client.send(req, stream=False)
+            try:
+                resp = await client.send(req, stream=False)
+            except (
+                httpx.TimeoutException,
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.RemoteProtocolError,
+            ) as exc:
+                return {"error": {"message": f"upstream unreachable: {exc}"}}, 502
             try:
                 return resp.json(), resp.status_code
             except Exception:
