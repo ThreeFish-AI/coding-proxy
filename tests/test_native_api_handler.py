@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 
 import httpx
@@ -443,3 +444,120 @@ def test_gemini_url_encoded_colon_decoded_for_upstream() -> None:
         # 上游 URL 必须含字面冒号，不含 %3A
         assert "%3A" not in upstream_str
         assert ":batchEmbedContents" in upstream_str
+
+
+# ── Gemini embedding Vertex AI 格式转换 ─────────────────────────
+
+
+def test_gemini_vertex_embed_content_single() -> None:
+    """非官方上游时，embedContent 转为 Vertex AI 格式."""
+
+    def route(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert "content" in body
+        assert "model" not in body
+        assert "requests" not in body
+        assert ":embedContent" in str(request.url)
+        assert "v1beta1/publishers/google/models" in str(request.url)
+        return httpx.Response(200, json={"embedding": {"values": [0.1, 0.2]}})
+
+    def factory(make_transport):
+        cfg = NativeApiConfig(
+            gemini=NativeProviderConfig(enabled=True, base_url="http://llms.as-in.io"),
+        )
+        transport = make_transport(route)
+        return NativeProxyHandler(cfg, transport=transport), transport
+
+    for client, captured in _make_app(factory):
+        r = client.post(
+            "/api/gemini/v1beta/models/gemini-embedding-2-preview:embedContent",
+            json={
+                "model": "models/gemini-embedding-2-preview",
+                "content": {"parts": [{"text": "hello"}]},
+            },
+        )
+        assert r.status_code == 200
+        assert "embedding" in r.json()
+
+
+def test_gemini_vertex_batch_embed_contents() -> None:
+    """非官方上游时，batchEmbedContents 拆分为多次 embedContent 并聚合."""
+
+    call_count = 0
+
+    def route(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        body = json.loads(request.content)
+        assert "content" in body
+        assert ":embedContent" in str(request.url)
+        assert "v1beta1/publishers/google/models" in str(request.url)
+        return httpx.Response(
+            200,
+            json={"embedding": {"values": [float(call_count), 0.5]}},
+        )
+
+    def factory(make_transport):
+        cfg = NativeApiConfig(
+            gemini=NativeProviderConfig(enabled=True, base_url="http://llms.as-in.io"),
+        )
+        transport = make_transport(route)
+        return NativeProxyHandler(cfg, transport=transport), transport
+
+    for client, captured in _make_app(factory):
+        r = client.post(
+            "/api/gemini/v1beta/models/gemini-embedding-2-preview:batchEmbedContents",
+            json={
+                "requests": [
+                    {
+                        "model": "models/gemini-embedding-2-preview",
+                        "content": {"parts": [{"text": "hello"}]},
+                    },
+                    {
+                        "model": "models/gemini-embedding-2-preview",
+                        "content": {"parts": [{"text": "world"}]},
+                    },
+                ]
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert "embeddings" in data
+        assert len(data["embeddings"]) == 2
+        assert data["embeddings"][0]["values"] == [1.0, 0.5]
+        assert data["embeddings"][1]["values"] == [2.0, 0.5]
+        assert call_count == 2
+
+
+def test_gemini_vertex_embed_official_upstream_unchanged() -> None:
+    """官方上游时，batchEmbedContents 走原始透传路径，不做格式转换."""
+
+    def route(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"embeddings": [{"values": [0.1, 0.2]}]})
+
+    def factory(make_transport):
+        cfg = NativeApiConfig(
+            gemini=NativeProviderConfig(
+                enabled=True, base_url="https://generativelanguage.googleapis.com"
+            ),
+        )
+        transport = make_transport(route)
+        return NativeProxyHandler(cfg, transport=transport), transport
+
+    for client, captured in _make_app(factory):
+        r = client.post(
+            "/api/gemini/v1beta/models/gemini-embedding-001:batchEmbedContents?key=k",
+            json={
+                "requests": [
+                    {
+                        "model": "models/gemini-embedding-001",
+                        "content": {"parts": [{"text": "hello"}]},
+                    }
+                ]
+            },
+        )
+        assert r.status_code == 200
+        # 官方上游走原始路径，URL 保持 v1beta/models/ 格式
+        upstream = captured[0]
+        assert "v1beta/models" in str(upstream.url)
+        assert "v1beta1/publishers" not in str(upstream.url)

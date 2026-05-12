@@ -13,8 +13,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
@@ -194,6 +196,28 @@ class NativeProxyHandler:
         start_ts = time.perf_counter()
         client = self._get_client(provider)
 
+        # ── Gemini embedding Vertex AI 格式转换 ──────────────────
+        # 当上游非官方 Google AI Studio（generativelanguage.googleapis.com）时，
+        # litellm 发送的 Google AI Studio 格式（v1beta/models/{model}:batchEmbedContents）
+        # 需转换为 Vertex AI 格式（v1beta1/publishers/google/models/{model}:embedContent）。
+        vertex_rewrite = (
+            provider == "gemini"
+            and operation in ("embedding", "embedding.batch")
+            and cfg.base_url
+            and "generativelanguage.googleapis.com" not in cfg.base_url
+        )
+        if vertex_rewrite:
+            return await self._dispatch_gemini_vertex_embedding(
+                client=client,
+                operation=operation,
+                endpoint=endpoint,
+                body_bytes=body_bytes,
+                upstream_headers=upstream_headers,
+                query_string=query_string,
+                provider=provider,
+                start_ts=start_ts,
+            )
+
         # 构造上游 URL（保留 query）
         upstream_url = endpoint
         if query_string:
@@ -293,6 +317,313 @@ class NativeProxyHandler:
             status_code=status,
             headers=resp_headers,
             media_type=content_type or None,
+        )
+
+    # ── Gemini embedding → Vertex AI 格式转换 ──────────────────
+
+    # Google AI Studio 路径正则：[v1beta/]models/{model}:{verb}
+    # 版本段允许缺失以兼容 litellm `_check_custom_proxy` 丢失 v1beta 前缀的 bug。
+    _GEMINI_EMBED_PATH_RE = re.compile(
+        r"^/?(?:v1(?:beta1?)?/)?models/(?P<model>[^/:]+)(?::|%3A)(?P<verb>embedContent|batchEmbedContents)/?$"
+    )
+
+    async def _dispatch_gemini_vertex_embedding(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        operation: str,
+        endpoint: str,
+        body_bytes: bytes,
+        upstream_headers: dict[str, str],
+        query_string: str,
+        provider: str,
+        start_ts: float,
+    ) -> StarletteResponse:
+        """将 Google AI Studio 格式的 embedding 请求转换为 Vertex AI 格式.
+
+        Google AI Studio:
+          POST v1beta/models/{model}:batchEmbedContents
+          Body: {"requests": [{"model": "models/{model}", "content": {...}}]}
+
+        Vertex AI:
+          POST v1beta1/publishers/google/models/{model}:embedContent
+          Body: {"content": {...}}
+        """
+        from fastapi.responses import Response as FastAPIResponse
+
+        match = self._GEMINI_EMBED_PATH_RE.match(endpoint)
+        if not match:
+            return FastAPIResponse(
+                content=json.dumps(
+                    {
+                        "error": {
+                            "message": f"unrecognized gemini embedding path: {endpoint}"
+                        }
+                    }
+                ).encode(),
+                status_code=400,
+                media_type="application/json",
+            )
+
+        model_name = match.group("model")
+        verb = match.group("verb")
+
+        # 解析原始请求体
+        try:
+            body = json.loads(body_bytes) if body_bytes else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return FastAPIResponse(
+                content=json.dumps(
+                    {"error": {"message": "invalid JSON body for embedding request"}}
+                ).encode(),
+                status_code=400,
+                media_type="application/json",
+            )
+
+        if verb == "batchEmbedContents":
+            return await self._vertex_batch_embed(
+                client=client,
+                model_name=model_name,
+                body=body,
+                upstream_headers=upstream_headers,
+                query_string=query_string,
+                provider=provider,
+                operation=operation,
+                endpoint=endpoint,
+                start_ts=start_ts,
+            )
+
+        # 单次 embedContent：直接转换
+        content = body.get("content", body)
+        return await self._vertex_single_embed(
+            client=client,
+            model_name=model_name,
+            content=content,
+            upstream_headers=upstream_headers,
+            query_string=query_string,
+            provider=provider,
+            operation=operation,
+            endpoint=endpoint,
+            start_ts=start_ts,
+        )
+
+    async def _vertex_single_embed(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        model_name: str,
+        content: dict,
+        upstream_headers: dict[str, str],
+        query_string: str,
+        provider: str,
+        operation: str,
+        endpoint: str,
+        start_ts: float,
+    ) -> StarletteResponse:
+        """发送单次 Vertex AI embedContent 请求."""
+        from fastapi.responses import Response as FastAPIResponse
+
+        vertex_path = f"/v1beta1/publishers/google/models/{model_name}:embedContent"
+        vertex_url = vertex_path
+        if query_string:
+            vertex_url = f"{vertex_path}?{query_string}"
+
+        vertex_body = json.dumps({"content": content}).encode()
+
+        req = client.build_request(
+            method="POST",
+            url=vertex_url,
+            content=vertex_body,
+            headers=upstream_headers,
+        )
+
+        try:
+            upstream_resp = await client.send(req, stream=True)
+        except (
+            httpx.TimeoutException,
+            httpx.ConnectError,
+            httpx.ReadError,
+            httpx.RemoteProtocolError,
+        ) as exc:
+            duration_ms = int((time.perf_counter() - start_ts) * 1000)
+            await self._record_failure(
+                provider=provider,
+                operation=operation,
+                endpoint=endpoint,
+                duration_ms=duration_ms,
+                reason=str(exc),
+            )
+            return FastAPIResponse(
+                content=json.dumps(
+                    {
+                        "error": {
+                            "message": f"upstream unreachable: {exc}",
+                            "type": "api_error",
+                        }
+                    }
+                ).encode(),
+                status_code=502,
+                media_type="application/json",
+            )
+
+        try:
+            raw_body = await upstream_resp.aread()
+        finally:
+            await upstream_resp.aclose()
+
+        duration_ms = int((time.perf_counter() - start_ts) * 1000)
+        status = upstream_resp.status_code
+        content_type = upstream_resp.headers.get("content-type", "").lower()
+        resp_headers = _filter_response_headers(dict(upstream_resp.headers))
+
+        # 用量抽取
+        extraction = ExtractionResult()
+        if "application/json" in content_type and raw_body:
+            try:
+                parsed = json.loads(raw_body.decode("utf-8", errors="replace"))
+                if isinstance(parsed, dict):
+                    extraction = extract_usage(
+                        provider, operation, parsed, status, dict(upstream_resp.headers)
+                    )
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+
+        vendor_label = _VENDOR_LABEL[provider]
+        await self._record_usage(
+            provider=provider,
+            operation=operation,
+            endpoint=endpoint,
+            duration_ms=duration_ms,
+            status=status,
+            extraction=extraction,
+            evidence_records=_build_nonstream_evidence(
+                vendor=vendor_label, extraction=extraction
+            ),
+        )
+
+        return FastAPIResponse(
+            content=raw_body,
+            status_code=status,
+            headers=resp_headers,
+            media_type=content_type or None,
+        )
+
+    async def _vertex_batch_embed(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        model_name: str,
+        body: dict,
+        upstream_headers: dict[str, str],
+        query_string: str,
+        provider: str,
+        operation: str,
+        endpoint: str,
+        start_ts: float,
+    ) -> StarletteResponse:
+        """将 batchEmbedContents 拆分为多次 embedContent 调用并聚合响应."""
+        from fastapi.responses import Response as FastAPIResponse
+
+        requests_list = body.get("requests", [])
+        if not requests_list:
+            return FastAPIResponse(
+                content=json.dumps(
+                    {
+                        "error": {
+                            "message": "batchEmbedContents requires non-empty 'requests' field"
+                        }
+                    }
+                ).encode(),
+                status_code=400,
+                media_type="application/json",
+            )
+
+        vertex_path = f"/v1beta1/publishers/google/models/{model_name}:embedContent"
+        vertex_url = vertex_path
+        if query_string:
+            vertex_url = f"{vertex_path}?{query_string}"
+
+        # 并发发送所有 embedContent 请求
+        async def _single(req_body: dict) -> tuple[dict, int]:
+            content = req_body.get("content", req_body)
+            vertex_body = json.dumps({"content": content}).encode()
+            req = client.build_request(
+                method="POST",
+                url=vertex_url,
+                content=vertex_body,
+                headers=upstream_headers,
+            )
+            try:
+                resp = await client.send(req, stream=False)
+            except (
+                httpx.TimeoutException,
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.RemoteProtocolError,
+            ) as exc:
+                return {"error": {"message": f"upstream unreachable: {exc}"}}, 502
+            try:
+                return resp.json(), resp.status_code
+            except Exception:
+                return {"error": {"message": resp.text[:200]}}, resp.status_code
+
+        results = await asyncio.gather(*[_single(r) for r in requests_list])
+
+        # 检查是否有失败的请求
+        embeddings = []
+        for resp_json, resp_status in results:
+            if resp_status != 200:
+                # 返回第一个错误
+                return FastAPIResponse(
+                    content=json.dumps(resp_json).encode(),
+                    status_code=resp_status,
+                    media_type="application/json",
+                )
+            embedding_data = resp_json.get("embedding", {})
+            embeddings.append(embedding_data)
+
+        # 聚合为 batchEmbedContents 响应格式
+        batch_response = {"embeddings": embeddings}
+        duration_ms = int((time.perf_counter() - start_ts) * 1000)
+
+        # 用量抽取
+        extraction = ExtractionResult()
+        for resp_json, _ in results:
+            if isinstance(resp_json, dict):
+                ext = extract_usage(provider, operation, resp_json, 200, {})
+                extraction = ExtractionResult(
+                    input_tokens=extraction.input_tokens + ext.input_tokens,
+                    output_tokens=extraction.output_tokens + ext.output_tokens,
+                    cache_creation_tokens=extraction.cache_creation_tokens
+                    + ext.cache_creation_tokens,
+                    cache_read_tokens=extraction.cache_read_tokens
+                    + ext.cache_read_tokens,
+                    request_id=ext.request_id or extraction.request_id,
+                    model_served=ext.model_served or extraction.model_served,
+                    raw_usage=ext.raw_usage or extraction.raw_usage,
+                    source_field_map=ext.source_field_map
+                    or extraction.source_field_map,
+                    evidence_kind=ext.evidence_kind or extraction.evidence_kind,
+                    extra_usage=ext.extra_usage or extraction.extra_usage,
+                )
+
+        vendor_label = _VENDOR_LABEL[provider]
+        await self._record_usage(
+            provider=provider,
+            operation=operation,
+            endpoint=endpoint,
+            duration_ms=duration_ms,
+            status=200,
+            extraction=extraction,
+            evidence_records=_build_nonstream_evidence(
+                vendor=vendor_label, extraction=extraction
+            ),
+        )
+
+        return FastAPIResponse(
+            content=json.dumps(batch_response).encode(),
+            status_code=200,
+            media_type="application/json",
         )
 
     # ── SSE 流式转发（同时累加 usage） ─────────────────────────

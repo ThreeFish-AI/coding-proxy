@@ -132,3 +132,57 @@ AttributeError: 'ZhipuVendor' object has no attribute 'name'
 
 - 已 `grep -rn "vendor\.name\b" src/` 全仓扫描，确认 `target_vendor.name | vendor.name` 误用仅 routes.py 的这两处，已随本次修复一并消除。`/v1/messages` 主链路在 executor 中调用 `tier.name`（`Tier` 对象的合法 dataclass 属性），与 vendor 实例 `name` 无关，不受影响。
 - 若未来新增 Vendor 子类，仍只需实现 `get_name()` 抽象方法；外部调用方应遵循同一契约，本档案的修复模式可作为参考。
+
+---
+
+## Gemini embedding 透传至 Vertex AI 上游返回 `request body doesn't contain valid prompts`
+
+**问题描述**
+
+通过本代理调用 Gemini embedding 模型时，上游返回 400：
+
+```
+litellm.BadRequestError: GeminiException BadRequestError -
+{"error":{"message":"request body doesn't contain valid prompts"}}
+POST /api/gemini/v1beta/models/gemini-embedding-001%3AbatchEmbedContents 400
+```
+
+litellm 报错日志中 URL 路径是 `:batchEmbedContents`，调用端疑似格式不兼容。
+
+**表因**
+
+litellm 按 Google AI Studio 格式构造请求：
+- 路径：`POST {api_base}/v1beta/models/{model}:batchEmbedContents`
+- Body：`{"requests": [{"model": "models/...", "content": {"parts": [{"text": "..."}]}}]}`
+
+但实际上游（如 `llms.as-in.io` 这类 Vertex AI 风格网关）只接受 Vertex AI 格式：
+- 路径：`POST {api_base}/v1beta1/publishers/google/models/{model}:embedContent`
+- Body：`{"content": {"parts": [{"text": "..."}]}}`
+
+且无 `batchEmbedContents` 端点。
+
+**根因**
+
+1. 代理 `NativeProxyHandler.dispatch()` 是字节级透传，对 embedding 端点未做协议适配，直接把 Google AI Studio 格式的 URL/Body 转给 Vertex AI 上游，路由不匹配。
+2. litellm `_check_custom_proxy()` 在自定义 `api_base` 场景下会丢失 `v1beta/` 版本前缀，发送 `{api_base}/models/{model}:verb`，使代理原有的 `OperationClassifier` 正则（要求 `v1beta/` 前缀）失配，进而走原始透传分支再次失败。
+
+**处理方式**
+
+1. `src/coding/proxy/native_api/operation.py`：放宽 Gemini 路径正则中的 `v1(?:beta1?)?/` 段为可选，兼容 litellm 丢失版本前缀的异常路径。
+2. `src/coding/proxy/native_api/handler.py`：在 `dispatch()` 中新增 Gemini embedding Vertex AI 适配分支：
+   - 仅当 `provider == "gemini"`、`operation in {"embedding", "embedding.batch"}`、且 `base_url` 非官方 `generativelanguage.googleapis.com` 时启用；
+   - `embedContent` → 重写路径为 `v1beta1/publishers/google/models/{model}:embedContent`，剥离 body 中的 `model` 字段；
+   - `batchEmbedContents` → 拆分为多次并发 `embedContent` 调用（`asyncio.gather`），聚合响应为 `{"embeddings": [...]}` 返回；
+   - 用量抽取累加各子请求的 `usageMetadata`。
+3. `tests/test_native_api_handler.py`：新增 3 个回归测试覆盖单次 / 批量 / 官方上游透传不变三类场景。
+
+**后续防范**
+
+- 协议适配层只对**非官方上游**生效，官方 `generativelanguage.googleapis.com` 仍走字节级透传，避免引入不必要的转换开销与协议偏差。
+- 上游路径分支的判定优先用 base_url 域名而非依赖网关行为特征，便于后续扩展（如 Vertex Express、其他 LLM gateway）时的精确匹配。
+- 真实链路验证：使用 litellm `embedding(api_base=..., api_key=...)` 单输入 / 多输入分别调用，确认返回 3072 维向量及正确批量计数。
+
+**同类问题影响与处理注意事项**
+
+- litellm 在 Gemini 其他端点（`generateContent` / `countTokens`）同样存在 `_check_custom_proxy` 丢失 `v1beta/` 前缀的 bug；本次仅放宽了 `operation.py` 中的路径正则（让分类器能识别此类异常路径），未对这些端点做格式转换，因为非 embedding 端点的 Google AI Studio / Vertex AI 请求体差异较小，多数上游兼容。如未来出现类似失配再做针对性适配。
+- 若上游网关同时支持 OpenAI `/v1/embeddings` 与 Vertex AI 路径，建议优先在客户端配置 OpenAI 兼容路径，减少协议转换链路。
