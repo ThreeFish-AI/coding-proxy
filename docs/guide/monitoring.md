@@ -31,7 +31,7 @@
 ```yaml
 logging:
   level: "DEBUG"    # 查看详细的模型映射和路由决策
-  file: "coding-proxy.log"  # 输出到文件
+  file: ".logs/coding-proxy.log"  # 输出到文件
   max_bytes: 5242880        # 单文件 5 MB，触发轮转
   backup_count: 5           # 保留 5 个 gzip 压缩备份
 ```
