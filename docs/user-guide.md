@@ -202,7 +202,7 @@ database:
 
 logging:
   level: "INFO"          # DEBUG / INFO / WARNING / ERROR
-  # file: "coding-proxy.log"  # 输出到文件
+  # file: ".logs/coding-proxy.log"  # 输出到文件
   # max_bytes: 5242880        # 单文件 5 MB
   # backup_count: 5           # 保留 5 个备份
 ```

@@ -21,7 +21,7 @@ class LoggingConfig(BaseModel):
 
     Attributes:
         level: 控制台日志级别（INFO / WARNING / DEBUG 等）。
-        file: 文件日志路径。为 ``None`` 时使用默认值 ``coding-proxy.log``；
+        file: 文件日志路径。为 ``None`` 时使用默认值 ``.logs/coding-proxy.log``；
              设为空字符串可禁用文件日志。
         max_bytes: 单个日志文件最大字节数（触发轮转）。默认 5 MB。
         backup_count: 保留的已压缩备份文件数。默认 5。
