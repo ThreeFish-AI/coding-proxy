@@ -604,7 +604,8 @@ class TokenLogger:
                       MIN(ts) AS first_seen_ts,
                       MAX(ts) AS last_active_ts,
                       COUNT(*) AS total_requests,
-                      SUM(input_tokens + output_tokens) AS total_tokens,
+                      SUM(input_tokens + output_tokens
+                          + cache_creation_tokens + cache_read_tokens) AS total_tokens,
                       SUM(input_tokens) AS total_input,
                       SUM(output_tokens) AS total_output,
                       GROUP_CONCAT(DISTINCT model_served) AS models,
@@ -631,7 +632,8 @@ class TokenLogger:
                       MIN(ts) AS first_seen_ts,
                       MAX(ts) AS last_active_ts,
                       COUNT(*) AS total_requests,
-                      SUM(input_tokens + output_tokens) AS total_tokens,
+                      SUM(input_tokens + output_tokens
+                          + cache_creation_tokens + cache_read_tokens) AS total_tokens,
                       SUM(input_tokens) AS total_input,
                       SUM(output_tokens) AS total_output,
                       GROUP_CONCAT(DISTINCT model_served) AS models,
