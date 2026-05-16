@@ -186,3 +186,47 @@ litellm 按 Google AI Studio 格式构造请求：
 
 - litellm 在 Gemini 其他端点（`generateContent` / `countTokens`）同样存在 `_check_custom_proxy` 丢失 `v1beta/` 前缀的 bug；本次仅放宽了 `operation.py` 中的路径正则（让分类器能识别此类异常路径），未对这些端点做格式转换，因为非 embedding 端点的 Google AI Studio / Vertex AI 请求体差异较小，多数上游兼容。如未来出现类似失配再做针对性适配。
 - 若上游网关同时支持 OpenAI `/v1/embeddings` 与 Vertex AI 路径，建议优先在客户端配置 OpenAI 兼容路径，减少协议转换链路。
+
+---
+
+## Dashboard Sessions 页 `Tokens` 列漏算缓存 Token
+
+**问题描述**
+
+Dashboard 的 **Sessions** 标签页中，每条会话的 `Tokens` 列与展开详情卡的 `Tokens` 值，仅统计 `input + output`，遗漏了 `cache_creation`（写缓存）与 `cache_read`（读缓存）。在长链路 Anthropic Prompt Cache 场景下，读取命中常常是 input/output 的数倍，导致 Sessions 页总量被显著低估，与 Overview 标签页（卡片、Token 时序图）跨页口径分裂。
+
+**表因**
+
+前端 `dashboard.py:1597 / 1614` 直接渲染 `s.total_tokens`，该值由 `/api/dashboard/sessions` 透传自 `token_logger.query_recent_sessions()` 的聚合结果。
+
+**根因**
+
+`src/coding/proxy/logging/db.py` 中两条按 `session_key` 分组的聚合 SQL 使用了不完整的求和口径：
+
+```sql
+SUM(input_tokens + output_tokens) AS total_tokens   -- 第 607 行（query_recent_sessions）
+SUM(input_tokens + output_tokens) AS total_tokens   -- 第 634 行（query_session_profile）
+```
+
+而同文件内 `query_usage()`（第 465–466 行分别 `SUM(...)` 四列）与 `query_total_tokens_by_vendor()`（第 584 行 `SUM(input + output + cache_creation + cache_read)`）已采用完整四项口径，构成了同文件内的口径双标。
+
+**处理方式**
+
+复用 `query_total_tokens_by_vendor` 的四项求和表达式，将两处 `total_tokens` 改写为：
+
+```sql
+SUM(input_tokens + output_tokens
+    + cache_creation_tokens + cache_read_tokens) AS total_tokens
+```
+
+不改动 API 返回结构、不新增字段、不改前端 detail-card——前端 `fmtTokens(s.total_tokens)` 调用无须变更。同时在 `tests/test_session_aware.py` 的 `test_query_recent_sessions_basic` / `test_query_session_profile_found` 中追加 `cache_creation_tokens` / `cache_read_tokens` 入参与完整口径断言，覆盖回归。
+
+**后续防范**
+
+- SQL 聚合层涉及"总 Tokens"概念时，必须保持**单一权威定义**（Single Source of Truth）：要么所有视图共用同一求和表达式，要么抽取为常量片段集中引用，杜绝多处独立维护造成的语义漂移。
+- 未来若引入新的 token 维度（如 reasoning_tokens、tool_tokens 等），需要全文检索 `SUM(input_tokens + output_tokens` 这一历史模式并同步补齐，避免出现新的口径分裂点。
+
+**同类问题影响与处理注意事项**
+
+- 历次 PR 中 cache token 字段的引入是渐进式的（schema 已有四列、`log()` 入参齐全、Overview 已全口径消费），但部分聚合视图的口径升级被遗漏；任何向 `usage_log` 增列后，**必须**审计所有 `SUM(input_tokens` / `SUM(output_tokens` 出现处的聚合表达式是否需要同步更新。
+- 跨标签页同一指标（如"总 Tokens"）的口径一致性，建议在添加新视图时主动与 Overview 现有口径做交叉核对，必要时在 SQL 注释中标注口径来源，便于后续 review。

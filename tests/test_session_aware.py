@@ -160,6 +160,8 @@ async def test_query_recent_sessions_basic(logger):
             model_served="claude-sonnet",
             input_tokens=100 * (i + 1),
             output_tokens=50 * (i + 1),
+            cache_creation_tokens=10 * (i + 1),
+            cache_read_tokens=1000 * (i + 1),
             session_key="session-alpha",
             duration_ms=100 + i * 50,
         )
@@ -186,9 +188,15 @@ async def test_query_recent_sessions_basic(logger):
 
     alpha = next(s for s in sessions if s["session_key"] == "session-alpha")
     assert alpha["total_requests"] == 3
-    assert alpha["total_tokens"] == (100 + 200 + 300) + (50 + 100 + 150)
-    assert alpha["total_input"] == 100 + 200 + 300
-    assert alpha["total_output"] == 50 + 100 + 150
+    expected_input = 100 + 200 + 300
+    expected_output = 50 + 100 + 150
+    expected_cache_creation = 10 + 20 + 30
+    expected_cache_read = 1000 + 2000 + 3000
+    assert alpha["total_tokens"] == (
+        expected_input + expected_output + expected_cache_creation + expected_cache_read
+    )
+    assert alpha["total_input"] == expected_input
+    assert alpha["total_output"] == expected_output
     assert "claude-sonnet" in alpha["models"]
     assert "anthropic" in alpha["vendors"]
     assert alpha["success_rate"] == 100.0
@@ -269,12 +277,15 @@ async def test_query_session_profile_found(logger):
         model_served="m",
         input_tokens=100,
         output_tokens=50,
+        cache_creation_tokens=20,
+        cache_read_tokens=400,
         session_key="profile-test",
     )
     profile = await logger.query_session_profile("profile-test")
     assert profile is not None
     assert profile["session_key"] == "profile-test"
     assert profile["total_requests"] == 1
+    assert profile["total_tokens"] == 100 + 50 + 20 + 400
 
 
 @pytest.mark.asyncio
