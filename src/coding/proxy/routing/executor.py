@@ -48,6 +48,58 @@ from ..compat.canonical import CompatibilityStatus, build_canonical_request
 logger = logging.getLogger(__name__)
 
 
+def _build_semantic_rejection_diagnostic(body: dict[str, Any]) -> str:
+    """构建语义拒绝的请求体诊断上下文.
+
+    在 semantic rejection 日志中附加请求体的可疑参数快照，
+    用于定位供应商参数校验失败的具体祸根参数。
+    """
+    parts: list[str] = []
+    # 顶层不兼容参数
+    for key in ("thinking", "extended_thinking", "reasoning_effort"):
+        if key in body:
+            val = body[key]
+            parts.append(f"{key}={val!r:.80}")
+    # 会话历史中的 thinking blocks
+    thinking_count = 0
+    for msg in body.get("messages", []):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in (
+                "thinking",
+                "redacted_thinking",
+            ):
+                thinking_count += 1
+    if thinking_count:
+        parts.append(f"thinking_blocks_in_history={thinking_count}")
+    # cache_control 存在检测
+    has_cc = False
+    for section in (
+        body.get("system", []) if isinstance(body.get("system"), list) else [],
+        *(
+            m.get("content", [])
+            for m in body.get("messages", [])
+            if isinstance(m.get("content"), list)
+        ),
+        body.get("tools", []),
+    ):
+        if isinstance(section, list):
+            for item in section:
+                if isinstance(item, dict) and "cache_control" in item:
+                    has_cc = True
+                    break
+        if has_cc:
+            break
+    if has_cc:
+        parts.append("cache_control_fields=present")
+    # 模型 + 消息数
+    parts.append(f"model={body.get('model', 'N/A')}")
+    parts.append(f"messages={len(body.get('messages', []))}")
+    return f" [{', '.join(parts)}]" if parts else ""
+
+
 def _log_http_error_detail(
     tier_name: str,
     exc: Exception,
@@ -601,12 +653,14 @@ class _RouteExecutor:
                     )
 
                 if not is_last and is_semantic:
+                    diagnostic = _build_semantic_rejection_diagnostic(body)
                     logger.warning(
-                        "Tier %s semantic rejection (type=%s, msg=%s), "
+                        "Tier %s semantic rejection (type=%s, msg=%s)%s, "
                         "trying next tier without recording failure",
                         tier.name,
                         resp.error_type or resp.status_code,
                         (resp.error_message or "N/A")[:200],
+                        diagnostic,
                     )
                     failed_tier_name = tier.name
                     continue
@@ -838,6 +892,18 @@ class _RouteExecutor:
                 )
 
             if semantic_rejection and not is_last:
+                if request_body is not None:
+                    diagnostic = _build_semantic_rejection_diagnostic(request_body)
+                    logger.warning(
+                        "Tier %s stream semantic rejection (type=%s, msg=%s)%s, "
+                        "trying next tier without recording failure",
+                        tier.name,
+                        error.get("type") if isinstance(error, dict) else None,
+                        (error.get("message") if isinstance(error, dict) else "N/A")[
+                            :200
+                        ],
+                        diagnostic,
+                    )
                 return True, tier.name, exc
 
             rl_info = parse_rate_limit_headers(
