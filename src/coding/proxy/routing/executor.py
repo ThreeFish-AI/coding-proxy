@@ -602,9 +602,11 @@ class _RouteExecutor:
 
                 if not is_last and is_semantic:
                     logger.warning(
-                        "Tier %s semantic rejection (%s), trying next tier without recording failure",
+                        "Tier %s semantic rejection (type=%s, msg=%s), "
+                        "trying next tier without recording failure",
                         tier.name,
                         resp.error_type or resp.status_code,
+                        (resp.error_message or "N/A")[:200],
                     )
                     failed_tier_name = tier.name
                     continue

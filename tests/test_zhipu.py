@@ -103,20 +103,15 @@ class TestRequestPassthrough:
 
         # 仅 model 被映射
         assert prepared_body["model"] == "glm-5.1"
-        # 其余字段原样保留
+        # 其余字段原样保留（GLM 原生支持 thinking，静默忽略 cache_control）
         assert prepared_body["max_tokens"] == 1024
         assert prepared_body["temperature"] == 0.7
         assert prepared_body["top_p"] == 0.9
         assert prepared_body["stream"] is True
-        # thinking 不再被剥离
         assert prepared_body["thinking"] == {"type": "enabled", "budget_tokens": 5000}
-        # metadata 不再被剥离
         assert prepared_body["metadata"] == {"user_id": "test-user"}
-        # system 不被删除
         assert prepared_body["system"] == "You are a helpful assistant."
-        # tools 不被截断或过滤
         assert len(prepared_body["tools"]) == 3
-        # tool_choice 不被修改
         assert prepared_body["tool_choice"] == {"type": "auto"}
         # 原始 body 未被修改（deep copy）
         assert body["model"] == "claude-sonnet-4-20250514"

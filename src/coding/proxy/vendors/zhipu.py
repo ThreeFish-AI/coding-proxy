@@ -5,6 +5,12 @@ Anthropic Messages API 协议，本模块仅做两项最小适配：
   1. 模型名映射（Claude -> GLM）
   2. 认证头替换（x-api-key）
 
+注意：实测验证 GLM 的 Anthropic 兼容端点对以下参数的处理方式：
+- thinking 参数：原生支持（GLM 有自己的 thinking 机制）
+- cache_control 字段：静默忽略（GLM 使用隐式自动缓存）
+- reasoning_effort 参数：静默忽略
+以上参数均不会导致 400 错误，因此不需要在 _prepare_request 中剥离。
+
 额外提供 429 Rate Limit 专用重试挽回机制：
   - max_attempt = 5（1 初始 + 4 重试）
   - 指数退避 + Full Jitter（1s → 2s → 4s → 8s）
