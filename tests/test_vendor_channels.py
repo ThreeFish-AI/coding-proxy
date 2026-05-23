@@ -22,6 +22,7 @@ from coding.proxy.convert.vendor_channels import (
     enforce_anthropic_tool_pairing,
     get_transition_channel,
     infer_source_vendor_from_body,
+    normalize_for_zhipu,
     prepare_copilot_to_zhipu,
     prepare_zhipu_to_anthropic,
     prepare_zhipu_to_copilot,
@@ -2147,3 +2148,80 @@ class TestZhipuToCopilotChannelFullCleanup:
         assert prepared["messages"][1]["content"][0]["tool_use_id"] == new_id
         assert any("zhipu_vendor_blocks" in a for a in adaptations)
         assert any("srvtoolu_ids" in a for a in adaptations)
+
+
+# ── normalize_for_zhipu 共享清洗函数 ────────────────────────
+
+
+class TestNormalizeForZhipu:
+    """normalize_for_zhipu 共享清洗函数测试."""
+
+    def test_strips_cache_control_and_params(self):
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [],
+            "thinking": {"type": "enabled", "budget_tokens": 5000},
+            "extended_thinking": {"type": "enabled"},
+            "reasoning_effort": "high",
+            "system": [
+                {
+                    "type": "text",
+                    "text": "sys",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+            "tools": [
+                {
+                    "name": "Bash",
+                    "input_schema": {"type": "object"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+        result, adaptations = normalize_for_zhipu(body)
+
+        assert "thinking" not in result
+        assert "extended_thinking" not in result
+        assert "reasoning_effort" not in result
+        assert "cache_control" not in result["system"][0]
+        assert "cache_control" not in result["tools"][0]
+        assert any("cache_control" in a for a in adaptations)
+        assert any("thinking" in a for a in adaptations)
+        assert any("reasoning_effort" in a for a in adaptations)
+
+    def test_operates_in_place(self):
+        body = {"model": "x", "messages": []}
+        result, _ = normalize_for_zhipu(body)
+        assert result is body
+
+    def test_idempotent(self):
+        body = {
+            "model": "x",
+            "messages": [],
+            "thinking": {"type": "enabled"},
+        }
+        normalize_for_zhipu(body)
+        _, adaptations = normalize_for_zhipu(body)
+        assert adaptations == []
+
+    def test_no_deep_copy(self):
+        messages = [{"role": "user", "content": "hi"}]
+        body = {"model": "x", "messages": messages}
+        result, _ = normalize_for_zhipu(body)
+        assert result["messages"] is messages
+
+    def test_preserves_supported_params(self):
+        body = {
+            "model": "x",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1024,
+            "temperature": 0.7,
+            "stream": True,
+            "metadata": {"user_id": "test"},
+        }
+        result, adaptations = normalize_for_zhipu(body)
+        assert result["max_tokens"] == 1024
+        assert result["temperature"] == 0.7
+        assert result["stream"] is True
+        assert result["metadata"] == {"user_id": "test"}
+        assert adaptations == []

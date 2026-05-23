@@ -367,6 +367,56 @@ def _strip_cache_control(body: dict[str, Any]) -> int:
     return removed
 
 
+# ── zhipu 共享清洗函数 ──────────────────────────────────────────
+
+# GLM 的 Anthropic 兼容端点不支持以下顶层参数，透传会导致 400 invalid_request_error。
+_ZHIPU_UNSUPPORTED_PARAMS: frozenset[str] = frozenset(
+    {"thinking", "extended_thinking", "reasoning_effort"}
+)
+
+
+def normalize_for_zhipu(body: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """为 zhipu GLM 的 Anthropic 兼容端点清洗请求体（就地，不 deep copy）.
+
+    作为 zhipu 兼容性清洗的单一事实源，同时服务于：
+    - 首选 tier 场景（source_vendor=None，无跨供应商转换触发）
+    - 跨供应商转换通道 ``prepare_copilot_to_zhipu``
+
+    清洗内容：
+    1. 剥离 cache_control 字段（GLM 不支持 Anthropic prompt caching）
+    2. 移除不支持的顶层参数（thinking / extended_thinking / reasoning_effort）
+    3. 强制 tool_use/tool_result 配对约束
+
+    不包含 thinking blocks 剥离：首选 tier 时 history 中的 thinking blocks 来自
+    zhipu 自身（签名有效）；跨供应商场景由调用方（``prepare_copilot_to_zhipu``）
+    在调用本函数之前单独处理。
+
+    所有操作均为幂等，安全地在已清洗的请求体上重复调用。
+
+    Returns:
+        (body, adaptations) — body 为就地修改后的同一引用，adaptations 为变换描述列表。
+    """
+    adaptations: list[str] = []
+
+    # Step 1: 剥离 cache_control
+    removed_cc = _strip_cache_control(body)
+    if removed_cc:
+        adaptations.append(f"removed_{removed_cc}_cache_control_fields")
+
+    # Step 2: 移除不支持的顶层参数
+    for param in _ZHIPU_UNSUPPORTED_PARAMS:
+        if param in body:
+            del body[param]
+            adaptations.append(f"removed_{param}_param")
+
+    # Step 3: 强制 tool_use/tool_result 配对
+    pairing_fixes = enforce_anthropic_tool_pairing(body.get("messages", []))
+    if pairing_fixes:
+        adaptations.extend(pairing_fixes)
+
+    return body, adaptations
+
+
 def _remove_vendor_blocks(body: dict[str, Any], block_types: set[str]) -> int:
     """从 messages[].content[] 中就地移除指定 type 的内容块.
 
@@ -544,26 +594,14 @@ def prepare_copilot_to_zhipu(
     prepared = copy.deepcopy(body)
     adaptations: list[str] = []
 
-    # Step 1: 剥离 thinking/redacted_thinking 块
+    # Step 1: 剥离 thinking/redacted_thinking 块（跨供应商签名失效）
     stripped = strip_thinking_blocks(prepared)
     if stripped:
         adaptations.append(f"stripped_{stripped}_thinking_blocks")
 
-    # Step 2: 移除 cache_control 字段
-    removed_cc = _strip_cache_control(prepared)
-    if removed_cc:
-        adaptations.append(f"removed_{removed_cc}_cache_control_fields")
-
-    # Step 3: 移除顶层 thinking/extended_thinking 参数（GLM-5 不支持）
-    for param in ("thinking", "extended_thinking"):
-        if param in prepared:
-            del prepared[param]
-            adaptations.append(f"removed_{param}_param")
-
-    # Step 4: 强制 tool_use/tool_result 配对
-    pairing_fixes = enforce_anthropic_tool_pairing(prepared.get("messages", []))
-    if pairing_fixes:
-        adaptations.extend(pairing_fixes)
+    # Step 2: 共享清洗（cache_control、不支持的顶层参数、tool pairing）
+    _, norm_adaptations = normalize_for_zhipu(prepared)
+    adaptations.extend(norm_adaptations)
 
     return prepared, adaptations
 

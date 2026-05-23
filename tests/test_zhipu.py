@@ -99,11 +99,11 @@ class TestRequestPassthrough:
         assert prepared_body["temperature"] == 0.7
         assert prepared_body["top_p"] == 0.9
         assert prepared_body["stream"] is True
-        # thinking 不再被剥离
-        assert prepared_body["thinking"] == {"type": "enabled", "budget_tokens": 5000}
-        # metadata 不再被剥离
+        # GLM 不支持的顶层参数被剥离
+        assert "thinking" not in prepared_body
+        # metadata 保留
         assert prepared_body["metadata"] == {"user_id": "test-user"}
-        # system 不被删除
+        # system 保留
         assert prepared_body["system"] == "You are a helpful assistant."
         # tools 不被截断或过滤
         assert len(prepared_body["tools"]) == 3
@@ -292,3 +292,136 @@ class TestTerminalVendor:
     async def test_health_check_always_true(self, zhipu_vendor):
         result = await zhipu_vendor.check_health()
         assert result is True
+
+
+# ── 请求参数清洗 ──────────────────────────────────────────
+
+
+class TestRequestNormalization:
+    """验证 _prepare_request 中 GLM 兼容性清洗行为."""
+
+    @pytest.mark.asyncio
+    async def test_strips_cache_control_from_system(self, zhipu_vendor):
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [],
+            "system": [
+                {
+                    "type": "text",
+                    "text": "You are helpful",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+        prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
+        system = prepared_body["system"]
+        assert isinstance(system, list)
+        assert "cache_control" not in system[0]
+        assert system[0]["text"] == "You are helpful"
+
+    @pytest.mark.asyncio
+    async def test_strips_cache_control_from_tools(self, zhipu_vendor):
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [],
+            "tools": [
+                {
+                    "name": "Bash",
+                    "input_schema": {"type": "object"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+        prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
+        assert "cache_control" not in prepared_body["tools"][0]
+        assert prepared_body["tools"][0]["name"] == "Bash"
+
+    @pytest.mark.asyncio
+    async def test_strips_cache_control_from_messages(self, zhipu_vendor):
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "hello",
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                    ],
+                },
+            ],
+        }
+        prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
+        msg_content = prepared_body["messages"][0]["content"]
+        assert isinstance(msg_content, list)
+        assert "cache_control" not in msg_content[0]
+        assert msg_content[0]["text"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_removes_thinking_param(self, zhipu_vendor):
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [],
+            "thinking": {"type": "enabled", "budget_tokens": 5000},
+        }
+        prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
+        assert "thinking" not in prepared_body
+
+    @pytest.mark.asyncio
+    async def test_removes_extended_thinking_param(self, zhipu_vendor):
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [],
+            "extended_thinking": {"type": "enabled"},
+        }
+        prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
+        assert "extended_thinking" not in prepared_body
+
+    @pytest.mark.asyncio
+    async def test_removes_reasoning_effort_param(self, zhipu_vendor):
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [],
+            "reasoning_effort": "high",
+        }
+        prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
+        assert "reasoning_effort" not in prepared_body
+
+    @pytest.mark.asyncio
+    async def test_preserves_other_params(self, zhipu_vendor):
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1024,
+            "temperature": 0.7,
+            "stream": True,
+            "stop_sequences": ["\n"],
+            "metadata": {"user_id": "test"},
+        }
+        prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
+        assert prepared_body["max_tokens"] == 1024
+        assert prepared_body["temperature"] == 0.7
+        assert prepared_body["stream"] is True
+        assert prepared_body["stop_sequences"] == ["\n"]
+        assert prepared_body["metadata"] == {"user_id": "test"}
+
+    @pytest.mark.asyncio
+    async def test_original_body_not_mutated(self, zhipu_vendor):
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [],
+            "thinking": {"type": "enabled", "budget_tokens": 5000},
+            "system": [
+                {
+                    "type": "text",
+                    "text": "prompt",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+        await zhipu_vendor._prepare_request(body, {})
+        assert body["model"] == "claude-sonnet-4-20250514"
+        assert body["thinking"] == {"type": "enabled", "budget_tokens": 5000}
+        assert "cache_control" in body["system"][0]
