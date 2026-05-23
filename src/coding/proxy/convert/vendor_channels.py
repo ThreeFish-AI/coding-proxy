@@ -369,7 +369,8 @@ def _strip_cache_control(body: dict[str, Any]) -> int:
 
 # ── zhipu 共享清洗函数 ──────────────────────────────────────────
 
-# GLM 的 Anthropic 兼容端点不支持以下顶层参数，透传会导致 400 invalid_request_error。
+# 跨供应商转换时主动剥离的顶层参数（首选 tier 场景由 _prepare_request 原样透传，
+# GLM 原生支持 thinking / 静默忽略 cache_control 和 reasoning_effort，不会触发 400）。
 _ZHIPU_UNSUPPORTED_PARAMS: frozenset[str] = frozenset(
     {"thinking", "extended_thinking", "reasoning_effort"}
 )
@@ -378,18 +379,18 @@ _ZHIPU_UNSUPPORTED_PARAMS: frozenset[str] = frozenset(
 def normalize_for_zhipu(body: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """为 zhipu GLM 的 Anthropic 兼容端点清洗请求体（就地，不 deep copy）.
 
-    作为 zhipu 兼容性清洗的单一事实源，同时服务于：
-    - 首选 tier 场景（source_vendor=None，无跨供应商转换触发）
-    - 跨供应商转换通道 ``prepare_copilot_to_zhipu``
+    为跨供应商转换通道 ``prepare_copilot_to_zhipu`` 提供请求体清洗。
 
     清洗内容：
-    1. 剥离 cache_control 字段（GLM 不支持 Anthropic prompt caching）
-    2. 移除不支持的顶层参数（thinking / extended_thinking / reasoning_effort）
+    1. 剥离 cache_control 字段（GLM 静默忽略，主动剥离以减少噪音）
+    2. 移除顶层 thinking/extended_thinking/reasoning_effort 参数（GLM 原生支持
+       thinking、静默忽略 reasoning_effort，但跨供应商场景下这些参数来自原供应商
+       的协议语义，主动剥离以确保请求语义一致性）
     3. 强制 tool_use/tool_result 配对约束
 
-    不包含 thinking blocks 剥离：首选 tier 时 history 中的 thinking blocks 来自
-    zhipu 自身（签名有效）；跨供应商场景由调用方（``prepare_copilot_to_zhipu``）
-    在调用本函数之前单独处理。
+    不包含 thinking blocks 剥离：跨供应商场景下 history 中的 thinking blocks
+    来自原供应商（签名失效），由调用方在调用本函数之前通过
+    ``strip_thinking_blocks`` 单独处理。
 
     所有操作均为幂等，安全地在已清洗的请求体上重复调用。
 
