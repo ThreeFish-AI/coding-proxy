@@ -115,8 +115,11 @@ class ZhipuVendor(NativeAnthropicVendor):
 
         for attempt in range(max_attempts):
             try:
-                async for chunk in super().send_message_stream(request_body, headers):
-                    yield chunk
+                # 429 在 status code 检查阶段即 raise（在任何 chunk 之前），
+                # 因此 __anext__ 安全：要么拿到首个 chunk，要么抛异常。
+                ait = super().send_message_stream(request_body, headers)
+                head = await ait.__anext__()
+            except StopAsyncIteration:
                 return
             except httpx.HTTPStatusError as exc:
                 if exc.response is None or exc.response.status_code != 429:
@@ -136,6 +139,13 @@ class ZhipuVendor(NativeAnthropicVendor):
                     delay,
                 )
                 await asyncio.sleep(delay / 1000.0)
+                continue
+
+            # yield 在 try/except 之外，避免捕获外部 athrow 的异常
+            yield head
+            async for chunk in ait:
+                yield chunk
+            return
 
     # ── 延迟计算 ────────────────────────────────────────────
 

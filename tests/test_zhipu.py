@@ -430,39 +430,7 @@ class TestRateLimitRetry:
 
     @pytest.mark.asyncio
     async def test_stream_429_retries_and_succeeds(self):
-        """流式 429 一次后成功."""
-        vendor = _make_zhipu_vendor()
-        call_count = 0
-
-        async def mock_stream(method, url, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                resp = _make_429_response()
-                raise httpx.HTTPStatusError(
-                    "429",
-                    request=resp.request,
-                    response=resp,
-                )
-            # 成功响应
-            resp = httpx.Response(
-                status_code=200,
-                request=httpx.Request("POST", "https://example.com"),
-            )
-            resp._stream = httpx.ByteStream(b'data: {"type":"content_block_start"}\n\n')
-            return resp
-
-        with patch.object(vendor, "_get_client") as mock_client:
-            client = AsyncMock()
-            client.stream = mock_stream
-            mock_client.return_value = client
-
-            # NativeAnthropicVendor.send_message_stream 的 super() 调用
-            # 需要完整的 BaseVendor 流式路径，这里直接验证 retry 逻辑
-            # 通过 mock super().send_message_stream 更简洁
-            pass
-
-        # 使用更直接的方式测试流式重试
+        """流式 429 两次后成功."""
         call_count = 0
 
         async def fake_stream(self, body, headers):
