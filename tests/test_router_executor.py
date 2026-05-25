@@ -246,7 +246,7 @@ class TestTryGateTier:
         body = {"model": "test"}
         headers = {}
         req = build_canonical_request(body, headers)
-        session_record = await exec_inst._session_mgr.get_or_create_record(
+        session_record, _is_new = await exec_inst._session_mgr.get_or_create_record(
             req.session_key, req.trace_id
         )
         reasons: list[str] = []
@@ -275,7 +275,7 @@ class TestTryGateTier:
         body = {"model": "test", "thinking": {"type": "enabled"}}
         headers = {}
         req = build_canonical_request(body, headers)
-        session_record = await exec_inst._session_mgr.get_or_create_record(
+        session_record, _is_new = await exec_inst._session_mgr.get_or_create_record(
             req.session_key, req.trace_id
         )
         reasons: list[str] = []
