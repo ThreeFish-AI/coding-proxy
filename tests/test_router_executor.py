@@ -222,7 +222,7 @@ class TestTryGateTier:
         headers = {}
         caps = RequestCapabilities()
         req = build_canonical_request(body, headers)
-        session_record = await exec_inst._session_mgr.get_or_create_record(
+        session_record, _is_new = await exec_inst._session_mgr.get_or_create_record(
             req.session_key, req.trace_id
         )
         reasons: list[str] = []
@@ -651,9 +651,10 @@ class TestRouteSessionManagerIntegration:
     @pytest.mark.asyncio
     async def test_get_or_create_without_store(self):
         mgr = RouteSessionManager(compat_session_store=None)
-        record = await mgr.get_or_create_record("sk_test", "trace_1")
-        # 无 store 时返回 None（由 executor 层面处理空 record 场景）
+        record, is_new = await mgr.get_or_create_record("sk_test", "trace_1")
+        # 无 store 时返回 (None, False)
         assert record is None
+        assert is_new is False
 
     @pytest.mark.asyncio
     async def test_persist_session_without_store_is_noop(self):

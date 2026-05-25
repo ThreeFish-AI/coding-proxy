@@ -43,9 +43,28 @@ from .usage_recorder import UsageRecorder
 # 向后兼容别名
 BackendResponse = VendorResponse
 NoCompatibleBackendError = NoCompatibleVendorError
-from ..compat.canonical import CompatibilityStatus, build_canonical_request
+from ..compat.canonical import (
+    CanonicalPartType,
+    CompatibilityStatus,
+    build_canonical_request,
+)
+from ..model.compat import CanonicalRequest
 
 logger = logging.getLogger(__name__)
+
+_SESSION_TITLE_MAX_LEN = 30
+
+
+def _extract_session_title(request: CanonicalRequest) -> str:
+    """从规范化请求中提取首个用户消息文本作为 session 标题."""
+    for part in request.messages:
+        if (
+            part.role == "user"
+            and part.type == CanonicalPartType.TEXT
+            and part.text.strip()
+        ):
+            return part.text.strip()[:_SESSION_TITLE_MAX_LEN]
+    return ""
 
 
 def _build_semantic_rejection_diagnostic(body: dict[str, Any]) -> str:
@@ -393,10 +412,16 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record = await self._session_mgr.get_or_create_record(
+        session_record, is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
+        if is_new_session:
+            title = _extract_session_title(canonical_request)
+            if title:
+                await self._recorder.set_session_title(
+                    canonical_request.session_key, title
+                )
         incompatible_reasons: list[str] = []
         effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
         last_idx = len(effective_tiers) - 1
@@ -564,10 +589,16 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record = await self._session_mgr.get_or_create_record(
+        session_record, is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
+        if is_new_session:
+            title = _extract_session_title(canonical_request)
+            if title:
+                await self._recorder.set_session_title(
+                    canonical_request.session_key, title
+                )
         incompatible_reasons: list[str] = []
         effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
         last_idx = len(effective_tiers) - 1
