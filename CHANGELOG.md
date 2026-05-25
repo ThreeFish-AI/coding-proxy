@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- feat(zhipu): 新增每模型并发限制（默认 3，可通过 `vendors[zhipu].concurrency` 配置），基于 `asyncio.Semaphore` 实现 FIFO 公平排队，流式与非流式共用同一槽位，与 429 重试机制兼容。
+
 ## [v0.4.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.4.0) — 2026-05-01
 
 > [!IMPORTANT]

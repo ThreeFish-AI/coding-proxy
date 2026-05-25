@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, BeforeValidator, Field, PrivateAttr, model_validator
 
 from .resiliency import CircuitBreakerConfig, QuotaGuardConfig, RetryConfig
+from .vendors import ZhipuConcurrencyConfig
 
 # ── 价格字段解析（$ / ¥ 前缀支持） ──────────────────────────
 
@@ -284,6 +285,12 @@ class VendorConfig(BaseModel):
     retry: RetryConfig = Field(default_factory=RetryConfig)
     quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
     weekly_quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
+
+    # ── Zhipu 专属：每模型并发限制 ───────────────────────────
+    concurrency: ZhipuConcurrencyConfig | None = Field(
+        default=None,
+        description="[zhipu] 每模型并发限制；None 表示不限并发",
+    )
 
     @model_validator(mode="after")
     def _warn_irrelevant_fields(self) -> VendorConfig:

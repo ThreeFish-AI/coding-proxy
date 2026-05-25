@@ -156,13 +156,17 @@ def _create_vendor_from_config(
             cfg = _resolve_antigravity_credentials(cfg, token_store)
             return AntigravityVendor(cfg, failover_cfg, mapper)
         case "zhipu":
-            cfg = ZhipuConfig(
-                enabled=vendor_cfg.enabled,
-                base_url=vendor_cfg.base_url
+            zhipu_kwargs: dict[str, Any] = {
+                "enabled": vendor_cfg.enabled,
+                "base_url": vendor_cfg.base_url
                 or "https://open.bigmodel.cn/api/anthropic",
-                api_key=vendor_cfg.api_key,
-                timeout_ms=vendor_cfg.timeout_ms,
-            )
+                "api_key": vendor_cfg.api_key,
+                "timeout_ms": vendor_cfg.timeout_ms,
+            }
+            # 仅当显式配置了 concurrency 时转发，否则使用 ZhipuConfig 默认值
+            if vendor_cfg.concurrency is not None:
+                zhipu_kwargs["concurrency"] = vendor_cfg.concurrency
+            cfg = ZhipuConfig(**zhipu_kwargs)
             return ZhipuVendor(cfg, mapper, failover_cfg)
         case "minimax":
             cfg = MinimaxConfig(

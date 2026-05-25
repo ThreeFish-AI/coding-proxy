@@ -34,6 +34,7 @@ from ..routing.rate_limit import (
 )
 from ..routing.retry import RetryConfig, calculate_delay
 from .base import VendorResponse
+from .concurrency import ModelConcurrencyLimiter
 from .native_anthropic import NativeAnthropicVendor
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,12 @@ class ZhipuVendor(NativeAnthropicVendor):
     ) -> None:
         super().__init__(config, model_mapper, failover_config)
         self._rl_retry = _RATE_LIMIT_RETRY
+        # 每模型并发限制器（config.concurrency 为 None 时禁用）
+        self._concurrency_limiter: ModelConcurrencyLimiter | None = (
+            ModelConcurrencyLimiter(config.concurrency)
+            if config.concurrency is not None
+            else None
+        )
 
     # ── 非流式：429 重试 ────────────────────────────────────
 
@@ -76,7 +83,24 @@ class ZhipuVendor(NativeAnthropicVendor):
         request_body: dict[str, Any],
         headers: dict[str, str],
     ) -> VendorResponse:
-        """非流式请求，429 时自动重试."""
+        """非流式请求，429 时自动重试.
+
+        在 429 重试循环外层套上每模型并发槽位获取，确保同一时间点同一模型的
+        在途请求数不超过配置上限；超过时新请求 FIFO 排队等待。
+        """
+        sem = await self._maybe_acquire_concurrency_slot(request_body)
+        try:
+            return await self._send_message_with_retry(request_body, headers)
+        finally:
+            if sem is not None:
+                sem.release()
+
+    async def _send_message_with_retry(
+        self,
+        request_body: dict[str, Any],
+        headers: dict[str, str],
+    ) -> VendorResponse:
+        """原 send_message 主体逻辑（不含并发控制）."""
         max_attempts = self._rl_retry.max_attempts
 
         for attempt in range(max_attempts):
@@ -116,42 +140,71 @@ class ZhipuVendor(NativeAnthropicVendor):
         安全性：429 在 BaseVendor.send_message_stream 中于
         status code 检查阶段即 raise（在任何 chunk yield 之前），
         因此重试不会导致已发出数据不一致。
+
+        在 429 重试循环外层套上每模型并发槽位获取，确保流式请求与非流式请求
+        共用同一信号量，统一限制同一模型的总在途并发数。
         """
+        sem = await self._maybe_acquire_concurrency_slot(request_body)
         max_attempts = self._rl_retry.max_attempts
 
-        for attempt in range(max_attempts):
-            try:
-                # 429 在 status code 检查阶段即 raise（在任何 chunk 之前），
-                # 因此 __anext__ 安全：要么拿到首个 chunk，要么抛异常。
-                ait = super().send_message_stream(request_body, headers)
-                head = await ait.__anext__()
-            except StopAsyncIteration:
-                return
-            except httpx.HTTPStatusError as exc:
-                if exc.response is None or exc.response.status_code != 429:
-                    raise
-                if attempt == max_attempts - 1:
-                    logger.warning(
-                        "Zhipu 429 stream rate limit exhausted after %d attempts",
-                        max_attempts,
+        try:
+            for attempt in range(max_attempts):
+                try:
+                    # 429 在 status code 检查阶段即 raise（在任何 chunk 之前），
+                    # 因此 __anext__ 安全：要么拿到首个 chunk，要么抛异常。
+                    ait = super().send_message_stream(request_body, headers)
+                    head = await ait.__anext__()
+                except StopAsyncIteration:
+                    return
+                except httpx.HTTPStatusError as exc:
+                    if exc.response is None or exc.response.status_code != 429:
+                        raise
+                    if attempt == max_attempts - 1:
+                        logger.warning(
+                            "Zhipu 429 stream rate limit exhausted after %d attempts",
+                            max_attempts,
+                        )
+                        raise
+
+                    delay = self._compute_retry_delay_from_response(
+                        exc.response, attempt
                     )
-                    raise
+                    logger.info(
+                        "Zhipu 429 stream rate limit, retry %d/%d in %.1fms",
+                        attempt + 1,
+                        max_attempts - 1,
+                        delay,
+                    )
+                    await asyncio.sleep(delay / 1000.0)
+                    continue
 
-                delay = self._compute_retry_delay_from_response(exc.response, attempt)
-                logger.info(
-                    "Zhipu 429 stream rate limit, retry %d/%d in %.1fms",
-                    attempt + 1,
-                    max_attempts - 1,
-                    delay,
-                )
-                await asyncio.sleep(delay / 1000.0)
-                continue
+                # yield 在 try/except 之外，避免捕获外部 athrow 的异常
+                yield head
+                async for chunk in ait:
+                    yield chunk
+                return
+        finally:
+            if sem is not None:
+                sem.release()
 
-            # yield 在 try/except 之外，避免捕获外部 athrow 的异常
-            yield head
-            async for chunk in ait:
-                yield chunk
-            return
+    # ── 并发控制 ────────────────────────────────────────────
+
+    async def _maybe_acquire_concurrency_slot(
+        self,
+        request_body: dict[str, Any],
+    ) -> asyncio.Semaphore | None:
+        """按映射后模型名获取并发槽位；未配置 concurrency 时返回 None.
+
+        ``map_model()`` 是纯同步字典查找，在 Semaphore 等待前调用是安全的，
+        且能确保排队键与上游真实承载模型对齐。
+        """
+        if self._concurrency_limiter is None:
+            return None
+        raw_model = request_body.get("model", "") if request_body else ""
+        mapped_model = self.map_model(raw_model) if raw_model else ""
+        if not mapped_model:
+            return None
+        return await self._concurrency_limiter.acquire(mapped_model)
 
     # ── 延迟计算 ────────────────────────────────────────────
 
