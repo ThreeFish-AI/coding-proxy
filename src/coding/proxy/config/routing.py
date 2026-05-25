@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, BeforeValidator, Field, PrivateAttr, model_validator
 
 from .resiliency import CircuitBreakerConfig, QuotaGuardConfig, RetryConfig
+from .vendors import ZhipuConcurrencyConfig
 
 # ── 价格字段解析（$ / ¥ 前缀支持） ──────────────────────────
 
@@ -64,13 +65,13 @@ _NATIVE_ANTHROPIC_FIELDS: frozenset[str] = frozenset(
         "api_key",
     }
 )
-# 向后兼容别名
-_ZHIPU_FIELDS = _NATIVE_ANTHROPIC_FIELDS
+# Zhipu 独占字段：在通用 api_key 基础上增加每模型并发限制
+_ZHIPU_FIELDS: frozenset[str] = _NATIVE_ANTHROPIC_FIELDS | frozenset({"concurrency"})
 
 _VENDOR_EXCLUSIVE_FIELDS: dict[str, frozenset[str]] = {
     "copilot": _COPILOT_FIELDS,
     "antigravity": _ANTIGRAVITY_FIELDS,
-    "zhipu": _NATIVE_ANTHROPIC_FIELDS,
+    "zhipu": _ZHIPU_FIELDS,
     "minimax": _NATIVE_ANTHROPIC_FIELDS,
     "kimi": _NATIVE_ANTHROPIC_FIELDS,
     "doubao": _NATIVE_ANTHROPIC_FIELDS,
@@ -284,6 +285,12 @@ class VendorConfig(BaseModel):
     retry: RetryConfig = Field(default_factory=RetryConfig)
     quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
     weekly_quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
+
+    # ── Zhipu 专属：每模型并发限制 ───────────────────────────
+    concurrency: ZhipuConcurrencyConfig | None = Field(
+        default=None,
+        description="[zhipu] 每模型并发限制；None 表示不限并发",
+    )
 
     @model_validator(mode="after")
     def _warn_irrelevant_fields(self) -> VendorConfig:

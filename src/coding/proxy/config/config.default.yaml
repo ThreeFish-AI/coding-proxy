@@ -119,6 +119,14 @@ vendors:
       window_hours: 24.0
       threshold_percent: 95.0
       probe_interval_seconds: 300
+    # 每模型并发限制：默认 3 个并行请求；超出则按 FIFO 排队等待
+    # 可通过 models 字段覆盖单个模型的限制（如 glm-5.1: 5）
+    concurrency:
+      default: 3
+      # models:
+      #   glm-5v-turbo: 3
+      #   glm-5.1: 3
+      #   glm-4.5-air: 3
 
   # Vendor 4: MiniMax（默认禁用，需手动启用并添加到 tiers）
   - vendor: minimax

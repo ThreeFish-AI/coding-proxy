@@ -2,7 +2,21 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class ZhipuConcurrencyConfig(BaseModel):
+    """Zhipu 每模型并发限制配置."""
+
+    default: int = Field(default=3, ge=1, le=20, description="全局默认并行度")
+    models: dict[str, int] = Field(
+        default_factory=dict,
+        description="按映射后模型名自定义并行度（覆盖 default）",
+    )
+
+    def get_limit(self, model: str) -> int:
+        """获取指定模型的并行度限制."""
+        return self.models.get(model, self.default)
 
 
 class AnthropicConfig(BaseModel):
@@ -48,6 +62,7 @@ class ZhipuConfig(BaseModel):
     base_url: str = "https://open.bigmodel.cn/api/anthropic"
     api_key: str = ""
     timeout_ms: int = 3000000
+    concurrency: ZhipuConcurrencyConfig = Field(default_factory=ZhipuConcurrencyConfig)
 
 
 class MinimaxConfig(BaseModel):
@@ -100,6 +115,7 @@ __all__ = [
     "CopilotConfig",
     "AntigravityConfig",
     "ZhipuConfig",
+    "ZhipuConcurrencyConfig",
     "MinimaxConfig",
     "KimiConfig",
     "DoubaoConfig",
