@@ -65,13 +65,13 @@ _NATIVE_ANTHROPIC_FIELDS: frozenset[str] = frozenset(
         "api_key",
     }
 )
-# 向后兼容别名
-_ZHIPU_FIELDS = _NATIVE_ANTHROPIC_FIELDS
+# Zhipu 独占字段：在通用 api_key 基础上增加每模型并发限制
+_ZHIPU_FIELDS: frozenset[str] = _NATIVE_ANTHROPIC_FIELDS | frozenset({"concurrency"})
 
 _VENDOR_EXCLUSIVE_FIELDS: dict[str, frozenset[str]] = {
     "copilot": _COPILOT_FIELDS,
     "antigravity": _ANTIGRAVITY_FIELDS,
-    "zhipu": _NATIVE_ANTHROPIC_FIELDS,
+    "zhipu": _ZHIPU_FIELDS,
     "minimax": _NATIVE_ANTHROPIC_FIELDS,
     "kimi": _NATIVE_ANTHROPIC_FIELDS,
     "doubao": _NATIVE_ANTHROPIC_FIELDS,
