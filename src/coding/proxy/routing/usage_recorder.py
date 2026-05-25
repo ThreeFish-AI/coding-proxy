@@ -28,6 +28,11 @@ class UsageRecorder:
     def set_pricing_table(self, table: PricingTable) -> None:
         self._pricing_table = table
 
+    async def set_session_title(self, session_key: str, title: str) -> None:
+        """为新 session 设置标题（委托给 TokenLogger）."""
+        if self._token_logger:
+            await self._token_logger.set_session_title(session_key, title)
+
     # ── 用量信息构建 ──────────────────────────────────────
 
     @staticmethod

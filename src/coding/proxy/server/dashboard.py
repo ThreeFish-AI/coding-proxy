@@ -411,6 +411,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .session-table td.cell-tags { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.8; vertical-align: middle; }
     .session-table tr:hover td { background: var(--bg-card-hover); }
     .session-table .session-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-blue); cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .session-table .session-title { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 0; }
     .session-id { display: flex; align-items: center; gap: 4px; }
     .session-id-text { overflow: hidden; text-overflow: ellipsis; }
     .copy-btn { background: none; border: none; color: var(--text-tertiary); cursor: pointer; padding: 2px; border-radius: 4px; font-size: 12px; line-height: 1; opacity: .5; flex-shrink: 0; }
@@ -676,20 +677,22 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="session-table-wrap" id="sessions-table-wrap">
       <table class="session-table">
         <colgroup>
-          <col style="width:12%">
-          <col style="width:7%">
+          <col style="width:10%">
+          <col style="width:15%">
           <col style="width:6%">
+          <col style="width:5%">
+          <col style="width:5%">
+          <col style="width:15%">
+          <col style="width:10%">
           <col style="width:6%">
-          <col style="width:17%">
-          <col style="width:12%">
-          <col style="width:7%">
-          <col style="width:9%">
-          <col style="width:12%">
-          <col style="width:12%">
+          <col style="width:8%">
+          <col style="width:10%">
+          <col style="width:10%">
         </colgroup>
         <thead>
           <tr>
             <th>Session ID</th>
+            <th>Title</th>
             <th>Last Active</th>
             <th>Requests</th>
             <th>Tokens</th>
@@ -702,7 +705,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </tr>
         </thead>
         <tbody id="sessions-tbody">
-          <tr><td colspan="10" class="empty">Loading...</td></tr>
+          <tr><td colspan="11" class="empty">Loading...</td></tr>
         </tbody>
       </table>
       <div class="session-pagination" id="session-pagination">
@@ -1573,7 +1576,7 @@ function renderSessionPage() {
   var tbody = document.getElementById('sessions-tbody');
 
   if (!total) {
-    tbody.innerHTML = '<tr><td colspan="10" class="empty"><div class="empty-icon">📭</div>No session data</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" class="empty"><div class="empty-icon">📭</div>No session data</td></tr>';
   } else {
     tbody.innerHTML = page.map(function(s) {
       var parsed = parseSessionKey(s.session_key);
@@ -1582,6 +1585,7 @@ function renderSessionPage() {
       var modelsFull = (s.models || '').split(',').map(function(c){return c.trim();});
       var vendorsFull = (s.vendors || '').split(',').map(function(v){return formatVendorLabel(v.trim());});
       var sr = s.success_rate != null ? Math.round(s.success_rate) : null;
+      var sessionTitle = s.title || '';
       return '<tr data-row onclick="toggleRow(this)">' +
         '<td class="session-key" onclick="event.stopPropagation()">' +
           '<div class="session-id" data-key="' + escapeHtml(s.session_key) + '" title="' + escapeHtml(s.session_key) + '">' +
@@ -1592,6 +1596,7 @@ function renderSessionPage() {
             'dev:' + escapeHtml(shortId(parsed.device_id, 8)) + ' · acct:' + escapeHtml(shortId(parsed.account_uuid, 8)) +
           '</div>' +
         '</td>' +
+        '<td class="session-title" title="' + escapeHtml(sessionTitle) + '">' + (sessionTitle ? escapeHtml(sessionTitle) : '–') + '</td>' +
         '<td>' + relativeTime(s.last_active_ts) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtNum(s.total_requests) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtTokens(s.total_tokens) + '</td>' +
@@ -1602,9 +1607,10 @@ function renderSessionPage() {
         '<td onclick="event.stopPropagation()">' + selectHtml + '</td>' +
         '<td>' + formatCategories(s.client_categories) + '</td>' +
         '</tr>' +
-        '<tr class="row-detail"><td colspan="10"><div class="detail-card">' +
+        '<tr class="row-detail"><td colspan="11"><div class="detail-card">' +
           '<div class="detail-identity-row">' +
             '<div class="detail-item"><div class="detail-label">Session ID</div><div class="detail-value" title="' + escapeHtml(s.session_key) + '">' + escapeHtml(parsed.session_id || s.session_key) + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Title</div><div class="detail-value">' + (sessionTitle ? escapeHtml(sessionTitle) : '–') + '</div></div>' +
             '<div class="detail-item"><div class="detail-label">Device</div><div class="detail-value" title="' + escapeHtml(parsed.device_id || '') + '">' + (parsed.device_id ? escapeHtml(parsed.device_id) : '–') + '</div></div>' +
             '<div class="detail-item"><div class="detail-label">Account</div><div class="detail-value" title="' + escapeHtml(parsed.account_uuid || '') + '">' + (parsed.account_uuid ? escapeHtml(parsed.account_uuid) : '–') + '</div></div>' +
           '</div>' +
