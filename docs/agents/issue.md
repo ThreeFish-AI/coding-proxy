@@ -230,3 +230,47 @@ SUM(input_tokens + output_tokens
 
 - 历次 PR 中 cache token 字段的引入是渐进式的（schema 已有四列、`log()` 入参齐全、Overview 已全口径消费），但部分聚合视图的口径升级被遗漏；任何向 `usage_log` 增列后，**必须**审计所有 `SUM(input_tokens` / `SUM(output_tokens` 出现处的聚合表达式是否需要同步更新。
 - 跨标签页同一指标（如"总 Tokens"）的口径一致性，建议在添加新视图时主动与 Overview 现有口径做交叉核对，必要时在 SQL 注释中标注口径来源，便于后续 review。
+
+---
+
+## Zhipu vendor 间歇性 `[1210][API 调用参数有误]` 拒绝（诊断阶段）
+
+**问题描述**
+
+Zhipu vendor 作为首选 tier 时，处理 `claude-haiku-* → glm-5-turbo` 的部分请求被上游直接拒绝：
+
+```
+WARNING Tier zhipu semantic rejection
+  (type=invalid_request_error,
+   msg=[1210][API 调用参数有误，请检查文档。][...])
+  [model=claude-haiku-4-5-20251001, messages=1], trying next tier without recording failure
+INFO  Tier anthropic message succeeded (took over from failed tier: zhipu)
+```
+
+失败请求统一表现为 `duration<1s + tokens=[0 0 0 0]`，被 zhipu 在入口校验阶段直接拒绝、未消耗任何 token。两次观察窗口失败率分别为 4%（2026-05-23 22:24，glm-4.7 旧映射）与 27%（2026-05-25 17:26+，glm-5-turbo 当前映射），均触发降级至 anthropic / copilot。
+
+**表因**
+
+`is_semantic_rejection` 检测到 zhipu 返回 `invalid_request_error + 1210` 含「API 调用参数有误」中文标记，判定为语义拒绝，跳过下一层 tier。1210 是智谱官方错误码，[官方文档](https://docs.bigmodel.cn/cn/api/api-code) 定义为「参数格式/类型不符规范」（区别于 1213「必需字段缺失」、1214「字段参数非法」）。
+
+**根因（仍在收集证据）**
+
+PR #244 的初版诊断字段仅覆盖 `thinking / thinking_blocks / cache_control / model / messages`，但 2026-05-25 17:26 后的诊断日志显示失败请求**均不含**上述任何字段。说明真正祸根在更细粒度的参数（system / tools / max_tokens / sampling / metadata / content_types / body_size 等）。
+
+**处理方式（分阶段）**
+
+- **Step 1（PR #244，已合并）**：在 `executor.py::_build_semantic_rejection_diagnostic` 中输出 thinking / cache_control 相关字段 — 但证据反转，覆盖不足以定位真因。
+- **Step 1 v2（本次）**：扩展诊断函数覆盖 `system_kind|blocks(+cc)` / `tools` / `tool_choice` / 采样参数 / `stream` / `metadata_keys` / `content_types` / `body_bytes` 等维度。所有项「仅存在时输出」以控制日志噪声。配套 14 个单元测试（`TestBuildSemanticRejectionDiagnostic`）覆盖各字段组合。
+- **Step 2（待定）**：依据扩展诊断日志的新证据，定位具体祸根参数后再施修复（候选路径：`ZhipuVendor._prepare_request` 参数剥离 / 调用现有 `normalize_for_zhipu` / pre-validation 警告）。
+
+**后续防范**
+
+- **「无证据，不下结论」**：当初版诊断字段无法覆盖根因时，禁止反复猜测，应优先扩展诊断维度抓取更多线索。本次先扩展再修复的迭代节奏可作为同类「黑盒 API 报错」问题的范式。
+- **诊断字段设计原则**：所有诊断项应「仅存在时输出」，避免常态化噪声；输出格式紧凑（`key=val`）便于日志检索；参数值用 `!r:.N` 截断防止巨型对象灌入日志。
+- **错误码差异化**：智谱 12xx 系列错误码语义并不等价（1210 ≠ 1213 ≠ 1214），未来面对类似 `[code][message]` 形式的供应商错误时，应优先查阅其官方错误码字典，避免基于错误消息字面意思的误判。
+
+**同类问题影响与处理注意事项**
+
+- 其他薄透传 vendor（minimax / kimi / doubao / alibaba / xiaomi）共用 `NativeAnthropicVendor._prepare_request`，若它们也开始报「参数错误」类语义拒绝，可复用本次扩展的诊断函数定位差异。
+- 若证据指向 `tools` 字段（如工具 schema 不兼容）、`metadata` 字段（如自定义键被 zhipu 拒收）等具体路径，修复时应优先复用 `convert/vendor_channels.py` 中已有的 `normalize_for_zhipu` / `strip_thinking_blocks` 工具，避免在 vendor 内部重复实现剥离逻辑。
+- 部署 Step 1 v2 后，建议观察至少 48 小时收集足够样本（>20 次失败），通过失败/成功请求形态对比统计找出**唯一差异维度**，再进入 Step 2。

@@ -22,6 +22,7 @@ from coding.proxy.compat.canonical import (
 from coding.proxy.routing.executor import (
     _SESSION_TITLE_MAX_LEN,
     _VENDOR_PROTOCOL_LABEL_MAP,
+    _build_semantic_rejection_diagnostic,
     _extract_session_title,
     _has_tool_results,
     _is_likely_request_format_error,
@@ -1952,6 +1953,218 @@ class TestPrepareBodyForTierTransition:
         result = exec_inst._prepare_body_for_tier(body, tier, source_vendor="zhipu")
 
         assert result is body
+
+
+class TestBuildSemanticRejectionDiagnostic:
+    """覆盖 _build_semantic_rejection_diagnostic 函数 — 用于诊断 [1210] 等供应商语义拒绝.
+
+    重点验证：
+    - baseline 字段（model / messages）始终输出
+    - 仅当参数存在时才输出相关项（避免日志噪声）
+    - 各字段输出格式稳定
+    """
+
+    def test_baseline_minimal_body(self):
+        """最小请求体：仅输出 model + messages."""
+        body = {"model": "glm-5-turbo", "messages": [{"role": "user", "content": "hi"}]}
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "model=glm-5-turbo" in result
+        assert "messages=1" in result
+        # 不应输出未使用的字段
+        assert "thinking" not in result
+        assert "tools" not in result
+        assert "cache_control" not in result
+
+    def test_includes_thinking_param(self):
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [],
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+        }
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "thinking=" in result
+        assert "budget_tokens" in result
+
+    def test_includes_system_string(self):
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [],
+            "system": "You are helpful." * 5,
+        }
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "system_kind=string(len=" in result
+
+    def test_includes_system_blocks_with_cache_control(self):
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [],
+            "system": [
+                {
+                    "type": "text",
+                    "text": "rule1",
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "text", "text": "rule2"},
+            ],
+        }
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "system_blocks=2,cc=1" in result
+
+    def test_includes_tools_and_tool_choice(self):
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [],
+            "tools": [{"name": "a"}, {"name": "b"}, {"name": "c"}],
+            "tool_choice": {"type": "auto"},
+        }
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "tools=3" in result
+        assert "tool_choice=" in result
+
+    def test_includes_sampling_params(self):
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [],
+            "max_tokens": 8192,
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 40,
+            "stop_sequences": ["\n\n", "END"],
+        }
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "max_tokens=8192" in result
+        assert "temperature=0.7" in result
+        assert "top_p=0.9" in result
+        assert "top_k=40" in result
+        assert "stop_sequences=2" in result
+
+    def test_includes_stream_and_metadata(self):
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [],
+            "stream": True,
+            "metadata": {"user_id": "x", "session_id": "y"},
+        }
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "stream=True" in result
+        assert "metadata_keys=2" in result
+
+    def test_content_type_distribution(self):
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hi"},
+                        {"type": "text", "text": "bye"},
+                        {"type": "image", "source": {}},
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "t1", "name": "x", "input": {}},
+                    ],
+                },
+            ],
+        }
+        result = _build_semantic_rejection_diagnostic(body)
+        # 排序为字母序
+        assert "content_types={image:1,text:2,tool_use:1}" in result
+
+    def test_content_type_string_messages(self):
+        """messages.content 为 string 时计入 string:N."""
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
+            ],
+        }
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "content_types={string:2}" in result
+
+    def test_thinking_blocks_in_history(self):
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "..."},
+                        {"type": "redacted_thinking", "data": "..."},
+                        {"type": "text", "text": "result"},
+                    ],
+                }
+            ],
+        }
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "thinking_blocks_in_history=2" in result
+
+    def test_cache_control_in_messages_or_tools(self):
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "x",
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                    ],
+                }
+            ],
+        }
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "cache_control_fields=present" in result
+
+    def test_body_bytes_estimated(self):
+        body = {"model": "glm-5-turbo", "messages": [{"role": "user", "content": "ok"}]}
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "body_bytes=" in result
+
+    def test_body_bytes_skipped_when_unserializable(self):
+        """请求体含非可序列化对象时不抛异常."""
+
+        class NonSerializable:
+            pass
+
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [],
+            "metadata": {"obj": NonSerializable()},
+        }
+        # 不应抛异常
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "model=glm-5-turbo" in result
+
+    def test_combined_real_world_failure_case(self):
+        """模拟真实失败请求形态（messages=1，无 thinking/cache_control，含 system + tools）."""
+        body = {
+            "model": "glm-5-turbo",
+            "messages": [{"role": "user", "content": "需要修复一个 bug"}],
+            "system": [{"type": "text", "text": "You are Claude Code."}],
+            "tools": [{"name": "Read"}, {"name": "Edit"}],
+            "max_tokens": 8192,
+            "temperature": 1.0,
+            "metadata": {"user_id": "x"},
+            "stream": True,
+        }
+        result = _build_semantic_rejection_diagnostic(body)
+        assert "model=glm-5-turbo" in result
+        assert "messages=1" in result
+        assert "system_blocks=1" in result
+        assert "tools=2" in result
+        assert "max_tokens=8192" in result
+        assert "temperature=1.0" in result
+        assert "metadata_keys=1" in result
+        assert "stream=True" in result
+        # 不应包含未出现的项
+        assert "thinking_blocks_in_history" not in result
+        assert "cache_control_fields" not in result
 
 
 # ── Session 标题清洗与抽取测试 ─────────────────────────────────
