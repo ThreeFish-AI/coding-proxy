@@ -190,6 +190,14 @@ CREATE TABLE IF NOT EXISTS usage_evidence (
 );
 """
 
+_CREATE_SESSION_META = """
+CREATE TABLE IF NOT EXISTS session_meta (
+    session_key TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+"""
+
 _CREATE_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_log(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_vendor ON usage_log(vendor);
@@ -245,6 +253,7 @@ class TokenLogger:
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(_CREATE_TABLES)
+        await self._db.executescript(_CREATE_SESSION_META)
         # 迁移必须在建索引之前执行，确保 vendor 列已存在
         await self._migrate_rename_backend_to_vendor()
         await self._migrate_add_failover_from()
@@ -315,6 +324,28 @@ class TokenLogger:
                 logger.info(
                     "Migration: renamed 'backend' column to 'vendor' in %s", table
                 )
+
+    async def set_session_title(self, session_key: str, title: str) -> None:
+        """为新 session 设置标题（幂等，仅首次写入）."""
+        if not self._db or not title or not session_key:
+            return
+        await self._db.execute(
+            "INSERT OR IGNORE INTO session_meta (session_key, title) VALUES (?, ?)",
+            (session_key, title),
+        )
+        await self._db.commit()
+
+    async def get_session_titles(self, session_keys: list[str]) -> dict[str, str]:
+        """批量查询 session 标题."""
+        if not self._db or not session_keys:
+            return {}
+        placeholders = ",".join("?" for _ in session_keys)
+        cursor = await self._db.execute(
+            f"SELECT session_key, title FROM session_meta WHERE session_key IN ({placeholders})",
+            session_keys,
+        )
+        rows = await cursor.fetchall()
+        return {row["session_key"]: row["title"] for row in rows}
 
     async def log(
         self,
@@ -621,7 +652,13 @@ class TokenLogger:
             (cutoff_iso, limit),
         )
         rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        sessions = [dict(row) for row in rows]
+        if sessions:
+            keys = [s["session_key"] for s in sessions]
+            titles = await self.get_session_titles(keys)
+            for s in sessions:
+                s["title"] = titles.get(s["session_key"], "")
+        return sessions
 
     async def query_session_profile(self, session_key: str) -> dict | None:
         """查询单个会话的完整聚合数据."""

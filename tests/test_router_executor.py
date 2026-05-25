@@ -20,12 +20,15 @@ from coding.proxy.compat.canonical import (
     build_canonical_request,
 )
 from coding.proxy.routing.executor import (
+    _SESSION_TITLE_MAX_LEN,
     _VENDOR_PROTOCOL_LABEL_MAP,
     _build_semantic_rejection_diagnostic,
+    _extract_session_title,
     _has_tool_results,
     _is_likely_request_format_error,
     _log_vendor_response_error,
     _RouteExecutor,
+    _sanitize_user_text,
 )
 from coding.proxy.routing.session_manager import RouteSessionManager
 from coding.proxy.routing.tier import VendorTier
@@ -223,7 +226,7 @@ class TestTryGateTier:
         headers = {}
         caps = RequestCapabilities()
         req = build_canonical_request(body, headers)
-        session_record = await exec_inst._session_mgr.get_or_create_record(
+        session_record, _is_new = await exec_inst._session_mgr.get_or_create_record(
             req.session_key, req.trace_id
         )
         reasons: list[str] = []
@@ -247,7 +250,7 @@ class TestTryGateTier:
         body = {"model": "test"}
         headers = {}
         req = build_canonical_request(body, headers)
-        session_record = await exec_inst._session_mgr.get_or_create_record(
+        session_record, _is_new = await exec_inst._session_mgr.get_or_create_record(
             req.session_key, req.trace_id
         )
         reasons: list[str] = []
@@ -276,7 +279,7 @@ class TestTryGateTier:
         body = {"model": "test", "thinking": {"type": "enabled"}}
         headers = {}
         req = build_canonical_request(body, headers)
-        session_record = await exec_inst._session_mgr.get_or_create_record(
+        session_record, _is_new = await exec_inst._session_mgr.get_or_create_record(
             req.session_key, req.trace_id
         )
         reasons: list[str] = []
@@ -652,9 +655,10 @@ class TestRouteSessionManagerIntegration:
     @pytest.mark.asyncio
     async def test_get_or_create_without_store(self):
         mgr = RouteSessionManager(compat_session_store=None)
-        record = await mgr.get_or_create_record("sk_test", "trace_1")
-        # 无 store 时返回 None（由 executor 层面处理空 record 场景）
+        record, is_new = await mgr.get_or_create_record("sk_test", "trace_1")
+        # 无 store 时返回 (None, False)
         assert record is None
+        assert is_new is False
 
     @pytest.mark.asyncio
     async def test_persist_session_without_store_is_noop(self):
@@ -2161,3 +2165,162 @@ class TestBuildSemanticRejectionDiagnostic:
         # 不应包含未出现的项
         assert "thinking_blocks_in_history" not in result
         assert "cache_control_fields" not in result
+
+
+# ── Session 标题清洗与抽取测试 ─────────────────────────────────
+
+
+class TestSanitizeUserText:
+    """``_sanitize_user_text`` — 剥离 CC 注入的系统级 XML 块.
+
+    覆盖典型 system-reminder/user-preferences 噪声、slash command
+    短路、空白折叠与边界场景。
+    """
+
+    def test_strips_system_reminder(self):
+        raw = "<system-reminder>MCP 指令</system-reminder>这是用户真实输入"
+        assert _sanitize_user_text(raw) == "这是用户真实输入"
+
+    def test_strips_user_preferences(self):
+        raw = "用户问题<user-preferences>遵循 AGENTS.md</user-preferences>"
+        assert _sanitize_user_text(raw) == "用户问题"
+
+    def test_strips_multiple_noise_blocks(self):
+        raw = (
+            "<system-reminder>A</system-reminder>"
+            "<system-reminder>B</system-reminder>"
+            "<system-reminder>C</system-reminder>"
+            "<system-reminder>D</system-reminder>"
+            "真实输入文本"
+            "<user-preferences>P</user-preferences>"
+        )
+        assert _sanitize_user_text(raw) == "真实输入文本"
+
+    def test_strips_multiline_system_reminder(self):
+        """多行 system-reminder 块需被 DOTALL 完整匹配剥离."""
+        raw = (
+            "<system-reminder>\n"
+            "# MCP Server Instructions\n"
+            "Use this server to fetch ...\n"
+            "</system-reminder>\n"
+            "TITLE 中的 Session 标题应当取自用户输入"
+        )
+        assert _sanitize_user_text(raw) == "TITLE 中的 Session 标题应当取自用户输入"
+
+    def test_strips_tag_with_attributes(self):
+        """容忍标签携带属性(如 <system-reminder type="x">)."""
+        raw = '<system-reminder type="x">noise</system-reminder>真实'
+        assert _sanitize_user_text(raw) == "真实"
+
+    def test_slash_command_with_args(self):
+        raw = (
+            "<command-message>commit (user)</command-message>"
+            "<command-name>/commit</command-name>"
+            "<command-args>修复标题</command-args>"
+        )
+        assert _sanitize_user_text(raw) == "/commit 修复标题"
+
+    def test_slash_command_no_args(self):
+        raw = "<command-name>/review</command-name>"
+        assert _sanitize_user_text(raw) == "/review"
+
+    def test_collapses_whitespace(self):
+        raw = "<system-reminder>X</system-reminder>\n\n   多余  空白\t\t折叠   "
+        assert _sanitize_user_text(raw) == "多余 空白 折叠"
+
+    def test_empty_after_strip(self):
+        raw = "<system-reminder>仅噪声</system-reminder>"
+        assert _sanitize_user_text(raw) == ""
+
+    def test_empty_input(self):
+        assert _sanitize_user_text("") == ""
+
+    def test_preserves_user_xml_like_content(self):
+        """用户输入中合法的 XML/HTML 片段(非白名单标签)需完整保留."""
+        raw = "请帮我审查这段代码:<div>hello</div> 是否符合规范?"
+        assert _sanitize_user_text(raw) == raw
+
+    def test_strips_local_command_output(self):
+        raw = "<local-command-stdout>build ok</local-command-stdout>构建后的下一步问题"
+        assert _sanitize_user_text(raw) == "构建后的下一步问题"
+
+
+class TestExtractSessionTitle:
+    """``_extract_session_title`` — 端到端从 CanonicalRequest 抽取标题."""
+
+    @staticmethod
+    def _build_request(messages: list[dict]):
+        return build_canonical_request({"model": "test", "messages": messages}, {})
+
+    def test_truncates_to_max_len(self):
+        long_text = "用户输入文本" * 20
+        req = self._build_request([{"role": "user", "content": long_text}])
+        title = _extract_session_title(req)
+        assert len(title) == _SESSION_TITLE_MAX_LEN
+        assert title == long_text[:_SESSION_TITLE_MAX_LEN]
+
+    def test_strips_noise_from_first_user_message(self):
+        raw = (
+            "<system-reminder>MCP 指令</system-reminder>"
+            "<user-preferences>偏好</user-preferences>"
+            "测试标题 ABC"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == "测试标题 ABC"
+
+    def test_handles_real_cc_first_message_shape(self):
+        """模拟 CC 真实首条消息(多个连续 system-reminder + 用户文本)."""
+        raw = (
+            "<system-reminder>\n# MCP Server Instructions\n...</system-reminder>"
+            "<system-reminder>\nThe following skills...\n</system-reminder>"
+            "<system-reminder>\nPlan mode is active...\n</system-reminder>"
+            "\n\nTITLE 中的 Session 标题应当取自用户输入的信息前 30 个字\n\n"
+            "<user-preferences>始终遵循 AGENTS.md</user-preferences>"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        title = _extract_session_title(req)
+        assert title.startswith("TITLE 中的 Session")
+        assert len(title) <= _SESSION_TITLE_MAX_LEN
+
+    def test_extracts_slash_command(self):
+        raw = (
+            "<command-name>/commit</command-name>"
+            "<command-args>feat: 新增标题清洗</command-args>"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == "/commit feat: 新增标题清洗"
+
+    def test_returns_empty_when_only_noise(self):
+        raw = "<system-reminder>纯噪声</system-reminder>"
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == ""
+
+    def test_returns_empty_for_no_user_messages(self):
+        req = self._build_request([{"role": "assistant", "content": "你好"}])
+        assert _extract_session_title(req) == ""
+
+    def test_skips_noise_only_part_to_find_real_input(self):
+        """首个 user text part 全噪声时,fallback 到下一个非空 user part."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "<system-reminder>noise</system-reminder>",
+                    },
+                    {"type": "text", "text": "真实问题"},
+                ],
+            }
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "真实问题"
+
+    def test_skips_assistant_role(self):
+        """assistant 角色的文本不应被作为标题候选."""
+        messages = [
+            {"role": "assistant", "content": "上一轮回答"},
+            {"role": "user", "content": "新的用户问题"},
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "新的用户问题"

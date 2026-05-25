@@ -19,13 +19,18 @@ class RouteSessionManager:
 
     async def get_or_create_record(
         self, session_key: str, trace_id: str
-    ) -> CompatSessionRecord | None:
+    ) -> tuple[CompatSessionRecord | None, bool]:
+        """获取或创建兼容性会话记录.
+
+        Returns:
+            (record, is_new) — is_new 为 True 表示本次创建的新会话。
+        """
         if self._store is None:
-            return None
+            return None, False
         record = await self._store.get(session_key)
         if record is not None:
-            return record
-        return CompatSessionRecord(session_key=session_key, trace_id=trace_id)
+            return record, False
+        return CompatSessionRecord(session_key=session_key, trace_id=trace_id), True
 
     def apply_compat_context(
         self,

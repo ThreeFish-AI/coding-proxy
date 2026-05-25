@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -44,9 +45,135 @@ from .usage_recorder import UsageRecorder
 # 向后兼容别名
 BackendResponse = VendorResponse
 NoCompatibleBackendError = NoCompatibleVendorError
-from ..compat.canonical import CompatibilityStatus, build_canonical_request
+from ..compat.canonical import (
+    CanonicalPartType,
+    CompatibilityStatus,
+    build_canonical_request,
+)
+from ..model.compat import CanonicalRequest
 
 logger = logging.getLogger(__name__)
+
+_SESSION_TITLE_MAX_LEN = 30
+
+# Claude Code 注入的"噪声"标签 — 系统级上下文,不应进入 Session 标题。
+# 这些标签由 CC harness 在首个 user 消息 content 中拼接,高度同质,
+# 直接用作标题会导致跨会话标题无差异化,丧失辨识度。
+_NOISE_TAG_PATTERN = re.compile(
+    r"<(?P<tag>system-reminder|user-preferences|"
+    r"local-command-stdout|local-command-stderr|"
+    r"bash-input|bash-stdout|bash-stderr|"
+    r"ide_selection|stdin|system_instruction)\b[^>]*>"
+    r".*?</(?P=tag)>",
+    flags=re.DOTALL | re.IGNORECASE,
+)
+
+# Slash command 子标签:用于识别 /commit、/review 等命令式调用,
+# 合成"命令 + 参数"式标题。
+_CMD_NAME_PATTERN = re.compile(r"<command-name>(.*?)</command-name>", flags=re.DOTALL)
+_CMD_ARGS_PATTERN = re.compile(r"<command-args>(.*?)</command-args>", flags=re.DOTALL)
+# 残留 command-* 包裹标签清除(command-message/command-stdout 等次要标签)。
+_CMD_WRAPPER_PATTERN = re.compile(
+    r"<command-[\w-]+>.*?</command-[\w-]+>", flags=re.DOTALL
+)
+
+
+def _sanitize_user_text(raw: str) -> str:
+    """剔除 Claude Code 注入的系统级 XML 块,还原真实用户输入。
+
+    处理顺序:
+    1. Slash command 优先识别 — 若检测到 <command-name>,合成"命令 + 参数"
+       式标题(因为残留文本通常为空,直接取标签内容更有意义)。
+    2. 通用噪声剥离 — 移除已知白名单内的 system-reminder 等标签。
+    3. 残留 command-* 包裹清除 — 兜底去除 command-message 等次要标签。
+    4. 前后空白归一化 — 折叠连续空白为单空格,便于 30 字截断。
+    """
+    if not raw:
+        return ""
+
+    # 阶段一: slash command 短路
+    cmd = _CMD_NAME_PATTERN.search(raw)
+    if cmd:
+        name = cmd.group(1).strip()
+        args_match = _CMD_ARGS_PATTERN.search(raw)
+        args = args_match.group(1).strip() if args_match else ""
+        composed = f"{name} {args}".strip() if args else name
+        if composed:
+            return composed
+
+    # 阶段二: 通用噪声剥离
+    cleaned = _NOISE_TAG_PATTERN.sub("", raw)
+    cleaned = _CMD_WRAPPER_PATTERN.sub("", cleaned)
+
+    # 阶段三: 空白折叠
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _extract_session_title(request: CanonicalRequest) -> str:
+    """从规范化请求中提取首个用户消息文本作为 session 标题。
+
+    跳过 Claude Code 注入的系统级 XML 块(system-reminder、user-preferences 等),
+    确保标题反映用户真实输入而非高同质化的系统模板。
+    """
+    for part in request.messages:
+        if part.role != "user" or part.type != CanonicalPartType.TEXT:
+            continue
+        cleaned = _sanitize_user_text(part.text)
+        if cleaned:
+            return cleaned[:_SESSION_TITLE_MAX_LEN]
+    return ""
+
+
+def _build_semantic_rejection_diagnostic(body: dict[str, Any]) -> str:
+    """构建语义拒绝的请求体诊断上下文.
+
+    在 semantic rejection 日志中附加请求体的可疑参数快照，
+    用于定位供应商参数校验失败的具体祸根参数。
+    """
+    parts: list[str] = []
+    # 顶层不兼容参数
+    for key in ("thinking", "extended_thinking", "reasoning_effort"):
+        if key in body:
+            val = body[key]
+            parts.append(f"{key}={val!r:.80}")
+    # 会话历史中的 thinking blocks
+    thinking_count = 0
+    for msg in body.get("messages", []):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in (
+                "thinking",
+                "redacted_thinking",
+            ):
+                thinking_count += 1
+    if thinking_count:
+        parts.append(f"thinking_blocks_in_history={thinking_count}")
+    # cache_control 存在检测
+    has_cc = False
+    for section in (
+        body.get("system", []) if isinstance(body.get("system"), list) else [],
+        *(
+            m.get("content", [])
+            for m in body.get("messages", [])
+            if isinstance(m.get("content"), list)
+        ),
+        body.get("tools", []),
+    ):
+        if isinstance(section, list):
+            for item in section:
+                if isinstance(item, dict) and "cache_control" in item:
+                    has_cc = True
+                    break
+        if has_cc:
+            break
+    if has_cc:
+        parts.append("cache_control_fields=present")
+    # 模型 + 消息数
+    parts.append(f"model={body.get('model', 'N/A')}")
+    parts.append(f"messages={len(body.get('messages', []))}")
+    return f" [{', '.join(parts)}]" if parts else ""
 
 
 def _build_semantic_rejection_diagnostic(body: dict[str, Any]) -> str:
@@ -460,10 +587,16 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record = await self._session_mgr.get_or_create_record(
+        session_record, is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
+        if is_new_session:
+            title = _extract_session_title(canonical_request)
+            if title:
+                await self._recorder.set_session_title(
+                    canonical_request.session_key, title
+                )
         incompatible_reasons: list[str] = []
         effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
         last_idx = len(effective_tiers) - 1
@@ -631,10 +764,16 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record = await self._session_mgr.get_or_create_record(
+        session_record, is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
+        if is_new_session:
+            title = _extract_session_title(canonical_request)
+            if title:
+                await self._recorder.set_session_title(
+                    canonical_request.session_key, title
+                )
         incompatible_reasons: list[str] = []
         effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
         last_idx = len(effective_tiers) - 1
