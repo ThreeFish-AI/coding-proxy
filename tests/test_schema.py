@@ -31,7 +31,8 @@ def test_antigravity_fields_set():
 
 def test_zhipu_fields_set():
     assert "api_key" in _ZHIPU_FIELDS
-    assert len(_ZHIPU_FIELDS) == 1
+    assert "concurrency" in _ZHIPU_FIELDS
+    assert len(_ZHIPU_FIELDS) == 2
 
 
 def test_vendor_exclusive_fields_mapping_complete():

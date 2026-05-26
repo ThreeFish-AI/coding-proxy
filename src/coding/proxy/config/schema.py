@@ -54,6 +54,7 @@ from .vendors import (  # noqa: F401
     KimiConfig,
     MinimaxConfig,
     XiaomiConfig,
+    ZhipuConcurrencyConfig,
     ZhipuConfig,
 )
 
@@ -318,6 +319,7 @@ __all__ = [
     "CopilotConfig",
     "AntigravityConfig",
     "ZhipuConfig",
+    "ZhipuConcurrencyConfig",
     # resiliency
     "CircuitBreakerConfig",
     "RetryConfig",
