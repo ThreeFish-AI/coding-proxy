@@ -1353,6 +1353,8 @@ document.addEventListener('click', function(e) {
   input.focus();
   input.select();
 
+  var _cancelled = false;
+
   function restore() {
     _mcEditing = false;
     if (input.parentNode) input.parentNode.removeChild(input);
@@ -1365,18 +1367,18 @@ document.addEventListener('click', function(e) {
   }
 
   input.addEventListener('keydown', function(ev) {
-    if (ev.key === 'Escape') { restore(); return; }
+    if (ev.key === 'Escape') { _cancelled = true; restore(); return; }
     if (ev.key !== 'Enter') return;
     ev.preventDefault();
     submit();
   });
 
   input.addEventListener('blur', function() {
-    // 短延迟允许 keydown 先处理
-    setTimeout(submit, 50);
+    setTimeout(function() { if (!_cancelled) submit(); }, 50);
   });
 
   function submit() {
+    if (_cancelled) return;
     var v = parseInt(input.value, 10);
     if (isNaN(v) || v < 1 || v > 20) { restore(); flash('mc-limit-flash-err'); return; }
     if (String(v) === oldVal) { restore(); return; }
