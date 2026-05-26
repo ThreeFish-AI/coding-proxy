@@ -78,7 +78,7 @@ class TestModelMapping:
 
 
 class TestRequestPassthrough:
-    """验证 _prepare_request 仅修改 model 和 headers."""
+    """验证 _prepare_request 的模型映射、headers 替换和兼容转换."""
 
     @pytest.mark.asyncio
     async def test_body_passthrough_except_model(self, zhipu_vendor):
@@ -103,18 +103,59 @@ class TestRequestPassthrough:
 
         # 仅 model 被映射
         assert prepared_body["model"] == "glm-5.1"
-        # 其余字段原样保留（GLM 原生支持 thinking，静默忽略 cache_control）
+        # thinking.type=enabled 原样保留（GLM 原生支持）
+        assert prepared_body["thinking"] == {"type": "enabled", "budget_tokens": 5000}
+        # 其余字段原样保留
         assert prepared_body["max_tokens"] == 1024
         assert prepared_body["temperature"] == 0.7
         assert prepared_body["top_p"] == 0.9
         assert prepared_body["stream"] is True
-        assert prepared_body["thinking"] == {"type": "enabled", "budget_tokens": 5000}
         assert prepared_body["metadata"] == {"user_id": "test-user"}
         assert prepared_body["system"] == "You are a helpful assistant."
         assert len(prepared_body["tools"]) == 3
         assert prepared_body["tool_choice"] == {"type": "auto"}
         # 原始 body 未被修改（deep copy）
         assert body["model"] == "claude-sonnet-4-20250514"
+
+    @pytest.mark.asyncio
+    async def test_thinking_adaptive_converted_to_enabled(self, zhipu_vendor):
+        """thinking.type=adaptive 应被转换为 enabled+budget（GLM 不支持 adaptive）."""
+        body = {
+            "model": "claude-opus-4-7",
+            "messages": [],
+            "thinking": {"type": "adaptive"},
+        }
+        prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
+
+        assert prepared_body["thinking"]["type"] == "enabled"
+        assert prepared_body["thinking"]["budget_tokens"] == 16000
+        # 原始 body 未被修改
+        assert body["thinking"] == {"type": "adaptive"}
+
+    @pytest.mark.asyncio
+    async def test_thinking_enabled_preserved_unchanged(self, zhipu_vendor):
+        """thinking.type=enabled 应原样保留（GLM 原生支持）."""
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [],
+            "thinking": {"type": "enabled", "budget_tokens": 8000},
+        }
+        prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
+
+        assert prepared_body["thinking"] == {"type": "enabled", "budget_tokens": 8000}
+        assert body["thinking"]["budget_tokens"] == 8000
+
+    @pytest.mark.asyncio
+    async def test_no_thinking_param_unchanged(self, zhipu_vendor):
+        """无 thinking 参数时不触发任何转换."""
+        body = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
+
+        assert "thinking" not in prepared_body
+        assert prepared_body["model"] == "glm-5.1"
 
     @pytest.mark.asyncio
     async def test_headers_replaces_auth(self, zhipu_vendor):

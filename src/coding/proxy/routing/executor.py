@@ -860,12 +860,15 @@ class _RouteExecutor:
 
                 if not is_last and is_semantic:
                     diagnostic = _build_semantic_rejection_diagnostic(body)
+                    # zhipu 等供应商的错误体含字段级诊断（如 [1210] 错误码 + request_id），
+                    # 500 字符足以覆盖完整错误体，避免截断丢失关键细节
+                    err_msg = (resp.error_message or "N/A")[:500]
                     logger.warning(
                         "Tier %s semantic rejection (type=%s, msg=%s)%s, "
                         "trying next tier without recording failure",
                         tier.name,
                         resp.error_type or resp.status_code,
-                        (resp.error_message or "N/A")[:200],
+                        err_msg,
                         diagnostic,
                     )
                     failed_tier_name = tier.name
@@ -1100,14 +1103,16 @@ class _RouteExecutor:
             if semantic_rejection and not is_last:
                 if request_body is not None:
                     diagnostic = _build_semantic_rejection_diagnostic(request_body)
+                    stream_err_msg = (
+                        error.get("message") if isinstance(error, dict) else "N/A"
+                    )
+                    # 扩展至 500 字符以保留完整字段级诊断信息
                     logger.warning(
                         "Tier %s stream semantic rejection (type=%s, msg=%s)%s, "
                         "trying next tier without recording failure",
                         tier.name,
                         error.get("type") if isinstance(error, dict) else None,
-                        (error.get("message") if isinstance(error, dict) else "N/A")[
-                            :200
-                        ],
+                        stream_err_msg[:500],
                         diagnostic,
                     )
                 return True, tier.name, exc

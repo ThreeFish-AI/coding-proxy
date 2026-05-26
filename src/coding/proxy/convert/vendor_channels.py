@@ -369,8 +369,10 @@ def _strip_cache_control(body: dict[str, Any]) -> int:
 
 # ── zhipu 共享清洗函数 ──────────────────────────────────────────
 
-# 跨供应商转换时主动剥离的顶层参数（首选 tier 场景由 _prepare_request 原样透传，
-# GLM 原生支持 thinking / 静默忽略 cache_control 和 reasoning_effort，不会触发 400）。
+# 跨供应商转换时主动剥离的顶层参数。
+# 首选 tier 场景的 thinking.type=adaptive 兼容转换由
+# ZhipuVendor._prepare_request 处理（转换为 enabled + budget，保留功能），
+# 此处仅负责 failover 路径的全量剥离（跨供应商 thinking signature 失效）。
 _ZHIPU_UNSUPPORTED_PARAMS: frozenset[str] = frozenset(
     {"thinking", "extended_thinking", "reasoning_effort"}
 )
