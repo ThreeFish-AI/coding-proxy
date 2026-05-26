@@ -129,50 +129,116 @@ def _build_semantic_rejection_diagnostic(body: dict[str, Any]) -> str:
 
     在 semantic rejection 日志中附加请求体的可疑参数快照，
     用于定位供应商参数校验失败的具体祸根参数。
+
+    覆盖范围：
+      * 模型 / messages 数（baseline）
+      * thinking 系列顶层参数 + history thinking_blocks 数
+      * system 形态（string / blocks，含 cache_control 计数）
+      * tools 数量 + tool_choice 形态
+      * 采样参数（max_tokens / temperature / top_p / top_k / stop_sequences）
+      * stream / metadata 形态
+      * cache_control 存在性
+      * messages.content 类型分布
+      * 请求体大小估算（json.dumps 字节数）
     """
     parts: list[str] = []
-    # 顶层不兼容参数
+
+    # ── 模型 + 消息数（baseline，始终输出）──
+    parts.append(f"model={body.get('model', 'N/A')}")
+    parts.append(f"messages={len(body.get('messages', []))}")
+
+    # ── 顶层 thinking 系列参数 ──
     for key in ("thinking", "extended_thinking", "reasoning_effort"):
         if key in body:
             val = body[key]
             parts.append(f"{key}={val!r:.80}")
-    # 会话历史中的 thinking blocks
+
+    # ── system 形态 ──
+    system = body.get("system")
+    if isinstance(system, str):
+        parts.append(f"system_kind=string(len={len(system)})")
+    elif isinstance(system, list):
+        cc_count = sum(
+            1 for item in system if isinstance(item, dict) and "cache_control" in item
+        )
+        if cc_count:
+            parts.append(f"system_blocks={len(system)},cc={cc_count}")
+        else:
+            parts.append(f"system_blocks={len(system)}")
+
+    # ── tools 与 tool_choice ──
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        parts.append(f"tools={len(tools)}")
+    tool_choice = body.get("tool_choice")
+    if tool_choice is not None:
+        parts.append(f"tool_choice={tool_choice!r:.60}")
+
+    # ── 采样参数（仅存在时输出）──
+    for key in ("max_tokens", "temperature", "top_p", "top_k"):
+        if key in body:
+            parts.append(f"{key}={body[key]!r:.40}")
+    stop_sequences = body.get("stop_sequences")
+    if isinstance(stop_sequences, list) and stop_sequences:
+        parts.append(f"stop_sequences={len(stop_sequences)}")
+
+    # ── stream / metadata ──
+    if "stream" in body:
+        parts.append(f"stream={body['stream']}")
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        parts.append(f"metadata_keys={len(metadata)}")
+
+    # ── 会话历史中的 thinking blocks 与 content_types 分布 ──
     thinking_count = 0
+    content_type_counts: dict[str, int] = {}
     for msg in body.get("messages", []):
         content = msg.get("content")
+        if isinstance(content, str):
+            content_type_counts["string"] = content_type_counts.get("string", 0) + 1
+            continue
         if not isinstance(content, list):
             continue
         for block in content:
-            if isinstance(block, dict) and block.get("type") in (
-                "thinking",
-                "redacted_thinking",
-            ):
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if isinstance(btype, str):
+                content_type_counts[btype] = content_type_counts.get(btype, 0) + 1
+            if btype in ("thinking", "redacted_thinking"):
                 thinking_count += 1
     if thinking_count:
         parts.append(f"thinking_blocks_in_history={thinking_count}")
-    # cache_control 存在检测
+    if content_type_counts:
+        type_repr = ",".join(f"{k}:{v}" for k, v in sorted(content_type_counts.items()))
+        parts.append(f"content_types={{{type_repr}}}")
+
+    # ── cache_control 存在检测（messages / tools，不含 system 因已单独统计）──
     has_cc = False
-    for section in (
-        body.get("system", []) if isinstance(body.get("system"), list) else [],
-        *(
-            m.get("content", [])
-            for m in body.get("messages", [])
-            if isinstance(m.get("content"), list)
-        ),
-        body.get("tools", []),
-    ):
-        if isinstance(section, list):
-            for item in section:
-                if isinstance(item, dict) and "cache_control" in item:
-                    has_cc = True
-                    break
+    sections: list[Any] = []
+    for m in body.get("messages", []):
+        if isinstance(m.get("content"), list):
+            sections.append(m["content"])
+    if isinstance(body.get("tools"), list):
+        sections.append(body["tools"])
+    for section in sections:
+        for item in section:
+            if isinstance(item, dict) and "cache_control" in item:
+                has_cc = True
+                break
         if has_cc:
             break
     if has_cc:
         parts.append("cache_control_fields=present")
-    # 模型 + 消息数
-    parts.append(f"model={body.get('model', 'N/A')}")
-    parts.append(f"messages={len(body.get('messages', []))}")
+
+    # ── 请求体大小估算 ──
+    try:
+        body_bytes = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+        parts.append(f"body_bytes={body_bytes}")
+    except (TypeError, ValueError):
+        # 极少数情况下 body 含非可序列化对象，跳过
+        pass
+
     return f" [{', '.join(parts)}]" if parts else ""
 
 
@@ -860,12 +926,15 @@ class _RouteExecutor:
 
                 if not is_last and is_semantic:
                     diagnostic = _build_semantic_rejection_diagnostic(body)
+                    # zhipu 等供应商的错误体含字段级诊断（如 [1210] 错误码 + request_id），
+                    # 500 字符足以覆盖完整错误体，避免截断丢失关键细节
+                    err_msg = (resp.error_message or "N/A")[:500]
                     logger.warning(
                         "Tier %s semantic rejection (type=%s, msg=%s)%s, "
                         "trying next tier without recording failure",
                         tier.name,
                         resp.error_type or resp.status_code,
-                        (resp.error_message or "N/A")[:200],
+                        err_msg,
                         diagnostic,
                     )
                     failed_tier_name = tier.name
@@ -1100,14 +1169,16 @@ class _RouteExecutor:
             if semantic_rejection and not is_last:
                 if request_body is not None:
                     diagnostic = _build_semantic_rejection_diagnostic(request_body)
+                    stream_err_msg = (
+                        error.get("message") if isinstance(error, dict) else "N/A"
+                    )
+                    # 扩展至 500 字符以保留完整字段级诊断信息
                     logger.warning(
                         "Tier %s stream semantic rejection (type=%s, msg=%s)%s, "
                         "trying next tier without recording failure",
                         tier.name,
                         error.get("type") if isinstance(error, dict) else None,
-                        (error.get("message") if isinstance(error, dict) else "N/A")[
-                            :200
-                        ],
+                        stream_err_msg[:500],
                         diagnostic,
                     )
                 return True, tier.name, exc

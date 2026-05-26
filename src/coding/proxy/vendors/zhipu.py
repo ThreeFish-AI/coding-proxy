@@ -1,15 +1,17 @@
-"""智谱 GLM 供应商 — 原生 Anthropic 兼容端点薄透传代理.
+"""智谱 GLM 供应商 — 原生 Anthropic 兼容端点代理（兼容转换 + 429 重试）.
 
-官方端点 (https://open.bigmodel.cn/api/anthropic) 已完整支持
-Anthropic Messages API 协议，本模块仅做两项最小适配：
+官方端点 (https://open.bigmodel.cn/api/anthropic) 支持大部分
+Anthropic Messages API 协议，本模块做以下适配：
   1. 模型名映射（Claude -> GLM）
   2. 认证头替换（x-api-key）
+  3. 首选 tier 参数兼容转换（_prepare_request）
 
-注意：实测验证 GLM 的 Anthropic 兼容端点对以下参数的处理方式：
-- thinking 参数：原生支持（GLM 有自己的 thinking 机制）
+实测验证 GLM 对 Anthropic 扩展参数的处理方式：
+- thinking.type="enabled"：原生支持（GLM 有自己的 thinking 机制）
+- thinking.type="adaptive"：不支持，触发 [1210] 参数错误 → 转换为 enabled + budget
 - cache_control 字段：静默忽略（GLM 使用隐式自动缓存）
 - reasoning_effort 参数：静默忽略
-以上参数均不会导致 400 错误，因此不需要在 _prepare_request 中剥离。
+- metadata 字段：暂不处理（待进一步诊断确认兼容性）
 
 额外提供 429 Rate Limit 专用重试挽回机制：
   - max_attempt = 5（1 初始 + 4 重试）
@@ -20,6 +22,7 @@ Anthropic Messages API 协议，本模块仅做两项最小适配：
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
@@ -75,6 +78,49 @@ class ZhipuVendor(NativeAnthropicVendor):
             if config.concurrency is not None
             else None
         )
+
+    # ── 首选 tier 参数兼容转换 ────────────────────────────────
+
+    # adaptive thinking → enabled 的默认预算（Anthropic 推荐的 adaptive 等价值）
+    _ADAPTIVE_THINKING_BUDGET = 16000
+
+    async def _prepare_request(
+        self,
+        request_body: dict[str, Any],
+        headers: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        """深拷贝 + 模型映射 + 认证头替换 + GLM 兼容转换.
+
+        当 zhipu 作为首选 tier 时（source_vendor=None），请求体来自原始客户端，
+        不经过跨供应商转换通道。此处对已知的 GLM 不兼容参数做兼容转换（而非移除），
+        保留完整的 CC (Claude Code) 功能特性。
+        """
+        body, new_headers = await super()._prepare_request(request_body, headers)
+
+        adaptations: list[str] = []
+
+        # thinking.type="adaptive" 是 Anthropic Claude 4.x 新增的类型，
+        # GLM 不支持此类型值，会触发 [1210] 参数错误。
+        # 转换为 enabled + budget 保留 thinking 能力。
+        thinking = body.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+            body["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self._ADAPTIVE_THINKING_BUDGET,
+            }
+            adaptations.append(
+                f"converted_thinking_adaptive→enabled"
+                f"(budget={self._ADAPTIVE_THINKING_BUDGET})"
+            )
+
+        if adaptations:
+            logger.debug(
+                "ZhipuVendor first-tier compat: %s%s",
+                ", ".join(adaptations),
+                _build_zhipu_request_snapshot(body),
+            )
+
+        return body, new_headers
 
     # ── 非流式：429 重试 ────────────────────────────────────
 
@@ -239,3 +285,39 @@ class ZhipuVendor(NativeAnthropicVendor):
 
 # 向后兼容别名
 ZhipuBackend = ZhipuVendor
+
+
+def _build_zhipu_request_snapshot(body: dict[str, Any]) -> str:
+    """构建发往 zhipu 请求的轻量参数快照，用于诊断日志.
+
+    输出格式与 executor._build_semantic_rejection_diagnostic 一致，
+    使成功请求和失败请求的日志可直接 diff 对比，定位差异维度。
+
+    仅在转换发生时输出（DEBUG 级别），避免常态化日志噪声。
+    """
+    parts: list[str] = []
+    parts.append(f"messages={len(body.get('messages', []))}")
+
+    thinking = body.get("thinking")
+    if isinstance(thinking, dict):
+        parts.append(f"thinking_type={thinking.get('type', 'unknown')}")
+
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        parts.append(f"metadata_keys={len(metadata)}")
+
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        parts.append(f"tools={len(tools)}")
+
+    system = body.get("system")
+    if isinstance(system, list):
+        parts.append(f"system_blocks={len(system)}")
+
+    try:
+        body_bytes = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+        parts.append(f"body_bytes={body_bytes}")
+    except (TypeError, ValueError):
+        pass
+
+    return f" [{', '.join(parts)}]" if parts else ""

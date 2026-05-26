@@ -253,15 +253,19 @@ INFO  Tier anthropic message succeeded (took over from failed tier: zhipu)
 
 `is_semantic_rejection` 检测到 zhipu 返回 `invalid_request_error + 1210` 含「API 调用参数有误」中文标记，判定为语义拒绝，跳过下一层 tier。1210 是智谱官方错误码，[官方文档](https://docs.bigmodel.cn/cn/api/api-code) 定义为「参数格式/类型不符规范」（区别于 1213「必需字段缺失」、1214「字段参数非法」）。
 
-**根因（仍在收集证据）**
+**根因（已定位，修复中）**
 
-PR #244 的初版诊断字段仅覆盖 `thinking / thinking_blocks / cache_control / model / messages`，但 2026-05-25 17:26 后的诊断日志显示失败请求**均不含**上述任何字段。说明真正祸根在更细粒度的参数（system / tools / max_tokens / sampling / metadata / content_types / body_size 等）。
+PR #247 (Step 1 v2) 部署后，2026-05-26 16:30–16:31 的诊断日志显示 8 次连续拒绝**全部携带 `thinking={"type": "adaptive"}`**（Anthropic Claude 4.x 新增的参数类型），而同一时段其他会话的请求持续成功。之前 curl 测试仅验证了 `{"type": "enabled"}`，未覆盖 `adaptive` 类型。GLM 可能不支持此特定类型值，导致 [1210] 参数校验失败。
 
 **处理方式（分阶段）**
 
 - **Step 1（PR #244，已合并）**：在 `executor.py::_build_semantic_rejection_diagnostic` 中输出 thinking / cache_control 相关字段 — 但证据反转，覆盖不足以定位真因。
-- **Step 1 v2（本次）**：扩展诊断函数覆盖 `system_kind|blocks(+cc)` / `tools` / `tool_choice` / 采样参数 / `stream` / `metadata_keys` / `content_types` / `body_bytes` 等维度。所有项「仅存在时输出」以控制日志噪声。配套 14 个单元测试（`TestBuildSemanticRejectionDiagnostic`）覆盖各字段组合。
-- **Step 2（待定）**：依据扩展诊断日志的新证据，定位具体祸根参数后再施修复（候选路径：`ZhipuVendor._prepare_request` 参数剥离 / 调用现有 `normalize_for_zhipu` / pre-validation 警告）。
+- **Step 1 v2（PR #247，已合并）**：扩展诊断函数覆盖 `system_kind|blocks(+cc)` / `tools` / `tool_choice` / 采样参数 / `stream` / `metadata_keys` / `content_types` / `body_bytes` 等维度。所有项「仅存在时输出」以控制日志噪声。配套 14 个单元测试（`TestBuildSemanticRejectionDiagnostic`）覆盖各字段组合。
+- **Step 2（进行中）**：基于 Step 1 v2 的日志证据，在 `ZhipuVendor._prepare_request` 中实现 **兼容转换**（而非移除）：
+  - `thinking.type="adaptive"` → `{"type": "enabled", "budget_tokens": 16000}`（保留 thinking 能力）
+  - 新增 `_build_zhipu_request_snapshot` 诊断快照，同时覆盖成功/失败请求，建立可对比证据链
+  - 扩展语义拒绝日志的错误体截断限制（200 → 500 字符），保留完整字段级诊断
+  - `metadata` 暂不处理（待进一步诊断确认兼容性）
 
 **后续防范**
 
