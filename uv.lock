@@ -74,7 +74,7 @@ wheels = [
 
 [[package]]
 name = "coding-proxy"
-version = "0.4.1a11"
+version = "0.4.1a12"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
