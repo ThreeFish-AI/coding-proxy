@@ -252,6 +252,22 @@ class ZhipuVendor(NativeAnthropicVendor):
             return None
         return await self._concurrency_limiter.acquire(mapped_model)
 
+    # ── 诊断信息 ─────────────────────────────────────────────
+
+    def get_diagnostics(self) -> dict[str, Any]:
+        """返回供应商运行时诊断信息，包含每模型并发状态."""
+        diagnostics = super().get_diagnostics()
+        if self._concurrency_limiter is not None:
+            diagnostics["concurrency"] = self._concurrency_limiter.get_diagnostics()
+        return diagnostics
+
+    def update_concurrency(self, model: str, limit: int) -> None:
+        """运行时更新指定模型的并发限制."""
+        if self._concurrency_limiter is None:
+            msg = "Concurrency limiter is not enabled for this vendor"
+            raise ValueError(msg)
+        self._concurrency_limiter.set_limit(model, limit)
+
     # ── 延迟计算 ────────────────────────────────────────────
 
     def _compute_retry_delay_from_headers(
