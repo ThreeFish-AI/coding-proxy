@@ -225,6 +225,61 @@ def register_status_route(app: Any, router: Any) -> None:
         return result
 
 
+def register_concurrency_route(app: Any, router: Any) -> None:
+    """注册运行时并发限制调整路由."""
+
+    @app.put("/api/concurrency")
+    async def update_concurrency(request: Request) -> Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return json_error_response(
+                400, error_type="invalid_request_error", message="body must be JSON"
+            )
+        tier_name = body.get("tier")
+        model = body.get("model")
+        limit = body.get("limit")
+        if not tier_name or not model or limit is None:
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="requires tier, model, limit",
+            )
+        if not isinstance(limit, int) or limit < 1 or limit > 20:
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="limit must be an integer between 1 and 20",
+            )
+        for tier in router.tiers:
+            if tier.name == tier_name:
+                vendor = tier.vendor
+                update_fn = getattr(vendor, "update_concurrency", None)
+                if update_fn is None:
+                    return json_error_response(
+                        400,
+                        error_type="invalid_request_error",
+                        message=f"vendor '{tier_name}' does not support concurrency",
+                    )
+                try:
+                    update_fn(model, limit)
+                except (ValueError, AttributeError) as exc:
+                    return json_error_response(
+                        400, error_type="invalid_request_error", message=str(exc)
+                    )
+                return Response(
+                    content=json.dumps(
+                        {"ok": True, "tier": tier_name, "model": model, "limit": limit},
+                        ensure_ascii=False,
+                    ).encode(),
+                    status_code=200,
+                    media_type="application/json",
+                )
+        return json_error_response(
+            404, error_type="not_found", message=f"tier '{tier_name}' not found"
+        )
+
+
 def register_copilot_routes(app: Any, router: Any) -> None:
     """注册 Copilot 诊断与模型探测路由."""
     from .factory import _find_copilot_vendor
@@ -457,6 +512,7 @@ def register_all_routes(
     register_core_routes(app, router)
     register_health_routes(app)
     register_status_route(app, router)
+    register_concurrency_route(app, router)
     register_copilot_routes(app, router)
     register_admin_routes(app, router)
     register_session_vendor_routes(app, router)

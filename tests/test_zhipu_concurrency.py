@@ -141,12 +141,12 @@ class TestModelConcurrencyLimiter:
     @pytest.mark.asyncio
     async def test_lazy_semaphore_creation(self) -> None:
         limiter = ModelConcurrencyLimiter(ZhipuConcurrencyConfig(default=2))
-        sem_a = limiter._get_semaphore("model-a")
-        sem_b = limiter._get_semaphore("model-b")
-        # 不同模型独立 semaphore
-        assert sem_a is not sem_b
-        # 相同模型复用 semaphore
-        assert limiter._get_semaphore("model-a") is sem_a
+        slot_a = limiter._get_or_create_slot("model-a")
+        slot_b = limiter._get_or_create_slot("model-b")
+        # 不同模型独立 slot
+        assert slot_a is not slot_b
+        # 相同模型复用 slot
+        assert limiter._get_or_create_slot("model-a") is slot_a
 
     @pytest.mark.asyncio
     async def test_acquire_blocks_when_full(self) -> None:
@@ -184,8 +184,8 @@ class TestModelConcurrencyLimiter:
 
     def test_diagnostics_snapshot(self) -> None:
         limiter = ModelConcurrencyLimiter(ZhipuConcurrencyConfig(default=3))
-        # 触发 semaphore 创建
-        limiter._get_semaphore("glm-5.1")
+        # 触发 slot 创建
+        limiter._get_or_create_slot("glm-5.1")
         snap = limiter.get_diagnostics()
         assert "glm-5.1" in snap
         assert snap["glm-5.1"]["limit"] == 3
@@ -459,10 +459,10 @@ class TestZhipuVendorStreamConcurrency:
                     chunks.append(chunk)
                 assert len(chunks) == 2
 
-        # 确认 semaphore 当前完全可用
+        # 确认 slot 当前完全可用
         assert vendor._concurrency_limiter is not None
-        sem = vendor._concurrency_limiter._get_semaphore("glm-5.1")
-        assert sem._value == 1  # noqa: SLF001
+        slot = vendor._concurrency_limiter._get_or_create_slot("glm-5.1")
+        assert slot.available == 1
 
     @pytest.mark.asyncio
     async def test_stream_releases_slot_on_error(self) -> None:
