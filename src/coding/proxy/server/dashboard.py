@@ -640,6 +640,43 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       padding: 1px 6px;
       border-radius: 3px;
     }
+    .mc-limit-editable {
+      cursor: pointer;
+      border-bottom: 1px dashed rgba(74,222,128,.4);
+      transition: border-color .2s, color .2s;
+    }
+    .mc-limit-editable:hover {
+      border-bottom-color: #4ade80;
+      color: #4ade80;
+    }
+    .mc-limit-input {
+      width: 36px;
+      background: var(--bg-primary);
+      border: 1px solid var(--accent-blue);
+      border-radius: 3px;
+      color: var(--text-primary);
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      text-align: center;
+      padding: 0 2px;
+      outline: none;
+      -moz-appearance: textfield;
+    }
+    .mc-limit-input::-webkit-outer-spin-button,
+    .mc-limit-input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    .mc-limit-flash-ok { animation: mc-flash-ok .6s ease; }
+    .mc-limit-flash-err { animation: mc-flash-err .6s ease; }
+    @keyframes mc-flash-ok {
+      0%,100% { color: inherit; }
+      40% { color: #4ade80; }
+    }
+    @keyframes mc-flash-err {
+      0%,100% { color: inherit; }
+      40% { color: #f87171; }
+    }
   </style>
 </head>
 <body>
@@ -1268,7 +1305,8 @@ function updateModelCalling(status) {
       + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
       + '<div class="mc-bar-wrap"><div class="mc-bar-fill ' + barClass + '" style="width:' + pct + '%"></div></div>'
       + '<div class="mc-stats">'
-      + '<span class="mc-badge mc-badge-active">' + m.in_use + '/' + m.limit + '</span>'
+      + '<span class="mc-badge mc-badge-active">' + m.in_use
+      + '/<span class="mc-limit-editable" data-tier="' + escapeHtml(m.vendor) + '" data-model="' + escapeHtml(m.model) + '" data-limit="' + m.limit + '" title="点击修改并行度">' + m.limit + '</span></span>'
       + (m.pending > 0 ? '<span class="mc-badge mc-badge-pending">⏳ ' + m.pending + '</span>' : '')
       + '</div>'
       + '</div>';
@@ -1292,6 +1330,79 @@ function startModelCallingPoll() {
 function stopModelCallingPoll() {
   if (_mcTimer) { clearInterval(_mcTimer); _mcTimer = null; }
 }
+
+// ── 并行度运行时编辑 ──────────────────────────────────────
+var _mcEditing = false;
+document.addEventListener('click', function(e) {
+  if (_mcEditing) return;
+  var el = e.target.closest('.mc-limit-editable');
+  if (!el) return;
+  e.preventDefault();
+  _mcEditing = true;
+  var oldVal = el.getAttribute('data-limit');
+  var tier = el.getAttribute('data-tier');
+  var model = el.getAttribute('data-model');
+  var input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'mc-limit-input';
+  input.min = '1';
+  input.max = '20';
+  input.value = oldVal;
+  el.style.display = 'none';
+  el.parentNode.insertBefore(input, el.nextSibling);
+  input.focus();
+  input.select();
+
+  var _cancelled = false;
+
+  function restore() {
+    _mcEditing = false;
+    if (input.parentNode) input.parentNode.removeChild(input);
+    el.style.display = '';
+  }
+
+  function flash(cls) {
+    el.classList.add(cls);
+    setTimeout(function() { el.classList.remove(cls); }, 600);
+  }
+
+  input.addEventListener('keydown', function(ev) {
+    if (ev.key === 'Escape') { _cancelled = true; restore(); return; }
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    submit();
+  });
+
+  input.addEventListener('blur', function() {
+    setTimeout(function() { if (!_cancelled) submit(); }, 50);
+  });
+
+  function submit() {
+    if (_cancelled) return;
+    var v = parseInt(input.value, 10);
+    if (isNaN(v) || v < 1 || v > 20) { restore(); flash('mc-limit-flash-err'); return; }
+    if (String(v) === oldVal) { restore(); return; }
+    fetch('/api/concurrency', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tier: tier, model: model, limit: v})
+    }).then(function(res) {
+      if (res.ok) {
+        return res.json().then(function() {
+          el.textContent = v;
+          el.setAttribute('data-limit', v);
+          flash('mc-limit-flash-ok');
+        });
+      } else {
+        flash('mc-limit-flash-err');
+      }
+    }).catch(function() {
+      flash('mc-limit-flash-err');
+    }).finally(function() {
+      restore();
+    });
+  }
+});
 
 // ── 按 tiers 顺序排序 vendor 列表 ─────────────────────────
 function sortByTierOrder(vendors, tierOrder) {
