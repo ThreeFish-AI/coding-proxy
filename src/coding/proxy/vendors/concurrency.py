@@ -67,10 +67,15 @@ class ModelConcurrencyLimiter:
             limit = self._config.get_limit(model)
             # asyncio.Semaphore 内部 _value 表示剩余可用槽位
             available = sem._value  # noqa: SLF001 — 公开 API 未暴露
+            in_use = max(limit - available, 0)
+            # _waiters 为正在排队等待的协程集合，无等待者时为 None
+            waiters = getattr(sem, "_waiters", None)  # noqa: SLF001
+            pending = len(waiters) if waiters else 0
             snapshot[model] = {
                 "limit": limit,
-                "in_use": max(limit - available, 0),
+                "in_use": in_use,
                 "available": max(available, 0),
+                "pending": pending,
             }
         return snapshot
 

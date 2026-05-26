@@ -557,6 +557,89 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .tab-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
+
+    /* ── Model Calling 实时状态 ────────────────────────── */
+    .model-calling-card {
+      margin-bottom: 5px;
+    }
+    .mc-empty {
+      text-align: center;
+      color: var(--text-muted);
+      padding: 16px 0;
+      font-size: 13px;
+    }
+    .mc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 8px;
+    }
+    .mc-model-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      background: var(--bg-secondary);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-subtle);
+    }
+    .mc-model-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--text-primary);
+      min-width: 140px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .mc-bar-wrap {
+      flex: 1;
+      min-width: 60px;
+      height: 6px;
+      background: rgba(255,255,255,.06);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .mc-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width .3s ease, background .3s ease;
+    }
+    .mc-bar-fill.mc-low { background: var(--accent-green); }
+    .mc-bar-fill.mc-mid { background: var(--accent-yellow); }
+    .mc-bar-fill.mc-high { background: var(--accent-red); }
+    .mc-stats {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .mc-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .mc-badge-pending {
+      background: rgba(251,146,60,.15);
+      color: #fb923c;
+    }
+    .mc-badge-active {
+      background: rgba(74,222,128,.12);
+      color: #4ade80;
+    }
+    .mc-vendor-tag {
+      font-size: 10px;
+      color: var(--text-muted);
+      background: rgba(255,255,255,.06);
+      padding: 1px 6px;
+      border-radius: 3px;
+    }
   </style>
 </head>
 <body>
@@ -623,6 +706,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kpi-header"><span class="kpi-icon">⚡</span><span class="kpi-label">平均延迟（今日）</span></div>
       <div class="kpi-value color-orange" id="kpi-lat-today">–</div>
       <div class="kpi-sub" id="kpi-lat-week">本周 –</div>
+    </div>
+  </div>
+
+  <!-- Model Calling 实时状态 -->
+  <div class="card model-calling-card" id="model-calling-card">
+    <div class="card-title">📡 Model Calling 实时状态</div>
+    <div class="model-calling-wrap" id="model-calling-wrap">
+      <div class="mc-empty">加载中…</div>
     </div>
   </div>
 
@@ -1132,6 +1223,74 @@ function updateVendorStatus(status) {
       </div>
     </div>`;
   }).join('');
+}
+
+// ── Model Calling 实时状态 ────────────────────────────────
+function updateModelCalling(status) {
+  var wrap = document.getElementById('model-calling-wrap');
+  if (!wrap) return;
+  var tiers = status.tiers || [];
+
+  // 收集所有带 concurrency 诊断的模型
+  var models = [];
+  for (var i = 0; i < tiers.length; i++) {
+    var tier = tiers[i];
+    var diag = tier.diagnostics || {};
+    var conc = diag.concurrency;
+    if (!conc) continue;
+    var names = Object.keys(conc);
+    for (var j = 0; j < names.length; j++) {
+      var model = names[j];
+      var d = conc[model];
+      models.push({
+        vendor: tier.name,
+        model: model,
+        limit: d.limit || 0,
+        in_use: d.in_use || 0,
+        available: d.available || 0,
+        pending: d.pending || 0,
+      });
+    }
+  }
+
+  if (!models.length) {
+    wrap.innerHTML = '<div class="mc-empty">无活跃模型调用</div>';
+    return;
+  }
+
+  var html = '<div class="mc-grid">';
+  for (var k = 0; k < models.length; k++) {
+    var m = models[k];
+    var pct = m.limit > 0 ? Math.round((m.in_use / m.limit) * 100) : 0;
+    var barClass = pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high');
+
+    html += '<div class="mc-model-row">'
+      + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
+      + '<div class="mc-bar-wrap"><div class="mc-bar-fill ' + barClass + '" style="width:' + pct + '%"></div></div>'
+      + '<div class="mc-stats">'
+      + '<span class="mc-badge mc-badge-active">' + m.in_use + '/' + m.limit + '</span>'
+      + (m.pending > 0 ? '<span class="mc-badge mc-badge-pending">⏳ ' + m.pending + '</span>' : '')
+      + '</div>'
+      + '</div>';
+  }
+  html += '</div>';
+  wrap.innerHTML = html;
+}
+
+// Model Calling 独立短间隔轮询
+var _mcTimer = null;
+function startModelCallingPoll() {
+  stopModelCallingPoll();
+  function tick() {
+    fetchJSON('/api/status').then(function(status) {
+      updateModelCalling(status);
+    }).catch(function() {});
+  }
+  tick();
+  _mcTimer = setInterval(tick, 5000);
+}
+function stopModelCallingPoll() {
+  if (_mcTimer) { clearInterval(_mcTimer); _mcTimer = null; }
 }
 
 // ── 按 tiers 顺序排序 vendor 列表 ─────────────────────────
@@ -1713,6 +1872,7 @@ async function refreshOverview() {
 
   updateKPI(summary);
   updateVendorStatus(status);
+  updateModelCalling(status);
   updateChartTitles(days);
 
   const rows = timeline.rows || [];
@@ -1788,6 +1948,8 @@ function switchTab(name) {
   currentTab = name;
   applyTabState(name);
   syncTabUrl(name);
+  // Model Calling 轮询随页签切换启停
+  if (name === 'overview') { startModelCallingPoll(); } else { stopModelCallingPoll(); }
   refresh();
 }
 
@@ -1807,6 +1969,7 @@ function switchTab(name) {
   }).catch(function(){});
   refresh();                     // 仅加载初始页签的数据
   setInterval(refresh, 600000);  // 每 10 分钟刷新当前页签
+  if (initial === 'overview') startModelCallingPoll();
 })();
 </script>
 </body>
