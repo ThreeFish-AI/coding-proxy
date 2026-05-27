@@ -629,6 +629,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(251,146,60,.15);
       color: #fb923c;
     }
+    .mc-badge-peak {
+      background: rgba(148,163,184,.12);
+      color: #94a3b8;
+    }
     .mc-badge-active {
       background: rgba(74,222,128,.12);
       color: #4ade80;
@@ -1282,10 +1286,12 @@ function updateModelCalling(status) {
       models.push({
         vendor: tier.name,
         model: model,
-        limit: d.limit || 0,
+        mode: d.mode || 'limited',
+        limit: d.limit,
         in_use: d.in_use || 0,
-        available: d.available || 0,
+        available: d.available,
         pending: d.pending || 0,
+        peak_pending_recent: d.peak_pending_recent || 0,
       });
     }
   }
@@ -1298,18 +1304,33 @@ function updateModelCalling(status) {
   var html = '<div class="mc-grid">';
   for (var k = 0; k < models.length; k++) {
     var m = models[k];
-    var pct = m.limit > 0 ? Math.round((m.in_use / m.limit) * 100) : 0;
-    var barClass = pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high');
 
-    html += '<div class="mc-model-row">'
-      + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
-      + '<div class="mc-bar-wrap"><div class="mc-bar-fill ' + barClass + '" style="width:' + pct + '%"></div></div>'
-      + '<div class="mc-stats">'
-      + '<span class="mc-badge mc-badge-active">' + m.in_use
-      + '/<span class="mc-limit-editable" data-tier="' + escapeHtml(m.vendor) + '" data-model="' + escapeHtml(m.model) + '" data-limit="' + m.limit + '" title="点击修改并行度">' + m.limit + '</span></span>'
-      + (m.pending > 0 ? '<span class="mc-badge mc-badge-pending">⏳ ' + m.pending + '</span>' : '')
-      + '</div>'
-      + '</div>';
+    if (m.mode === 'monitor') {
+      // monitor 模式：纯计数徽章，无 limit/进度条
+      html += '<div class="mc-model-row">'
+        + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
+        + '<div class="mc-bar-wrap"></div>'
+        + '<div class="mc-stats">'
+        + '<span class="mc-badge mc-badge-active">' + m.in_use + '</span>'
+        + '</div>'
+        + '</div>';
+    } else {
+      // limited 模式：保留现有渲染（进度条 + limit 编辑）
+      var limit = m.limit || 0;
+      var pct = limit > 0 ? Math.round((m.in_use / limit) * 100) : 0;
+      var barClass = pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high');
+
+      html += '<div class="mc-model-row">'
+        + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
+        + '<div class="mc-bar-wrap"><div class="mc-bar-fill ' + barClass + '" style="width:' + pct + '%"></div></div>'
+        + '<div class="mc-stats">'
+        + '<span class="mc-badge mc-badge-active">' + m.in_use
+        + '/<span class="mc-limit-editable" data-tier="' + escapeHtml(m.vendor) + '" data-model="' + escapeHtml(m.model) + '" data-limit="' + limit + '" title="点击修改并行度">' + limit + '</span></span>'
+        + (m.pending > 0 ? '<span class="mc-badge mc-badge-pending">⏳ ' + m.pending + '</span>' : '')
+        + (m.pending === 0 && m.peak_pending_recent > 0 ? '<span class="mc-badge mc-badge-peak">🕘 曾排队 ' + m.peak_pending_recent + '</span>' : '')
+        + '</div>'
+        + '</div>';
+    }
   }
   html += '</div>';
   wrap.innerHTML = html;
@@ -1325,7 +1346,7 @@ function startModelCallingPoll() {
     }).catch(function() {});
   }
   tick();
-  _mcTimer = setInterval(tick, 5000);
+  _mcTimer = setInterval(tick, 1500);
 }
 function stopModelCallingPoll() {
   if (_mcTimer) { clearInterval(_mcTimer); _mcTimer = null; }

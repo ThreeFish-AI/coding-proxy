@@ -254,16 +254,15 @@ def register_concurrency_route(app: Any, router: Any) -> None:
         for tier in router.tiers:
             if tier.name == tier_name:
                 vendor = tier.vendor
-                update_fn = getattr(vendor, "update_concurrency", None)
-                if update_fn is None:
-                    return json_error_response(
-                        400,
-                        error_type="invalid_request_error",
-                        message=f"vendor '{tier_name}' does not support concurrency",
-                    )
                 try:
-                    update_fn(model, limit)
-                except (ValueError, AttributeError) as exc:
+                    vendor.update_concurrency(model, limit)
+                except ValueError as exc:
+                    return json_error_response(
+                        422,
+                        error_type="invalid_request_error",
+                        message=str(exc),
+                    )
+                except AttributeError as exc:
                     return json_error_response(
                         400, error_type="invalid_request_error", message=str(exc)
                     )
