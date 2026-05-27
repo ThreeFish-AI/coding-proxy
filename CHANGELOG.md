@@ -4,7 +4,34 @@
 
 ## [Unreleased]
 
-- feat(zhipu): 新增每模型并发限制（默认 3，可通过 `vendors[zhipu].concurrency` 配置），基于 `asyncio.Semaphore` 实现 FIFO 公平排队，流式与非流式共用同一槽位，与 429 重试机制兼容。
+- feat(dashboard): Model Calling 实时监控扩展至全 vendor / 全 model（仅 CC 场景），其他 vendor 在 monitor 模式下仅计数不限流，Zhipu 保留 limited 模式 + FIFO 排队；
+- feat(concurrency): 新增 `peak_pending_recent` 最近 10s 排队峰值追踪，瞬时排队释放后前端仍可见"曾排队 N" 余晖徽章；
+- perf(dashboard): Model Calling 轮询间隔由 5000ms 缩短至 1500ms，提升瞬时排队可观测性；
+- refactor(vendors): `ModelConcurrencyLimiter` 重构为 `ModelConcurrencyController`，统一 monitor / limited 双模式抽象（保留旧名别名）；并发控制由 vendor 内部迁移至 executor 层 `track_in_flight` 包裹，行为对所有 vendor 一致；
+
+## [v0.5.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.0) - 2026-05-27
+
+> [!IMPORTANT]
+>
+> **🚀 Model Calling 实时状态！**
+>
+> 模型并发与排队深度一目了然，运行时动态调整每个模型并行度，预防 vendor 侧的 429 幺蛾子。
+
+![model-calling](assets/model-calling-v0.5.0.png)
+
+### ✨ 核心亮点
+
+- feat(concurrency): 新增 Model Calling 实时状态模块，可视化每模型并发与排队深度，支持运行时动态修改每模型并行度 (#250) (#251)
+- feat(zhipu): 新增每模型并发限制，默认 3 个并行请求 FIFO 排队 (#248)
+- feat(zhipu): 为 429 Rate Limit 添加指数退避重试挽回机制 (#242)
+
+### 🔧 更多特性
+
+- fix(antigravity): 修复 v1internal 模式检测逻辑并新增 E2E 测试; (#234)
+- fix(routes): 修复 count_tokens 路由对 target_vendor.name 的错误属性访问; (#235)
+- fix(vendor-channels): 修复 zhipu→anthropic 通道 tool_use/tool_result 配对漏洞; (#236)
+- fix(native-api): 修复 Gemini :verb 路径中 %3A URL 编码导致上游 400 的兼容问题; (#237)
+- fix(zhipu): 诊断首选 tier 语义拒绝降级问题，增强可观测性并提取跨供应商清洗共享函数 (#243)
 
 ## [v0.4.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.4.0) — 2026-05-01
 

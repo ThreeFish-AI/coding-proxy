@@ -89,6 +89,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       --shadow-md: 0 8px 24px rgba(0,0,0,.3);
       --glow-blue: 0 0 0 1px rgba(88,166,255,.1), 0 8px 32px rgba(88,166,255,.04);
       --gradient-primary: linear-gradient(135deg, #667eea, #764ba2);
+      --gap-section: 12px;
     }
     @keyframes fadeInUp {
       from { opacity: 0; transform: translateY(10px); }
@@ -160,7 +161,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 5px;
-      margin-bottom: 24px;
+      margin-bottom: var(--gap-section);
     }
     .kpi-card {
       background: rgba(18,22,30,.7);
@@ -214,13 +215,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       display: grid;
       grid-template-columns: 1fr 2fr;
       gap: 16px;
-      margin-bottom: 16px;
+      margin-bottom: var(--gap-section);
     }
     .charts-grid-2 {
       display: grid;
       grid-template-columns: 1fr 2fr;
       gap: 16px;
-      margin-bottom: 16px;
+      margin-bottom: var(--gap-section);
     }
     .charts-grid > .card,
     .charts-grid-2 > .card {
@@ -356,7 +357,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     /* ── 时间区间选择栏 ── */
     .time-range-bar {
       display: flex; align-items: center; gap: 8px;
-      margin-bottom: 24px; flex-wrap: wrap;
+      margin-bottom: var(--gap-section); flex-wrap: wrap;
       padding: 8px 16px;
       background: rgba(18,22,30,.5);
       border: 1px solid rgba(255,255,255,.04);
@@ -560,7 +561,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     /* ── Model Calling 实时状态 ────────────────────────── */
     .model-calling-card {
-      margin-bottom: 5px;
+      margin-bottom: var(--gap-section);
+    }
+    .model-token-card {
+      margin-bottom: var(--gap-section);
     }
     .mc-empty {
       text-align: center;
@@ -628,6 +632,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .mc-badge-pending {
       background: rgba(251,146,60,.15);
       color: #fb923c;
+    }
+    .mc-badge-peak {
+      background: rgba(148,163,184,.12);
+      color: #94a3b8;
     }
     .mc-badge-active {
       background: rgba(74,222,128,.12);
@@ -787,7 +795,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <!-- Token 用量（按 Vendor / 模型）堆叠图 -->
-  <div class="card" style="margin-bottom:12px">
+  <div class="card model-token-card">
     <div class="card-title" id="title-model-token-timeline">近 7 天 Token 用量（按 Vendor / 模型）</div>
     <div class="chart-with-legend">
       <div class="chart-wrap-xl">
@@ -1282,10 +1290,12 @@ function updateModelCalling(status) {
       models.push({
         vendor: tier.name,
         model: model,
-        limit: d.limit || 0,
+        mode: d.mode || 'limited',
+        limit: d.limit,
         in_use: d.in_use || 0,
-        available: d.available || 0,
+        available: d.available,
         pending: d.pending || 0,
+        peak_pending_recent: d.peak_pending_recent || 0,
       });
     }
   }
@@ -1298,18 +1308,33 @@ function updateModelCalling(status) {
   var html = '<div class="mc-grid">';
   for (var k = 0; k < models.length; k++) {
     var m = models[k];
-    var pct = m.limit > 0 ? Math.round((m.in_use / m.limit) * 100) : 0;
-    var barClass = pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high');
 
-    html += '<div class="mc-model-row">'
-      + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
-      + '<div class="mc-bar-wrap"><div class="mc-bar-fill ' + barClass + '" style="width:' + pct + '%"></div></div>'
-      + '<div class="mc-stats">'
-      + '<span class="mc-badge mc-badge-active">' + m.in_use
-      + '/<span class="mc-limit-editable" data-tier="' + escapeHtml(m.vendor) + '" data-model="' + escapeHtml(m.model) + '" data-limit="' + m.limit + '" title="点击修改并行度">' + m.limit + '</span></span>'
-      + (m.pending > 0 ? '<span class="mc-badge mc-badge-pending">⏳ ' + m.pending + '</span>' : '')
-      + '</div>'
-      + '</div>';
+    if (m.mode === 'monitor') {
+      // monitor 模式：纯计数徽章，无 limit/进度条
+      html += '<div class="mc-model-row">'
+        + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
+        + '<div class="mc-bar-wrap"></div>'
+        + '<div class="mc-stats">'
+        + '<span class="mc-badge mc-badge-active">' + m.in_use + '</span>'
+        + '</div>'
+        + '</div>';
+    } else {
+      // limited 模式：保留现有渲染（进度条 + limit 编辑）
+      var limit = m.limit || 0;
+      var pct = limit > 0 ? Math.round((m.in_use / limit) * 100) : 0;
+      var barClass = pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high');
+
+      html += '<div class="mc-model-row">'
+        + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
+        + '<div class="mc-bar-wrap"><div class="mc-bar-fill ' + barClass + '" style="width:' + pct + '%"></div></div>'
+        + '<div class="mc-stats">'
+        + '<span class="mc-badge mc-badge-active">' + m.in_use
+        + '/<span class="mc-limit-editable" data-tier="' + escapeHtml(m.vendor) + '" data-model="' + escapeHtml(m.model) + '" data-limit="' + limit + '" title="点击修改并行度">' + limit + '</span></span>'
+        + (m.pending > 0 ? '<span class="mc-badge mc-badge-pending">⏳ ' + m.pending + '</span>' : '')
+        + (m.pending === 0 && m.peak_pending_recent > 0 ? '<span class="mc-badge mc-badge-peak">🕘 曾排队 ' + m.peak_pending_recent + '</span>' : '')
+        + '</div>'
+        + '</div>';
+    }
   }
   html += '</div>';
   wrap.innerHTML = html;
@@ -1325,7 +1350,7 @@ function startModelCallingPoll() {
     }).catch(function() {});
   }
   tick();
-  _mcTimer = setInterval(tick, 5000);
+  _mcTimer = setInterval(tick, 1500);
 }
 function stopModelCallingPoll() {
   if (_mcTimer) { clearInterval(_mcTimer); _mcTimer = null; }

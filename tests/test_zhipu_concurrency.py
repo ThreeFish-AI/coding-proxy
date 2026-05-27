@@ -1,13 +1,16 @@
 """Zhipu 每模型并发限制专项测试.
 
-验证 ``ModelConcurrencyLimiter`` 与 ``ZhipuVendor`` 集成后的并发控制行为：
+验证 ``ModelConcurrencyController`` 与 ``ZhipuVendor`` 集成后的并发控制行为：
   - 默认 ``concurrency.default=3`` 时同一模型最多 3 个并发
   - 超出上限时按 FIFO 排队，槽位释放后才唤醒
   - 不同模型彼此独立，互不阻塞
-  - 异常路径下 Semaphore 仍能释放，避免泄漏
-  - 流式请求与非流式请求共享同一信号量
+  - 异常路径下槽位仍能释放，避免泄漏
+  - 流式请求与非流式请求共享同一槽位
   - 与 429 重试机制兼容（重试期间持续占用槽位）
-  - ``concurrency=None`` 时禁用限制（向后兼容）
+
+注意：并发限流由 BaseVendor._concurrency_controller 统一管控，
+executor 层通过 ``vendor.track_in_flight(mapped_model)`` 上下文管理器
+包裹 send_message[_stream] 调用。本测试用同样的包裹模拟 executor 语义。
 """
 
 from __future__ import annotations
@@ -25,7 +28,10 @@ from coding.proxy.config.schema import (
     ZhipuConfig,
 )
 from coding.proxy.routing.model_mapper import ModelMapper
-from coding.proxy.vendors.concurrency import ModelConcurrencyLimiter
+from coding.proxy.vendors.concurrency import (
+    ModelConcurrencyController,
+    ModelConcurrencyLimiter,
+)
 from coding.proxy.vendors.native_anthropic import NativeAnthropicVendor
 from coding.proxy.vendors.zhipu import ZhipuVendor
 
@@ -67,6 +73,29 @@ def _make_vendor(
     if concurrency is not None:
         cfg_kwargs["concurrency"] = concurrency
     return ZhipuVendor(ZhipuConfig(**cfg_kwargs), _make_mapper())
+
+
+async def _send_with_tracking(
+    vendor: ZhipuVendor,
+    body: dict,
+    headers: dict,
+):
+    """模拟 executor 行为：track_in_flight 包裹 send_message 调用."""
+    mapped = vendor.map_model(body.get("model", ""))
+    async with vendor.track_in_flight(mapped):
+        return await vendor.send_message(body, headers)
+
+
+async def _stream_with_tracking(
+    vendor: ZhipuVendor,
+    body: dict,
+    headers: dict,
+):
+    """模拟 executor 行为：track_in_flight 包裹 send_message_stream 调用."""
+    mapped = vendor.map_model(body.get("model", ""))
+    async with vendor.track_in_flight(mapped):
+        async for chunk in vendor.send_message_stream(body, headers):
+            yield chunk
 
 
 def _make_200_response() -> httpx.Response:
@@ -132,72 +161,128 @@ class TestZhipuConcurrencyConfig:
         assert cfg.concurrency.default == 3
 
 
-# ─── ModelConcurrencyLimiter 单元测试 ──────────────────────
+# ─── ModelConcurrencyController 单元测试（limited 模式）─────
 
 
-class TestModelConcurrencyLimiter:
-    """ModelConcurrencyLimiter 基础行为."""
+class TestModelConcurrencyControllerLimited:
+    """ModelConcurrencyController limited 模式基础行为."""
+
+    def test_alias_compatibility(self) -> None:
+        """ModelConcurrencyLimiter 别名指向 ModelConcurrencyController."""
+        assert ModelConcurrencyLimiter is ModelConcurrencyController
+
+    def test_mode_is_limited(self) -> None:
+        ctrl = ModelConcurrencyController(ZhipuConcurrencyConfig(default=2))
+        assert ctrl.mode == "limited"
 
     @pytest.mark.asyncio
-    async def test_lazy_semaphore_creation(self) -> None:
-        limiter = ModelConcurrencyLimiter(ZhipuConcurrencyConfig(default=2))
-        slot_a = limiter._get_or_create_slot("model-a")
-        slot_b = limiter._get_or_create_slot("model-b")
+    async def test_lazy_slot_creation(self) -> None:
+        ctrl = ModelConcurrencyController(ZhipuConcurrencyConfig(default=2))
+        slot_a = ctrl._get_or_create_slot("model-a")
+        slot_b = ctrl._get_or_create_slot("model-b")
         # 不同模型独立 slot
         assert slot_a is not slot_b
         # 相同模型复用 slot
-        assert limiter._get_or_create_slot("model-a") is slot_a
+        assert ctrl._get_or_create_slot("model-a") is slot_a
 
     @pytest.mark.asyncio
-    async def test_acquire_blocks_when_full(self) -> None:
-        limiter = ModelConcurrencyLimiter(ZhipuConcurrencyConfig(default=2))
+    async def test_track_blocks_when_full(self) -> None:
+        ctrl = ModelConcurrencyController(ZhipuConcurrencyConfig(default=2))
 
-        # 占满 2 个槽位
-        sem1 = await limiter.acquire("glm-5.1")
-        sem2 = await limiter.acquire("glm-5.1")
-        assert sem1 is sem2  # 同一 semaphore
+        # 通过 acquire 占满 2 个槽位
+        slot = ctrl._get_or_create_slot("glm-5.1")
+        await slot.acquire()
+        await slot.acquire()
+        assert slot.in_use == 2
 
-        # 第 3 次 acquire 必须阻塞
-        task = asyncio.create_task(limiter.acquire("glm-5.1"))
+        # 第 3 次 track 必须阻塞
+        async def third():
+            async with ctrl.track("glm-5.1"):
+                pass
+
+        task = asyncio.create_task(third())
         await asyncio.sleep(0.05)
         assert not task.done(), "第三个请求应在排队等待"
+        # 排队时 pending 应递增
+        assert slot.pending == 1
 
         # 释放一个槽位后，等待者被唤醒
-        sem1.release()
+        slot.release()
         await asyncio.sleep(0.05)
         assert task.done()
-        (await task).release()
-        sem2.release()
+        slot.release()
 
     @pytest.mark.asyncio
     async def test_per_model_independent(self) -> None:
-        limiter = ModelConcurrencyLimiter(
+        ctrl = ModelConcurrencyController(
             ZhipuConcurrencyConfig(default=1, models={"glm-5.1": 1})
         )
-        # 占满 glm-5.1
-        sem_51 = await limiter.acquire("glm-5.1")
-        # glm-5v-turbo 仍可立即获取
-        sem_5v = await asyncio.wait_for(limiter.acquire("glm-5v-turbo"), timeout=0.5)
-        assert sem_51 is not sem_5v
-        sem_51.release()
-        sem_5v.release()
 
-    def test_diagnostics_snapshot(self) -> None:
-        limiter = ModelConcurrencyLimiter(ZhipuConcurrencyConfig(default=3))
+        async def hold(model: str, event: asyncio.Event) -> None:
+            async with ctrl.track(model):
+                await event.wait()
+
+        gate_51 = asyncio.Event()
+        gate_5v = asyncio.Event()
+        t51 = asyncio.create_task(hold("glm-5.1", gate_51))
+        await asyncio.sleep(0.02)
+        # glm-5v-turbo 仍可立即获取
+        t5v = asyncio.create_task(hold("glm-5v-turbo", gate_5v))
+        await asyncio.sleep(0.02)
+        # 两个任务都尚未结束（都在 await event）
+        assert not t51.done()
+        assert not t5v.done()
+        gate_51.set()
+        gate_5v.set()
+        await asyncio.gather(t51, t5v)
+
+    def test_diagnostics_snapshot_limited(self) -> None:
+        ctrl = ModelConcurrencyController(ZhipuConcurrencyConfig(default=3))
         # 触发 slot 创建
-        limiter._get_or_create_slot("glm-5.1")
-        snap = limiter.get_diagnostics()
+        ctrl._get_or_create_slot("glm-5.1")
+        snap = ctrl.get_diagnostics()
         assert "glm-5.1" in snap
+        assert snap["glm-5.1"]["mode"] == "limited"
         assert snap["glm-5.1"]["limit"] == 3
         assert snap["glm-5.1"]["available"] == 3
         assert snap["glm-5.1"]["in_use"] == 0
+        assert snap["glm-5.1"]["pending"] == 0
+        assert "peak_pending_recent" in snap["glm-5.1"]
+
+    @pytest.mark.asyncio
+    async def test_peak_pending_recent_tracking(self) -> None:
+        """触发排队时记录 peak，释放后仍可读到余晖."""
+        ctrl = ModelConcurrencyController(ZhipuConcurrencyConfig(default=1))
+        slot = ctrl._get_or_create_slot("glm-5.1")
+
+        # 占满
+        await slot.acquire()
+        # 触发两个排队
+        t1 = asyncio.create_task(slot.acquire())
+        t2 = asyncio.create_task(slot.acquire())
+        await asyncio.sleep(0.05)
+        assert slot.pending == 2
+        snap = ctrl.get_diagnostics()
+        assert snap["glm-5.1"]["peak_pending_recent"] == 2
+
+        # 释放并完成所有任务
+        slot.release()
+        await t1
+        slot.release()
+        await t2
+        slot.release()
+
+        # pending 已归零，但 peak_pending_recent 仍记得最近的峰值
+        snap2 = ctrl.get_diagnostics()
+        assert snap2["glm-5.1"]["pending"] == 0
+        assert snap2["glm-5.1"]["peak_pending_recent"] == 2
 
 
 # ─── ZhipuVendor 集成测试：非流式 ────────────────────────────
 
 
 class TestZhipuVendorNonStreamConcurrency:
-    """非流式 send_message 的并发限制行为."""
+    """非流式 send_message 的并发限制行为（通过 track_in_flight 包裹）."""
 
     @pytest.mark.asyncio
     async def test_limits_parallel_requests(self) -> None:
@@ -223,7 +308,8 @@ class TestZhipuVendorNonStreamConcurrency:
 
             tasks = [
                 asyncio.create_task(
-                    vendor.send_message(
+                    _send_with_tracking(
+                        vendor,
                         {"model": "claude-opus-4-6", "messages": []},
                         {},
                     )
@@ -265,15 +351,17 @@ class TestZhipuVendorNonStreamConcurrency:
             mock_client.return_value = client
 
             # claude-opus → glm-5.1, claude-sonnet → glm-5v-turbo，
-            # 分属两个独立信号量，应同时执行
+            # 分属两个独立槽位，应同时执行
             task_opus = asyncio.create_task(
-                vendor.send_message(
+                _send_with_tracking(
+                    vendor,
                     {"model": "claude-opus-4-6", "messages": []},
                     {},
                 )
             )
             task_sonnet = asyncio.create_task(
-                vendor.send_message(
+                _send_with_tracking(
+                    vendor,
                     {"model": "claude-sonnet-4-6", "messages": []},
                     {},
                 )
@@ -289,8 +377,8 @@ class TestZhipuVendorNonStreamConcurrency:
             await asyncio.gather(task_opus, task_sonnet)
 
     @pytest.mark.asyncio
-    async def test_semaphore_released_on_exception(self) -> None:
-        """上游抛异常时 Semaphore 仍应释放，后续请求不阻塞."""
+    async def test_slot_released_on_exception(self) -> None:
+        """上游抛异常时槽位仍应释放，后续请求不阻塞."""
         vendor = _make_vendor(ZhipuConcurrencyConfig(default=1))
         call_count = 0
 
@@ -307,14 +395,16 @@ class TestZhipuVendorNonStreamConcurrency:
             mock_client.return_value = client
 
             with pytest.raises(RuntimeError):
-                await vendor.send_message(
+                await _send_with_tracking(
+                    vendor,
                     {"model": "claude-opus-4-6", "messages": []},
                     {},
                 )
 
             # 槽位应已释放，第二次请求可正常完成
             resp = await asyncio.wait_for(
-                vendor.send_message(
+                _send_with_tracking(
+                    vendor,
                     {"model": "claude-opus-4-6", "messages": []},
                     {},
                 ),
@@ -343,7 +433,8 @@ class TestZhipuVendorNonStreamConcurrency:
             client.post = mock_post
             mock_client.return_value = client
 
-            resp = await vendor.send_message(
+            resp = await _send_with_tracking(
+                vendor,
                 {"model": "claude-opus-4-6", "messages": []},
                 {},
             )
@@ -351,13 +442,13 @@ class TestZhipuVendorNonStreamConcurrency:
             assert call_count == 3  # 两次 429 + 一次成功，且共用同一槽位
 
     @pytest.mark.asyncio
-    async def test_no_concurrency_when_config_is_none(self) -> None:
-        """concurrency=None 时禁用并发限制，行为与旧版完全一致."""
-        # 强制构造一个 concurrency=None 的 ZhipuConfig（绕过默认工厂）
-        cfg = ZhipuConfig(api_key="key")
-        cfg = cfg.model_copy(update={"concurrency": None})
-        vendor = ZhipuVendor(cfg, _make_mapper())
-        assert vendor._concurrency_limiter is None
+    async def test_monitor_mode_no_throttling(self) -> None:
+        """BaseVendor 默认 monitor 模式：高并发不限流，仅计数."""
+        # 显式构造一个 monitor 模式的 zhipu vendor（用于验证 BaseVendor 默认行为等价）
+        vendor = _make_vendor(ZhipuConcurrencyConfig(default=20))
+        from coding.proxy.vendors.concurrency import ModelConcurrencyController as MCC
+
+        vendor._concurrency_controller = MCC(None)
 
         gate = asyncio.Event()
         active = 0
@@ -378,7 +469,8 @@ class TestZhipuVendorNonStreamConcurrency:
 
             tasks = [
                 asyncio.create_task(
-                    vendor.send_message(
+                    _send_with_tracking(
+                        vendor,
                         {"model": "claude-opus-4-6", "messages": []},
                         {},
                     )
@@ -390,7 +482,7 @@ class TestZhipuVendorNonStreamConcurrency:
                     break
                 await asyncio.sleep(0.01)
 
-            assert peak == 5, "无并发限制时应全部并行"
+            assert peak == 5, "monitor 模式应允许全部并行"
             gate.set()
             await asyncio.gather(*tasks)
 
@@ -399,7 +491,7 @@ class TestZhipuVendorNonStreamConcurrency:
 
 
 class TestZhipuVendorStreamConcurrency:
-    """流式 send_message_stream 的并发限制行为."""
+    """流式 send_message_stream 的并发限制行为（通过 track_in_flight 包裹）."""
 
     @pytest.mark.asyncio
     async def test_stream_limits_parallel_requests(self) -> None:
@@ -421,8 +513,8 @@ class TestZhipuVendorStreamConcurrency:
 
         async def consume(model: str) -> int:
             chunks: list[bytes] = []
-            async for chunk in vendor.send_message_stream(
-                {"model": model, "messages": []}, {}
+            async for chunk in _stream_with_tracking(
+                vendor, {"model": model, "messages": []}, {}
             ):
                 chunks.append(chunk)
             return len(chunks)
@@ -453,15 +545,14 @@ class TestZhipuVendorStreamConcurrency:
             # 连续两次流式请求都能完成（说明槽位被释放）
             for _ in range(2):
                 chunks = []
-                async for chunk in vendor.send_message_stream(
-                    {"model": "claude-opus-4-6", "messages": []}, {}
+                async for chunk in _stream_with_tracking(
+                    vendor, {"model": "claude-opus-4-6", "messages": []}, {}
                 ):
                     chunks.append(chunk)
                 assert len(chunks) == 2
 
         # 确认 slot 当前完全可用
-        assert vendor._concurrency_limiter is not None
-        slot = vendor._concurrency_limiter._get_or_create_slot("glm-5.1")
+        slot = vendor._concurrency_controller._get_or_create_slot("glm-5.1")
         assert slot.available == 1
 
     @pytest.mark.asyncio
@@ -485,22 +576,22 @@ class TestZhipuVendorStreamConcurrency:
 
         with patch.object(NativeAnthropicVendor, "send_message_stream", fake_stream):
             with pytest.raises(httpx.HTTPStatusError):
-                async for _ in vendor.send_message_stream(
-                    {"model": "claude-opus-4-6", "messages": []}, {}
+                async for _ in _stream_with_tracking(
+                    vendor, {"model": "claude-opus-4-6", "messages": []}, {}
                 ):
                     pass
 
             # 槽位应已释放，第二次请求可正常推进
             chunks = []
-            async for chunk in vendor.send_message_stream(
-                {"model": "claude-opus-4-6", "messages": []}, {}
+            async for chunk in _stream_with_tracking(
+                vendor, {"model": "claude-opus-4-6", "messages": []}, {}
             ):
                 chunks.append(chunk)
             assert chunks == [b'data: {"type":"message_start"}\n\n']
 
     @pytest.mark.asyncio
-    async def test_stream_and_nonstream_share_semaphore(self) -> None:
-        """流式与非流式请求共用同一信号量（按映射后模型分组）."""
+    async def test_stream_and_nonstream_share_slot(self) -> None:
+        """流式与非流式请求共用同一槽位（按映射后模型分组）."""
         vendor = _make_vendor(ZhipuConcurrencyConfig(default=1))
         gate = asyncio.Event()
         active = 0
@@ -530,8 +621,8 @@ class TestZhipuVendorStreamConcurrency:
 
             # 启动流式请求并等待它占用槽位
             async def consume_stream() -> None:
-                async for _ in vendor.send_message_stream(
-                    {"model": "claude-opus-4-6", "messages": []}, {}
+                async for _ in _stream_with_tracking(
+                    vendor, {"model": "claude-opus-4-6", "messages": []}, {}
                 ):
                     pass
 
@@ -542,9 +633,10 @@ class TestZhipuVendorStreamConcurrency:
                 await asyncio.sleep(0.01)
             assert active == 1
 
-            # 非流式请求应被同一信号量阻塞
+            # 非流式请求应被同一槽位阻塞
             nonstream_task = asyncio.create_task(
-                vendor.send_message(
+                _send_with_tracking(
+                    vendor,
                     {"model": "claude-opus-4-6", "messages": []},
                     {},
                 )

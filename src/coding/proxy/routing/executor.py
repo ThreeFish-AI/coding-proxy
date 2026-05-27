@@ -689,15 +689,17 @@ class _RouteExecutor:
                     tier.name, failed_tier_name, session_record, body
                 )
                 body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
-                async for chunk in tier.vendor.send_message_stream(
-                    body_for_tier, headers
-                ):
-                    parse_usage_from_chunk(
-                        chunk,
-                        usage,
-                        vendor_label=_VENDOR_PROTOCOL_LABEL_MAP.get(tier.name),
-                    )
-                    yield chunk, tier.name
+                _mapped_model = tier.vendor.map_model(body.get("model", ""))
+                async with tier.vendor.track_in_flight(_mapped_model):
+                    async for chunk in tier.vendor.send_message_stream(
+                        body_for_tier, headers
+                    ):
+                        parse_usage_from_chunk(
+                            chunk,
+                            usage,
+                            vendor_label=_VENDOR_PROTOCOL_LABEL_MAP.get(tier.name),
+                        )
+                        yield chunk, tier.name
 
                 info = self._recorder.build_usage_info(usage)
                 if has_missing_input_usage_signals(info):
@@ -863,7 +865,9 @@ class _RouteExecutor:
                     tier.name, failed_tier_name, session_record, body
                 )
                 body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
-                resp = await tier.vendor.send_message(body_for_tier, headers)
+                _mapped_model = tier.vendor.map_model(body.get("model", ""))
+                async with tier.vendor.track_in_flight(_mapped_model):
+                    resp = await tier.vendor.send_message(body_for_tier, headers)
 
                 if resp.status_code < 400:
                     duration = int((time.monotonic() - start) * 1000)
