@@ -48,30 +48,34 @@ _OPENAI_RULES: tuple[_Rule, ...] = (
 )
 
 # ── Gemini ────────────────────────────────────────────────────────
-# Gemini 的方法动词作为路径后缀（``:generateContent``），通过正则提取
+# Gemini 的方法动词作为路径后缀（``:generateContent``），通过正则提取。
+# ``v1(?:beta1?)?/`` 前缀允许缺失，以兼容 litellm `_check_custom_proxy` 在
+# 自定义 ``api_base`` 场景下丢失版本段的 bug（参考 litellm issue #17759）。
 _GEMINI_RULES: tuple[_Rule, ...] = (
     _Rule(
-        re.compile(r"^/?v1(?:beta)?/models/[^/]+:streamGenerateContent/?$"),
+        re.compile(
+            r"^/?(?:v1(?:beta1?)?/)?models/[^/]+(?:%3A|:)streamGenerateContent/?$"
+        ),
         "generate_content",
     ),
     _Rule(
-        re.compile(r"^/?v1(?:beta)?/models/[^/]+:generateContent/?$"),
+        re.compile(r"^/?(?:v1(?:beta1?)?/)?models/[^/]+(?:%3A|:)generateContent/?$"),
         "generate_content",
     ),
     _Rule(
-        re.compile(r"^/?v1(?:beta)?/models/[^/]+:countTokens/?$"),
+        re.compile(r"^/?(?:v1(?:beta1?)?/)?models/[^/]+(?:%3A|:)countTokens/?$"),
         "count_tokens",
     ),
     _Rule(
-        re.compile(r"^/?v1(?:beta)?/models/[^/]+:embedContent/?$"),
+        re.compile(r"^/?(?:v1(?:beta1?)?/)?models/[^/]+(?:%3A|:)embedContent/?$"),
         "embedding",
     ),
     _Rule(
-        re.compile(r"^/?v1(?:beta)?/models/[^/]+:batchEmbedContents/?$"),
+        re.compile(r"^/?(?:v1(?:beta1?)?/)?models/[^/]+(?:%3A|:)batchEmbedContents/?$"),
         "embedding.batch",
     ),
     _Rule(
-        re.compile(r"^/?v1(?:beta)?/models/[^/]+:predict/?$"),
+        re.compile(r"^/?(?:v1(?:beta1?)?/)?models/[^/]+(?:%3A|:)predict/?$"),
         "predict",
     ),
     _Rule(
@@ -159,7 +163,8 @@ class OperationClassifier:
         normalized = path if path.startswith("/") else f"/{path}"
         return bool(
             re.match(
-                r"^/?v1(?:beta)?/models/[^/]+:streamGenerateContent/?$", normalized
+                r"^/?v1(?:beta)?/models/[^/]+(?:%3A|:)streamGenerateContent/?$",
+                normalized,
             )
         )
 

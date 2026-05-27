@@ -55,6 +55,12 @@ def test_classify_openai(path: str, expected: str) -> None:
         ("/v1beta/models/text-embedding-004:embedContent", "embedding"),
         ("/v1beta/models/text-embedding-004:batchEmbedContents", "embedding.batch"),
         ("/v1beta/models/imagegeneration@006:predict", "predict"),
+        # %3A (URL 编码冒号) 兼容性
+        ("/v1beta/models/gemini-embedding-001%3AbatchEmbedContents", "embedding.batch"),
+        ("/v1beta/models/text-embedding-004%3AembedContent", "embedding"),
+        ("/v1beta/models/gemini-2.0-flash%3AgenerateContent", "generate_content"),
+        ("/v1beta/models/gemini-2.0-flash%3AstreamGenerateContent", "generate_content"),
+        ("/v1beta/models/gemini-1.5-pro%3AcountTokens", "count_tokens"),
         ("/v1beta/cachedContents", "cache"),
         ("/v1beta/cachedContents/cachedContents-xyz", "cache"),
         ("/v1beta/files", "file"),
@@ -128,3 +134,14 @@ def test_is_stream_path() -> None:
     # OpenAI / Anthropic 不走路径判定（以响应 content-type 为准）
     assert not OperationClassifier.is_stream_path("openai", "/v1/chat/completions")
     assert not OperationClassifier.is_stream_path("anthropic", "/v1/messages")
+
+
+def test_is_stream_path_with_encoded_colon() -> None:
+    """%3A (URL 编码冒号) 也应被 is_stream_path 识别."""
+    assert OperationClassifier.is_stream_path(
+        "gemini", "/v1beta/models/gemini-2.0-flash%3AstreamGenerateContent"
+    )
+    # %3A + 非流式路径仍应返回 False
+    assert not OperationClassifier.is_stream_path(
+        "gemini", "/v1beta/models/gemini-2.0-flash%3AgenerateContent"
+    )

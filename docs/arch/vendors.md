@@ -1,7 +1,7 @@
 # 供应商模块（vendors/）
 
 > 路径约定：相对于 `src/coding/proxy/`
-> 定位：从 [framework.md](./framework.md) 提取，详述供应商分类体系与各供应商实现。
+> 定位：从 [framework.md](../framework.md) 提取，详述供应商分类体系与各供应商实现。
 
 [TOC]
 

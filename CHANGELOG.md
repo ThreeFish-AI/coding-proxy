@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [v0.5.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.0) - 2026-05-27
+
+> [!IMPORTANT]
+>
+> **🚀 Model Calling 实时状态！**
+>
+> 模型并发与排队深度一目了然，运行时动态调整每个模型并行度，预防 vendor 侧的 429 幺蛾子。
+
+![model-calling](assets/model-calling-v0.5.0.png)
+
+### ✨ 核心亮点
+
+- feat(concurrency): 新增 Model Calling 实时状态模块，可视化每模型并发与排队深度，支持运行时动态修改每模型并行度 (#250) (#251)
+- feat(zhipu): 新增每模型并发限制，默认 3 个并行请求 FIFO 排队 (#248)
+- feat(zhipu): 为 429 Rate Limit 添加指数退避重试挽回机制 (#242)
+
+### 🔧 更多特性
+
+- fix(antigravity): 修复 v1internal 模式检测逻辑并新增 E2E 测试; (#234)
+- fix(routes): 修复 count_tokens 路由对 target_vendor.name 的错误属性访问; (#235)
+- fix(vendor-channels): 修复 zhipu→anthropic 通道 tool_use/tool_result 配对漏洞; (#236)
+- fix(native-api): 修复 Gemini :verb 路径中 %3A URL 编码导致上游 400 的兼容问题; (#237)
+- fix(zhipu): 诊断首选 tier 语义拒绝降级问题，增强可观测性并提取跨供应商清洗共享函数 (#243)
+
 ## [v0.4.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.4.0) — 2026-05-01
 
 > [!IMPORTANT]

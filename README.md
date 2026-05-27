@@ -30,7 +30,7 @@ When you're deeply immersed in your coding "zone" with **Claude Code** (or any A
 ## 🌟 Core Features
 
 <div align="center">
-    <img src="assets/dashboard-v0.2.4.png">
+    <img src="assets/dashboard-v0.4.0.png">
 </div>
 
 - **⛓️ N-tier Chained Failover**: Autonomous descending sequence, supporting Claude's official plans, as well as Coding Plans from GitHub Copilot, Google Antigravity, Z AI, MiniMax, Alibaba Qwen, Xiaomi, Kimi, Doubao, etc.

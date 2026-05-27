@@ -411,6 +411,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .session-table td.cell-tags { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.8; vertical-align: middle; }
     .session-table tr:hover td { background: var(--bg-card-hover); }
     .session-table .session-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent-blue); cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .session-table .session-title { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 0; }
     .session-id { display: flex; align-items: center; gap: 4px; }
     .session-id-text { overflow: hidden; text-overflow: ellipsis; }
     .copy-btn { background: none; border: none; color: var(--text-tertiary); cursor: pointer; padding: 2px; border-radius: 4px; font-size: 12px; line-height: 1; opacity: .5; flex-shrink: 0; }
@@ -556,6 +557,126 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .tab-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
+
+    /* ── Model Calling 实时状态 ────────────────────────── */
+    .model-calling-card {
+      margin-bottom: 5px;
+    }
+    .mc-empty {
+      text-align: center;
+      color: var(--text-muted);
+      padding: 16px 0;
+      font-size: 13px;
+    }
+    .mc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 8px;
+    }
+    .mc-model-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      background: var(--bg-secondary);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-subtle);
+    }
+    .mc-model-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--text-primary);
+      min-width: 140px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .mc-bar-wrap {
+      flex: 1;
+      min-width: 60px;
+      height: 6px;
+      background: rgba(255,255,255,.06);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .mc-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width .3s ease, background .3s ease;
+    }
+    .mc-bar-fill.mc-low { background: var(--accent-green); }
+    .mc-bar-fill.mc-mid { background: var(--accent-yellow); }
+    .mc-bar-fill.mc-high { background: var(--accent-red); }
+    .mc-stats {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .mc-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .mc-badge-pending {
+      background: rgba(251,146,60,.15);
+      color: #fb923c;
+    }
+    .mc-badge-active {
+      background: rgba(74,222,128,.12);
+      color: #4ade80;
+    }
+    .mc-vendor-tag {
+      font-size: 10px;
+      color: var(--text-muted);
+      background: rgba(255,255,255,.06);
+      padding: 1px 6px;
+      border-radius: 3px;
+    }
+    .mc-limit-editable {
+      cursor: pointer;
+      border-bottom: 1px dashed rgba(74,222,128,.4);
+      transition: border-color .2s, color .2s;
+    }
+    .mc-limit-editable:hover {
+      border-bottom-color: #4ade80;
+      color: #4ade80;
+    }
+    .mc-limit-input {
+      width: 36px;
+      background: var(--bg-primary);
+      border: 1px solid var(--accent-blue);
+      border-radius: 3px;
+      color: var(--text-primary);
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      text-align: center;
+      padding: 0 2px;
+      outline: none;
+      -moz-appearance: textfield;
+    }
+    .mc-limit-input::-webkit-outer-spin-button,
+    .mc-limit-input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    .mc-limit-flash-ok { animation: mc-flash-ok .6s ease; }
+    .mc-limit-flash-err { animation: mc-flash-err .6s ease; }
+    @keyframes mc-flash-ok {
+      0%,100% { color: inherit; }
+      40% { color: #4ade80; }
+    }
+    @keyframes mc-flash-err {
+      0%,100% { color: inherit; }
+      40% { color: #f87171; }
+    }
   </style>
 </head>
 <body>
@@ -625,6 +746,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Model Calling 实时状态 -->
+  <div class="card model-calling-card" id="model-calling-card">
+    <div class="card-title">📡 Model Calling 实时状态</div>
+    <div class="model-calling-wrap" id="model-calling-wrap">
+      <div class="mc-empty">加载中…</div>
+    </div>
+  </div>
+
   <!-- 供应商状态 + 请求量趋势折线图 -->
   <div class="charts-grid">
     <div class="card">
@@ -676,20 +805,22 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="session-table-wrap" id="sessions-table-wrap">
       <table class="session-table">
         <colgroup>
-          <col style="width:12%">
-          <col style="width:7%">
+          <col style="width:10%">
+          <col style="width:15%">
           <col style="width:6%">
+          <col style="width:5%">
+          <col style="width:5%">
+          <col style="width:15%">
+          <col style="width:10%">
           <col style="width:6%">
-          <col style="width:17%">
-          <col style="width:12%">
-          <col style="width:7%">
-          <col style="width:9%">
-          <col style="width:12%">
-          <col style="width:12%">
+          <col style="width:8%">
+          <col style="width:10%">
+          <col style="width:10%">
         </colgroup>
         <thead>
           <tr>
             <th>Session ID</th>
+            <th>Title</th>
             <th>Last Active</th>
             <th>Requests</th>
             <th>Tokens</th>
@@ -702,7 +833,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </tr>
         </thead>
         <tbody id="sessions-tbody">
-          <tr><td colspan="10" class="empty">Loading...</td></tr>
+          <tr><td colspan="11" class="empty">Loading...</td></tr>
         </tbody>
       </table>
       <div class="session-pagination" id="session-pagination">
@@ -1130,6 +1261,148 @@ function updateVendorStatus(status) {
     </div>`;
   }).join('');
 }
+
+// ── Model Calling 实时状态 ────────────────────────────────
+function updateModelCalling(status) {
+  var wrap = document.getElementById('model-calling-wrap');
+  if (!wrap) return;
+  var tiers = status.tiers || [];
+
+  // 收集所有带 concurrency 诊断的模型
+  var models = [];
+  for (var i = 0; i < tiers.length; i++) {
+    var tier = tiers[i];
+    var diag = tier.diagnostics || {};
+    var conc = diag.concurrency;
+    if (!conc) continue;
+    var names = Object.keys(conc);
+    for (var j = 0; j < names.length; j++) {
+      var model = names[j];
+      var d = conc[model];
+      models.push({
+        vendor: tier.name,
+        model: model,
+        limit: d.limit || 0,
+        in_use: d.in_use || 0,
+        available: d.available || 0,
+        pending: d.pending || 0,
+      });
+    }
+  }
+
+  if (!models.length) {
+    wrap.innerHTML = '<div class="mc-empty">无活跃模型调用</div>';
+    return;
+  }
+
+  var html = '<div class="mc-grid">';
+  for (var k = 0; k < models.length; k++) {
+    var m = models[k];
+    var pct = m.limit > 0 ? Math.round((m.in_use / m.limit) * 100) : 0;
+    var barClass = pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high');
+
+    html += '<div class="mc-model-row">'
+      + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
+      + '<div class="mc-bar-wrap"><div class="mc-bar-fill ' + barClass + '" style="width:' + pct + '%"></div></div>'
+      + '<div class="mc-stats">'
+      + '<span class="mc-badge mc-badge-active">' + m.in_use
+      + '/<span class="mc-limit-editable" data-tier="' + escapeHtml(m.vendor) + '" data-model="' + escapeHtml(m.model) + '" data-limit="' + m.limit + '" title="点击修改并行度">' + m.limit + '</span></span>'
+      + (m.pending > 0 ? '<span class="mc-badge mc-badge-pending">⏳ ' + m.pending + '</span>' : '')
+      + '</div>'
+      + '</div>';
+  }
+  html += '</div>';
+  wrap.innerHTML = html;
+}
+
+// Model Calling 独立短间隔轮询
+var _mcTimer = null;
+function startModelCallingPoll() {
+  stopModelCallingPoll();
+  function tick() {
+    fetchJSON('/api/status').then(function(status) {
+      updateModelCalling(status);
+    }).catch(function() {});
+  }
+  tick();
+  _mcTimer = setInterval(tick, 5000);
+}
+function stopModelCallingPoll() {
+  if (_mcTimer) { clearInterval(_mcTimer); _mcTimer = null; }
+}
+
+// ── 并行度运行时编辑 ──────────────────────────────────────
+var _mcEditing = false;
+document.addEventListener('click', function(e) {
+  if (_mcEditing) return;
+  var el = e.target.closest('.mc-limit-editable');
+  if (!el) return;
+  e.preventDefault();
+  _mcEditing = true;
+  var oldVal = el.getAttribute('data-limit');
+  var tier = el.getAttribute('data-tier');
+  var model = el.getAttribute('data-model');
+  var input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'mc-limit-input';
+  input.min = '1';
+  input.max = '20';
+  input.value = oldVal;
+  el.style.display = 'none';
+  el.parentNode.insertBefore(input, el.nextSibling);
+  input.focus();
+  input.select();
+
+  var _cancelled = false;
+
+  function restore() {
+    _mcEditing = false;
+    if (input.parentNode) input.parentNode.removeChild(input);
+    el.style.display = '';
+  }
+
+  function flash(cls) {
+    el.classList.add(cls);
+    setTimeout(function() { el.classList.remove(cls); }, 600);
+  }
+
+  input.addEventListener('keydown', function(ev) {
+    if (ev.key === 'Escape') { _cancelled = true; restore(); return; }
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    submit();
+  });
+
+  input.addEventListener('blur', function() {
+    setTimeout(function() { if (!_cancelled) submit(); }, 50);
+  });
+
+  function submit() {
+    if (_cancelled) return;
+    var v = parseInt(input.value, 10);
+    if (isNaN(v) || v < 1 || v > 20) { restore(); flash('mc-limit-flash-err'); return; }
+    if (String(v) === oldVal) { restore(); return; }
+    fetch('/api/concurrency', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tier: tier, model: model, limit: v})
+    }).then(function(res) {
+      if (res.ok) {
+        return res.json().then(function() {
+          el.textContent = v;
+          el.setAttribute('data-limit', v);
+          flash('mc-limit-flash-ok');
+        });
+      } else {
+        flash('mc-limit-flash-err');
+      }
+    }).catch(function() {
+      flash('mc-limit-flash-err');
+    }).finally(function() {
+      restore();
+    });
+  }
+});
 
 // ── 按 tiers 顺序排序 vendor 列表 ─────────────────────────
 function sortByTierOrder(vendors, tierOrder) {
@@ -1573,7 +1846,7 @@ function renderSessionPage() {
   var tbody = document.getElementById('sessions-tbody');
 
   if (!total) {
-    tbody.innerHTML = '<tr><td colspan="10" class="empty"><div class="empty-icon">📭</div>No session data</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" class="empty"><div class="empty-icon">📭</div>No session data</td></tr>';
   } else {
     tbody.innerHTML = page.map(function(s) {
       var parsed = parseSessionKey(s.session_key);
@@ -1582,6 +1855,7 @@ function renderSessionPage() {
       var modelsFull = (s.models || '').split(',').map(function(c){return c.trim();});
       var vendorsFull = (s.vendors || '').split(',').map(function(v){return formatVendorLabel(v.trim());});
       var sr = s.success_rate != null ? Math.round(s.success_rate) : null;
+      var sessionTitle = s.title || '';
       return '<tr data-row onclick="toggleRow(this)">' +
         '<td class="session-key" onclick="event.stopPropagation()">' +
           '<div class="session-id" data-key="' + escapeHtml(s.session_key) + '" title="' + escapeHtml(s.session_key) + '">' +
@@ -1592,6 +1866,7 @@ function renderSessionPage() {
             'dev:' + escapeHtml(shortId(parsed.device_id, 8)) + ' · acct:' + escapeHtml(shortId(parsed.account_uuid, 8)) +
           '</div>' +
         '</td>' +
+        '<td class="session-title" title="' + escapeHtml(sessionTitle) + '">' + (sessionTitle ? escapeHtml(sessionTitle) : '–') + '</td>' +
         '<td>' + relativeTime(s.last_active_ts) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtNum(s.total_requests) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtTokens(s.total_tokens) + '</td>' +
@@ -1602,9 +1877,10 @@ function renderSessionPage() {
         '<td onclick="event.stopPropagation()">' + selectHtml + '</td>' +
         '<td>' + formatCategories(s.client_categories) + '</td>' +
         '</tr>' +
-        '<tr class="row-detail"><td colspan="10"><div class="detail-card">' +
+        '<tr class="row-detail"><td colspan="11"><div class="detail-card">' +
           '<div class="detail-identity-row">' +
             '<div class="detail-item"><div class="detail-label">Session ID</div><div class="detail-value" title="' + escapeHtml(s.session_key) + '">' + escapeHtml(parsed.session_id || s.session_key) + '</div></div>' +
+            '<div class="detail-item"><div class="detail-label">Title</div><div class="detail-value">' + (sessionTitle ? escapeHtml(sessionTitle) : '–') + '</div></div>' +
             '<div class="detail-item"><div class="detail-label">Device</div><div class="detail-value" title="' + escapeHtml(parsed.device_id || '') + '">' + (parsed.device_id ? escapeHtml(parsed.device_id) : '–') + '</div></div>' +
             '<div class="detail-item"><div class="detail-label">Account</div><div class="detail-value" title="' + escapeHtml(parsed.account_uuid || '') + '">' + (parsed.account_uuid ? escapeHtml(parsed.account_uuid) : '–') + '</div></div>' +
           '</div>' +
@@ -1707,6 +1983,7 @@ async function refreshOverview() {
 
   updateKPI(summary);
   updateVendorStatus(status);
+  updateModelCalling(status);
   updateChartTitles(days);
 
   const rows = timeline.rows || [];
@@ -1782,6 +2059,8 @@ function switchTab(name) {
   currentTab = name;
   applyTabState(name);
   syncTabUrl(name);
+  // Model Calling 轮询随页签切换启停
+  if (name === 'overview') { startModelCallingPoll(); } else { stopModelCallingPoll(); }
   refresh();
 }
 
@@ -1801,6 +2080,7 @@ function switchTab(name) {
   }).catch(function(){});
   refresh();                     // 仅加载初始页签的数据
   setInterval(refresh, 600000);  // 每 10 分钟刷新当前页签
+  if (initial === 'overview') startModelCallingPoll();
 })();
 </script>
 </body>

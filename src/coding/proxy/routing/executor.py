@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -43,9 +45,319 @@ from .usage_recorder import UsageRecorder
 # 向后兼容别名
 BackendResponse = VendorResponse
 NoCompatibleBackendError = NoCompatibleVendorError
-from ..compat.canonical import CompatibilityStatus, build_canonical_request
+from ..compat.canonical import (
+    CanonicalPartType,
+    CompatibilityStatus,
+    build_canonical_request,
+)
+from ..model.compat import CanonicalRequest
 
 logger = logging.getLogger(__name__)
+
+_SESSION_TITLE_MAX_LEN = 30
+
+# Claude Code 注入的"噪声"标签 — 系统级上下文,不应进入 Session 标题。
+# 这些标签由 CC harness 在首个 user 消息 content 中拼接,高度同质,
+# 直接用作标题会导致跨会话标题无差异化,丧失辨识度。
+_NOISE_TAG_PATTERN = re.compile(
+    r"<(?P<tag>system-reminder|user-preferences|"
+    r"local-command-stdout|local-command-stderr|"
+    r"bash-input|bash-stdout|bash-stderr|"
+    r"ide_selection|stdin|system_instruction)\b[^>]*>"
+    r".*?</(?P=tag)>",
+    flags=re.DOTALL | re.IGNORECASE,
+)
+
+# Slash command 子标签:用于识别 /commit、/review 等命令式调用,
+# 合成"命令 + 参数"式标题。
+_CMD_NAME_PATTERN = re.compile(r"<command-name>(.*?)</command-name>", flags=re.DOTALL)
+_CMD_ARGS_PATTERN = re.compile(r"<command-args>(.*?)</command-args>", flags=re.DOTALL)
+# 残留 command-* 包裹标签清除(command-message/command-stdout 等次要标签)。
+_CMD_WRAPPER_PATTERN = re.compile(
+    r"<command-[\w-]+>.*?</command-[\w-]+>", flags=re.DOTALL
+)
+
+
+def _sanitize_user_text(raw: str) -> str:
+    """剔除 Claude Code 注入的系统级 XML 块,还原真实用户输入。
+
+    处理顺序:
+    1. Slash command 优先识别 — 若检测到 <command-name>,合成"命令 + 参数"
+       式标题(因为残留文本通常为空,直接取标签内容更有意义)。
+    2. 通用噪声剥离 — 移除已知白名单内的 system-reminder 等标签。
+    3. 残留 command-* 包裹清除 — 兜底去除 command-message 等次要标签。
+    4. 前后空白归一化 — 折叠连续空白为单空格,便于 30 字截断。
+    """
+    if not raw:
+        return ""
+
+    # 阶段一: slash command 短路
+    cmd = _CMD_NAME_PATTERN.search(raw)
+    if cmd:
+        name = cmd.group(1).strip()
+        args_match = _CMD_ARGS_PATTERN.search(raw)
+        args = args_match.group(1).strip() if args_match else ""
+        composed = f"{name} {args}".strip() if args else name
+        if composed:
+            return composed
+
+    # 阶段二: 通用噪声剥离
+    cleaned = _NOISE_TAG_PATTERN.sub("", raw)
+    cleaned = _CMD_WRAPPER_PATTERN.sub("", cleaned)
+
+    # 阶段三: 空白折叠
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _extract_session_title(request: CanonicalRequest) -> str:
+    """从规范化请求中提取首个用户消息文本作为 session 标题。
+
+    跳过 Claude Code 注入的系统级 XML 块(system-reminder、user-preferences 等),
+    确保标题反映用户真实输入而非高同质化的系统模板。
+    """
+    for part in request.messages:
+        if part.role != "user" or part.type != CanonicalPartType.TEXT:
+            continue
+        cleaned = _sanitize_user_text(part.text)
+        if cleaned:
+            return cleaned[:_SESSION_TITLE_MAX_LEN]
+    return ""
+
+
+def _build_semantic_rejection_diagnostic(body: dict[str, Any]) -> str:
+    """构建语义拒绝的请求体诊断上下文.
+
+    在 semantic rejection 日志中附加请求体的可疑参数快照，
+    用于定位供应商参数校验失败的具体祸根参数。
+
+    覆盖范围：
+      * 模型 / messages 数（baseline）
+      * thinking 系列顶层参数 + history thinking_blocks 数
+      * system 形态（string / blocks，含 cache_control 计数）
+      * tools 数量 + tool_choice 形态
+      * 采样参数（max_tokens / temperature / top_p / top_k / stop_sequences）
+      * stream / metadata 形态
+      * cache_control 存在性
+      * messages.content 类型分布
+      * 请求体大小估算（json.dumps 字节数）
+    """
+    parts: list[str] = []
+
+    # ── 模型 + 消息数（baseline，始终输出）──
+    parts.append(f"model={body.get('model', 'N/A')}")
+    parts.append(f"messages={len(body.get('messages', []))}")
+
+    # ── 顶层 thinking 系列参数 ──
+    for key in ("thinking", "extended_thinking", "reasoning_effort"):
+        if key in body:
+            val = body[key]
+            parts.append(f"{key}={val!r:.80}")
+
+    # ── system 形态 ──
+    system = body.get("system")
+    if isinstance(system, str):
+        parts.append(f"system_kind=string(len={len(system)})")
+    elif isinstance(system, list):
+        cc_count = sum(
+            1 for item in system if isinstance(item, dict) and "cache_control" in item
+        )
+        if cc_count:
+            parts.append(f"system_blocks={len(system)},cc={cc_count}")
+        else:
+            parts.append(f"system_blocks={len(system)}")
+
+    # ── tools 与 tool_choice ──
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        parts.append(f"tools={len(tools)}")
+    tool_choice = body.get("tool_choice")
+    if tool_choice is not None:
+        parts.append(f"tool_choice={tool_choice!r:.60}")
+
+    # ── 采样参数（仅存在时输出）──
+    for key in ("max_tokens", "temperature", "top_p", "top_k"):
+        if key in body:
+            parts.append(f"{key}={body[key]!r:.40}")
+    stop_sequences = body.get("stop_sequences")
+    if isinstance(stop_sequences, list) and stop_sequences:
+        parts.append(f"stop_sequences={len(stop_sequences)}")
+
+    # ── stream / metadata ──
+    if "stream" in body:
+        parts.append(f"stream={body['stream']}")
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        parts.append(f"metadata_keys={len(metadata)}")
+
+    # ── 会话历史中的 thinking blocks 与 content_types 分布 ──
+    thinking_count = 0
+    content_type_counts: dict[str, int] = {}
+    for msg in body.get("messages", []):
+        content = msg.get("content")
+        if isinstance(content, str):
+            content_type_counts["string"] = content_type_counts.get("string", 0) + 1
+            continue
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if isinstance(btype, str):
+                content_type_counts[btype] = content_type_counts.get(btype, 0) + 1
+            if btype in ("thinking", "redacted_thinking"):
+                thinking_count += 1
+    if thinking_count:
+        parts.append(f"thinking_blocks_in_history={thinking_count}")
+    if content_type_counts:
+        type_repr = ",".join(f"{k}:{v}" for k, v in sorted(content_type_counts.items()))
+        parts.append(f"content_types={{{type_repr}}}")
+
+    # ── cache_control 存在检测（messages / tools，不含 system 因已单独统计）──
+    has_cc = False
+    sections: list[Any] = []
+    for m in body.get("messages", []):
+        if isinstance(m.get("content"), list):
+            sections.append(m["content"])
+    if isinstance(body.get("tools"), list):
+        sections.append(body["tools"])
+    for section in sections:
+        for item in section:
+            if isinstance(item, dict) and "cache_control" in item:
+                has_cc = True
+                break
+        if has_cc:
+            break
+    if has_cc:
+        parts.append("cache_control_fields=present")
+
+    # ── 请求体大小估算 ──
+    try:
+        body_bytes = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+        parts.append(f"body_bytes={body_bytes}")
+    except (TypeError, ValueError):
+        # 极少数情况下 body 含非可序列化对象，跳过
+        pass
+
+    return f" [{', '.join(parts)}]" if parts else ""
+
+
+def _build_semantic_rejection_diagnostic(body: dict[str, Any]) -> str:
+    """构建语义拒绝的请求体诊断上下文.
+
+    在 semantic rejection 日志中附加请求体的可疑参数快照，
+    用于定位供应商参数校验失败的具体祸根参数。
+
+    覆盖范围：
+      * 模型 / messages 数（baseline）
+      * thinking 系列顶层参数 + history thinking_blocks 数
+      * system 形态（string / blocks，含 cache_control 计数）
+      * tools 数量 + tool_choice 形态
+      * 采样参数（max_tokens / temperature / top_p / top_k / stop_sequences）
+      * stream / metadata 形态
+      * cache_control 存在性
+      * messages.content 类型分布
+      * 请求体大小估算（json.dumps 字节数）
+    """
+    parts: list[str] = []
+
+    # ── 模型 + 消息数（baseline，始终输出）──
+    parts.append(f"model={body.get('model', 'N/A')}")
+    parts.append(f"messages={len(body.get('messages', []))}")
+
+    # ── 顶层 thinking 系列参数 ──
+    for key in ("thinking", "extended_thinking", "reasoning_effort"):
+        if key in body:
+            val = body[key]
+            parts.append(f"{key}={val!r:.80}")
+
+    # ── system 形态 ──
+    system = body.get("system")
+    if isinstance(system, str):
+        parts.append(f"system_kind=string(len={len(system)})")
+    elif isinstance(system, list):
+        cc_count = sum(
+            1 for item in system if isinstance(item, dict) and "cache_control" in item
+        )
+        if cc_count:
+            parts.append(f"system_blocks={len(system)},cc={cc_count}")
+        else:
+            parts.append(f"system_blocks={len(system)}")
+
+    # ── tools 与 tool_choice ──
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        parts.append(f"tools={len(tools)}")
+    tool_choice = body.get("tool_choice")
+    if tool_choice is not None:
+        parts.append(f"tool_choice={tool_choice!r:.60}")
+
+    # ── 采样参数（仅存在时输出）──
+    for key in ("max_tokens", "temperature", "top_p", "top_k"):
+        if key in body:
+            parts.append(f"{key}={body[key]!r:.40}")
+    stop_sequences = body.get("stop_sequences")
+    if isinstance(stop_sequences, list) and stop_sequences:
+        parts.append(f"stop_sequences={len(stop_sequences)}")
+
+    # ── stream / metadata ──
+    if "stream" in body:
+        parts.append(f"stream={body['stream']}")
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        parts.append(f"metadata_keys={len(metadata)}")
+
+    # ── 会话历史中的 thinking blocks 与 content_types 分布 ──
+    thinking_count = 0
+    content_type_counts: dict[str, int] = {}
+    for msg in body.get("messages", []):
+        content = msg.get("content")
+        if isinstance(content, str):
+            content_type_counts["string"] = content_type_counts.get("string", 0) + 1
+            continue
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if isinstance(btype, str):
+                content_type_counts[btype] = content_type_counts.get(btype, 0) + 1
+            if btype in ("thinking", "redacted_thinking"):
+                thinking_count += 1
+    if thinking_count:
+        parts.append(f"thinking_blocks_in_history={thinking_count}")
+    if content_type_counts:
+        type_repr = ",".join(f"{k}:{v}" for k, v in sorted(content_type_counts.items()))
+        parts.append(f"content_types={{{type_repr}}}")
+
+    # ── cache_control 存在检测（messages / tools，不含 system 因已单独统计）──
+    has_cc = False
+    sections: list[Any] = []
+    for m in body.get("messages", []):
+        if isinstance(m.get("content"), list):
+            sections.append(m["content"])
+    if isinstance(body.get("tools"), list):
+        sections.append(body["tools"])
+    for section in sections:
+        for item in section:
+            if isinstance(item, dict) and "cache_control" in item:
+                has_cc = True
+                break
+        if has_cc:
+            break
+    if has_cc:
+        parts.append("cache_control_fields=present")
+
+    # ── 请求体大小估算 ──
+    try:
+        body_bytes = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+        parts.append(f"body_bytes={body_bytes}")
+    except (TypeError, ValueError):
+        # 极少数情况下 body 含非可序列化对象，跳过
+        pass
+
+    return f" [{', '.join(parts)}]" if parts else ""
 
 
 def _log_http_error_detail(
@@ -341,10 +653,16 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record = await self._session_mgr.get_or_create_record(
+        session_record, is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
+        if is_new_session:
+            title = _extract_session_title(canonical_request)
+            if title:
+                await self._recorder.set_session_title(
+                    canonical_request.session_key, title
+                )
         incompatible_reasons: list[str] = []
         effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
         last_idx = len(effective_tiers) - 1
@@ -512,10 +830,16 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record = await self._session_mgr.get_or_create_record(
+        session_record, is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
+        if is_new_session:
+            title = _extract_session_title(canonical_request)
+            if title:
+                await self._recorder.set_session_title(
+                    canonical_request.session_key, title
+                )
         incompatible_reasons: list[str] = []
         effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
         last_idx = len(effective_tiers) - 1
@@ -601,10 +925,17 @@ class _RouteExecutor:
                     )
 
                 if not is_last and is_semantic:
+                    diagnostic = _build_semantic_rejection_diagnostic(body)
+                    # zhipu 等供应商的错误体含字段级诊断（如 [1210] 错误码 + request_id），
+                    # 500 字符足以覆盖完整错误体，避免截断丢失关键细节
+                    err_msg = (resp.error_message or "N/A")[:500]
                     logger.warning(
-                        "Tier %s semantic rejection (%s), trying next tier without recording failure",
+                        "Tier %s semantic rejection (type=%s, msg=%s)%s, "
+                        "trying next tier without recording failure",
                         tier.name,
                         resp.error_type or resp.status_code,
+                        err_msg,
+                        diagnostic,
                     )
                     failed_tier_name = tier.name
                     continue
@@ -836,6 +1167,20 @@ class _RouteExecutor:
                 )
 
             if semantic_rejection and not is_last:
+                if request_body is not None:
+                    diagnostic = _build_semantic_rejection_diagnostic(request_body)
+                    stream_err_msg = (
+                        error.get("message") if isinstance(error, dict) else "N/A"
+                    )
+                    # 扩展至 500 字符以保留完整字段级诊断信息
+                    logger.warning(
+                        "Tier %s stream semantic rejection (type=%s, msg=%s)%s, "
+                        "trying next tier without recording failure",
+                        tier.name,
+                        error.get("type") if isinstance(error, dict) else None,
+                        stream_err_msg[:500],
+                        diagnostic,
+                    )
                 return True, tier.name, exc
 
             rl_info = parse_rate_limit_headers(

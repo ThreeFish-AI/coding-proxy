@@ -89,12 +89,13 @@ flowchart TD
 
 ## 5. VendorConfig 弹性字段
 
-| 字段                 | 类型           | 默认值               | 说明                        |
-| -------------------- | -------------- | -------------------- | --------------------------- |
-| `circuit_breaker`    | config \| None | `None`               | 熔断器配置（None = 终端层） |
-| `retry`              | config         | `RetryConfig()`      | 重试策略配置                |
-| `quota_guard`        | config         | `QuotaGuardConfig()` | 日度配额守卫配置            |
-| `weekly_quota_guard` | config         | `QuotaGuardConfig()` | 周度配额守卫配置            |
+| 字段                 | 类型           | 默认值               | 说明                                |
+| -------------------- | -------------- | -------------------- | ----------------------------------- |
+| `circuit_breaker`    | config \| None | `None`               | 熔断器配置（None = 终端层）         |
+| `retry`              | config         | `RetryConfig()`      | 重试策略配置                        |
+| `quota_guard`        | config         | `QuotaGuardConfig()` | 日度配额守卫配置                    |
+| `weekly_quota_guard` | config         | `QuotaGuardConfig()` | 周度配额守卫配置                    |
+| `concurrency`        | config \| None | `None`               | `[zhipu]` 每模型并发限制（详见 5.5） |
 
 <a id="elastic-params"></a>
 
@@ -142,6 +143,33 @@ flowchart TD
 | `status_codes`           | list[int] | `[429, 403, 503, 500, 529]`                                                        |
 | `error_types`            | list[str] | `["rate_limit_error", "overloaded_error", "api_error"]`                            |
 | `error_message_patterns` | list[str] | `["quota", "limit exceeded", "usage cap", "capacity", "internal network failure"]` |
+
+### 5.5 ZhipuConcurrencyConfig — Zhipu 每模型并发参数
+
+仅对 `vendor: zhipu` 生效，基于 `asyncio.Semaphore` 实现 FIFO 公平排队。
+
+| 字段      | 类型           | 默认值 | 说明                                                                             |
+| --------- | -------------- | ------ | -------------------------------------------------------------------------------- |
+| `default` | int            | `3`    | 全局默认并行度（适用于所有未在 `models` 中显式覆盖的模型）；取值范围 `[1, 20]`   |
+| `models`  | map[str → int] | `{}`   | 按映射后模型名（如 `glm-5v-turbo` / `glm-5.1` / `glm-4.5-air`）自定义并行度上限 |
+
+YAML 示例：
+
+```yaml
+- vendor: zhipu
+  concurrency:
+    default: 3
+    models:
+      glm-5v-turbo: 5
+      glm-5.1: 2
+```
+
+行为语义：
+
+- 信号量按**映射后模型名**键控，与上游真实承载模型对齐；流式与非流式请求共用同一槽位。
+- 槽位满时新请求按 FIFO 顺序排队，直到任一在途请求释放槽位才被唤醒。
+- 429 重试期间持续占用槽位（重试视为同一请求的延续）。
+- 顶层 `concurrency` 字段缺省为 `None` → 转发至 `ZhipuConfig` 时回退默认值 `default=3`；如需完全关闭限流，可在 `ZhipuConfig` 构造层显式置 `null`（一般无需操作）。
 
 ---
 

@@ -27,4 +27,4 @@ config.yaml
 .playwright-mcp/
 
 # Log files (dual-write logging)
-coding-proxy.log*
+.logs/

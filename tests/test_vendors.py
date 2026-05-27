@@ -396,7 +396,7 @@ async def test_zhipu_prepare_request_preserves_metadata():
 
 @pytest.mark.asyncio
 async def test_zhipu_prepare_request_preserves_thinking():
-    """ZhipuVendor._prepare_request 应原样保留 thinking 字段（原生端点支持）."""
+    """ZhipuVendor._prepare_request 应原样保留 thinking.type=enabled（GLM 原生支持）."""
     mapper = ModelMapper([])
     zhipu_vendor = ZhipuVendor(ZhipuConfig(api_key="sk-test"), mapper)
     body = {
@@ -405,10 +405,33 @@ async def test_zhipu_prepare_request_preserves_thinking():
         "thinking": {"type": "enabled", "budget_tokens": 10000},
     }
     prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
-    # thinking 原样透传，不再剥离任何字段
+    # thinking.type=enabled 原样透传（GLM 原生支持）
     assert prepared_body["thinking"] == {"type": "enabled", "budget_tokens": 10000}
     # 原始 body 不应被修改
     assert body["thinking"]["budget_tokens"] == 10000
+
+
+@pytest.mark.asyncio
+async def test_zhipu_prepare_request_converts_thinking_adaptive():
+    """ZhipuVendor._prepare_request 应将 thinking.type=adaptive 转换为 enabled+budget.
+
+    GLM 不支持 adaptive 类型，转换为已确认安全的 enabled + budget_tokens 格式，
+    保留 thinking 能力不被阉割。
+    """
+    mapper = ModelMapper([])
+    zhipu_vendor = ZhipuVendor(ZhipuConfig(api_key="sk-test"), mapper)
+    body = {
+        "model": "claude-opus-4-7",
+        "messages": [],
+        "thinking": {"type": "adaptive"},
+    }
+    prepared_body, _ = await zhipu_vendor._prepare_request(body, {})
+
+    # adaptive 应被转换为 enabled + budget
+    assert prepared_body["thinking"]["type"] == "enabled"
+    assert prepared_body["thinking"]["budget_tokens"] == 16000
+    # 原始 body 不应被修改
+    assert body["thinking"] == {"type": "adaptive"}
 
 
 @pytest.mark.asyncio

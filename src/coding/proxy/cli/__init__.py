@@ -109,7 +109,7 @@ def start(
     print_banner(console, host=cfg.server.host, port=cfg.server.port)
 
     # 解析文件日志路径：未显式配置时使用默认值
-    _file_path: str | None = cfg.logging.file or "coding-proxy.log"
+    _file_path: str | None = cfg.logging.file or ".logs/coding-proxy.log"
     uvicorn.run(
         fastapi_app,
         host=cfg.server.host,

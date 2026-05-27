@@ -384,12 +384,12 @@ def test_is_v1internal_mode_with_project_id_and_v1internal_url():
 
 
 def test_is_v1internal_mode_without_project_id():
-    """未配置 project_id 时即使 URL 含 v1internal 也不启用."""
+    """v1internal 模式由 base_url 驱动，无需 project_id（与参考项目对齐）."""
     config = AntigravityConfig(
         base_url="https://cloudcode-pa.googleapis.com/v1internal",
     )
     vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
-    assert vendor._is_v1internal_mode() is False
+    assert vendor._is_v1internal_mode() is True
 
 
 def test_is_v1internal_mode_standard_gla_url():
@@ -527,7 +527,7 @@ async def test_discover_project_id_single_active_project():
 
     assert result == "my-gcp-123"
     assert vendor._project_id_discovered == "my-gcp-123"
-    assert vendor._base_url == "https://cloudcode-pa.googleapis.com/v1internal"
+    assert vendor._base_url == "https://cloudcode-pa.googleapis.com"
     assert vendor._is_v1internal_mode() is True
 
 
@@ -743,20 +743,19 @@ async def test_prepare_request_skips_discovery_when_configured():
 
 
 def test_is_v1internal_mode_uses_effective_project_id():
-    """_is_v1internal_mode 应基于 _effective_project_id 判断."""
+    """_is_v1internal_mode 应基于 base_url 判断（不再依赖 project_id）."""
     config = AntigravityConfig(base_url=_V1INTERNAL_BASE_URL)
     vendor = AntigravityVendor(config, FailoverConfig(), ModelMapper([]))
 
-    # 未配置、未发现 → False
-    assert vendor._is_v1internal_mode() is False
+    # base_url 含 v1internal → True（即使无 project_id）
+    assert vendor._is_v1internal_mode() is True
 
-    # 发现后 → True
+    # 发现 project_id 不影响 v1internal 模式判断
     vendor._project_id_discovered = "found-it"
     assert vendor._is_v1internal_mode() is True
 
-    # 配置值覆盖发现值
+    # 清除发现值也不影响
     vendor._project_id_discovered = ""
-    vendor._project_id = "manual"
     assert vendor._is_v1internal_mode() is True
 
 
