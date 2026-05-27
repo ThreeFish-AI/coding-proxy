@@ -2225,3 +2225,221 @@ class TestNormalizeForZhipu:
         assert result["stream"] is True
         assert result["metadata"] == {"user_id": "test"}
         assert adaptations == []
+
+
+class TestDumpMessageDigest:
+    """``_dump_message_digest`` 诊断快照函数测试."""
+
+    def test_outputs_nothing_on_empty_messages(self, caplog):
+        import logging
+
+        from coding.proxy.convert.vendor_channels import _dump_message_digest
+
+        with caplog.at_level(
+            logging.DEBUG, logger="coding.proxy.convert.vendor_channels"
+        ):
+            _dump_message_digest([], label="test")
+        assert "Transition digest" not in caplog.text
+
+    def test_outputs_structure_for_first_n_messages(self, caplog):
+        import logging
+
+        from coding.proxy.convert.vendor_channels import _dump_message_digest
+
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"},
+                ],
+            },
+        ]
+        with caplog.at_level(
+            logging.DEBUG, logger="coding.proxy.convert.vendor_channels"
+        ):
+            _dump_message_digest(messages, label="test")
+        assert "test" in caplog.text
+        assert "0:user" in caplog.text
+        assert "1:assistant" in caplog.text
+        assert "tool_use:1" in caplog.text
+
+
+class TestValidateAnthropicPairing:
+    """``_validate_anthropic_pairing`` 独立配对自检测试."""
+
+    def test_no_issues_for_correct_pairing(self):
+        from coding.proxy.convert.vendor_channels import _validate_anthropic_pairing
+
+        messages = [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"},
+                ],
+            },
+        ]
+        issues = _validate_anthropic_pairing(messages)
+        assert issues == []
+
+    def test_detects_missing_tool_result(self):
+        from coding.proxy.convert.vendor_channels import _validate_anthropic_pairing
+
+        messages = [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}},
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "no result"}]},
+        ]
+        issues = _validate_anthropic_pairing(messages)
+        assert len(issues) == 1
+        assert "toolu_1" in issues[0]
+        assert "messages[1]" in issues[0]
+
+    def test_detects_non_user_after_assistant_with_tool_use(self):
+        from coding.proxy.convert.vendor_channels import _validate_anthropic_pairing
+
+        messages = [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "another assistant"}],
+            },
+        ]
+        issues = _validate_anthropic_pairing(messages)
+        assert len(issues) == 1
+        assert "not user" in issues[0]
+
+    def test_detects_assistant_with_tool_use_at_end_of_list(self):
+        from coding.proxy.convert.vendor_channels import _validate_anthropic_pairing
+
+        messages = [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}},
+                ],
+            },
+        ]
+        issues = _validate_anthropic_pairing(messages)
+        assert len(issues) == 1
+        assert "end of list" in issues[0]
+
+    def test_partial_missing_only_reports_missing_ids(self):
+        from coding.proxy.convert.vendor_channels import _validate_anthropic_pairing
+
+        messages = [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}},
+                    {"type": "tool_use", "id": "toolu_2", "name": "read", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"},
+                ],
+            },
+        ]
+        issues = _validate_anthropic_pairing(messages)
+        assert len(issues) == 1
+        assert "toolu_2" in issues[0]
+        assert "1/2" in issues[0]
+
+    def test_integration_with_zhipu_to_anthropic_channel(self):
+        """验证 prepare_zhipu_to_anthropic 在末端执行自检且 adaptations 包含标签."""
+        from coding.proxy.convert.vendor_channels import prepare_zhipu_to_anthropic
+
+        body = {
+            "model": "claude-opus-4-7",
+            "messages": [
+                {"role": "user", "content": "go"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "server_tool_use",
+                            "id": "srvtoolu_01",
+                            "name": "bash",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "srvtoolu_01",
+                            "content": "ok",
+                        },
+                    ],
+                },
+            ],
+        }
+        result, adaptations = prepare_zhipu_to_anthropic(body)
+        # 自检通过，不应包含 validation_issues 标签
+        assert "anthropic_pairing_validation_issues" not in adaptations
+
+    def test_integration_detects_enforce_missed_issue(self):
+        """构造一个理论上 enforce 可能遗漏的场景，验证自检能捕获.
+
+        场景：两条连续 assistant 消息，第一条的 tool_result 被第二条的
+        existing_result_ids"冒领"（相同 ID 碰撞场景的模拟）。
+        虽然当前 enforce 实现下不太可能自然产生此场景，但自检应能捕获。
+        """
+        from coding.proxy.convert.vendor_channels import (
+            _validate_anthropic_pairing,
+        )
+
+        # 手动构造一个 enforce 后仍存在配对缺陷的 body
+        messages = [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_x", "name": "bash", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    # tool_result 缺失 tolu_x，但有不相关的 tool_result
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_other",
+                        "content": "wrong",
+                    },
+                ],
+            },
+        ]
+        issues = _validate_anthropic_pairing(messages)
+        assert len(issues) == 1
+        assert "toolu_x" in issues[0]
