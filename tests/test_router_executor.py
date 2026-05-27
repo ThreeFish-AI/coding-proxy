@@ -90,6 +90,11 @@ def _mock_vendor(name: str = "test", **caps_kwargs) -> BaseVendor:
     vendor.check_health = AsyncMock(return_value=True)
     vendor.close = AsyncMock()
     vendor.set_compat_context = MagicMock()
+
+    # track_in_flight 返回 nullcontext（不影响执行流，仅满足 async with 协议）
+    from contextlib import nullcontext
+
+    vendor.track_in_flight = MagicMock(return_value=nullcontext())
     return vendor
 
 
