@@ -89,6 +89,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       --shadow-md: 0 8px 24px rgba(0,0,0,.3);
       --glow-blue: 0 0 0 1px rgba(88,166,255,.1), 0 8px 32px rgba(88,166,255,.04);
       --gradient-primary: linear-gradient(135deg, #667eea, #764ba2);
+      --gap-section: 12px;
     }
     @keyframes fadeInUp {
       from { opacity: 0; transform: translateY(10px); }
@@ -160,7 +161,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 5px;
-      margin-bottom: 24px;
+      margin-bottom: var(--gap-section);
     }
     .kpi-card {
       background: rgba(18,22,30,.7);
@@ -214,13 +215,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       display: grid;
       grid-template-columns: 1fr 2fr;
       gap: 16px;
-      margin-bottom: 16px;
+      margin-bottom: var(--gap-section);
     }
     .charts-grid-2 {
       display: grid;
       grid-template-columns: 1fr 2fr;
       gap: 16px;
-      margin-bottom: 16px;
+      margin-bottom: var(--gap-section);
     }
     .charts-grid > .card,
     .charts-grid-2 > .card {
@@ -356,7 +357,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     /* ── 时间区间选择栏 ── */
     .time-range-bar {
       display: flex; align-items: center; gap: 8px;
-      margin-bottom: 24px; flex-wrap: wrap;
+      margin-bottom: var(--gap-section); flex-wrap: wrap;
       padding: 8px 16px;
       background: rgba(18,22,30,.5);
       border: 1px solid rgba(255,255,255,.04);
@@ -560,7 +561,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     /* ── Model Calling 实时状态 ────────────────────────── */
     .model-calling-card {
-      margin-bottom: 5px;
+      margin-bottom: var(--gap-section);
+    }
+    .model-token-card {
+      margin-bottom: var(--gap-section);
     }
     .mc-empty {
       text-align: center;
@@ -791,7 +795,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <!-- Token 用量（按 Vendor / 模型）堆叠图 -->
-  <div class="card" style="margin-bottom:12px">
+  <div class="card model-token-card">
     <div class="card-title" id="title-model-token-timeline">近 7 天 Token 用量（按 Vendor / 模型）</div>
     <div class="chart-with-legend">
       <div class="chart-wrap-xl">
