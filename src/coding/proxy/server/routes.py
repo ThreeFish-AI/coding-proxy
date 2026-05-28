@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 from fastapi import Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 
 from ..vendors.base import NoCompatibleVendorError
 
@@ -197,10 +197,14 @@ def register_health_routes(app: Any) -> None:
         return {"status": "ok"}
 
     @app.head("/")
-    @app.get("/")
-    async def root() -> Response:
+    async def root_head() -> Response:
         """根路径连通性探测 — Claude Code 在建连前发送 HEAD / 作为 health probe."""
         return Response(status_code=200)
+
+    @app.get("/")
+    async def root_get() -> RedirectResponse:
+        """GET / 重定向到 Dashboard."""
+        return RedirectResponse(url="/dashboard", status_code=307)
 
 
 def register_status_route(app: Any, router: Any) -> None:

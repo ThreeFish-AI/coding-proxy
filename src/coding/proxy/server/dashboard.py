@@ -1350,7 +1350,7 @@ function startModelCallingPoll() {
     }).catch(function() {});
   }
   tick();
-  _mcTimer = setInterval(tick, 1500);
+  _mcTimer = setInterval(tick, 10000);
 }
 function stopModelCallingPoll() {
   if (_mcTimer) { clearInterval(_mcTimer); _mcTimer = null; }

@@ -35,11 +35,12 @@ def test_head_root_returns_200():
         assert resp.status_code == 200
 
 
-def test_get_root_returns_200():
-    """GET / 返回 200."""
+def test_get_root_redirects_to_dashboard():
+    """GET / 重定向到 /dashboard."""
     with _make_app() as client:
-        resp = client.get("/")
-        assert resp.status_code == 200
+        resp = client.get("/", follow_redirects=False)
+        assert resp.status_code == 307
+        assert resp.headers["location"] == "/dashboard"
 
 
 # ── count_tokens 透传 ────────────────────────────────────────
