@@ -444,6 +444,21 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .detail-card .detail-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .detail-card .detail-label { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .3px; }
     .detail-card .detail-value { color: var(--text-primary); line-height: 1.4; word-break: break-all; overflow-wrap: break-word; }
+    .detail-title-row {
+      padding-bottom: 10px; margin-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .detail-title-row .detail-value {
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: break-word;
+      line-height: 1.5;
+      max-height: 4.5em;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+    }
     .detail-identity-row {
       display: flex; gap: 16px;
       padding-bottom: 10px; margin-bottom: 10px;
@@ -1903,9 +1918,11 @@ function renderSessionPage() {
         '<td>' + formatCategories(s.client_categories) + '</td>' +
         '</tr>' +
         '<tr class="row-detail"><td colspan="11"><div class="detail-card">' +
+          '<div class="detail-title-row">' +
+            '<div class="detail-item"><div class="detail-label">Title</div><div class="detail-value">' + (sessionTitle ? escapeHtml(sessionTitle) : '–') + '</div></div>' +
+          '</div>' +
           '<div class="detail-identity-row">' +
             '<div class="detail-item"><div class="detail-label">Session ID</div><div class="detail-value" title="' + escapeHtml(s.session_key) + '">' + escapeHtml(parsed.session_id || s.session_key) + '</div></div>' +
-            '<div class="detail-item"><div class="detail-label">Title</div><div class="detail-value">' + (sessionTitle ? escapeHtml(sessionTitle) : '–') + '</div></div>' +
             '<div class="detail-item"><div class="detail-label">Device</div><div class="detail-value" title="' + escapeHtml(parsed.device_id || '') + '">' + (parsed.device_id ? escapeHtml(parsed.device_id) : '–') + '</div></div>' +
             '<div class="detail-item"><div class="detail-label">Account</div><div class="detail-value" title="' + escapeHtml(parsed.account_uuid || '') + '">' + (parsed.account_uuid ? escapeHtml(parsed.account_uuid) : '–') + '</div></div>' +
           '</div>' +

@@ -54,7 +54,7 @@ from ..model.compat import CanonicalRequest
 
 logger = logging.getLogger(__name__)
 
-_SESSION_TITLE_MAX_LEN = 30
+_SESSION_TITLE_MAX_LEN = 600
 
 # Claude Code 注入的"噪声"标签 — 系统级上下文,不应进入 Session 标题。
 # 这些标签由 CC harness 在首个 user 消息 content 中拼接,高度同质,
@@ -63,7 +63,7 @@ _NOISE_TAG_PATTERN = re.compile(
     r"<(?P<tag>system-reminder|user-preferences|"
     r"local-command-stdout|local-command-stderr|"
     r"bash-input|bash-stdout|bash-stderr|"
-    r"ide_selection|stdin|system_instruction)\b[^>]*>"
+    r"ide_selection|stdin|system_instruction|session)\b[^>]*>"
     r".*?</(?P=tag)>",
     flags=re.DOTALL | re.IGNORECASE,
 )
