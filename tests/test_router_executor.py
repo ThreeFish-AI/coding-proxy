@@ -2249,6 +2249,15 @@ class TestSanitizeUserText:
         raw = "<local-command-stdout>build ok</local-command-stdout>构建后的下一步问题"
         assert _sanitize_user_text(raw) == "构建后的下一步问题"
 
+    def test_strips_session_tag(self):
+        """``<session>`` 标签应被完整剥离,不残留在标题中."""
+        raw = "<session>session metadata</session>用户真实输入文本"
+        assert _sanitize_user_text(raw) == "用户真实输入文本"
+
+    def test_strips_session_tag_multiline(self):
+        raw = "<session>\nline1\nline2\n</session>真实标题"
+        assert _sanitize_user_text(raw) == "真实标题"
+
 
 class TestExtractSessionTitle:
     """``_extract_session_title`` — 端到端从 CanonicalRequest 抽取标题."""
@@ -2258,7 +2267,7 @@ class TestExtractSessionTitle:
         return build_canonical_request({"model": "test", "messages": messages}, {})
 
     def test_truncates_to_max_len(self):
-        long_text = "用户输入文本" * 20
+        long_text = "用户输入文本" * 200
         req = self._build_request([{"role": "user", "content": long_text}])
         title = _extract_session_title(req)
         assert len(title) == _SESSION_TITLE_MAX_LEN
