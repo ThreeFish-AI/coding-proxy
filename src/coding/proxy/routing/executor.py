@@ -50,11 +50,13 @@ from ..compat.canonical import (
     CompatibilityStatus,
     build_canonical_request,
 )
-from ..model.compat import CanonicalRequest
+from ..model.compat import CanonicalMessagePart, CanonicalRequest
 
 logger = logging.getLogger(__name__)
 
 _SESSION_TITLE_MAX_LEN = 600
+# 回退标题截取长度 — 工具结果等非用户直接输入的摘要上限。
+_FALLBACK_TITLE_MAX_LEN = 80
 
 # Claude Code 注入的"噪声"标签 — 系统级上下文,不应进入 Session 标题。
 # 这些标签由 CC harness 在首个 user 消息 content 中拼接,高度同质,
@@ -63,7 +65,8 @@ _NOISE_TAG_PATTERN = re.compile(
     r"<(?P<tag>system-reminder|user-preferences|"
     r"local-command-stdout|local-command-stderr|"
     r"bash-input|bash-stdout|bash-stderr|"
-    r"ide_selection|stdin|system_instruction|session)\b[^>]*>"
+    r"ide_selection|stdin|system_instruction|session|"
+    r"artifactMetadata|thinking)\b[^>]*>"
     r".*?</(?P=tag)>",
     flags=re.DOTALL | re.IGNORECASE,
 )
@@ -109,19 +112,78 @@ def _sanitize_user_text(raw: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
-def _extract_session_title(request: CanonicalRequest) -> str:
-    """从规范化请求中提取首个用户消息文本作为 session 标题。
+# ── Session 标题提取: 多层级回退策略 ──────────────────────────────
+#
+# Level 1: user TEXT → 噪声剥离 → 首条非空文本 (原有逻辑)
+# Level 2: user TOOL_RESULT → text 截取 → "[Tool output] <snippet>"
+# Level 3: user IMAGE → 计数 → "[1 Image]" / "[N Images]"
+# Level 4: 请求元数据 → tool_names / model → "[Tool call] Bash, Read"
+#          / "[Session] claude-opus-4-8"
+# ─────────────────────────────────────────────────────────────────
 
-    跳过 Claude Code 注入的系统级 XML 块(system-reminder、user-preferences 等),
-    确保标题反映用户真实输入而非高同质化的系统模板。
-    """
-    for part in request.messages:
+
+def _extract_title_from_user_text(messages: list[CanonicalMessagePart]) -> str:
+    """Level 1: 从 user TEXT 部分提取经噪声剥离后的首条非空文本."""
+    for part in messages:
         if part.role != "user" or part.type != CanonicalPartType.TEXT:
             continue
         cleaned = _sanitize_user_text(part.text)
         if cleaned:
             return cleaned[:_SESSION_TITLE_MAX_LEN]
     return ""
+
+
+def _extract_title_from_tool_results(messages: list[CanonicalMessagePart]) -> str:
+    """Level 2: 从 user TOOL_RESULT 部分截取文本摘要."""
+    for part in messages:
+        if part.role != "user" or part.type != CanonicalPartType.TOOL_RESULT:
+            continue
+        if not part.text:
+            continue
+        cleaned = _sanitize_user_text(part.text)
+        if cleaned:
+            snippet = cleaned[:_FALLBACK_TITLE_MAX_LEN]
+            return f"[Tool output] {snippet}"
+    return ""
+
+
+def _extract_title_from_images(messages: list[CanonicalMessagePart]) -> str:
+    """Level 3: 统计 user IMAGE 部分数量,生成图片描述标题."""
+    count = sum(
+        1 for p in messages if p.role == "user" and p.type == CanonicalPartType.IMAGE
+    )
+    if count == 0:
+        return ""
+    return f"[{count} Image{'s' if count > 1 else ''}]"
+
+
+def _extract_title_from_metadata(request: CanonicalRequest) -> str:
+    """Level 4: 从请求元数据 (tool_names / model) 合成兜底标题."""
+    if request.tool_names:
+        names = ", ".join(request.tool_names[:3])
+        return f"[Tool call] {names}"
+    if request.model:
+        return f"[Session] {request.model}"
+    return ""
+
+
+def _extract_session_title(request: CanonicalRequest) -> str:
+    """从规范化请求中提取 session 标题 — 多层级回退策略。
+
+    依次尝试: user TEXT 噪声剥离 → TOOL_RESULT 摘要 → IMAGE 计数 → 元数据兜底。
+    任意级别命中即返回,确保 Dashboard 尽可能展示有辨识度的标题。
+    """
+    messages = request.messages
+    for extractor in (
+        _extract_title_from_user_text,
+        _extract_title_from_tool_results,
+        _extract_title_from_images,
+    ):
+        title = extractor(messages)
+        if title:
+            return title[:_SESSION_TITLE_MAX_LEN]
+    # Level 4 依赖 request 元数据,签名不同
+    return _extract_title_from_metadata(request)[:_SESSION_TITLE_MAX_LEN]
 
 
 def _build_semantic_rejection_diagnostic(body: dict[str, Any]) -> str:
@@ -663,6 +725,13 @@ class _RouteExecutor:
                 await self._recorder.set_session_title(
                     canonical_request.session_key, title
                 )
+        else:
+            # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
+            title = _extract_session_title(canonical_request)
+            if title:
+                await self._recorder.update_empty_session_title(
+                    canonical_request.session_key, title
+                )
         incompatible_reasons: list[str] = []
         effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
         last_idx = len(effective_tiers) - 1
@@ -840,6 +909,13 @@ class _RouteExecutor:
             title = _extract_session_title(canonical_request)
             if title:
                 await self._recorder.set_session_title(
+                    canonical_request.session_key, title
+                )
+        else:
+            # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
+            title = _extract_session_title(canonical_request)
+            if title:
+                await self._recorder.update_empty_session_title(
                     canonical_request.session_key, title
                 )
         incompatible_reasons: list[str] = []
