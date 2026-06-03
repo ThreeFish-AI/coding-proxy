@@ -335,6 +335,20 @@ class TokenLogger:
         )
         await self._db.commit()
 
+    async def update_empty_session_title(self, session_key: str, title: str) -> None:
+        """为标题为空的 session 补写标题（幂等,仅覆盖空标题行）.
+
+        使用 ``AND title = ''`` 条件确保不覆盖已有标题,
+        即使行已存在但标题为空也会被更新。
+        """
+        if not self._db or not title or not session_key:
+            return
+        await self._db.execute(
+            "UPDATE session_meta SET title = ? WHERE session_key = ? AND title = ''",
+            (title, session_key),
+        )
+        await self._db.commit()
+
     async def get_session_titles(self, session_keys: list[str]) -> dict[str, str]:
         """批量查询 session 标题."""
         if not self._db or not session_keys:

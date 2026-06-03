@@ -20,10 +20,15 @@ from coding.proxy.compat.canonical import (
     build_canonical_request,
 )
 from coding.proxy.routing.executor import (
+    _FALLBACK_TITLE_MAX_LEN,
     _SESSION_TITLE_MAX_LEN,
     _VENDOR_PROTOCOL_LABEL_MAP,
     _build_semantic_rejection_diagnostic,
     _extract_session_title,
+    _extract_title_from_images,
+    _extract_title_from_metadata,
+    _extract_title_from_tool_results,
+    _extract_title_from_user_text,
     _has_tool_results,
     _is_likely_request_format_error,
     _log_vendor_response_error,
@@ -2258,6 +2263,20 @@ class TestSanitizeUserText:
         raw = "<session>\nline1\nline2\n</session>真实标题"
         assert _sanitize_user_text(raw) == "真实标题"
 
+    def test_strips_artifact_metadata_tag(self):
+        """``<artifactMetadata>`` 标签应被完整剥离."""
+        raw = "<artifactMetadata>artifact context</artifactMetadata>用户文本"
+        assert _sanitize_user_text(raw) == "用户文本"
+
+    def test_strips_thinking_tag(self):
+        """``<thinking>`` 标签应被完整剥离."""
+        raw = "<thinking>内部推理过程</thinking>用户实际提问"
+        assert _sanitize_user_text(raw) == "用户实际提问"
+
+    def test_strips_thinking_tag_multiline(self):
+        raw = "<thinking>\nline1\nline2\n</thinking>清理后文本"
+        assert _sanitize_user_text(raw) == "清理后文本"
+
 
 class TestExtractSessionTitle:
     """``_extract_session_title`` — 端到端从 CanonicalRequest 抽取标题."""
@@ -2304,14 +2323,16 @@ class TestExtractSessionTitle:
         req = self._build_request([{"role": "user", "content": raw}])
         assert _extract_session_title(req) == "/commit feat: 新增标题清洗"
 
-    def test_returns_empty_when_only_noise(self):
+    def test_returns_metadata_fallback_when_only_noise(self):
+        """纯噪声文本回退到 Level 4 元数据兜底(使用 model 名称)."""
         raw = "<system-reminder>纯噪声</system-reminder>"
         req = self._build_request([{"role": "user", "content": raw}])
-        assert _extract_session_title(req) == ""
+        assert _extract_session_title(req) == "[Session] test"
 
-    def test_returns_empty_for_no_user_messages(self):
+    def test_returns_metadata_fallback_for_no_user_messages(self):
+        """无 user 消息时回退到 Level 4 元数据兜底."""
         req = self._build_request([{"role": "assistant", "content": "你好"}])
-        assert _extract_session_title(req) == ""
+        assert _extract_session_title(req) == "[Session] test"
 
     def test_skips_noise_only_part_to_find_real_input(self):
         """首个 user text part 全噪声时,fallback 到下一个非空 user part."""
@@ -2338,3 +2359,266 @@ class TestExtractSessionTitle:
         ]
         req = self._build_request(messages)
         assert _extract_session_title(req) == "新的用户问题"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 多层级回退标题提取测试
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestExtractTitleFromUserText:
+    """Level 1 辅助函数 ``_extract_title_from_user_text``."""
+
+    def test_returns_first_non_empty_user_text(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT, role="user", text="用户输入"
+            ),
+        ]
+        assert _extract_title_from_user_text(msgs) == "用户输入"
+
+    def test_skips_assistant_text(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT, role="assistant", text="助手回复"
+            ),
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT, role="user", text="用户问题"
+            ),
+        ]
+        assert _extract_title_from_user_text(msgs) == "用户问题"
+
+    def test_returns_empty_for_noise_only(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT,
+                role="user",
+                text="<system-reminder>纯噪声</system-reminder>",
+            ),
+        ]
+        assert _extract_title_from_user_text(msgs) == ""
+
+
+class TestExtractTitleFromToolResults:
+    """Level 2 辅助函数 ``_extract_title_from_tool_results``."""
+
+    def test_extracts_tool_result_text(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TOOL_RESULT,
+                role="user",
+                text="file contents here",
+            ),
+        ]
+        title = _extract_title_from_tool_results(msgs)
+        assert title == "[Tool output] file contents here"
+
+    def test_skips_empty_tool_result(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TOOL_RESULT, role="user", text=""
+            ),
+        ]
+        assert _extract_title_from_tool_results(msgs) == ""
+
+    def test_truncates_long_tool_result(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        long_text = "A" * 200
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TOOL_RESULT, role="user", text=long_text
+            ),
+        ]
+        title = _extract_title_from_tool_results(msgs)
+        assert title.startswith("[Tool output] ")
+        assert len(title) <= len("[Tool output] ") + _FALLBACK_TITLE_MAX_LEN
+
+    def test_sanitizes_noise_in_tool_result(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TOOL_RESULT,
+                role="user",
+                text="<system-reminder>noise</system-reminder>clean output",
+            ),
+        ]
+        title = _extract_title_from_tool_results(msgs)
+        assert title == "[Tool output] clean output"
+
+    def test_returns_empty_when_all_noise(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TOOL_RESULT,
+                role="user",
+                text="<system-reminder>纯噪声</system-reminder>",
+            ),
+        ]
+        assert _extract_title_from_tool_results(msgs) == ""
+
+
+class TestExtractTitleFromImages:
+    """Level 3 辅助函数 ``_extract_title_from_images``."""
+
+    def test_single_image(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(type=CanonicalPartType.IMAGE, role="user"),
+        ]
+        assert _extract_title_from_images(msgs) == "[1 Image]"
+
+    def test_multiple_images(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(type=CanonicalPartType.IMAGE, role="user"),
+            CanonicalMessagePart(type=CanonicalPartType.IMAGE, role="user"),
+            CanonicalMessagePart(type=CanonicalPartType.IMAGE, role="user"),
+        ]
+        assert _extract_title_from_images(msgs) == "[3 Images]"
+
+    def test_no_images(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(type=CanonicalPartType.TEXT, role="user", text="文本"),
+        ]
+        assert _extract_title_from_images(msgs) == ""
+
+    def test_skips_assistant_images(self):
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(type=CanonicalPartType.IMAGE, role="assistant"),
+        ]
+        assert _extract_title_from_images(msgs) == ""
+
+
+class TestExtractTitleFromMetadata:
+    """Level 4 辅助函数 ``_extract_title_from_metadata``."""
+
+    @staticmethod
+    def _build_request_with_meta(tool_names: list[str] | None = None, model: str = ""):
+        body: dict = {"model": model, "messages": []}
+        if tool_names:
+            body["tools"] = [{"name": n} for n in tool_names]
+        return build_canonical_request(body, {})
+
+    def test_uses_tool_names(self):
+        req = self._build_request_with_meta(
+            tool_names=["Bash", "Read", "Edit"], model="claude-opus-4-8"
+        )
+        assert _extract_title_from_metadata(req) == "[Tool call] Bash, Read, Edit"
+
+    def test_limits_to_three_tool_names(self):
+        req = self._build_request_with_meta(
+            tool_names=["Bash", "Read", "Edit", "Write", "Grep"], model="test"
+        )
+        assert _extract_title_from_metadata(req) == "[Tool call] Bash, Read, Edit"
+
+    def test_uses_model_when_no_tools(self):
+        req = self._build_request_with_meta(tool_names=[], model="claude-sonnet-4-6")
+        assert _extract_title_from_metadata(req) == "[Session] claude-sonnet-4-6"
+
+    def test_returns_empty_when_nothing(self):
+        req = self._build_request_with_meta(tool_names=[], model="")
+        assert _extract_title_from_metadata(req) == ""
+
+
+class TestExtractSessionTitleFallback:
+    """``_extract_session_title`` 多层级回退集成测试."""
+
+    @staticmethod
+    def _build_request(messages: list[dict], **extra):
+        body: dict = {"model": "test-model", "messages": messages, **extra}
+        return build_canonical_request(body, {})
+
+    def test_level1_takes_priority(self):
+        """Level 1 命中时不回退到 Level 2."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "用户真实问题"},
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": "工具输出",
+                    },
+                ],
+            }
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "用户真实问题"
+
+    def test_level2_when_no_text(self):
+        """无 user TEXT 时,回退到 Level 2 TOOL_RESULT."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": [{"type": "text", "text": "文件内容摘要"}],
+                    },
+                ],
+            }
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "[Tool output] 文件内容摘要"
+
+    def test_level3_when_only_images(self):
+        """无 TEXT 和 TOOL_RESULT 时,回退到 Level 3 IMAGE."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "abc",
+                        },
+                    },
+                ],
+            }
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "[1 Image]"
+
+    def test_level4_uses_tool_names(self):
+        """所有消息级别均无内容时,回退到 Level 4 元数据."""
+        req = self._build_request([], tools=[{"name": "Bash"}, {"name": "Read"}])
+        assert _extract_session_title(req) == "[Tool call] Bash, Read"
+
+    def test_level4_uses_model_name(self):
+        """无 tools 时,Level 4 使用 model 名称."""
+        req = self._build_request([])
+        assert _extract_session_title(req) == "[Session] test-model"
+
+    def test_fallback_cascade_full(self):
+        """Level 1 全噪声 → Level 2 全噪声 → Level 3 无图 → Level 4 模型名."""
+        messages = [
+            {
+                "role": "user",
+                "content": "<system-reminder>纯噪声</system-reminder>",
+            },
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "[Session] test-model"
