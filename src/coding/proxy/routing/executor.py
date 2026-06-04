@@ -71,6 +71,11 @@ _NOISE_TAG_PATTERN = re.compile(
     flags=re.DOTALL | re.IGNORECASE,
 )
 
+# <session> 标签需要特殊处理:当用户文本在 <session> 标签内部时,
+# 完整块剥离会连同用户文本一起删除。此模式仅去除外壳标签(保留内容),
+# 用于首轮完整剥离结果为空时的二次回退提取。
+_SESSION_TAG_WRAPPER = re.compile(r"</?session\b[^>]*>", flags=re.IGNORECASE)
+
 # Slash command 子标签:用于识别 /commit、/review 等命令式调用,
 # 合成"命令 + 参数"式标题。
 _CMD_NAME_PATTERN = re.compile(r"<command-name>(.*?)</command-name>", flags=re.DOTALL)
@@ -80,6 +85,9 @@ _CMD_WRAPPER_PATTERN = re.compile(
     r"<command-[\w-]+>.*?</command-[\w-]+>", flags=re.DOTALL
 )
 
+# 空白折叠
+_WHITESPACE_PATTERN = re.compile(r"\s+")
+
 
 def _sanitize_user_text(raw: str) -> str:
     """剔除 Claude Code 注入的系统级 XML 块,还原真实用户输入。
@@ -88,8 +96,10 @@ def _sanitize_user_text(raw: str) -> str:
     1. Slash command 优先识别 — 若检测到 <command-name>,合成"命令 + 参数"
        式标题(因为残留文本通常为空,直接取标签内容更有意义)。
     2. 通用噪声剥离 — 移除已知白名单内的 system-reminder 等标签。
-    3. 残留 command-* 包裹清除 — 兜底去除 command-message 等次要标签。
-    4. 前后空白归一化 — 折叠连续空白为单空格,便于 30 字截断。
+    3. <session> 二次回退 — 若首轮剥离后为空,说明用户文本可能在 <session>
+       标签内部;此时仅去除外壳标签,保留内部文本再做噪声剥离。
+    4. 残留 command-* 包裹清除 — 兜底去除 command-message 等次要标签。
+    5. 前后空白归一化 — 折叠连续空白为单空格。
     """
     if not raw:
         return ""
@@ -107,9 +117,22 @@ def _sanitize_user_text(raw: str) -> str:
     # 阶段二: 通用噪声剥离
     cleaned = _NOISE_TAG_PATTERN.sub("", raw)
     cleaned = _CMD_WRAPPER_PATTERN.sub("", cleaned)
+    cleaned = _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
+    if cleaned:
+        return cleaned
 
-    # 阶段三: 空白折叠
-    return re.sub(r"\s+", " ", cleaned).strip()
+    # 阶段三: <session> 二次回退
+    # 当首轮全部剥离为空时,用户文本很可能被 <session> 标签完整包裹。
+    # 此时不去除 <session> 块,而是仅剥掉外壳标签,保留内部文本后重新剥离。
+    if "<session" in raw.lower():
+        inner = _SESSION_TAG_WRAPPER.sub("", raw)
+        cleaned = _NOISE_TAG_PATTERN.sub("", inner)
+        cleaned = _CMD_WRAPPER_PATTERN.sub("", cleaned)
+        cleaned = _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
+        if cleaned:
+            return cleaned
+
+    return ""
 
 
 # ── Session 标题提取: 多层级回退策略 ──────────────────────────────
