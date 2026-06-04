@@ -2277,6 +2277,40 @@ class TestSanitizeUserText:
         raw = "<thinking>\nline1\nline2\n</thinking>清理后文本"
         assert _sanitize_user_text(raw) == "清理后文本"
 
+    # ── <session> 标签包裹用户文本的二次回退 ──
+
+    def test_session_tag_wrapping_user_text(self):
+        """当 <session> 标签包裹用户文本时,二次回退应提取内部文本.
+
+        注: session 元数据可能残留在标题前部,但用户文本现在可见,
+        远优于完全回退到 '[Session] model_name'.
+        """
+        raw = "<session>session metadata\n用户真实提问内容</session>"
+        result = _sanitize_user_text(raw)
+        assert "用户真实提问内容" in result
+
+    def test_session_tag_wrapping_with_inner_noise(self):
+        """<session> 内部混合噪声标签时,二次回退应正确剥离噪声."""
+        raw = (
+            "<session>session_key: abc\n"
+            "<system-reminder>噪声内容</system-reminder>"
+            "用户真实输入"
+            "</session>"
+        )
+        result = _sanitize_user_text(raw)
+        assert "用户真实输入" in result
+        assert "噪声内容" not in result
+
+    def test_session_tag_prefix_still_works(self):
+        """用户文本在 <session> 标签之后(原有行为)仍正确."""
+        raw = "<session>metadata</session>用户文本在外部"
+        assert _sanitize_user_text(raw) == "用户文本在外部"
+
+    def test_all_noise_inside_session_tag(self):
+        """<session> 内部全是噪声时,二次回退仍返回空."""
+        raw = "<session><system-reminder>纯噪声</system-reminder></session>"
+        assert _sanitize_user_text(raw) == ""
+
 
 class TestExtractSessionTitle:
     """``_extract_session_title`` — 端到端从 CanonicalRequest 抽取标题."""
