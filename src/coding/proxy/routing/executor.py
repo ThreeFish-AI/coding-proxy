@@ -11,9 +11,12 @@ import logging
 import re
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from ..config.session_policy import TitleVendorBinding
 
 from ..vendors.base import (
     NoCompatibleVendorError,
@@ -610,6 +613,7 @@ class _RouteExecutor:
         session_manager: RouteSessionManager,
         reauth_coordinator: Any | None = None,
         session_policy_resolver: SessionPolicyResolver | None = None,
+        title_vendor_bindings: list[TitleVendorBinding] | None = None,
     ) -> None:
         self._router = router
         self._tiers = tiers
@@ -617,12 +621,34 @@ class _RouteExecutor:
         self._session_mgr = session_manager
         self._reauth_coordinator = reauth_coordinator
         self._policy_resolver = session_policy_resolver or SessionPolicyResolver()
+        self._title_vendor_bindings = title_vendor_bindings or []
+        self._validate_title_vendor_bindings()
 
         # Tier 名称 → OAuth provider 名称的映射
         self._tier_provider_map: dict[str, str] = {
             "copilot": "github",
             "antigravity": "google",
         }
+
+    def _validate_title_vendor_bindings(self) -> None:
+        """启动期校验标题绑定引用的 vendor 均存在,缺失则告警.
+
+        与手动绑定 API（拒绝未知 vendor）的语义对齐：此处不硬失败，
+        仅记录警告——避免单条误配置阻断整个代理启动；运行时
+        `_resolve_effective_tiers` 会静默跳过未知 vendor 回退默认顺序。
+        """
+        if not self._title_vendor_bindings:
+            return
+        valid = {t.name for t in self._tiers}
+        for binding in self._title_vendor_bindings:
+            if binding.vendor not in valid:
+                logger.warning(
+                    "title_vendor_bindings 引用了未知 vendor %r（前缀 %r）；"
+                    "可用 vendor: %s。该绑定将在运行时被静默跳过。",
+                    binding.vendor,
+                    binding.prefix,
+                    sorted(valid),
+                )
 
     # ── 公开执行入口 ──────────────────────────────────────
 
@@ -649,6 +675,27 @@ class _RouteExecutor:
                 ordered.append(tier)
                 seen.add(tier.name)
         return ordered
+
+    def _apply_title_based_policy(self, session_key: str, title: str) -> None:
+        """根据 Session 标题前缀自动绑定供应商.
+
+        当标题以预配置的前缀开头时，通过 SessionPolicyResolver.upsert()
+        将该 Session 绑定到指定供应商，后续请求无需再走默认路由。
+
+        仅在新 Session 首次提取标题时调用，避免覆盖手动绑定的策略。
+        """
+        if not title or not self._title_vendor_bindings:
+            return
+        for binding in self._title_vendor_bindings:
+            if title.startswith(binding.prefix):
+                self._policy_resolver.upsert(session_key, [binding.vendor])
+                logger.info(
+                    "Session title prefix %r matched → auto-bind to %s (session=%s)",
+                    binding.prefix,
+                    binding.vendor,
+                    session_key[:12],
+                )
+                return
 
     def _prepare_body_for_tier(
         self,
@@ -748,6 +795,7 @@ class _RouteExecutor:
                 await self._recorder.set_session_title(
                     canonical_request.session_key, title
                 )
+                self._apply_title_based_policy(canonical_request.session_key, title)
         else:
             # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
             title = _extract_session_title(canonical_request)
@@ -934,6 +982,7 @@ class _RouteExecutor:
                 await self._recorder.set_session_title(
                     canonical_request.session_key, title
                 )
+                self._apply_title_based_policy(canonical_request.session_key, title)
         else:
             # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
             title = _extract_session_title(canonical_request)

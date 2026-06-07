@@ -685,4 +685,11 @@ native_api:
 #       tiers: ["copilot", "anthropic", "zhipu"]
 #
 # 未配置时（默认），所有 Session 使用全局 tiers 顺序。
-session_policies: []
+session_policies:
+  policies: []
+  # 标题前缀 → 供应商自动绑定。
+  # 当 Session 标题以指定前缀开头时，自动将该 Session 绑定到对应供应商。
+  # 匹配规则按列表顺序求值，首次匹配生效。
+  title_vendor_bindings:
+    - prefix: "# 目标"
+      vendor: "zhipu"
