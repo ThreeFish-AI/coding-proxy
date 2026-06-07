@@ -50,10 +50,34 @@ class SessionPolicy(BaseModel):
     )
 
 
+class TitleVendorBinding(BaseModel):
+    """标题前缀 → 供应商自动绑定规则."""
+
+    prefix: str = Field(
+        min_length=1,
+        description=(
+            "标题前缀匹配模式（大小写敏感的 startswith 匹配）。"
+            "禁止空字符串——空前缀会匹配所有标题,导致全量误绑定。"
+        ),
+    )
+    vendor: str = Field(
+        min_length=1,
+        description="匹配后绑定的目标供应商名称",
+    )
+
+
 class SessionPoliciesConfig(BaseModel):
     """顶层 Session 策略配置容器."""
 
     policies: list[SessionPolicy] = Field(
         default_factory=list,
         description="Session 路由策略列表，按定义顺序求值，首次匹配生效",
+    )
+    title_vendor_bindings: list[TitleVendorBinding] = Field(
+        default_factory=list,
+        description=(
+            "标题前缀 → 供应商自动绑定规则。"
+            "当 Session 标题以指定前缀开头时，自动绑定到对应供应商。"
+            "匹配规则按列表顺序求值，首次匹配生效。"
+        ),
     )

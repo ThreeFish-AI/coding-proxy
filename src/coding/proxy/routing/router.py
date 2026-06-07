@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from ..config.session_policy import TitleVendorBinding
     from ..pricing import PricingTable
 
 from .executor import _RouteExecutor
@@ -38,6 +39,7 @@ class RequestRouter:
         reauth_coordinator: Any | None = None,
         compat_session_store: CompatSessionStore | None = None,
         session_policy_resolver: SessionPolicyResolver | None = None,
+        title_vendor_bindings: list[TitleVendorBinding] | None = None,
     ) -> None:
         if not tiers:
             raise ValueError("至少需要一个供应商层级")
@@ -56,6 +58,7 @@ class RequestRouter:
             session_manager=self._session_mgr,
             reauth_coordinator=reauth_coordinator,
             session_policy_resolver=session_policy_resolver,
+            title_vendor_bindings=title_vendor_bindings,
         )
 
     def set_pricing_table(self, table: PricingTable) -> None:

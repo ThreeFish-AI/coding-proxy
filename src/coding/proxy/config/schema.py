@@ -44,7 +44,7 @@ from .routing import (  # noqa: F401
 
 # ── 子模块 re-export ────────────────────────────────────────────
 from .server import DatabaseConfig, LoggingConfig, ServerConfig  # noqa: F401
-from .session_policy import SessionPoliciesConfig  # noqa: F401
+from .session_policy import SessionPoliciesConfig, TitleVendorBinding  # noqa: F401
 from .vendors import (  # noqa: F401
     AlibabaConfig,
     AnthropicConfig,
@@ -350,4 +350,5 @@ __all__ = [
     "NativeApiConfig",
     # session policy
     "SessionPoliciesConfig",
+    "TitleVendorBinding",
 ]

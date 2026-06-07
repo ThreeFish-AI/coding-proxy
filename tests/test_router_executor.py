@@ -19,6 +19,7 @@ from coding.proxy.compat.canonical import (
     CompatibilityStatus,
     build_canonical_request,
 )
+from coding.proxy.config.session_policy import TitleVendorBinding
 from coding.proxy.routing.executor import (
     _FALLBACK_TITLE_MAX_LEN,
     _SESSION_TITLE_MAX_LEN,
@@ -36,6 +37,7 @@ from coding.proxy.routing.executor import (
     _sanitize_user_text,
 )
 from coding.proxy.routing.session_manager import RouteSessionManager
+from coding.proxy.routing.session_policy import SessionPolicyResolver
 from coding.proxy.routing.tier import VendorTier
 from coding.proxy.routing.usage_recorder import UsageRecorder
 from coding.proxy.vendors.base import (
@@ -131,6 +133,19 @@ def _executor(tiers: list[VendorTier] | None = None, **kwargs) -> _RouteExecutor
         session_manager=session_mgr,
         **kwargs,
     )
+
+
+def _stub_session_manager(is_new: bool = True) -> MagicMock:
+    """构造返回指定 is_new 的 session manager stub.
+
+    默认 RouteSessionManager(无 store) 的 get_or_create_record 恒返回
+    is_new=False；测试新 session 路径需显式 stub 返回 is_new=True。
+    """
+    mgr = MagicMock(spec=RouteSessionManager)
+    mgr.get_or_create_record = AsyncMock(return_value=(None, is_new))
+    mgr.apply_compat_context = MagicMock()
+    mgr.persist_session = AsyncMock()
+    return mgr
 
 
 # ── _VENDOR_PROTOCOL_LABEL_MAP ───────────────────────────
@@ -2656,3 +2671,278 @@ class TestExtractSessionTitleFallback:
         ]
         req = self._build_request(messages)
         assert _extract_session_title(req) == "[Session] test-model"
+
+
+class TestApplyTitleBasedPolicy:
+    """``_apply_title_based_policy`` 标题前缀自动绑定测试."""
+
+    def test_prefix_match_triggers_upsert(self):
+        """标题以配置前缀开头 → 触发 upsert 绑定到目标 vendor."""
+        resolver = SessionPolicyResolver()
+        executor = _executor(
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        executor._apply_title_based_policy("sess-1", "# 目标 (Goal) 实现功能 X")
+        policy = resolver.resolve("sess-1")
+        assert policy is not None
+        assert policy.tiers == ["zhipu"]
+        assert policy.name == "runtime:sess-1"
+
+    def test_prefix_match_without_parenthesis(self):
+        """前缀匹配不要求括号后缀,纯 '# 目标' 开头即命中."""
+        resolver = SessionPolicyResolver()
+        executor = _executor(
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        executor._apply_title_based_policy("sess-2", "# 目标 详细计划")
+        policy = resolver.resolve("sess-2")
+        assert policy is not None
+        assert policy.tiers == ["zhipu"]
+
+    def test_non_matching_title_no_binding(self):
+        """非匹配标题 → 不创建绑定."""
+        resolver = SessionPolicyResolver()
+        executor = _executor(
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        executor._apply_title_based_policy("sess-3", "普通会话标题")
+        assert resolver.resolve("sess-3") is None
+
+    def test_empty_title_no_binding(self):
+        """空标题 → 提前返回,不创建绑定."""
+        resolver = SessionPolicyResolver()
+        executor = _executor(
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        executor._apply_title_based_policy("sess-4", "")
+        assert resolver.resolve("sess-4") is None
+
+    def test_no_bindings_configured_no_binding(self):
+        """未配置任何绑定规则 → 提前返回,等效禁用."""
+        resolver = SessionPolicyResolver()
+        executor = _executor(
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[],
+        )
+        executor._apply_title_based_policy("sess-5", "# 目标 任意标题")
+        assert resolver.resolve("sess-5") is None
+
+    def test_prefix_in_middle_no_match(self):
+        """前缀出现在标题中间 → startswith 不匹配,不绑定."""
+        resolver = SessionPolicyResolver()
+        executor = _executor(
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        executor._apply_title_based_policy("sess-6", "前缀 # 目标 在中间")
+        assert resolver.resolve("sess-6") is None
+
+    def test_multiple_bindings_first_match_wins(self):
+        """多条规则按顺序匹配,首次命中生效."""
+        resolver = SessionPolicyResolver()
+        executor = _executor(
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[
+                TitleVendorBinding(prefix="# 目标", vendor="zhipu"),
+                TitleVendorBinding(prefix="# Review", vendor="anthropic"),
+            ],
+        )
+        executor._apply_title_based_policy("sess-7", "# Review 代码审查")
+        policy = resolver.resolve("sess-7")
+        assert policy is not None
+        assert policy.tiers == ["anthropic"]
+
+    def test_bound_tier_promoted_to_front(self):
+        """绑定后 _resolve_effective_tiers 将目标 vendor 提升至首位."""
+        resolver = SessionPolicyResolver()
+        tiers = [
+            _make_tier(_mock_vendor("anthropic")),
+            _make_tier(_mock_vendor("zhipu")),
+        ]
+        executor = _executor(
+            tiers=tiers,
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        executor._apply_title_based_policy("sess-8", "# 目标 实现 X")
+        effective = executor._resolve_effective_tiers("sess-8")
+        assert effective[0].name == "zhipu"
+        # 未提及的 vendor 仍保留在末尾
+        assert {t.name for t in effective} == {"zhipu", "anthropic"}
+
+    def test_non_matching_session_uses_default_order(self):
+        """非匹配 session 的 tier 顺序保持全局默认."""
+        resolver = SessionPolicyResolver()
+        tiers = [
+            _make_tier(_mock_vendor("anthropic")),
+            _make_tier(_mock_vendor("zhipu")),
+        ]
+        executor = _executor(
+            tiers=tiers,
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        executor._apply_title_based_policy("sess-9", "普通标题")
+        effective = executor._resolve_effective_tiers("sess-9")
+        assert [t.name for t in effective] == ["anthropic", "zhipu"]
+
+    def test_nonexistent_vendor_skipped_in_resolution(self):
+        """绑定不存在的 vendor → upsert 成功但 tier 解析跳过该 vendor."""
+        resolver = SessionPolicyResolver()
+        tiers = [
+            _make_tier(_mock_vendor("anthropic")),
+            _make_tier(_mock_vendor("zhipu")),
+        ]
+        executor = _executor(
+            tiers=tiers,
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[
+                TitleVendorBinding(prefix="# 目标", vendor="nonexistent")
+            ],
+        )
+        executor._apply_title_based_policy("sess-10", "# 目标 X")
+        effective = executor._resolve_effective_tiers("sess-10")
+        # 不存在的 vendor 被跳过,回退到全局默认顺序
+        assert [t.name for t in effective] == ["anthropic", "zhipu"]
+
+    @pytest.mark.asyncio
+    async def test_execute_message_end_to_end_binding(self):
+        """端到端: 新 session 首请求标题命中前缀 → 创建绑定并路由到 zhipu."""
+        resolver = SessionPolicyResolver()
+        tiers = [
+            _make_tier(_mock_vendor("anthropic")),
+            _make_tier(_mock_vendor("zhipu")),
+        ]
+        executor = _executor(
+            tiers=tiers,
+            session_mgr=_stub_session_manager(is_new=True),
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        body = {
+            "model": "test",
+            "metadata": {"user_id": "session-abc"},
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "# 目标 实现 X"}]}
+            ],
+        }
+        resp = await executor.execute_message(body, {})
+        assert resp.status_code == 200
+        # 从 body 解析出的 session_key 应已建立运行时绑定
+        canonical = build_canonical_request(body, {})
+        policy = resolver.resolve(canonical.session_key)
+        assert policy is not None
+        assert policy.tiers == ["zhipu"]
+
+    @pytest.mark.asyncio
+    async def test_execute_message_existing_session_no_binding(self):
+        """端到端: 已存在 session(is_new=False) 不触发标题绑定."""
+        resolver = SessionPolicyResolver()
+        tiers = [
+            _make_tier(_mock_vendor("anthropic")),
+            _make_tier(_mock_vendor("zhipu")),
+        ]
+        executor = _executor(
+            tiers=tiers,
+            session_mgr=_stub_session_manager(is_new=False),
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        body = {
+            "model": "test",
+            "metadata": {"user_id": "session-existing"},
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "# 目标 实现 X"}]}
+            ],
+        }
+        await executor.execute_message(body, {})
+        canonical = build_canonical_request(body, {})
+        # is_new=False → 不调用 _apply_title_based_policy,无运行时绑定
+        assert resolver.resolve(canonical.session_key) is None
+
+    @pytest.mark.asyncio
+    async def test_execute_stream_end_to_end_binding(self):
+        """端到端(流式): 新 session 首请求标题命中前缀 → 创建绑定."""
+        resolver = SessionPolicyResolver()
+        zhipu_vendor = _mock_vendor("zhipu")
+        zhipu_vendor.send_message_stream = MagicMock(
+            return_value=_async_chunks([b'{"type":"message_stop"}'])
+        )
+        tiers = [
+            _make_tier(_mock_vendor("anthropic")),
+            _make_tier(zhipu_vendor),
+        ]
+        executor = _executor(
+            tiers=tiers,
+            session_mgr=_stub_session_manager(is_new=True),
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        body = {
+            "model": "test",
+            "metadata": {"user_id": "session-stream"},
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "# 目标 流式任务"}],
+                }
+            ],
+        }
+        chunks = [chunk async for chunk, _ in executor.execute_stream(body, {})]
+        assert chunks  # 有数据返回
+        canonical = build_canonical_request(body, {})
+        policy = resolver.resolve(canonical.session_key)
+        assert policy is not None
+        assert policy.tiers == ["zhipu"]
+
+    def test_empty_prefix_rejected_by_validation(self):
+        """空 prefix 在模型校验阶段即被拒绝,杜绝全量误绑定."""
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError):
+            TitleVendorBinding(prefix="", vendor="zhipu")
+
+    def test_empty_vendor_rejected_by_validation(self):
+        """空 vendor 在模型校验阶段即被拒绝."""
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError):
+            TitleVendorBinding(prefix="# 目标", vendor="")
+
+    def test_unknown_vendor_warns_at_startup(self, caplog):
+        """构造时引用未知 vendor → 记录启动告警."""
+        import logging as _logging
+
+        tiers = [_make_tier(_mock_vendor("anthropic"))]
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            _executor(
+                tiers=tiers,
+                session_policy_resolver=SessionPolicyResolver(),
+                title_vendor_bindings=[
+                    TitleVendorBinding(prefix="# 目标", vendor="nonexistent")
+                ],
+            )
+        warnings = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert any("nonexistent" in r.message for r in warnings)
+
+    def test_known_vendor_no_startup_warning(self, caplog):
+        """构造时引用合法 vendor → 不产生告警."""
+        import logging as _logging
+
+        tiers = [_make_tier(_mock_vendor("zhipu"))]
+        with caplog.at_level(_logging.WARNING, logger="coding.proxy.routing.executor"):
+            _executor(
+                tiers=tiers,
+                session_policy_resolver=SessionPolicyResolver(),
+                title_vendor_bindings=[
+                    TitleVendorBinding(prefix="# 目标", vendor="zhipu")
+                ],
+            )
+        binding_warnings = [
+            r for r in caplog.records if "title_vendor_bindings" in r.message
+        ]
+        assert not binding_warnings
