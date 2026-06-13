@@ -228,26 +228,26 @@ failover:
 # === 模型映射 ===
 model_mapping:
   # GitHub Copilot 可用模型（通过 /api/copilot/models 诊断获取）
-  - pattern: "claude-sonnet-.*"
-    vendors: ["copilot"]
-    target: "claude-sonnet-4.6"
-    is_regex: true
   - pattern: "claude-opus-.*"
     vendors: ["copilot"]
     target: "claude-opus-4.6"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    vendors: ["copilot"]
+    target: "claude-sonnet-4.6"
     is_regex: true
   - pattern: "claude-haiku-.*"
     vendors: ["copilot"]
     target: "claude-haiku-4.5"
     is_regex: true
   # Google Antigravity 模型映射
-  - pattern: "claude-sonnet-.*"
-    vendors: ["antigravity"]
-    target: "Claude Sonnet 4.6"
-    is_regex: true
   - pattern: "claude-opus-.*"
     vendors: ["antigravity"]
     target: "Claude Opus 4.6 Thinking"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    vendors: ["antigravity"]
+    target: "Claude Sonnet 4.6"
     is_regex: true
   - pattern: "claude-haiku-.*"
     vendors: ["antigravity"]
@@ -255,24 +255,24 @@ model_mapping:
     is_regex: true
   # 智谱 GLM 映射（官方原生 Anthropic 兼容端点）
   # glm-5v-turbo 完整承载 Claude Code 满血能力（tool calling / thinking / 多模态）
-  - pattern: "claude-sonnet-.*"
-    vendors: ["zhipu"]
-    target: "glm-5v-turbo"
-    is_regex: true
   - pattern: "claude-opus-.*"
+    vendors: ["zhipu"]
+    target: "glm-5.2"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
     vendors: ["zhipu"]
     target: "glm-5.1"
     is_regex: true
   - pattern: "claude-haiku-.*"
     vendors: ["zhipu"]
-    target: "glm-4.5-air"
+    target: "glm-5.1"
     is_regex: true
   # MiniMax 模型映射（原生 Anthropic 兼容端点）
-  - pattern: "claude-sonnet-.*"
+  - pattern: "claude-opus-.*"
     vendors: ["minimax"]
     target: "minimax-m2.7"
     is_regex: true
-  - pattern: "claude-opus-.*"
+  - pattern: "claude-sonnet-.*"
     vendors: ["minimax"]
     target: "minimax-m2.7"
     is_regex: true
@@ -281,11 +281,11 @@ model_mapping:
     target: "minimax-m2.7"
     is_regex: true
   # 阿里 Qwen 模型映射（原生 Anthropic 兼容端点）
-  - pattern: "claude-sonnet-.*"
+  - pattern: "claude-opus-.*"
     vendors: ["alibaba"]
     target: "qwen3.6-plus"
     is_regex: true
-  - pattern: "claude-opus-.*"
+  - pattern: "claude-sonnet-.*"
     vendors: ["alibaba"]
     target: "qwen3.6-plus"
     is_regex: true
@@ -294,11 +294,11 @@ model_mapping:
     target: "qwen3.6-plus"
     is_regex: true
   # 小米 MiMo 模型映射（原生 Anthropic 兼容端点）
-  - pattern: "claude-sonnet-.*"
+  - pattern: "claude-opus-.*"
     vendors: ["xiaomi"]
     target: "mimo-v2-pro"
     is_regex: true
-  - pattern: "claude-opus-.*"
+  - pattern: "claude-sonnet-.*"
     vendors: ["xiaomi"]
     target: "mimo-v2-pro"
     is_regex: true
@@ -307,11 +307,11 @@ model_mapping:
     target: "mimo-v2-pro"
     is_regex: true
   # Kimi 模型映射（原生 Anthropic 兼容端点）
-  - pattern: "claude-sonnet-.*"
+  - pattern: "claude-opus-.*"
     vendors: ["kimi"]
     target: "kimi-k2.5"
     is_regex: true
-  - pattern: "claude-opus-.*"
+  - pattern: "claude-sonnet-.*"
     vendors: ["kimi"]
     target: "kimi-k2.5"
     is_regex: true
@@ -339,6 +339,12 @@ model_mapping:
 # 未配置定价的模型在统计中 Cost 列显示 "-"
 pricing:
   # ── Anthropic Claude ──
+  - vendor: anthropic
+    model: claude-fable-5
+    input_cost_per_mtok: $10.0
+    output_cost_per_mtok: $50.0
+    cache_write_cost_per_mtok: $12.50
+    cache_read_cost_per_mtok: $1.00
   - vendor: anthropic
     model: claude-opus-4-8
     input_cost_per_mtok: $5.0
@@ -527,20 +533,10 @@ pricing:
     cache_read_cost_per_mtok: $0.05
   # ── 智谱 GLM ──
   - vendor: zhipu
-    model: glm-4.5-air # 待区分长短上下文定价
-    input_cost_per_mtok: ¥0.80
-    output_cost_per_mtok: ¥2.00
-    cache_read_cost_per_mtok: ¥0.16
-  - vendor: zhipu
-    model: glm-4.7 # 待区分长短上下文定价
-    input_cost_per_mtok: ¥2.00
-    output_cost_per_mtok: ¥8.00
-    cache_read_cost_per_mtok: ¥0.40
-  - vendor: zhipu
-    model: glm-5v-turbo # 待区分长短上下文定价
-    input_cost_per_mtok: ¥5.00
-    output_cost_per_mtok: ¥22.00
-    cache_read_cost_per_mtok: ¥1.20
+    model: glm-5.2 # 待区分长短上下文定价
+    input_cost_per_mtok: ¥6.00
+    output_cost_per_mtok: ¥24.00
+    cache_read_cost_per_mtok: ¥1.30
   - vendor: zhipu
     model: glm-5.1 # 待区分长短上下文定价
     input_cost_per_mtok: ¥6.00
@@ -556,6 +552,21 @@ pricing:
     input_cost_per_mtok: ¥4.00
     output_cost_per_mtok: ¥18.00
     cache_read_cost_per_mtok: ¥1.00
+  - vendor: zhipu
+    model: glm-5v-turbo # 待区分长短上下文定价
+    input_cost_per_mtok: ¥5.00
+    output_cost_per_mtok: ¥22.00
+    cache_read_cost_per_mtok: ¥1.20
+  - vendor: zhipu
+    model: glm-4.7 # 待区分长短上下文定价
+    input_cost_per_mtok: ¥2.00
+    output_cost_per_mtok: ¥8.00
+    cache_read_cost_per_mtok: ¥0.40
+  - vendor: zhipu
+    model: glm-4.5-air # 待区分长短上下文定价
+    input_cost_per_mtok: ¥0.80
+    output_cost_per_mtok: ¥2.00
+    cache_read_cost_per_mtok: ¥0.16
   # ── MiniMax ──
   - vendor: minimax
     model: minimax-m2.7
