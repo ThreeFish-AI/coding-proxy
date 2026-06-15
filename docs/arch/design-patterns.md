@@ -541,6 +541,8 @@ $$
 
 > **参数默认值**：参见 [配置参考 -- RetryConfig](./config-reference.md#elastic-params)
 
+**Vendor 级应用（Zhipu 429/529 内部退避重试）**：[`vendors/zhipu.py`](../../src/coding/proxy/vendors/zhipu.py) 复用 `RetryConfig` / `calculate_delay()`，在 `send_message` / `send_message_stream` 内对 **429 Rate Limit（限流）** 与 **529 Overloaded（并发过载）** 两类服务端瞬态过载信号做就地指数退避重试（共用 `_BACKOFF_RETRY_STATUS = {429, 529}` 作单一事实源，max=5、1s→2s→4s→8s、Full Jitter，优先尊重 server `retry-after`）。耗尽重试后将状态码原样返回，交由上层 `should_trigger_failover`（§3.6 VendorTier）与 [CircuitBreaker](#circuit-breaker) 处理，从而降低 failover 频率。
+
 ---
 
 ## 3.13 Rate Limit Deadline Tracking（速率限制截止追踪）
