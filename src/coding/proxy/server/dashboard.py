@@ -11,28 +11,106 @@ from fastapi.responses import HTMLResponse, Response
 
 from ..logging.db import TimePeriod
 
+# ── 品牌图标：Tabler terminal-2 核心笔划（> 与 _），不含外框 ──────────────
+# 外框由「蓝紫渐变圆角方块」容器承载（favicon SVG 的 <rect> 与页面 .logo 的 CSS
+# 渐变），保留 Tabler 原始外框笔划会双重描边、边缘发糊，故仅取 > 与 _ 两条。
+# 作为单一事实源，同时供 favicon SVG（f-string）与页面 logo（{{TERMINAL2}} 模板替换）消费。
+_TERMINAL2_PATHS = '<path d="M8 9l3 3l-3 3" /><path d="M13 15l3 0" />'
 
-# ── Favicon (16×16, 蓝紫渐变) ────────────────────────────────────────────
+
+# ── Favicon (SVG, 现代浏览器主选) ──────────────────────────────────────────
+def _build_favicon_svg() -> str:
+    """生成 24×24 SVG favicon：品牌渐变圆角方块 + 白色 terminal-2 笔划.
+
+    独立 SVG 文档无 CSS 上下文，``currentColor`` 不可靠，故笔划硬编码 ``#ffffff``。
+    """
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
+        '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+        '<stop offset="0" stop-color="#667eea"/>'
+        '<stop offset="1" stop-color="#764ba2"/>'
+        "</linearGradient></defs>"
+        '<rect x="1" y="1" width="22" height="22" rx="6" fill="url(#g)"/>'
+        f'<g fill="none" stroke="#ffffff" stroke-width="2" '
+        f'stroke-linecap="round" stroke-linejoin="round">{_TERMINAL2_PATHS}</g>'
+        "</svg>"
+    )
+
+
+# ── Favicon (ICO, 32×32 光栅回退) ─────────────────────────────────────────
 def _build_favicon() -> bytes:
-    """程序化生成 16×16 ICO，蓝紫渐变与 Dashboard Logo 一致."""
+    """程序化生成 32×32 ICO：品牌渐变圆角方块 + 白色 terminal-2 笔划（旧浏览器/Safari 回退）.
+
+    项目无 Pillow/cairosvg 等图像库，故以纯 Python 按像素光栅化：渐变圆角方块背景
+    + 白色 ``>`` 折线与 ``_`` 下划线。沿用原实现「全零 AND-mask + per-pixel alpha」
+    的圆角透明方案（现代渲染器按 alpha 通道处理透明）。
+    """
+    import math
     import struct
 
-    width, height = 16, 16
+    width = height = 32
+    radius = 8
+    scale = width / 24.0  # SVG 24 单位 -> 像素
+
+    r0, g0, b0 = 0x66, 0x7E, 0xEA  # #667eea
+    r1, g1, b1 = 0x76, 0x4B, 0xA2  # #764ba2
+
+    def inside(x: int, y: int) -> bool:
+        """满铺圆角方块（四角半径 radius）包含判定."""
+        cx = min(x, width - 1 - x)
+        cy = min(y, height - 1 - y)
+        if cx >= radius or cy >= radius:
+            return True
+        return (radius - cx) ** 2 + (radius - cy) ** 2 <= radius * radius
+
+    # 像素缓冲：[B, G, R, A]，默认全透明
+    buf: list[list[list[int]]] = [
+        [[0, 0, 0, 0] for _ in range(width)] for _ in range(height)
+    ]
+
+    # 1) 对角渐变圆角背景（左上 #667eea -> 右下 #764ba2）
+    for y in range(height):
+        for x in range(width):
+            if not inside(x, y):
+                continue
+            t = (x + y) / (width + height - 2)
+            buf[y][x] = [
+                int(b0 + (b1 - b0) * t),
+                int(g0 + (g1 - g0) * t),
+                int(r0 + (r1 - r0) * t),
+                255,
+            ]
+
+    def stamp(px: float, py: float) -> None:
+        """以 (px, py) 为中心盖 ~3px 白色方块（笔划加粗，保证小尺寸可辨识）."""
+        ix, iy = int(round(px)), int(round(py))
+        for oy in (-1, 0, 1):
+            for ox in (-1, 0, 1):
+                nx, ny = ix + ox, iy + oy
+                if 0 <= nx < width and 0 <= ny < height:
+                    buf[ny][nx] = [255, 255, 255, 255]
+
+    def line(x0: float, y0: float, x1: float, y1: float) -> None:
+        """稠密采样 + stamp 形成白色粗线段."""
+        dist = math.hypot(x1 - x0, y1 - y0)
+        steps = max(1, int(dist * 3))
+        for i in range(steps + 1):
+            s = i / steps
+            stamp(x0 + (x1 - x0) * s, y0 + (y1 - y0) * s)
+
+    # 2) terminal-2 笔划（SVG 24 单位 -> 像素）
+    #    > 折线 (8,9)->(11,12)->(8,15)；_ 下划线 (13,15)->(16,15)
+    line(8 * scale, 9 * scale, 11 * scale, 12 * scale)
+    line(11 * scale, 12 * scale, 8 * scale, 15 * scale)
+    line(13 * scale, 15 * scale, 16 * scale, 15 * scale)
+
+    # 3) 打包 ICO（BMP bottom-up；全零 AND-mask，信任 per-pixel alpha 实现圆角透明）
     pixel_rows: list[bytes] = []
-    cx, cy = width / 2.0, height / 2.0
     for y in range(height - 1, -1, -1):  # BMP bottom-up
         row = bytearray()
         for x in range(width):
-            dx = x - cx + 0.5
-            dy = y - cy + 0.5
-            if dx * dx + dy * dy > (width / 2.0) ** 2:
-                row.extend([0, 0, 0, 0])  # 圆外透明
-            else:
-                t = (x + (height - 1 - y)) / (width + height - 2)
-                r = int(88 + (188 - 88) * t)
-                g = int(166 + (140 - 166) * t)
-                b = 255
-                row.extend([b, g, r, 255])  # BGRA
+            b, g, r, a = buf[y][x]
+            row.extend([b, g, r, a])  # BGRA
         pixel_rows.append(bytes(row))
 
     bmp_hdr = struct.pack(
@@ -50,6 +128,7 @@ def _build_favicon() -> bytes:
 
 
 _FAVICON_ICO: bytes = _build_favicon()
+_FAVICON_SVG: str = _build_favicon_svg()
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +140,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Coding Proxy Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -127,9 +207,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       background: var(--gradient-primary);
       border-radius: 10px;
       display: flex; align-items: center; justify-content: center;
-      font-size: 15px; font-weight: 700; color: #fff;
       box-shadow: 0 4px 12px rgba(102,126,234,.25);
     }
+    .logo svg { width: 20px; height: 20px; display: block; }
     h1 { font-size: 18px; font-weight: 600; color: var(--text-primary); letter-spacing: -.3px; }
     .header-right { display: flex; align-items: center; gap: 12px; }
     .badge {
@@ -705,7 +785,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <body>
 <header>
   <div class="header-left">
-    <div class="logo">C</div>
+    <div class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{{TERMINAL2}}</svg></div>
     <h1>Coding Proxy Dashboard</h1>
     <span class="badge" id="version-badge">v-.-.-</span>
   </div>
@@ -2127,7 +2207,7 @@ function switchTab(name) {
 </script>
 </body>
 </html>
-"""
+""".replace("{{TERMINAL2}}", _TERMINAL2_PATHS)
 
 
 # ── 数据计算工具 ──────────────────────────────────────────────────────────
@@ -2203,6 +2283,11 @@ def register_dashboard_routes(app: Any) -> None:
     async def favicon() -> Response:
         """返回内嵌 favicon."""
         return Response(content=_FAVICON_ICO, media_type="image/x-icon")
+
+    @app.get("/favicon.svg", include_in_schema=False)
+    async def favicon_svg() -> Response:
+        """返回 SVG favicon（现代浏览器优先）."""
+        return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
 
     @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
     async def dashboard() -> HTMLResponse:
