@@ -847,3 +847,45 @@ class TestRateLimitRetry:
         assert len(sleep_delays) == 1
         # retry-after=2 → 2 * 1.1 = 2.2s（>1s 指数退避首跳，证明用了 server 信号）
         assert 2.0 <= sleep_delays[0] <= 2.2
+
+    @pytest.mark.asyncio
+    async def test_529_equal_jitter_delay_in_expected_band(self):
+        """非流式 529 无 retry-after 时，Equal Jitter 首跳落在 [0.5, 1.0]s。
+
+        回归保障：Full Jitter 时首跳为 uniform(0, 1000ms)，可能接近 0ms
+        （用户报告的 418.8ms 落在 (0, 1000] 全区间，且整体序列非单调）。
+        Equal Jitter 后区间收窄为 [500, 1000]ms，下界抬升至 500ms，
+        呈现单调非递减的指数退避形态，429/529 同步受益（共用 calculate_delay）。
+        """
+        vendor = _make_zhipu_vendor()
+        sleep_delays = []
+
+        async def mock_sleep(delay):
+            sleep_delays.append(delay)
+
+        call_count = 0
+
+        async def mock_post(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_529_response()  # 无 retry-after
+            return _make_200_response()
+
+        with (
+            patch.object(vendor, "_get_client") as mock_client,
+            patch("asyncio.sleep", side_effect=mock_sleep),
+        ):
+            client = AsyncMock()
+            client.post = mock_post
+            mock_client.return_value = client
+
+            resp = await vendor.send_message(
+                {"model": "claude-sonnet-4-20250514", "messages": []},
+                {},
+            )
+
+        assert resp.status_code == 200
+        assert len(sleep_delays) == 1
+        # Equal Jitter: attempt 0 → temp=1000ms → [500, 1000]ms → sleep([0.5, 1.0])
+        assert 0.5 <= sleep_delays[0] <= 1.0
