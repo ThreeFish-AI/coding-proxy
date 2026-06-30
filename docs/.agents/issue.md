@@ -4,6 +4,49 @@
 
 ---
 
+## Zhipu 529 过载重试退避非单调（对齐 429 指数退避语义）
+
+**问题描述**
+
+cc 调用 zhipu 返回 529 过载触发重试时，延迟序列呈非单调形态（实测 `418.8ms → 1857.7ms → 961.6ms → 3769.7ms`，第 3 次反而短于第 2 次），不像 429 那样呈现干净的指数退避。
+
+**表因**
+
+`src/coding/proxy/routing/retry.py::calculate_delay` 的兜底抖动为 **Full Jitter**：`delay = random.uniform(0, ceiling)`，每次延迟是 `[0, ceiling]` 区间均匀随机值，本质非单调。实测值逐项精确匹配 `attempt 0/1/2/3` 的 `uniform(0,1000)/(0,2000)/(0,4000)/(0,8000)`。
+
+**根因**
+
+关键认知修正：429 与 529 在代码层面**早已共用同一退避路径** `ZhipuVendor._compute_retry_delay_from_headers`（`vendors/zhipu.py:230-247`），并非"两套规则"。感知差异来自两个因素叠加：
+
+1. **服务端响应头不对称**：429（限流）响应通常携带 `Retry-After` 头 → 走确定性 server-guided 路径（`retry_after * 1.1`），看起来"干净递增"；529（过载）响应通常**不携带**该头 → 落入 Full Jitter 兜底分支。
+2. **Full Jitter 本身非单调**：即使 429 也一样，只是 429 多数情况有 `Retry-After` 遮蔽了该问题。
+
+故真正修复对象是共享的抖动策略，而非给 529 单独加逻辑。
+
+**处理方式**
+
+将 `calculate_delay` 从 Full Jitter 改为 **Equal Jitter**（AWS M. Brooker, "Exponential Backoff And Jitter," 2015）：
+
+```
+temp  = min(initial * backoff^attempt, max)
+delay = temp/2 + random.uniform(0, temp/2)      # [temp/2, temp]
+```
+
+Zhipu 配置下区间变为 `[500,1000] → [1000,2000] → [2000,4000] → [4000,8000]`，相邻区间仅边界相切，延迟几乎必然单调非递减；保留抖动以防惊群；429/529 同步受益；`retry-after` 优先级链不动。同步更新 `retry.py` / `zhipu.py` 共 4 处 "Full Jitter" docstring，新增 `tests/test_retry.py` 独立单元测试与 `test_zhipu.py::test_529_equal_jitter_delay_in_expected_band`。
+
+**后续防范**
+
+- **单调性是配置相关的弱保证**：依赖 `backoff_multiplier >= 2.0` 且未触及 `max_delay_ms` 封顶。封顶后（`initial*2^attempt >= max`）各 attempt 区间退化为同一 `[max/2, max]`，单调性丧失。当前 Zhipu `max_retries=4` 触及不到，但未来调参须注意。函数 docstring 已写明此契约边界。
+- **诚实权衡（Brooker 反方观点）**：Brooker 2015 分布式吞吐基准显示 Full Jitter 优于 Equal Jitter。但本场景是单代理（CC）低并发过载恢复，诉求是可解释性（日志递增可预测）而非分布式吞吐最优，CC 并发量级远未达"海量"，差异在噪声内。若未来观测到并发过载下的惊群回归，应优先要求 server 提供 `retry-after` 或评估 Decorrelated Jitter，而非回退 Full Jitter。
+
+**同类问题影响与处理注意事项**
+
+- **双 `RetryConfig` 死代码（重要遗留债）**：仓库存在两个 `RetryConfig`——`routing/retry.py:25`（活跃 dataclass，仅 Zhipu 用）与 `config/resiliency.py:15`（Pydantic 死代码，`config/routing.py:285` 注册为 `retry` 字段但 `VendorTier.retry_config` 从未赋值，全仓库 `grep "retry_config="` 为空）。`docs/arch/routing.md:22` 与 `config-reference.md:95` 引用了不同的 `RetryConfig`，构成认知陷阱。本次修复**未触碰**死代码（超出范围），后续应单独清理。这也是本次"为何选方案 A（直改 `calculate_delay`）而非方案 B（加可配置 jitter_strategy 字段）"的决定性理由——方案 B 会扩大 schema 与运行时的裂缝。
+- **`calculate_delay` 唯一消费者确证**：经全仓库 grep，仅 `vendors/zhipu.py:247` 调用（`routing/__init__.py` 仅 re-export，`tier.retry_config` 字段未激活）。修改其抖动策略爆炸半径仅限 Zhipu，安全。
+- **测试缺口已补**：修复前 `calculate_delay` 无任何独立单元测试（仅通过 zhipu 集成测试间接覆盖，且那些测试要么禁用 jitter、要么走 retry-after 路径），现已新建 `tests/test_retry.py`。
+
+---
+
 ## streaming usage parse failed: 'NoneType' object has no attribute 'get'
 
 **问题描述**

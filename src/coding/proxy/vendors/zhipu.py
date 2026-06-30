@@ -16,7 +16,7 @@ Anthropic Messages API 协议，本模块做以下适配：
 额外提供 429/529 专用重试挽回机制：
   - 429 Rate Limit（限流）与 529 Overloaded（并发过载）共用同一退避策略
   - max_attempt = 5（1 初始 + 4 重试）
-  - 指数退避 + Full Jitter（1s → 2s → 4s → 8s）
+  - 指数退避 + Equal Jitter（区间 0.5–1s → 1–2s → 2–4s → 4–8s）
   - 优先尊重 server retry-after header
 
 并发限流由 BaseVendor._concurrency_controller 统一管控
@@ -238,7 +238,7 @@ class ZhipuVendor(NativeAnthropicVendor):
         以"限流退避"语义（429）解析 header：``parse_rate_limit_headers``
         仅对 429/403 解析 retry-after，故此处固定传 429，
         使 529 也能尊重 server retry-after，与 429 行为一致。
-        无 server 信号时回退到指数退避 + Full Jitter。
+        无 server 信号时回退到指数退避 + Equal Jitter。
         """
         rl_info = parse_rate_limit_headers(headers, 429, None)
         server_delay_s = compute_effective_retry_seconds(rl_info)

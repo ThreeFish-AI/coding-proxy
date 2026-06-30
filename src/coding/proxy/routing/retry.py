@@ -1,4 +1,4 @@
-"""传输层重试策略 — 指数退避与 Full Jitter.
+"""传输层重试策略 — 指数退避与 Equal Jitter.
 
 与 Circuit Breaker 正交互：
 - Retry 处理瞬态网络抖动（秒级恢复）
@@ -68,15 +68,24 @@ def is_retryable_status(status_code: int) -> bool:
 
 
 def calculate_delay(attempt: int, cfg: RetryConfig) -> float:
-    """计算第 N 次重试的延迟（毫秒），含指数退避和 Full Jitter.
+    """计算第 N 次重试的延迟（毫秒），含指数退避和 Equal Jitter.
 
-    Full Jitter 策略: delay = random(0, min(initial * backoff^attempt, max))
+    Equal Jitter 策略: temp = min(initial * backoff^attempt, max);
+    delay = temp/2 + random(0, temp/2)，落在 [temp/2, temp]。
+    相较 Full Jitter (random(0, temp))，Equal Jitter 保留一半固定基线，
+    使相邻重试的延迟区间仅边界相切，呈现单调非递减的指数形态，
+    同时保留抖动以防惊群。
+
+    契约边界：单调非递减依赖 ``backoff_multiplier >= 2.0`` 且未触及
+    ``max_delay_ms`` 封顶；封顶后各 attempt 区间退化为同一 [max/2, max]
+    （当前 Zhipu ``max_retries=4`` 触及不到该边界）。
+
     参考: AWS "Exponential Backoff And Jitter" (Marc Brooker, 2015)
     """
     delay = cfg.initial_delay_ms * (cfg.backoff_multiplier**attempt)
     delay = min(delay, cfg.max_delay_ms)
 
     if cfg.jitter:
-        delay = random.uniform(0, delay)
+        delay = delay / 2 + random.uniform(0, delay / 2)
 
     return delay
