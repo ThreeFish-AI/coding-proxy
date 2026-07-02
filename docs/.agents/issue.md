@@ -4,6 +4,37 @@
 
 ---
 
+## Session 标题豁免前缀对 `[Session]` 兜底标题不生效（豁免仅 Level 1 生效）
+
+**问题描述**
+
+用户在 `session_policies.title_exempt_prefixes` 配置中加入 `"[Session]"`，期望过滤掉 `[Session] claude-opus-4-8` 这类不预期标题（此前已用同机制成功豁免 `Write the title in the language ...` 注入式 Prompt）。但配置后无效——`[Session] claude-opus-4-8` 仍被写入 Session 标题。
+
+**表因**
+
+`[Session] claude-opus-4-8` **不是用户输入**，而是标题提取 Level 4 元数据兜底（`_extract_title_from_metadata`，`f"[Session] {request.model}"`）的产物。用户误以为它来自 user 文本，故尝试用 `title_exempt_prefixes` 豁免。
+
+**根因**
+
+`_extract_session_title`（`routing/executor.py`）采用 4 层回退，但 `exempt_prefixes` **仅在 Level 1**（`_extract_title_from_user_text`）消费——这是原始设计：v0.5.2a1 #265 引入该配置时仅覆盖 L1，docstring 明写「Level 2/3/4 不参与豁免」。Level 2/3/4 的合成标题（`[Tool output]` / `[N Image]` / `[Tool call]` / `[Session]`）完全不查询豁免名单。故用户配的 `"[Session]"` 只进到 L1，对 L4 兜底标题毫无作用——这是「配了却不生效」的根本原因，**非配置错误**。
+
+**处理方式**
+
+在 `_extract_session_title` 编排层引入 `_is_exempt` 闭包，对 L1/L2/L3/L4 每层候选统一做大小写敏感 `startswith` 拦截，命中则向下一层回退、全豁免返回空串。返回空串触发调用方 `if title:` 跳过写库，标题保持空，待后续请求带真实 user 文本时经 `update_empty_session_title` 回填。L1 内部「逐条消息跳过」语义不变，外层闭包作一致性兜底；并补入参空串前缀防御。**默认行为零影响**（不添加前缀则不豁免）；**不**把合成前缀塞进默认 config，避免误杀正常 `[Tool output]` 标题。新增 8 个回归测试（含 mock recorder 验证写库跳过）。
+
+**后续防范**
+
+- **新增合成兜底标题须纳入豁免链路**：未来若在 L2/L3/L4 增加新的 `f"[Xxx] ..."` 合成标题，编排层的 `_is_exempt` 自动覆盖（无需改子函数），但应在 `config.default.yaml` 注释里补充示例前缀，提示用户可豁免。
+- **空串前缀恒真陷阱**：`"".startswith` 恒真会豁免一切。配置层 field_validator、构造器、模块函数入参已三重过滤，任何新增的 startswith 豁免/绑定逻辑都须保留空串防御。
+
+**同类问题影响与处理注意事项**
+
+- **`[Session] <model>` 触发条件**：请求无可提取的 user TEXT / TOOL_RESULT / IMAGE / tool_names，只剩 model 字段（典型如首条消息全是 `<system-reminder>` 噪声、或仅 assistant 消息的续接请求）。排查此类标题应优先确认请求体内容，而非怀疑配置。
+- **豁免语义边界**：豁免 =「跳过该候选、继续向下一层回退」，非「替换为别的标题」。L4 是最后一层，被豁免只能落到空串；依赖标题触发 `_apply_title_based_policy` 供应商自动绑定的场景，空标题不会触发绑定（预期副作用，语义自洽）。
+- **不要把合成前缀写进默认配置**：`[Tool output]` 等对用户有信息量，默认豁免会造成正常工具结果摘要标题消失的回归。
+
+---
+
 ## Zhipu 529 过载重试退避非单调（对齐 429 指数退避语义）
 
 **问题描述**
