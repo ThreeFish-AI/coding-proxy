@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v0.5.2a3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a3) - 2026-07-02
+
+- fix(session): 标题豁免前缀扩展至全层级兜底标题，修复 `[Session] <model>` 等 Level 4 合成标题无法豁免（原 `title_exempt_prefixes` 仅 Level 1 生效）；改为在 `_extract_session_title` 编排层对 L1/L2/L3/L4 候选统一拦截，命中回退、全豁免返回空串待后续真实输入回填，默认行为零影响 (#267)；
+
 ## [v0.5.2a2](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a2) - 2026-07-02
 
 - feat(session): 新增 Session 标题豁免前缀配置 `title_exempt_prefixes`，过滤注入式 Prompt（典型如 "Write the title in the language the user wrote in..."）被误用为 Session 标题；首条 user 输入经噪声剥离后命中豁免前缀则跳过、继续向后查找 title 候选，Level 2/3/4 回退不受影响 (#265)；
