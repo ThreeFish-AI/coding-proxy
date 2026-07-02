@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -2483,6 +2483,97 @@ class TestExtractSessionTitle:
         # L2 不受豁免影响，正常提取并加 [Tool output] 前缀
         assert title == "[Tool output] Write the title in the language ..."
 
+    # ── 豁免前缀对合成兜底标题（Level 2/3/4）统一生效 ──
+
+    def test_exempt_l4_session_title_returns_empty(self):
+        """L4 兜底 [Session] 标题命中豁免前缀 → 回退耗尽 → 返回空串."""
+        req = self._build_request(
+            [{"role": "user", "content": "<system-reminder>纯噪声</system-reminder>"}]
+        )
+        # L1 噪声剥离为空 → L4 产出 "[Session] test" → 命中 "[Session]" 豁免
+        assert _extract_session_title(req, exempt_prefixes=["[Session]"]) == ""
+
+    def test_exempt_l4_tool_call_title_returns_empty(self):
+        """L4 兜底 [Tool call] 标题命中豁免前缀 → 返回空串."""
+        req = build_canonical_request(
+            {"model": "test", "messages": [], "tools": [{"name": "Bash"}]}, {}
+        )
+        assert _extract_session_title(req, exempt_prefixes=["[Tool call]"]) == ""
+
+    def test_exempt_l4_unmatched_keeps_original(self):
+        """豁免前缀不命中 L4 实际标题时维持原行为（不误豁免）."""
+        req = build_canonical_request(
+            {"model": "test", "messages": [], "tools": [{"name": "Bash"}]}, {}
+        )
+        # L4 产出 "[Tool call] Bash"，豁免前缀 "[Session]" 不命中 → 原样返回
+        assert (
+            _extract_session_title(req, exempt_prefixes=["[Session]"])
+            == "[Tool call] Bash"
+        )
+
+    def test_exempt_l2_tool_output_falls_through_to_l4(self):
+        """L2 合成标题 [Tool output] 命中豁免 → 跳过 L2、回退到 L4."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": [{"type": "text", "text": "文件内容摘要"}],
+                    }
+                ],
+            },
+        ]
+        req = self._build_request(messages)
+        # L1 无 user TEXT → L2 "[Tool output] 文件内容摘要" 命中豁免 → 跳过 →
+        # L3 无图 → L4 "[Session] test"（未命中豁免，正常返回）
+        assert (
+            _extract_session_title(req, exempt_prefixes=["[Tool output]"])
+            == "[Session] test"
+        )
+
+    def test_exempt_l3_image_falls_through_to_l4(self):
+        """L3 合成标题 [1 Image] 命中豁免 → 跳过 L3、回退到 L4."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "abc",
+                        },
+                    }
+                ],
+            }
+        ]
+        req = self._build_request(messages)
+        assert (
+            _extract_session_title(req, exempt_prefixes=["[1 Image]"])
+            == "[Session] test"
+        )
+
+    def test_exempt_all_synthetic_layers_returns_empty(self):
+        """四层合成标题全部进豁免名单 → 全部被拦截 → 返回空串（永久空标题可接受）."""
+        req = self._build_request(
+            [{"role": "user", "content": "<system-reminder>纯噪声</system-reminder>"}]
+        )
+        assert (
+            _extract_session_title(
+                req,
+                exempt_prefixes=[
+                    "[Tool output]",
+                    "[1 Image]",
+                    "[Tool call]",
+                    "[Session]",
+                ],
+            )
+            == ""
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 多层级回退标题提取测试
@@ -3191,3 +3282,32 @@ class TestExemptPrefixInjection:
         executor = _executor(title_exempt_prefixes=["", "  ", "\t"])
         assert executor._title_exempt_prefixes == []
         assert executor._extract_session_title(req) == "正常标题"
+
+    def test_executor_exempt_l4_returns_empty(self):
+        """executor 持有 [Session] 豁免 → L4 兜底标题被豁免 → 实例方法返回空串."""
+        req = self._build_request(
+            [{"role": "user", "content": "<system-reminder>纯噪声</system-reminder>"}]
+        )
+        executor = _executor(title_exempt_prefixes=["[Session]"])
+        # L1 噪声剥离为空 → L4 "[Session] test" 命中豁免 → 返回 ""
+        assert executor._extract_session_title(req) == ""
+
+    @pytest.mark.asyncio
+    async def test_execute_skips_title_write_when_l4_exempt(self):
+        """端到端: L4 兜底 [Session] 标题命中豁免 → 标题为空 → set_session_title 不被调用."""
+        recorder = UsageRecorder()
+        executor = _executor(
+            recorder=recorder,
+            session_mgr=_stub_session_manager(is_new=True),
+            title_exempt_prefixes=["[Session]"],
+        )
+        body = {
+            "model": "claude-opus-4-8",
+            "metadata": {"user_id": "session-l4"},
+            "messages": [
+                {"role": "user", "content": "<system-reminder>纯噪声</system-reminder>"}
+            ],
+        }
+        with patch.object(recorder, "set_session_title", new=AsyncMock()) as spy:
+            await executor.execute_message(body, {})
+            spy.assert_not_called()
