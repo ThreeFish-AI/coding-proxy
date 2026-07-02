@@ -40,6 +40,7 @@ class RequestRouter:
         compat_session_store: CompatSessionStore | None = None,
         session_policy_resolver: SessionPolicyResolver | None = None,
         title_vendor_bindings: list[TitleVendorBinding] | None = None,
+        title_exempt_prefixes: list[str] | None = None,
     ) -> None:
         if not tiers:
             raise ValueError("至少需要一个供应商层级")
@@ -59,6 +60,7 @@ class RequestRouter:
             reauth_coordinator=reauth_coordinator,
             session_policy_resolver=session_policy_resolver,
             title_vendor_bindings=title_vendor_bindings,
+            title_exempt_prefixes=title_exempt_prefixes,
         )
 
     def set_pricing_table(self, table: PricingTable) -> None:

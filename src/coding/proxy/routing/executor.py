@@ -148,14 +148,30 @@ def _sanitize_user_text(raw: str) -> str:
 # ─────────────────────────────────────────────────────────────────
 
 
-def _extract_title_from_user_text(messages: list[CanonicalMessagePart]) -> str:
-    """Level 1: 从 user TEXT 部分提取经噪声剥离后的首条非空文本."""
+def _extract_title_from_user_text(
+    messages: list[CanonicalMessagePart],
+    exempt_prefixes: list[str] | None = None,
+) -> str:
+    """Level 1: 从 user TEXT 部分提取经噪声剥离后的首条非空文本.
+
+    ``exempt_prefixes`` 非空时，清洗后文本以任一前缀开头则跳过该输入、继续向后
+    查找——用于过滤注入式 Prompt，避免其被误用作 Session 标题。匹配作用于
+    ``_sanitize_user_text`` 清洗后的纯文本（而非带 XML 标签的原始 raw）。
+    """
     for part in messages:
         if part.role != "user" or part.type != CanonicalPartType.TEXT:
             continue
         cleaned = _sanitize_user_text(part.text)
-        if cleaned:
-            return cleaned[:_SESSION_TITLE_MAX_LEN]
+        if not cleaned:
+            continue
+        if exempt_prefixes and any(cleaned.startswith(p) for p in exempt_prefixes):
+            logger.debug(
+                "Title candidate skipped by exempt prefix %r (snippet=%r)",
+                next(p for p in exempt_prefixes if cleaned.startswith(p)),
+                cleaned[:60],
+            )
+            continue
+        return cleaned[:_SESSION_TITLE_MAX_LEN]
     return ""
 
 
@@ -193,15 +209,24 @@ def _extract_title_from_metadata(request: CanonicalRequest) -> str:
     return ""
 
 
-def _extract_session_title(request: CanonicalRequest) -> str:
+def _extract_session_title(
+    request: CanonicalRequest,
+    exempt_prefixes: list[str] | None = None,
+) -> str:
     """从规范化请求中提取 session 标题 — 多层级回退策略。
 
     依次尝试: user TEXT 噪声剥离 → TOOL_RESULT 摘要 → IMAGE 计数 → 元数据兜底。
     任意级别命中即返回,确保 Dashboard 尽可能展示有辨识度的标题。
+
+    ``exempt_prefixes`` 仅作用于 Level 1（用户直接输入的 TEXT）；Level 2/3/4
+    为非用户直接输入的回退来源,不参与豁免。默认 ``None`` 时行为与历史一致。
     """
     messages = request.messages
+    # Level 1 需要豁免前缀；单独调用以传入参数，避免污染 L2/L3 的统一签名。
+    title = _extract_title_from_user_text(messages, exempt_prefixes)
+    if title:
+        return title[:_SESSION_TITLE_MAX_LEN]
     for extractor in (
-        _extract_title_from_user_text,
         _extract_title_from_tool_results,
         _extract_title_from_images,
     ):
@@ -614,6 +639,7 @@ class _RouteExecutor:
         reauth_coordinator: Any | None = None,
         session_policy_resolver: SessionPolicyResolver | None = None,
         title_vendor_bindings: list[TitleVendorBinding] | None = None,
+        title_exempt_prefixes: list[str] | None = None,
     ) -> None:
         self._router = router
         self._tiers = tiers
@@ -622,6 +648,13 @@ class _RouteExecutor:
         self._reauth_coordinator = reauth_coordinator
         self._policy_resolver = session_policy_resolver or SessionPolicyResolver()
         self._title_vendor_bindings = title_vendor_bindings or []
+        # 豁免前缀名单：构造期二次归一化（strip + 去空），双重防御配置层 field_validator。
+        # 即便绕过配置层直接构造 executor，也能避免空串 startswith 恒真与纯空白失配。
+        self._title_exempt_prefixes: list[str] = [
+            stripped
+            for p in (title_exempt_prefixes or [])
+            if isinstance(p, str) and (stripped := p.strip())
+        ]
         self._validate_title_vendor_bindings()
 
         # Tier 名称 → OAuth provider 名称的映射
@@ -675,6 +708,17 @@ class _RouteExecutor:
                 ordered.append(tier)
                 seen.add(tier.name)
         return ordered
+
+    def _extract_session_title(self, request: CanonicalRequest) -> str:
+        """封装模块级标题提取，注入实例持有的豁免前缀名单.
+
+        将 ``self._title_exempt_prefixes`` 透传给模块级 ``_extract_session_title``，
+        使 Level 1 能跳过以豁免前缀开头的注入式 Prompt。4 处标题提取调用点统一
+        经此方法，避免重复透传（零透传污染）。
+        """
+        return _extract_session_title(
+            request, exempt_prefixes=self._title_exempt_prefixes
+        )
 
     def _apply_title_based_policy(self, session_key: str, title: str) -> None:
         """根据 Session 标题前缀自动绑定供应商.
@@ -790,7 +834,7 @@ class _RouteExecutor:
             canonical_request.trace_id,
         )
         if is_new_session:
-            title = _extract_session_title(canonical_request)
+            title = self._extract_session_title(canonical_request)
             if title:
                 await self._recorder.set_session_title(
                     canonical_request.session_key, title
@@ -798,7 +842,7 @@ class _RouteExecutor:
                 self._apply_title_based_policy(canonical_request.session_key, title)
         else:
             # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
-            title = _extract_session_title(canonical_request)
+            title = self._extract_session_title(canonical_request)
             if title:
                 await self._recorder.update_empty_session_title(
                     canonical_request.session_key, title
@@ -977,7 +1021,7 @@ class _RouteExecutor:
             canonical_request.trace_id,
         )
         if is_new_session:
-            title = _extract_session_title(canonical_request)
+            title = self._extract_session_title(canonical_request)
             if title:
                 await self._recorder.set_session_title(
                     canonical_request.session_key, title
@@ -985,7 +1029,7 @@ class _RouteExecutor:
                 self._apply_title_based_policy(canonical_request.session_key, title)
         else:
             # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
-            title = _extract_session_title(canonical_request)
+            title = self._extract_session_title(canonical_request)
             if title:
                 await self._recorder.update_empty_session_title(
                     canonical_request.session_key, title
