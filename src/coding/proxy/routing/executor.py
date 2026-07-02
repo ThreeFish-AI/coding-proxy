@@ -216,25 +216,45 @@ def _extract_session_title(
     """从规范化请求中提取 session 标题 — 多层级回退策略。
 
     依次尝试: user TEXT 噪声剥离 → TOOL_RESULT 摘要 → IMAGE 计数 → 元数据兜底。
-    任意级别命中即返回,确保 Dashboard 尽可能展示有辨识度的标题。
+    任一层级产出候选且未被豁免即返回,确保 Dashboard 尽可能展示有辨识度的标题。
 
-    ``exempt_prefixes`` 仅作用于 Level 1（用户直接输入的 TEXT）；Level 2/3/4
-    为非用户直接输入的回退来源,不参与豁免。默认 ``None`` 时行为与历史一致。
+    ``exempt_prefixes`` 对所有层级统一生效：任一层产出的候选标题若以任一前缀
+    开头，则视为豁免、继续向下一层回退。Level 1 内部仍保留「逐条消息跳过」
+    语义（清洗后文本以豁免前缀开头则跳过该条、继续查找下一条 user TEXT）；
+    本函数在编排层对每层最终候选再做一次 ``_is_exempt`` 拦截，使 Level 2/3/4
+    的合成标题（如 ``[Tool output]``、``[N Image(s)]``、``[Tool call]``、
+    ``[Session]``）也能被用户显式豁免。全部层级均被豁免时返回空串，调用方
+    ``if title:`` 据此跳过写库，session 标题保持空，待后续请求经
+    ``update_empty_session_title`` 回填有意义标题。默认 ``None`` 时行为与历史一致。
     """
+    # 防御性过滤空串前缀："" startswith 恒真会误豁免一切。入参虽经配置层与
+    # 构造器两层归一化，模块级直接调用（如测试）仍可能传入 [""]，此处兜底。
+    prefixes = [p for p in (exempt_prefixes or []) if p]
+
+    def _is_exempt(candidate: str) -> bool:
+        """候选标题是否命中任一豁免前缀（大小写敏感 startswith）。"""
+        return bool(prefixes) and any(candidate.startswith(p) for p in prefixes)
+
     messages = request.messages
-    # Level 1 需要豁免前缀；单独调用以传入参数，避免污染 L2/L3 的统一签名。
-    title = _extract_title_from_user_text(messages, exempt_prefixes)
-    if title:
+    # Level 1: 内部已对每条 user TEXT 做豁免跳过；外层 _is_exempt 对其最终候选
+    # 再做一次拦截（正常路径下冗余，作为 _sanitize_user_text 一致性兜底）。
+    title = _extract_title_from_user_text(messages, exempt_prefixes=prefixes)
+    if title and not _is_exempt(title):
         return title[:_SESSION_TITLE_MAX_LEN]
+    # Level 2 / Level 3: 候选为合成标题，统一经 _is_exempt 拦截后回退。
     for extractor in (
         _extract_title_from_tool_results,
         _extract_title_from_images,
     ):
         title = extractor(messages)
-        if title:
+        if title and not _is_exempt(title):
             return title[:_SESSION_TITLE_MAX_LEN]
-    # Level 4 依赖 request 元数据,签名不同
-    return _extract_title_from_metadata(request)[:_SESSION_TITLE_MAX_LEN]
+    # Level 4: 签名不同（依赖 request 元数据）。被豁免则落到末尾返回空串，
+    # 使调用方 if title: 跳过写库、保留空标题待后续回填。
+    title = _extract_title_from_metadata(request)
+    if title and not _is_exempt(title):
+        return title[:_SESSION_TITLE_MAX_LEN]
+    return ""
 
 
 def _build_semantic_rejection_diagnostic(body: dict[str, Any]) -> str:

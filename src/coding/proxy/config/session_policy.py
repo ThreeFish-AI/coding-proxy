@@ -84,9 +84,12 @@ class SessionPoliciesConfig(BaseModel):
     title_exempt_prefixes: list[str] = Field(
         default_factory=list,
         description=(
-            "Session 标题豁免前缀名单。当首条 user TEXT 输入（经噪声剥离清洗后）"
-            "以任一前缀开头时，跳过该输入、继续向后查找合适的 title 候选。"
-            "用于过滤注入式 Prompt（如示例语言指令），避免其被误用作 Session 标题。"
+            "Session 标题豁免前缀名单。标题提取的每一层（user TEXT 噪声剥离、"
+            "TOOL_RESULT 摘要、IMAGE 计数、元数据兜底）产出的候选，若以任一前缀"
+            "开头，则视为豁免、继续向下一层回退；全部层级均被豁免时返回空串，"
+            "调用方据此跳过写库，session 标题保持空待后续真实输入回填。"
+            "既用于过滤注入式 Prompt（如示例语言指令），也可豁免无信息量的合成"
+            "兜底标题（如 [Session]、[Tool call]、[Tool output]）。"
             "大小写敏感的 startswith 匹配，与 title_vendor_bindings 语义一致。"
             "加载时会自动 strip + 去空 + 去重；空字符串前缀会被丢弃"
             "（防空串 startswith 恒真导致全量误豁免）。"
