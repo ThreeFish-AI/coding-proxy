@@ -462,6 +462,30 @@ def test_config_parse():
     assert config.policies[0].tiers == ["anthropic", "copilot"]
 
 
+def test_config_exempt_prefixes_default_empty():
+    """未配置时默认空列表."""
+    config = SessionPoliciesConfig()
+    assert config.title_exempt_prefixes == []
+
+
+def test_config_exempt_prefixes_strips_whitespace():
+    """加载时 strip 每个前缀的前后空白."""
+    config = SessionPoliciesConfig(title_exempt_prefixes=["  Write  ", "\tRead\t"])
+    assert config.title_exempt_prefixes == ["Write", "Read"]
+
+
+def test_config_exempt_prefixes_drops_empty_string():
+    """空字符串/纯空白前缀必须丢弃——防空串 startswith 恒真导致全量误豁免."""
+    config = SessionPoliciesConfig(title_exempt_prefixes=["", "   ", "Write"])
+    assert config.title_exempt_prefixes == ["Write"]
+
+
+def test_config_exempt_prefixes_dedupes_preserves_order():
+    """去重并保留首次出现顺序."""
+    config = SessionPoliciesConfig(title_exempt_prefixes=["a", "b", "a", "b", "c"])
+    assert config.title_exempt_prefixes == ["a", "b", "c"]
+
+
 # ── 9. SessionPolicyResolver 运行时可变性 ────────────────────────
 
 

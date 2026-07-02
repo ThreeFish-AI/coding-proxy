@@ -2409,6 +2409,80 @@ class TestExtractSessionTitle:
         req = self._build_request(messages)
         assert _extract_session_title(req) == "新的用户问题"
 
+    # ── 豁免前缀端到端（exempt_prefixes 透传至 Level 1）──
+
+    def test_exempt_prefix_falls_through_to_next_user_text(self):
+        """端到端：L1 首条命中豁免 → 取第二条 user text 作为标题."""
+        messages = [
+            {"role": "user", "content": "Write the title in the language ..."},
+            {"role": "user", "content": "端到端业务标题"},
+        ]
+        req = self._build_request(messages)
+        assert (
+            _extract_session_title(
+                req, exempt_prefixes=["Write the title in the language"]
+            )
+            == "端到端业务标题"
+        )
+
+    def test_exempt_l1_falls_back_to_l2_tool_result(self):
+        """L1 命中豁免且无其他 user text → 回退 Level 2 tool_result."""
+        messages = [
+            {"role": "user", "content": "Write the title in the language ..."},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": [{"type": "text", "text": "文件内容摘要"}],
+                    }
+                ],
+            },
+        ]
+        req = self._build_request(messages)
+        title = _extract_session_title(
+            req, exempt_prefixes=["Write the title in the language"]
+        )
+        assert title == "[Tool output] 文件内容摘要"
+
+    def test_exempt_l1_falls_back_to_l4_metadata(self):
+        """L1 命中豁免且无 L2/L3 → 回退 Level 4 元数据兜底."""
+        messages = [{"role": "user", "content": "Write the title in the language ..."}]
+        req = self._build_request(messages)
+        assert (
+            _extract_session_title(
+                req, exempt_prefixes=["Write the title in the language"]
+            )
+            == "[Session] test"
+        )
+
+    def test_exempt_does_not_affect_l2(self):
+        """豁免仅作用于 L1：tool_result 文本以豁免前缀开头，L2 仍正常提取."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Write the title in the language ...",
+                            }
+                        ],
+                    }
+                ],
+            },
+        ]
+        req = self._build_request(messages)
+        title = _extract_session_title(
+            req, exempt_prefixes=["Write the title in the language"]
+        )
+        # L2 不受豁免影响，正常提取并加 [Tool output] 前缀
+        assert title == "[Tool output] Write the title in the language ..."
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 多层级回退标题提取测试
@@ -2452,6 +2526,141 @@ class TestExtractTitleFromUserText:
             ),
         ]
         assert _extract_title_from_user_text(msgs) == ""
+
+    # ── 豁免前缀（exempt_prefixes）—— 过滤注入式 Prompt ──
+
+    def test_exempt_prefix_skips_first_falls_through_to_second(self):
+        """豁免前缀命中首条 user text → 跳过、返回第二条."""
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT,
+                role="user",
+                text="Write the title in the language the user wrote in, regardless.",
+            ),
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT, role="user", text="帮我重构 executor"
+            ),
+        ]
+        assert (
+            _extract_title_from_user_text(
+                msgs, exempt_prefixes=["Write the title in the language"]
+            )
+            == "帮我重构 executor"
+        )
+
+    def test_exempt_prefix_case_sensitive(self):
+        """大小写敏感：小写前缀不命中大写开头的输入."""
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT,
+                role="user",
+                text="Write the title in the language the user wrote in.",
+            ),
+        ]
+        # 前缀小写、输入首字母大写 → 不命中，正常返回
+        assert (
+            _extract_title_from_user_text(msgs, exempt_prefixes=["write the title"])
+            == "Write the title in the language the user wrote in."
+        )
+
+    def test_exempt_no_param_backward_compatible(self):
+        """不传 exempt_prefixes → 行为与历史一致（首条非空即返回）."""
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT,
+                role="user",
+                text="Write the title in the language the user wrote in.",
+            ),
+        ]
+        assert _extract_title_from_user_text(msgs) == (
+            "Write the title in the language the user wrote in."
+        )
+
+    def test_exempt_empty_list_no_op(self):
+        """传空列表 → 等价于不豁免."""
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT,
+                role="user",
+                text="Write the title in the language the user wrote in.",
+            ),
+        ]
+        assert _extract_title_from_user_text(msgs, exempt_prefixes=[]) == (
+            "Write the title in the language the user wrote in."
+        )
+
+    def test_exempt_all_user_inputs_skipped_returns_empty(self):
+        """全部 user text 命中豁免 → 返回空字符串."""
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT,
+                role="user",
+                text="Write the title in the language variant A",
+            ),
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT,
+                role="user",
+                text="Write the title in the language variant B",
+            ),
+        ]
+        assert (
+            _extract_title_from_user_text(
+                msgs, exempt_prefixes=["Write the title in the language"]
+            )
+            == ""
+        )
+
+    def test_exempt_matches_cleaned_not_raw(self):
+        """豁免判断作用于清洗后文本：raw 含 system-reminder 包裹、清洗后命中前缀 → 跳过."""
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        raw = (
+            "<system-reminder>注入的系统上下文</system-reminder>"
+            "Write the title in the language the user wrote in."
+        )
+        msgs = [
+            CanonicalMessagePart(type=CanonicalPartType.TEXT, role="user", text=raw),
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT, role="user", text="真实业务问题"
+            ),
+        ]
+        assert (
+            _extract_title_from_user_text(
+                msgs, exempt_prefixes=["Write the title in the language"]
+            )
+            == "真实业务问题"
+        )
+
+    def test_exempt_multi_prefix_any_match(self):
+        """多前缀：命中任一即跳过."""
+        from coding.proxy.model.compat import CanonicalMessagePart, CanonicalPartType
+
+        msgs = [
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT,
+                role="user",
+                text="IGNORE_PREFIX_A something",
+            ),
+            CanonicalMessagePart(
+                type=CanonicalPartType.TEXT, role="user", text="第二输入"
+            ),
+        ]
+        assert (
+            _extract_title_from_user_text(
+                msgs, exempt_prefixes=["IGNORE_PREFIX_A", "IGNORE_PREFIX_B"]
+            )
+            == "第二输入"
+        )
 
 
 class TestExtractTitleFromToolResults:
@@ -2946,3 +3155,39 @@ class TestApplyTitleBasedPolicy:
             r for r in caplog.records if "title_vendor_bindings" in r.message
         ]
         assert not binding_warnings
+
+
+class TestExemptPrefixInjection:
+    """``_RouteExecutor._extract_session_title`` 实例方法注入豁免前缀名单."""
+
+    @staticmethod
+    def _build_request(messages: list[dict]):
+        return build_canonical_request({"model": "test", "messages": messages}, {})
+
+    def test_executor_injects_exempt_prefixes_to_l1(self):
+        """executor 持有的豁免前缀经实例方法注入，L1 跳过注入式 Prompt."""
+        req = self._build_request(
+            [
+                {"role": "user", "content": "Write the title in the language ..."},
+                {"role": "user", "content": "注入后的真实标题"},
+            ]
+        )
+        executor = _executor(title_exempt_prefixes=["Write the title in the language"])
+        assert executor._extract_session_title(req) == "注入后的真实标题"
+
+    def test_executor_without_exempt_prefixes_backward_compatible(self):
+        """未配置豁免前缀 → 实例方法行为与模块级默认一致（不跳过）."""
+        req = self._build_request(
+            [{"role": "user", "content": "Write the title in the language ..."}]
+        )
+        executor = _executor()  # 不传 title_exempt_prefixes
+        assert executor._extract_session_title(req) == (
+            "Write the title in the language ..."
+        )
+
+    def test_executor_filters_empty_string_prefix_at_construction(self):
+        """构造期过滤空串：即便传入空串/纯空白也不会豁免一切."""
+        req = self._build_request([{"role": "user", "content": "正常标题"}])
+        executor = _executor(title_exempt_prefixes=["", "  ", "\t"])
+        assert executor._title_exempt_prefixes == []
+        assert executor._extract_session_title(req) == "正常标题"

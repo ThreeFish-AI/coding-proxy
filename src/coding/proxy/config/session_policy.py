@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SessionPolicyMatch(BaseModel):
@@ -81,3 +81,34 @@ class SessionPoliciesConfig(BaseModel):
             "匹配规则按列表顺序求值，首次匹配生效。"
         ),
     )
+    title_exempt_prefixes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Session 标题豁免前缀名单。当首条 user TEXT 输入（经噪声剥离清洗后）"
+            "以任一前缀开头时，跳过该输入、继续向后查找合适的 title 候选。"
+            "用于过滤注入式 Prompt（如示例语言指令），避免其被误用作 Session 标题。"
+            "大小写敏感的 startswith 匹配，与 title_vendor_bindings 语义一致。"
+            "加载时会自动 strip + 去空 + 去重；空字符串前缀会被丢弃"
+            "（防空串 startswith 恒真导致全量误豁免）。"
+        ),
+    )
+
+    @field_validator("title_exempt_prefixes", mode="after")
+    @classmethod
+    def _normalize_exempt_prefixes(cls, value: list[str]) -> list[str]:
+        """归一化豁免前缀：strip + 去空 + 去重保序.
+
+        空字符串前缀必须丢弃——``"".startswith`` 恒真会豁免一切用户输入，
+        导致 Level 1 标题提取永久失效。
+        """
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            cleaned = item.strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            result.append(cleaned)
+        return result
