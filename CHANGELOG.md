@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [v0.5.2a4](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a4) - 2026-07-03
+
+- feat(dashboard): 供应商状态模块支持拖拽调整供应商优先级，新增纯重排序端点 `PUT /api/tier-order`（复用 `router.reorder_tiers`，不重置熔断器/配额守卫/rate limit），拖拽后配额与用量统计保持当日值不变；与 `reset -v` 同源、运行时内存生效，失败自动回滚至服务端真实顺序 (#269)；
+- feat(session): 扩充标题豁免前缀，新增 `[Session]` 过滤注入式 Prompt 候选；
+- chore(pricing): 更新智谱 GLM-5.2 模型定价配置；
+
 ## [v0.5.2a3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a3) - 2026-07-02
 
 - fix(session): 标题豁免前缀扩展至全层级兜底标题，修复 `[Session] <model>` 等 Level 4 合成标题无法豁免（原 `title_exempt_prefixes` 仅 Level 1 生效）；改为在 `_extract_session_title` 编排层对 L1/L2/L3/L4 候选统一拦截，命中回退、全豁免返回空串待后续真实输入回填，默认行为零影响 (#267)；
