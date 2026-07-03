@@ -386,6 +386,53 @@ def register_admin_routes(app: Any, router: Any) -> None:
         )
 
 
+def register_tier_order_route(app: Any, router: Any) -> None:
+    """注册运行时 N-tier 链路顺序调整路由（纯重排序，不重置熔断器/配额守卫）."""
+
+    @app.put("/api/tier-order")
+    async def update_tier_order(request: Request) -> Response:
+        """替换整个 N-tier 链路顺序.
+
+        JSON body: ``{"vendors": ["v1", "v2", ...]}``（需覆盖所有当前启用的 vendor）。
+        与 ``/api/reset`` 的重排序语义一致，但**不会**重置熔断器/配额守卫/rate limit，
+        以保留当日用量统计（供 Web 拖拽调整优先级使用）。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return json_error_response(
+                400, error_type="invalid_request_error", message="body must be JSON"
+            )
+        if not isinstance(body, dict):
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="body must be a JSON object",
+            )
+        raw = body.get("vendors")
+        if not isinstance(raw, list) or not raw:
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="requires non-empty 'vendors' list",
+            )
+        vendor_names = [str(v) for v in raw]
+        try:
+            router.reorder_tiers(vendor_names)
+        except ValueError as exc:
+            return json_error_response(
+                400, error_type="invalid_request_error", message=str(exc)
+            )
+        return Response(
+            content=json.dumps(
+                {"ok": True, "tier_order": router.get_vendor_names()},
+                ensure_ascii=False,
+            ).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+
 def register_session_vendor_routes(app: Any, router: Any) -> None:
     """注册 Session-Vendor 运行时绑定路由."""
 
@@ -518,6 +565,7 @@ def register_all_routes(
     register_concurrency_route(app, router)
     register_copilot_routes(app, router)
     register_admin_routes(app, router)
+    register_tier_order_route(app, router)
     register_session_vendor_routes(app, router)
     if reauth_coordinator:
         register_reauth_routes(app, reauth_coordinator)
