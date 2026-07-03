@@ -12,26 +12,36 @@ from fastapi.responses import HTMLResponse, Response
 from ..logging.db import TimePeriod
 
 # ── 品牌图标：Tabler terminal-2 核心笔划（> 与 _），不含外框 ──────────────
-# 外框由「蓝紫渐变圆角方块」容器承载（favicon SVG 的 <rect> 与页面 .logo 的 CSS
-# 渐变），保留 Tabler 原始外框笔划会双重描边、边缘发糊，故仅取 > 与 _ 两条。
-# 作为单一事实源，同时供 favicon SVG（f-string）与页面 logo（{{TERMINAL2}} 模板替换）消费。
+# 容器为「淡色磨砂卡片」（#f5f6fb 浅底 + 品牌紫描边环），> 与 _ 笔划改用品牌渐变
+# （#667eea -> #764ba2）——色彩反转：品牌紫由背景迁移至图标笔划，轮廓成为视觉主角，
+# 更简约、小尺寸下更清晰（Linear/Vercel 风）。保留 Tabler 原始外框笔划会双重描边、
+# 边缘发糊，故仅取 > 与 _ 两条。
+# 单一事实源：_TERMINAL2_PATHS 与 _LOGO_DEFS 同时供 favicon SVG（f-string）与页面
+# logo（{{TERMINAL2}} / {{LOGO_DEFS}} 模板替换）消费。
+_BRAND_FROM, _BRAND_TO = "#667eea", "#764ba2"
+_LOGO_DEFS = (
+    '<defs><linearGradient id="cpBrand" x1="0" y1="0" x2="1" y2="1">'
+    f'<stop offset="0" stop-color="{_BRAND_FROM}"/>'
+    f'<stop offset="1" stop-color="{_BRAND_TO}"/>'
+    "</linearGradient></defs>"
+)
 _TERMINAL2_PATHS = '<path d="M8 9l3 3l-3 3" /><path d="M13 15l3 0" />'
 
 
 # ── Favicon (SVG, 现代浏览器主选) ──────────────────────────────────────────
 def _build_favicon_svg() -> str:
-    """生成 24×24 SVG favicon：品牌渐变圆角方块 + 白色 terminal-2 笔划.
+    """生成 24×24 SVG favicon：淡色磨砂卡片 + 品牌渐变 terminal-2 笔划.
 
-    独立 SVG 文档无 CSS 上下文，``currentColor`` 不可靠，故笔划硬编码 ``#ffffff``。
+    容器为 ``#f5f6fb`` 浅底圆角方块 + 品牌紫描边环；``>`` 与 ``_`` 笔划由白色改为品牌
+    渐变（``url(#cpBrand)``），使图标轮廓成为主角。独立 SVG 文档无 CSS 上下文，
+    ``currentColor`` 不可靠，故颜色硬编码；``<defs>`` 复用 ``_LOGO_DEFS`` 单一事实源。
     """
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
-        '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
-        '<stop offset="0" stop-color="#667eea"/>'
-        '<stop offset="1" stop-color="#764ba2"/>'
-        "</linearGradient></defs>"
-        '<rect x="1" y="1" width="22" height="22" rx="6" fill="url(#g)"/>'
-        f'<g fill="none" stroke="#ffffff" stroke-width="2" '
+        f"{_LOGO_DEFS}"
+        '<rect x="1" y="1" width="22" height="22" rx="6" fill="#f5f6fb" '
+        'stroke="#667eea" stroke-opacity=".18" stroke-width="1"/>'
+        f'<g fill="none" stroke="url(#cpBrand)" stroke-width="2" '
         f'stroke-linecap="round" stroke-linejoin="round">{_TERMINAL2_PATHS}</g>'
         "</svg>"
     )
@@ -39,11 +49,12 @@ def _build_favicon_svg() -> str:
 
 # ── Favicon (ICO, 32×32 光栅回退) ─────────────────────────────────────────
 def _build_favicon() -> bytes:
-    """程序化生成 32×32 ICO：品牌渐变圆角方块 + 白色 terminal-2 笔划（旧浏览器/Safari 回退）.
+    """程序化生成 32×32 ICO：淡色磨砂卡片 + 品牌渐变 terminal-2 笔划（旧浏览器/Safari 回退）.
 
-    项目无 Pillow/cairosvg 等图像库，故以纯 Python 按像素光栅化：渐变圆角方块背景
-    + 白色 ``>`` 折线与 ``_`` 下划线。沿用原实现「全零 AND-mask + per-pixel alpha」
-    的圆角透明方案（现代渲染器按 alpha 通道处理透明）。
+    项目无 Pillow/cairosvg 等图像库，故以纯 Python 按像素光栅化：``#f5f6fb`` 浅底圆角
+    方块 + 品牌渐变（#667eea -> #764ba2）``>`` 折线与 ``_`` 下划线。沿用原实现「全零
+    AND-mask + per-pixel alpha」的圆角透明方案（现代渲染器按 alpha 通道处理透明）。
+    32px 下细描边环易锯齿，故 ICO 仅保留浅底 + 渐变笔划，精修外观由 SVG 承载。
     """
     import math
     import struct
@@ -52,8 +63,11 @@ def _build_favicon() -> bytes:
     radius = 8
     scale = width / 24.0  # SVG 24 单位 -> 像素
 
-    r0, g0, b0 = 0x66, 0x7E, 0xEA  # #667eea
-    r1, g1, b1 = 0x76, 0x4B, 0xA2  # #764ba2
+    # 图标笔划品牌渐变：#667eea -> #764ba2（与 _LOGO_DEFS 同源）
+    r0, g0, b0 = 0x66, 0x7E, 0xEA
+    r1, g1, b1 = 0x76, 0x4B, 0xA2
+    # 容器底色：#f5f6fb（近白、极浅冷蓝紫）
+    tile_r, tile_g, tile_b = 0xF5, 0xF6, 0xFB
 
     def inside(x: int, y: int) -> bool:
         """满铺圆角方块（四角半径 radius）包含判定."""
@@ -68,30 +82,34 @@ def _build_favicon() -> bytes:
         [[0, 0, 0, 0] for _ in range(width)] for _ in range(height)
     ]
 
-    # 1) 对角渐变圆角背景（左上 #667eea -> 右下 #764ba2）
+    # 1) 浅底圆角背景（扁平 #f5f6fb）
     for y in range(height):
         for x in range(width):
             if not inside(x, y):
                 continue
-            t = (x + y) / (width + height - 2)
-            buf[y][x] = [
-                int(b0 + (b1 - b0) * t),
-                int(g0 + (g1 - g0) * t),
-                int(r0 + (r1 - r0) * t),
-                255,
-            ]
+            buf[y][x] = [tile_b, tile_g, tile_r, 255]
+
+    def brand_at(px: float, py: float) -> tuple[int, int, int]:
+        """按对角参数 t 返回 (px,py) 处的品牌渐变 RGB（与 SVG url(#cpBrand) 同向）."""
+        t = (px + py) / (width + height - 2)
+        return (
+            int(r0 + (r1 - r0) * t),
+            int(g0 + (g1 - g0) * t),
+            int(b0 + (b1 - b0) * t),
+        )
 
     def stamp(px: float, py: float) -> None:
-        """以 (px, py) 为中心盖 ~3px 白色方块（笔划加粗，保证小尺寸可辨识）."""
+        """以 (px, py) 为中心盖 ~3px 品牌渐变方块（笔划加粗，保证小尺寸可辨识）."""
         ix, iy = int(round(px)), int(round(py))
+        cr, cg, cb = brand_at(px, py)
         for oy in (-1, 0, 1):
             for ox in (-1, 0, 1):
                 nx, ny = ix + ox, iy + oy
                 if 0 <= nx < width and 0 <= ny < height:
-                    buf[ny][nx] = [255, 255, 255, 255]
+                    buf[ny][nx] = [cb, cg, cr, 255]
 
     def line(x0: float, y0: float, x1: float, y1: float) -> None:
-        """稠密采样 + stamp 形成白色粗线段."""
+        """稠密采样 + stamp 形成品牌渐变粗线段."""
         dist = math.hypot(x1 - x0, y1 - y0)
         steps = max(1, int(dist * 3))
         for i in range(steps + 1):
@@ -204,10 +222,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .header-left { display: flex; align-items: center; gap: 12px; }
     .logo {
       width: 32px; height: 32px;
-      background: var(--gradient-primary);
+      background: #f5f6fb;
+      border: 1px solid rgba(102,126,234,.18);
       border-radius: 10px;
       display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 4px 12px rgba(102,126,234,.25);
+      box-shadow: 0 4px 12px rgba(102,126,234,.18);
     }
     .logo svg { width: 20px; height: 20px; display: block; }
     h1 { font-size: 18px; font-weight: 600; color: var(--text-primary); letter-spacing: -.3px; }
@@ -799,7 +818,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <body>
 <header>
   <div class="header-left">
-    <div class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{{TERMINAL2}}</svg></div>
+    <div class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="url(#cpBrand)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{{LOGO_DEFS}}{{TERMINAL2}}</svg></div>
     <h1>Coding Proxy Dashboard</h1>
     <span class="badge" id="version-badge">v-.-.-</span>
   </div>
@@ -2333,7 +2352,7 @@ function switchTab(name) {
 </script>
 </body>
 </html>
-""".replace("{{TERMINAL2}}", _TERMINAL2_PATHS)
+""".replace("{{TERMINAL2}}", _TERMINAL2_PATHS).replace("{{LOGO_DEFS}}", _LOGO_DEFS)
 
 
 # ── 数据计算工具 ──────────────────────────────────────────────────────────
