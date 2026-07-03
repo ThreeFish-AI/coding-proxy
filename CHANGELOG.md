@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- style(branding): logo/favicon 容器由「淡色磨砂卡片」改为「玻璃雾卡」（半透明白 ~6-8% + hairline 描边环），与深色毛玻璃 header 语言统一、消除「亮白贴片」压制感；`>_` terminal 笔划加粗 stroke-width 2→2.5，chevron 左移、下划线右移并延长至 5 单位（M6/M13 l5），撑开间距至 4 单位避免粘连、防止下划线小尺寸退化为圆点；深端色 `#764ba2`→`#8b5fd0` 提亮使深底对比达 WCAG 图形 3:1；`.logo` 笔划新增 drop-shadow 辉光、容器改双层 box-shadow（黑投影 + inset 玻璃高光）；favicon 跨浅/深 tab 双主题均可辨识（实机验证）；
+
 ## [v0.5.2a5](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a5) - 2026-07-04
 
 - fix(dashboard): 供应商队列拖拽由原生 HTML5 DnD 改为 Pointer Events 实现，修复 v0.5.2a4 引入的拖拽排序功能在浏览器中无法拖动的问题；引入 4px 拖拽阈值、乐观实时重排与指针捕获机制，同步支持触屏设备；拖拽完成后顺序立即影响 cc 运行时供应商优先级调度（实机验证）；为 `/dashboard` 响应增加 `Cache-Control: no-cache`，防止浏览器缓存旧内联脚本；补齐前端守卫测试断言 (#271)；

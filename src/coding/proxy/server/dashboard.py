@@ -12,36 +12,40 @@ from fastapi.responses import HTMLResponse, Response
 from ..logging.db import TimePeriod
 
 # ── 品牌图标：Tabler terminal-2 核心笔划（> 与 _），不含外框 ──────────────
-# 容器为「淡色磨砂卡片」（#f5f6fb 浅底 + 品牌紫描边环），> 与 _ 笔划改用品牌渐变
-# （#667eea -> #764ba2）——色彩反转：品牌紫由背景迁移至图标笔划，轮廓成为视觉主角，
-# 更简约、小尺寸下更清晰（Linear/Vercel 风）。保留 Tabler 原始外框笔划会双重描边、
-# 边缘发糊，故仅取 > 与 _ 两条。
+# 容器为「玻璃雾卡」（半透明白 ~6-8% 浅底 + hairline 描边环），与深色毛玻璃 header
+# （backdrop-filter）语言统一；视觉重量让位给笔划，避免「亮白贴片」压制 >_ 主体。
+# > 与 _ 笔划用品牌渐变（#667eea -> #8b5fd0）——深端提亮使深底对比达 WCAG 图形 3:1。
+# chevron 左移、下划线右移并延长（M6 / M13 l5）撑开间距至 4 单位、下划线加长至 5，
+# 避免 stroke-width=2.5 加粗后下划线在小尺寸退化为圆点；保留 Tabler 原始外框笔划会
+# 双重描边、边缘发糊，故仅取 > 与 _ 两条。
 # 单一事实源：_TERMINAL2_PATHS 与 _LOGO_DEFS 同时供 favicon SVG（f-string）与页面
 # logo（{{TERMINAL2}} / {{LOGO_DEFS}} 模板替换）消费。
-_BRAND_FROM, _BRAND_TO = "#667eea", "#764ba2"
+_BRAND_FROM, _BRAND_TO = "#667eea", "#8b5fd0"
 _LOGO_DEFS = (
     '<defs><linearGradient id="cpBrand" x1="0" y1="0" x2="1" y2="1">'
     f'<stop offset="0" stop-color="{_BRAND_FROM}"/>'
     f'<stop offset="1" stop-color="{_BRAND_TO}"/>'
     "</linearGradient></defs>"
 )
-_TERMINAL2_PATHS = '<path d="M8 9l3 3l-3 3" /><path d="M13 15l3 0" />'
+_TERMINAL2_PATHS = '<path d="M6 9l3 3l-3 3" /><path d="M13 15l5 0" />'
 
 
 # ── Favicon (SVG, 现代浏览器主选) ──────────────────────────────────────────
 def _build_favicon_svg() -> str:
-    """生成 24×24 SVG favicon：淡色磨砂卡片 + 品牌渐变 terminal-2 笔划.
+    """生成 24×24 SVG favicon：玻璃雾卡 + 品牌渐变 terminal-2 笔划.
 
-    容器为 ``#f5f6fb`` 浅底圆角方块 + 品牌紫描边环；``>`` 与 ``_`` 笔划由白色改为品牌
-    渐变（``url(#cpBrand)``），使图标轮廓成为主角。独立 SVG 文档无 CSS 上下文，
-    ``currentColor`` 不可靠，故颜色硬编码；``<defs>`` 复用 ``_LOGO_DEFS`` 单一事实源。
+    容器为半透明白雾卡（``#ffffff14`` 8% 浅底 + ``#ffffff38`` 22% hairline 描边环），
+    与深色毛玻璃 header 语言统一；``>`` 与 ``_`` 笔划加粗至 ``stroke-width=2.5``，
+    使图标轮廓成为主角。独立 SVG 文档无 CSS 上下文，``currentColor`` 不可靠，故颜色
+    硬编码为 hex8（同时承载透明度，避免与 ``stroke-opacity`` 双重叠加）；``<defs>``
+    复用 ``_LOGO_DEFS`` 单一事实源。
     """
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
         f"{_LOGO_DEFS}"
-        '<rect x="1" y="1" width="22" height="22" rx="6" fill="#f5f6fb" '
-        'stroke="#667eea" stroke-opacity=".18" stroke-width="1"/>'
-        f'<g fill="none" stroke="url(#cpBrand)" stroke-width="2" '
+        '<rect x="1" y="1" width="22" height="22" rx="6" fill="#ffffff14" '
+        'stroke="#ffffff38" stroke-width="1"/>'
+        f'<g fill="none" stroke="url(#cpBrand)" stroke-width="2.5" '
         f'stroke-linecap="round" stroke-linejoin="round">{_TERMINAL2_PATHS}</g>'
         "</svg>"
     )
@@ -49,12 +53,13 @@ def _build_favicon_svg() -> str:
 
 # ── Favicon (ICO, 32×32 光栅回退) ─────────────────────────────────────────
 def _build_favicon() -> bytes:
-    """程序化生成 32×32 ICO：淡色磨砂卡片 + 品牌渐变 terminal-2 笔划（旧浏览器/Safari 回退）.
+    """程序化生成 32×32 ICO：玻璃雾卡 + 品牌渐变 terminal-2 笔划（旧浏览器/Safari 回退）.
 
-    项目无 Pillow/cairosvg 等图像库，故以纯 Python 按像素光栅化：``#f5f6fb`` 浅底圆角
-    方块 + 品牌渐变（#667eea -> #764ba2）``>`` 折线与 ``_`` 下划线。沿用原实现「全零
-    AND-mask + per-pixel alpha」的圆角透明方案（现代渲染器按 alpha 通道处理透明）。
-    32px 下细描边环易锯齿，故 ICO 仅保留浅底 + 渐变笔划，精修外观由 SVG 承载。
+    项目无 Pillow/cairosvg 等图像库，故以纯 Python 按像素光栅化：``#f5f6fb`` 半透明
+    （alpha 0xB0）圆角方块 + 品牌渐变（#667eea -> #8b5fd0）``>`` 折线与 ``_`` 下划线。
+    沿用原实现「全零 AND-mask + per-pixel alpha」的圆角透明方案（现代渲染器按 alpha
+    通道处理透明）。32px 下细描边环易锯齿，故 ICO 仅保留雾底 + 渐变笔划，精修外观
+    由 SVG 承载。
     """
     import math
     import struct
@@ -63,10 +68,10 @@ def _build_favicon() -> bytes:
     radius = 8
     scale = width / 24.0  # SVG 24 单位 -> 像素
 
-    # 图标笔划品牌渐变：#667eea -> #764ba2（与 _LOGO_DEFS 同源）
+    # 图标笔划品牌渐变：#667eea -> #8b5fd0（与 _LOGO_DEFS 同源；深端提亮达 WCAG 3:1）
     r0, g0, b0 = 0x66, 0x7E, 0xEA
-    r1, g1, b1 = 0x76, 0x4B, 0xA2
-    # 容器底色：#f5f6fb（近白、极浅冷蓝紫）
+    r1, g1, b1 = 0x8B, 0x5F, 0xD0
+    # 容器底色：#f5f6fb（近白、极浅冷蓝紫）；alpha 在背景填充处降至 0xB0 实现玻璃雾感
     tile_r, tile_g, tile_b = 0xF5, 0xF6, 0xFB
 
     def inside(x: int, y: int) -> bool:
@@ -82,12 +87,12 @@ def _build_favicon() -> bytes:
         [[0, 0, 0, 0] for _ in range(width)] for _ in range(height)
     ]
 
-    # 1) 浅底圆角背景（扁平 #f5f6fb）
+    # 1) 玻璃雾卡圆角背景（#f5f6fb @ alpha 0xB0 ≈ 69%，半透明与 SVG #ffffff14 同向）
     for y in range(height):
         for x in range(width):
             if not inside(x, y):
                 continue
-            buf[y][x] = [tile_b, tile_g, tile_r, 255]
+            buf[y][x] = [tile_b, tile_g, tile_r, 0xB0]
 
     def brand_at(px: float, py: float) -> tuple[int, int, int]:
         """按对角参数 t 返回 (px,py) 处的品牌渐变 RGB（与 SVG url(#cpBrand) 同向）."""
@@ -116,11 +121,11 @@ def _build_favicon() -> bytes:
             s = i / steps
             stamp(x0 + (x1 - x0) * s, y0 + (y1 - y0) * s)
 
-    # 2) terminal-2 笔划（SVG 24 单位 -> 像素）
-    #    > 折线 (8,9)->(11,12)->(8,15)；_ 下划线 (13,15)->(16,15)
-    line(8 * scale, 9 * scale, 11 * scale, 12 * scale)
-    line(11 * scale, 12 * scale, 8 * scale, 15 * scale)
-    line(13 * scale, 15 * scale, 16 * scale, 15 * scale)
+    # 2) terminal-2 笔划（SVG 24 单位 -> 像素；chevron 左移、下划线右移并延长，间距 4 单位）
+    #    > 折线 (6,9)->(9,12)->(6,15)；_ 下划线 (13,15)->(18,15)
+    line(6 * scale, 9 * scale, 9 * scale, 12 * scale)
+    line(9 * scale, 12 * scale, 6 * scale, 15 * scale)
+    line(13 * scale, 15 * scale, 18 * scale, 15 * scale)
 
     # 3) 打包 ICO（BMP bottom-up；全零 AND-mask，信任 per-pixel alpha 实现圆角透明）
     pixel_rows: list[bytes] = []
@@ -222,13 +227,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .header-left { display: flex; align-items: center; gap: 12px; }
     .logo {
       width: 32px; height: 32px;
-      background: #f5f6fb;
-      border: 1px solid rgba(102,126,234,.18);
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.12);
       border-radius: 10px;
       display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 4px 12px rgba(102,126,234,.18);
+      box-shadow: 0 4px 12px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.06);
     }
-    .logo svg { width: 20px; height: 20px; display: block; }
+    .logo svg { width: 20px; height: 20px; display: block; filter: drop-shadow(0 0 4px rgba(182,140,255,.35)); }
     h1 { font-size: 18px; font-weight: 600; color: var(--text-primary); letter-spacing: -.3px; }
     .header-right { display: flex; align-items: center; gap: 12px; }
     .badge {
@@ -815,7 +820,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <body>
 <header>
   <div class="header-left">
-    <div class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="url(#cpBrand)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{{LOGO_DEFS}}{{TERMINAL2}}</svg></div>
+    <div class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="url(#cpBrand)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">{{LOGO_DEFS}}{{TERMINAL2}}</svg></div>
     <h1>Coding Proxy Dashboard</h1>
     <span class="badge" id="version-badge">v-.-.-</span>
   </div>
