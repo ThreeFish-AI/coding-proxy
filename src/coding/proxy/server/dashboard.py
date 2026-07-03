@@ -411,20 +411,17 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       height: 100%; border-radius: 2px;
       transition: width .6s cubic-bezier(.4,0,.2,1);
     }
-    /* ── 供应商状态：拖拽排序 ── */
-    .vendor-item[draggable="true"] { cursor: grab; }
-    .vendor-item[draggable="true"]:active { cursor: grabbing; }
+    /* ── 供应商状态：拖拽排序（Pointer Events，手柄发起） ── */
     .vendor-item.dragging { opacity: .4; }
     .drag-handle {
       display: flex; align-items: center; flex-shrink: 0;
       color: var(--text-tertiary); font-size: 15px; line-height: 1;
-      cursor: grab; user-select: none; padding: 0 2px;
+      cursor: grab; user-select: none; touch-action: none; padding: 0 2px;
       opacity: 0; transition: opacity .2s ease;
     }
+    .drag-handle:active { cursor: grabbing; }
     .vendor-item:hover .drag-handle { opacity: .55; }
     .drag-handle:hover { opacity: 1 !important; color: var(--text-secondary); }
-    .vendor-item.drag-over-before { box-shadow: inset 0 2px 0 0 var(--accent-blue); }
-    .vendor-item.drag-over-after { box-shadow: inset 0 -2px 0 0 var(--accent-blue); }
     /* ── 故障转移表 ── */
     .ft-table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
@@ -1354,7 +1351,7 @@ function updateVendorStatus(status) {
     list.innerHTML = '<div class="empty"><div class="empty-icon">🔌</div>无供应商数据</div>';
     return;
   }
-  const draggable = tiers.length >= 2;
+  const reorderable = tiers.length >= 2;
   list.innerHTML = tiers.map(tier => {
     const cb = tier.circuit_breaker || {};
     const cbClass = cbStateClass(cb.state);
@@ -1368,8 +1365,9 @@ function updateVendorStatus(status) {
     const rlInfo = tier.rate_limit || {};
     const rlHtml = rlInfo.limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
 
-    const dragAttrs = ` data-vendor="${tier.name}"` + (draggable ? ` draggable="true"` : '');
-    const handle = draggable ? `<div class="drag-handle" title="拖拽调整优先级">⠿</div>` : '';
+    // Pointer Events 重排：仅需 data-vendor 定位；手柄作为拖拽发起点（无原生 draggable）
+    const dragAttrs = ` data-vendor="${tier.name}"`;
+    const handle = reorderable ? `<div class="drag-handle" title="拖拽调整优先级">⠿</div>` : '';
 
     return `<div class="vendor-item"${dragAttrs}>
       <div class="vendor-info">
@@ -1386,76 +1384,111 @@ function updateVendorStatus(status) {
   }).join('');
 }
 
-// ── 供应商状态：拖拽调整优先级（运行时重排，不重置配额） ────
-const _tierDrag = { active: false, srcName: null, inFlight: false };
+// ── 供应商状态：拖拽调整优先级（Pointer Events 重排，运行时生效，不重置配额） ────
+// 采用 Pointer Events 而非原生 HTML5 DnD：后者触屏不支持、跨浏览器易「拿不起来」，
+// 是业界公认脆弱的重排序方案（故 SortableJS / dnd-kit 等均改用指针事件）。
+const _tierDrag = {
+  active: false,     // 已越过阈值、进入拖拽
+  srcName: null,     // 被拖拽 vendor 名
+  srcEl: null,       // 被拖拽行
+  pointerId: null,   // 捕获的指针 ID
+  startY: 0,         // pointerdown 起点 Y
+  origOrder: null,   // 拖拽开始时的顺序快照（无变化则跳过 PUT）
+  inFlight: false,   // PUT 未决
+};
+const _TIER_DRAG_THRESHOLD = 4; // px，越过才判定为拖拽（否则视作点击）
 
-function _tierDragClearIndicators() {
-  document.querySelectorAll('#vendor-list .drag-over-before, #vendor-list .drag-over-after')
-    .forEach(function(el) { el.classList.remove('drag-over-before', 'drag-over-after'); });
+function _tierCurrentOrder(listEl) {
+  return Array.from(listEl.querySelectorAll('.vendor-item'))
+    .map(function(el) { return el.dataset.vendor; })
+    .filter(Boolean);
 }
 
-function _tierDragPosition(item, clientY) {
-  // 鼠标相对目标行中点的位置 → 插入到上方或下方
-  const rect = item.getBoundingClientRect();
-  return clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+// 依据指针 Y 与各兄弟行中点比较，即时(乐观)重排 DOM
+function _tierDragMoveTo(listEl, clientY) {
+  const dragged = _tierDrag.srcEl;
+  if (!dragged) return;
+  const siblings = Array.from(listEl.querySelectorAll('.vendor-item'))
+    .filter(function(el) { return el !== dragged; });
+  for (var i = 0; i < siblings.length; i++) {
+    const rect = siblings[i].getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) {
+      if (dragged !== siblings[i] && dragged.nextElementSibling !== siblings[i]) {
+        listEl.insertBefore(dragged, siblings[i]);
+      }
+      return;
+    }
+  }
+  if (listEl.lastElementChild !== dragged) listEl.appendChild(dragged); // 落到末尾
+}
+
+function _tierDragReset() {
+  if (_tierDrag.srcEl) {
+    if (_tierDrag.pointerId != null) {
+      try { _tierDrag.srcEl.releasePointerCapture(_tierDrag.pointerId); } catch (_) {}
+    }
+    _tierDrag.srcEl.classList.remove('dragging');
+  }
+  _tierDrag.active = false;
+  _tierDrag.srcName = null;
+  _tierDrag.srcEl = null;
+  _tierDrag.pointerId = null;
+  _tierDrag.startY = 0;
+  _tierDrag.origOrder = null;
 }
 
 function initTierDrag() {
-  // 事件委托绑定在静态容器 #vendor-list 上一次；子节点重渲染后仍生效
+  // 指针事件委托绑定在静态容器 #vendor-list 上一次；子节点重渲染后仍生效
   const list = document.getElementById('vendor-list');
   if (!list || list.dataset.dndBound === '1') return;
   list.dataset.dndBound = '1';
 
-  list.addEventListener('dragstart', function(e) {
-    const item = e.target && e.target.closest && e.target.closest('.vendor-item');
-    if (!item || !item.draggable) return;
-    _tierDrag.active = true;
+  list.addEventListener('pointerdown', function(e) {
+    if (e.button != null && e.button !== 0) return;            // 仅主指针/左键
+    const handle = e.target && e.target.closest && e.target.closest('.drag-handle');
+    if (!handle) return;                                       // 仅从手柄发起，避免误触与文本选择
+    const item = handle.closest('.vendor-item');
+    if (!item || !item.dataset.vendor) return;
+    if (list.querySelectorAll('.vendor-item').length < 2) return;
+    _tierDrag.srcEl = item;
     _tierDrag.srcName = item.dataset.vendor;
-    item.classList.add('dragging');
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = 'move';
-      try { e.dataTransfer.setData('text/plain', _tierDrag.srcName || ''); } catch (_) {}
+    _tierDrag.pointerId = e.pointerId;
+    _tierDrag.startY = e.clientY;
+    try { item.setPointerCapture(e.pointerId); } catch (_) {}  // 捕获后 DOM 重排不丢事件
+    e.preventDefault();                                        // 阻止文本选择
+  });
+
+  list.addEventListener('pointermove', function(e) {
+    if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
+    if (!_tierDrag.active) {
+      if (Math.abs(e.clientY - _tierDrag.startY) < _TIER_DRAG_THRESHOLD) return;
+      _tierDrag.active = true;                                 // 越阈值 → 正式进入拖拽
+      _tierDrag.origOrder = _tierCurrentOrder(list);
+      _tierDrag.srcEl.classList.add('dragging');
     }
-  });
-
-  list.addEventListener('dragover', function(e) {
-    if (!_tierDrag.active) return;
-    e.preventDefault(); // 允许 drop（无论是否命中某一行）
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    const item = e.target && e.target.closest && e.target.closest('.vendor-item');
-    _tierDragClearIndicators();
-    if (!item || item.dataset.vendor === _tierDrag.srcName) return;
-    item.classList.add(_tierDragPosition(item, e.clientY) === 'before' ? 'drag-over-before' : 'drag-over-after');
-  });
-
-  list.addEventListener('drop', function(e) {
-    if (!_tierDrag.active) return;
     e.preventDefault();
-    const listEl = document.getElementById('vendor-list');
-    const dragged = listEl.querySelector('.vendor-item.dragging');
-    if (!dragged) return;
-    let target = e.target && e.target.closest && e.target.closest('.vendor-item');
-    if (!target) {
-      // 落在容器空白处 → 移到末尾
-      if (listEl.lastElementChild !== dragged) listEl.appendChild(dragged);
-    } else if (target !== dragged) {
-      const ref = _tierDragPosition(target, e.clientY) === 'before' ? target : target.nextElementSibling;
-      if (ref !== dragged) listEl.insertBefore(dragged, ref);
-    }
-    _tierDragClearIndicators();
-    const order = Array.from(listEl.children)
-      .filter(function(el) { return el.classList.contains('vendor-item'); })
-      .map(function(el) { return el.dataset.vendor; })
-      .filter(Boolean);
-    persistTierOrder(order);
+    _tierDragMoveTo(list, e.clientY);
   });
 
-  list.addEventListener('dragend', function() {
-    _tierDrag.active = false;
-    _tierDrag.srcName = null;
-    _tierDragClearIndicators();
-    document.querySelectorAll('#vendor-list .dragging')
-      .forEach(function(el) { el.classList.remove('dragging'); });
+  function _tierDragFinish(commit) {
+    if (!_tierDrag.srcEl) return;
+    const wasActive = _tierDrag.active;
+    const order = _tierCurrentOrder(list);
+    const orig = _tierDrag.origOrder;
+    _tierDragReset();
+    if (!wasActive) return;                                    // 仅点击手柄未拖动 → 空操作
+    if (!commit) { _tierRevertToList(); return; }              // 取消 → 回滚服务端真实顺序
+    if (orig && order.join(',') === orig.join(',')) return;   // 顺序未变 → 跳过 PUT
+    persistTierOrder(order);                                   // 提交新顺序（PUT + 失败回滚）
+  }
+
+  list.addEventListener('pointerup', function(e) {
+    if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
+    _tierDragFinish(true);
+  });
+  list.addEventListener('pointercancel', function(e) {
+    if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
+    _tierDragFinish(false);
   });
 }
 
@@ -2417,8 +2450,13 @@ def register_dashboard_routes(app: Any) -> None:
 
     @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
     async def dashboard() -> HTMLResponse:
-        """返回 Dashboard HTML 页面."""
-        return HTMLResponse(content=_DASHBOARD_HTML)
+        """返回 Dashboard HTML 页面.
+
+        内联 JS/CSS 随版本变化，禁用缓存以免浏览器留存旧内联脚本掩盖前端修复。
+        """
+        return HTMLResponse(
+            content=_DASHBOARD_HTML, headers={"Cache-Control": "no-cache"}
+        )
 
     @app.get("/api/dashboard/summary")
     async def dashboard_summary(request: Request, days: int = 7) -> Response:
