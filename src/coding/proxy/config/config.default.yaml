@@ -534,9 +534,9 @@ pricing:
   # ── 智谱 GLM ──
   - vendor: zhipu
     model: glm-5.2 # 待区分长短上下文定价
-    input_cost_per_mtok: ¥6.00
-    output_cost_per_mtok: ¥24.00
-    cache_read_cost_per_mtok: ¥1.30
+    input_cost_per_mtok: ¥8.00
+    output_cost_per_mtok: ¥28.00
+    cache_read_cost_per_mtok: ¥2.00
   - vendor: zhipu
     model: glm-5.1 # 待区分长短上下文定价
     input_cost_per_mtok: ¥6.00
