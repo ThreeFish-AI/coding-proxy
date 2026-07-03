@@ -1213,3 +1213,25 @@ def test_tier_order_preserves_circuit_breaker_and_rate_limit():
     same = next(t for t in router.tiers if t.name == target.name)
     assert not same.can_execute()  # 仍熔断
     assert same.is_rate_limited  # 仍限速
+
+
+def test_dashboard_serves_pointer_drag_reorder_and_no_cache():
+    """Dashboard 供应商拖拽已由脆弱的原生 HTML5 DnD 改为 Pointer Events，并禁用页面缓存.
+
+    #269 仅覆盖后端 /api/tier-order，前端拖拽机制无任何断言（拖拽从未被验证）。
+    此处补一条轻量守卫：确保重排序 UI 机制（指针事件 + PUT /api/tier-order）随页面交付、
+    不回退到原生 DnD，且响应带 no-cache 以免浏览器留存旧内联脚本掩盖前端修复。
+    """
+    with _make_app() as client:
+        resp = client.get("/dashboard")
+        assert resp.status_code == 200
+        assert resp.headers.get("cache-control") == "no-cache"
+        html = resp.text
+        # Pointer Events 重排机制在位
+        assert "initTierDrag" in html
+        assert "pointerdown" in html
+        assert "setPointerCapture" in html
+        assert "/api/tier-order" in html
+        # 已移除脆弱的原生 HTML5 DnD（不再渲染 draggable 属性 / 监听 dragstart）
+        assert 'draggable="true"' not in html
+        assert "addEventListener('dragstart'" not in html
