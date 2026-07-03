@@ -411,6 +411,20 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       height: 100%; border-radius: 2px;
       transition: width .6s cubic-bezier(.4,0,.2,1);
     }
+    /* ── 供应商状态：拖拽排序 ── */
+    .vendor-item[draggable="true"] { cursor: grab; }
+    .vendor-item[draggable="true"]:active { cursor: grabbing; }
+    .vendor-item.dragging { opacity: .4; }
+    .drag-handle {
+      display: flex; align-items: center; flex-shrink: 0;
+      color: var(--text-tertiary); font-size: 15px; line-height: 1;
+      cursor: grab; user-select: none; padding: 0 2px;
+      opacity: 0; transition: opacity .2s ease;
+    }
+    .vendor-item:hover .drag-handle { opacity: .55; }
+    .drag-handle:hover { opacity: 1 !important; color: var(--text-secondary); }
+    .vendor-item.drag-over-before { box-shadow: inset 0 2px 0 0 var(--accent-blue); }
+    .vendor-item.drag-over-after { box-shadow: inset 0 -2px 0 0 var(--accent-blue); }
     /* ── 故障转移表 ── */
     .ft-table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
@@ -1332,12 +1346,15 @@ function renderQuotaBar(qg) {
 }
 
 function updateVendorStatus(status) {
+  // 拖拽进行中 / 重排序 POST 未决时跳过重渲染，避免抢占正在操作的 DOM
+  if (_tierDrag.active || _tierDrag.inFlight) return;
   const tiers = status.tiers || [];
   const list = document.getElementById('vendor-list');
   if (!tiers.length) {
     list.innerHTML = '<div class="empty"><div class="empty-icon">🔌</div>无供应商数据</div>';
     return;
   }
+  const draggable = tiers.length >= 2;
   list.innerHTML = tiers.map(tier => {
     const cb = tier.circuit_breaker || {};
     const cbClass = cbStateClass(cb.state);
@@ -1351,8 +1368,12 @@ function updateVendorStatus(status) {
     const rlInfo = tier.rate_limit || {};
     const rlHtml = rlInfo.limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
 
-    return `<div class="vendor-item">
+    const dragAttrs = ` data-vendor="${tier.name}"` + (draggable ? ` draggable="true"` : '');
+    const handle = draggable ? `<div class="drag-handle" title="拖拽调整优先级">⠿</div>` : '';
+
+    return `<div class="vendor-item"${dragAttrs}>
       <div class="vendor-info">
+        ${handle}
         <div class="vendor-avatar">${initial}</div>
         <span class="vendor-name">${tier.name}</span>
       </div>
@@ -1363,6 +1384,110 @@ function updateVendorStatus(status) {
       </div>
     </div>`;
   }).join('');
+}
+
+// ── 供应商状态：拖拽调整优先级（运行时重排，不重置配额） ────
+const _tierDrag = { active: false, srcName: null, inFlight: false };
+
+function _tierDragClearIndicators() {
+  document.querySelectorAll('#vendor-list .drag-over-before, #vendor-list .drag-over-after')
+    .forEach(function(el) { el.classList.remove('drag-over-before', 'drag-over-after'); });
+}
+
+function _tierDragPosition(item, clientY) {
+  // 鼠标相对目标行中点的位置 → 插入到上方或下方
+  const rect = item.getBoundingClientRect();
+  return clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+}
+
+function initTierDrag() {
+  // 事件委托绑定在静态容器 #vendor-list 上一次；子节点重渲染后仍生效
+  const list = document.getElementById('vendor-list');
+  if (!list || list.dataset.dndBound === '1') return;
+  list.dataset.dndBound = '1';
+
+  list.addEventListener('dragstart', function(e) {
+    const item = e.target && e.target.closest && e.target.closest('.vendor-item');
+    if (!item || !item.draggable) return;
+    _tierDrag.active = true;
+    _tierDrag.srcName = item.dataset.vendor;
+    item.classList.add('dragging');
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', _tierDrag.srcName || ''); } catch (_) {}
+    }
+  });
+
+  list.addEventListener('dragover', function(e) {
+    if (!_tierDrag.active) return;
+    e.preventDefault(); // 允许 drop（无论是否命中某一行）
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    const item = e.target && e.target.closest && e.target.closest('.vendor-item');
+    _tierDragClearIndicators();
+    if (!item || item.dataset.vendor === _tierDrag.srcName) return;
+    item.classList.add(_tierDragPosition(item, e.clientY) === 'before' ? 'drag-over-before' : 'drag-over-after');
+  });
+
+  list.addEventListener('drop', function(e) {
+    if (!_tierDrag.active) return;
+    e.preventDefault();
+    const listEl = document.getElementById('vendor-list');
+    const dragged = listEl.querySelector('.vendor-item.dragging');
+    if (!dragged) return;
+    let target = e.target && e.target.closest && e.target.closest('.vendor-item');
+    if (!target) {
+      // 落在容器空白处 → 移到末尾
+      if (listEl.lastElementChild !== dragged) listEl.appendChild(dragged);
+    } else if (target !== dragged) {
+      const ref = _tierDragPosition(target, e.clientY) === 'before' ? target : target.nextElementSibling;
+      if (ref !== dragged) listEl.insertBefore(dragged, ref);
+    }
+    _tierDragClearIndicators();
+    const order = Array.from(listEl.children)
+      .filter(function(el) { return el.classList.contains('vendor-item'); })
+      .map(function(el) { return el.dataset.vendor; })
+      .filter(Boolean);
+    persistTierOrder(order);
+  });
+
+  list.addEventListener('dragend', function() {
+    _tierDrag.active = false;
+    _tierDrag.srcName = null;
+    _tierDragClearIndicators();
+    document.querySelectorAll('#vendor-list .dragging')
+      .forEach(function(el) { el.classList.remove('dragging'); });
+  });
+}
+
+function persistTierOrder(names) {
+  if (_tierDrag.inFlight) return;          // 防并发：上一次未决则忽略
+  if (!Array.isArray(names) || names.length < 2) return;
+  _tierDrag.inFlight = true;
+  fetch('/api/tier-order', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vendors: names })
+  }).then(function(res) {
+    _tierDrag.inFlight = false;            // 先清守卫，允许随后的 refreshOverview 重渲染
+    if (res.ok) {
+      // 服务端已更新顺序；刷新以同步请求趋势图等的排序
+      if (!_tierDrag.active) refreshOverview().catch(function() {});
+    } else {
+      console.error('tier-order rejected:', res.status);
+      _tierRevertToList();
+    }
+  }).catch(function(e) {
+    _tierDrag.inFlight = false;
+    console.error('tier-order failed:', e);
+    _tierRevertToList();
+  });
+}
+
+function _tierRevertToList() {
+  // 回滚到服务端真实顺序（PUT 失败 → 服务端顺序未变）
+  fetchJSON('/api/status').then(function(status) {
+    updateVendorStatus(status);
+  }).catch(function() {});
 }
 
 // ── Model Calling 实时状态 ────────────────────────────────
@@ -2200,6 +2325,7 @@ function switchTab(name) {
   fetchJSON('/api/dashboard/summary?days=7').then(function(s) {
     if (s && s.version) document.getElementById('version-badge').textContent = 'v' + s.version;
   }).catch(function(){});
+  initTierDrag();                // 绑定供应商列表拖拽（事件委托，幂等）
   refresh();                     // 仅加载初始页签的数据
   setInterval(refresh, 600000);  // 每 10 分钟刷新当前页签
   if (initial === 'overview') startModelCallingPoll();
