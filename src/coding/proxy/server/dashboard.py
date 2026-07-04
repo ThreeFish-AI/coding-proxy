@@ -149,18 +149,20 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <style>
     :root {
       --bg: #0a0e14;
       --bg-card: #12161e;
       --bg-card-hover: #181d27;
+      --bg-secondary: #161b24;
       --border: rgba(255,255,255,.06);
       --border-subtle: rgba(255,255,255,.04);
       --text-primary: #e6edf3;
       --text-secondary: #8b949e;
       --text-tertiary: #6e7681;
+      --text-muted: #6e7681;
       --accent-blue: #58a6ff;
       --accent-green: #3fb950;
       --accent-yellow: #d29922;
@@ -202,11 +204,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px 16px;
       position: sticky;
       top: 0;
       z-index: 100;
     }
-    .header-left { display: flex; align-items: center; gap: 12px; }
+    .header-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .header-left h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .logo {
       width: 32px; height: 32px;
       display: flex; align-items: center; justify-content: center;
@@ -241,8 +246,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     /* ── KPI 卡片 ── */
     .kpi-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 5px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: var(--gap-section);
       margin-bottom: var(--gap-section);
     }
     .kpi-card {
@@ -280,12 +285,25 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .kpi-icon { font-size: 15px; opacity: .8; }
     .kpi-label { font-size: 13px; color: var(--text-secondary); font-weight: 600; letter-spacing: .2px; }
     .kpi-value {
-      font-size: 32px; font-weight: 700; line-height: 1.2;
+      font-size: clamp(20px, 2.2vw, 32px); font-weight: 700; line-height: 1.2;
       font-family: 'JetBrains Mono', monospace;
       letter-spacing: -1px;
     }
-    #kpi-cost-today { font-size: 20px; white-space: nowrap; }
+    #kpi-cost-today {
+      font-size: clamp(15px, 1.3vw + 0.25rem, 20px);
+      white-space: normal;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+      line-height: 1.25;
+    }
     .kpi-sub { font-size: 13px; color: var(--text-tertiary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+    /* ── KPI 响应式：桌面/笔记本/平板横屏(≥1024px)强制 6 列单行，杜绝数值裁剪；窄屏优雅降级 ── */
+    @media (max-width: 1023px) {
+      .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 480px) {
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
     .color-blue { color: var(--accent-blue); }
     .color-green { color: var(--accent-green); }
     .color-yellow { color: var(--accent-yellow); }
@@ -664,6 +682,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border-color: rgba(88,166,255,.2);
     }
     .tab-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+    .range-btn:focus-visible,
+    .btn-refresh:focus-visible,
+    .page-btn:focus-visible,
+    .copy-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
 
@@ -792,6 +814,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     @keyframes mc-flash-err {
       0%,100% { color: inherit; }
       40% { color: #f87171; }
+    }
+    /* ── 尊重「减少动态效果」系统偏好（前庭敏感用户）── */
+    @media (prefers-reduced-motion: reduce) {
+      .kpi-card, .card { animation: none !important; }
+      *, *::before, *::after {
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+      }
     }
   </style>
 </head>
