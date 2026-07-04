@@ -2,7 +2,7 @@
 
 <div align="center">
 
-# ⚡ coding-proxy
+# <img src="assets/logo.svg" alt="coding-proxy" width="32" height="32" align="absmiddle"> coding-proxy
 
 **A High-Availability, Transparent, and Smart Multi-Vendor Proxy for Claude Code**
 
@@ -125,7 +125,7 @@ graph RL
 
     Client["💻<br/>Client (Claude Code)"]:::client
 
-    subgraph CodingProxy["⚡ coding-proxy"]
+    subgraph CodingProxy["coding-proxy"]
         direction RL
 
         Router["RequestRouter<br/><code>routing/router.py</code>"]:::router
