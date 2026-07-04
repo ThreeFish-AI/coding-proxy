@@ -189,5 +189,5 @@ During our chaotic yet rewarding exploration of engineering practices, we were h
 ---
 
 <div align="center">
-  <sub>Built with 🧠, ❤️, and an absurd amount of coffee by ThreeFish-AI </sub>
+  <sub>Built with 🧠, ❤️, and an absurd amount of coffee by <a href="https://github.com/ThreeFish-AI">ThreeFish-AI</a> · Released under the <a href="./LICENSE">Apache License 2.0</a>.</sub>
 </div>
