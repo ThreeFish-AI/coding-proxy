@@ -35,11 +35,12 @@ def test_head_root_returns_200():
         assert resp.status_code == 200
 
 
-def test_get_root_returns_200():
-    """GET / 返回 200."""
+def test_get_root_redirects_to_dashboard():
+    """GET / 重定向到 /dashboard."""
     with _make_app() as client:
-        resp = client.get("/")
-        assert resp.status_code == 200
+        resp = client.get("/", follow_redirects=False)
+        assert resp.status_code == 307
+        assert resp.headers["location"] == "/dashboard"
 
 
 # ── count_tokens 透传 ────────────────────────────────────────
@@ -1090,3 +1091,147 @@ def test_reorder_tiers_shared_reference():
     # Executor 的列表也改变了（因为是同一个对象）
     assert [t.name for t in executor_tiers] == ["c", "a", "b"]
     assert router.get_vendor_names() == ["c", "a", "b"]
+
+
+# ── /api/tier-order 纯重排序测试（不重置配额/熔断器/rate limit）──────────────
+
+
+def test_tier_order_reorder_success():
+    """PUT /api/tier-order → 精确替换链路顺序，返回最新 tier_order."""
+    app = _make_reorder_app()
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/tier-order", json={"vendors": ["copilot", "anthropic", "zhipu"]}
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["tier_order"] == ["copilot", "anthropic", "zhipu"]
+        assert app.state.router.get_vendor_names() == ["copilot", "anthropic", "zhipu"]
+
+
+def test_tier_order_unknown_vendor_returns_400():
+    """未知 vendor 名称 → 400."""
+    app = _make_reorder_app()
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/tier-order",
+            json={"vendors": ["nonexist", "anthropic", "zhipu", "copilot"]},
+        )
+        assert resp.status_code == 400
+        assert "未知 vendor" in resp.json()["error"]["message"]
+
+
+def test_tier_order_duplicate_returns_400():
+    """重复 vendor 名称 → 400."""
+    app = _make_reorder_app()
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/tier-order",
+            json={"vendors": ["anthropic", "anthropic", "zhipu", "copilot"]},
+        )
+        assert resp.status_code == 400
+        assert "重复" in resp.json()["error"]["message"]
+
+
+def test_tier_order_incomplete_returns_400():
+    """不完整的 vendor 列表（缺少现有 tier）→ 400."""
+    app = _make_reorder_app()
+    with TestClient(app) as client:
+        resp = client.put("/api/tier-order", json={"vendors": ["anthropic", "zhipu"]})
+        assert resp.status_code == 400
+        assert "缺少 vendor" in resp.json()["error"]["message"]
+
+
+def test_tier_order_invalid_body_returns_400():
+    """非法 body（非 JSON / 缺 vendors / 非列表 / 空列表）→ 400."""
+    app = _make_reorder_app()
+    with TestClient(app) as client:
+        # 非 JSON
+        resp = client.put(
+            "/api/tier-order",
+            content=b"not-json",
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 400
+        # body 非 dict
+        resp = client.put("/api/tier-order", json=["anthropic", "zhipu", "copilot"])
+        assert resp.status_code == 400
+        # 缺 vendors
+        resp = client.put("/api/tier-order", json={"foo": "bar"})
+        assert resp.status_code == 400
+        # vendors 非列表
+        resp = client.put("/api/tier-order", json={"vendors": "zhipu"})
+        assert resp.status_code == 400
+        # vendors 空列表
+        resp = client.put("/api/tier-order", json={"vendors": []})
+        assert resp.status_code == 400
+
+
+def test_tier_order_preserves_quota_guard():
+    """核心：重排序不重置配额守卫的滑动窗口用量（保留当日统计）."""
+    app = _make_reorder_app()
+    router = app.state.router
+    # 选用首个 tier，手动启用其配额守卫并写入用量
+    tier = router.tiers[0]
+    qg = tier.quota_guard
+    assert qg is not None
+    qg._enabled = True
+    qg._budget = 100_000
+    qg.record_usage(40_000)
+    before = qg.get_info()
+    assert before["window_usage_tokens"] == 40_000
+    assert before["usage_percent"] == 40.0
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/tier-order", json={"vendors": ["zhipu", "copilot", "anthropic"]}
+        )
+        assert resp.status_code == 200
+
+    # reorder_tiers 仅重排引用、不重建对象 → 同一 QuotaGuard 实例用量保持
+    after = qg.get_info()
+    assert after["window_usage_tokens"] == 40_000
+    assert after["usage_percent"] == 40.0
+
+
+def test_tier_order_preserves_circuit_breaker_and_rate_limit():
+    """重排序不重置熔断器与 rate limit（与 /api/reset 行为相反）."""
+    app = _make_reorder_app()
+    router = app.state.router
+    target = router.tiers[0]
+    target.record_failure(retry_after_seconds=300)
+    target._rate_limit_deadline = 999_999.0
+    assert not target.can_execute()
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/tier-order", json={"vendors": ["zhipu", "anthropic", "copilot"]}
+        )
+        assert resp.status_code == 200
+
+    same = next(t for t in router.tiers if t.name == target.name)
+    assert not same.can_execute()  # 仍熔断
+    assert same.is_rate_limited  # 仍限速
+
+
+def test_dashboard_serves_pointer_drag_reorder_and_no_cache():
+    """Dashboard 供应商拖拽已由脆弱的原生 HTML5 DnD 改为 Pointer Events，并禁用页面缓存.
+
+    #269 仅覆盖后端 /api/tier-order，前端拖拽机制无任何断言（拖拽从未被验证）。
+    此处补一条轻量守卫：确保重排序 UI 机制（指针事件 + PUT /api/tier-order）随页面交付、
+    不回退到原生 DnD，且响应带 no-cache 以免浏览器留存旧内联脚本掩盖前端修复。
+    """
+    with _make_app() as client:
+        resp = client.get("/dashboard")
+        assert resp.status_code == 200
+        assert resp.headers.get("cache-control") == "no-cache"
+        html = resp.text
+        # Pointer Events 重排机制在位
+        assert "initTierDrag" in html
+        assert "pointerdown" in html
+        assert "setPointerCapture" in html
+        assert "/api/tier-order" in html
+        # 已移除脆弱的原生 HTML5 DnD（不再渲染 draggable 属性 / 监听 dragstart）
+        assert 'draggable="true"' not in html
+        assert "addEventListener('dragstart'" not in html

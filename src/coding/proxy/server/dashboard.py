@@ -11,28 +11,111 @@ from fastapi.responses import HTMLResponse, Response
 
 from ..logging.db import TimePeriod
 
+# ── 品牌图标：Tabler prompt 核心笔划（> 与 _）+ 通透青绿圆环 ──────────────
+# 设计（方案 d05）：全透明底 + 青绿渐变细圆环（stroke 0.5，仅原 1/3，通透若隐）+
+# 饱和青绿渐变 >_ 笔划（stroke 2.5）。极细环与饱和笔划形成权重对比，>_ 为绝对主角；
+# 青绿（#22d3ee -> #2dd4bf）承载终端/代码语义，通透明快。基础笔划取自 Tabler prompt
+# （chevron M5 7l5 5l-5 5 + 下划线 M13 17l6 0，下划线长 6 单位、不会小尺寸点化）。
+# 渐变用 gradientUnits="userSpaceOnUse" + 绝对坐标：纯水平下划线包围盒高度为 0，若用
+# 默认 objectBoundingBox 渐变会映射失效而不着色（下划线消失），userSpaceOnUse 规避。
+# 单一事实源：_PROMPT_PATHS 与 _LOGO_DEFS 同时供 favicon SVG（f-string）与页面
+# logo（{{PROMPT}} / {{LOGO_DEFS}} 模板替换）消费。
+_BRAND_FROM, _BRAND_TO = "#22d3ee", "#2dd4bf"
+_LOGO_DEFS = (
+    '<defs><linearGradient id="cpBrand" gradientUnits="userSpaceOnUse" '
+    'x1="4" y1="4" x2="20" y2="20">'
+    f'<stop offset="0" stop-color="{_BRAND_FROM}"/>'
+    f'<stop offset="1" stop-color="{_BRAND_TO}"/>'
+    "</linearGradient></defs>"
+)
+_PROMPT_PATHS = '<path d="M5 7l5 5l-5 5" /><path d="M13 17l6 0" />'
 
-# ── Favicon (16×16, 蓝紫渐变) ────────────────────────────────────────────
+
+# ── Favicon (SVG, 现代浏览器主选) ──────────────────────────────────────────
+def _build_favicon_svg() -> str:
+    """生成 24×24 SVG favicon：通透青绿圆环 + 品牌渐变 prompt 笔划（方案 d05）.
+
+    全透明底 + 青绿渐变细圆环（``r=11``、``stroke-width=0.5``、``stroke-opacity=.55``，
+    通透若隐）+ 饱和青绿渐变 ``>`` 与 ``_`` 笔划（``stroke-width=2.5``）。极细环与饱和
+    笔划形成权重对比，``>_`` 为视觉主角。独立 SVG 文档无 CSS 上下文，``currentColor``
+    不可靠，故渐变复用 ``_LOGO_DEFS``（userSpaceOnUse，规避水平下划线不着色）单一事实源。
+    """
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
+        f"{_LOGO_DEFS}"
+        '<circle cx="12" cy="12" r="11" fill="none" stroke="url(#cpBrand)" '
+        'stroke-width="0.5" stroke-opacity=".55"/>'
+        f'<g fill="none" stroke="url(#cpBrand)" stroke-width="2.5" '
+        f'stroke-linecap="round" stroke-linejoin="round">{_PROMPT_PATHS}</g>'
+        "</svg>"
+    )
+
+
+# ── Favicon (ICO, 32×32 光栅回退) ─────────────────────────────────────────
 def _build_favicon() -> bytes:
-    """程序化生成 16×16 ICO，蓝紫渐变与 Dashboard Logo 一致."""
+    """程序化生成 32×32 ICO：全透明底 + 青绿渐变 prompt 笔划（旧浏览器/Safari 回退）.
+
+    项目无 Pillow/cairosvg 等图像库，故以纯 Python 按像素光栅化：全透明底 + 青绿渐变
+    （#22d3ee -> #2dd4bf）``>`` 折线与 ``_`` 下划线。沿用「全零 AND-mask + per-pixel
+    alpha」透明方案（现代渲染器按 alpha 通道处理透明）。方案 d05 的细圆环（0.5px）在
+    32px 下不足 1 像素、无法渲染，故 ICO 省略圆环、仅保留饱和 ``>_`` 笔划（符合「图标
+    为主角、环极弱」的设计意图），完整外观由 SVG 主版承载。
+    """
+    import math
     import struct
 
-    width, height = 16, 16
+    width = height = 32
+    scale = width / 24.0  # SVG 24 单位 -> 像素
+
+    # 图标笔划青绿渐变：#22d3ee -> #2dd4bf（与 _LOGO_DEFS 同源）
+    r0, g0, b0 = 0x22, 0xD3, 0xEE
+    r1, g1, b1 = 0x2D, 0xD4, 0xBF
+
+    # 像素缓冲：[B, G, R, A]，默认全透明（全透底，无容器填充）
+    buf: list[list[list[int]]] = [
+        [[0, 0, 0, 0] for _ in range(width)] for _ in range(height)
+    ]
+
+    def brand_at(px: float, py: float) -> tuple[int, int, int]:
+        """按对角参数 t 返回 (px,py) 处的青绿渐变 RGB（与 SVG url(#cpBrand) 同向）."""
+        t = (px + py) / (width + height - 2)
+        return (
+            int(r0 + (r1 - r0) * t),
+            int(g0 + (g1 - g0) * t),
+            int(b0 + (b1 - b0) * t),
+        )
+
+    def stamp(px: float, py: float) -> None:
+        """以 (px, py) 为中心盖 ~3px 青绿渐变方块（笔划加粗，保证小尺寸可辨识）."""
+        ix, iy = int(round(px)), int(round(py))
+        cr, cg, cb = brand_at(px, py)
+        for oy in (-1, 0, 1):
+            for ox in (-1, 0, 1):
+                nx, ny = ix + ox, iy + oy
+                if 0 <= nx < width and 0 <= ny < height:
+                    buf[ny][nx] = [cb, cg, cr, 255]
+
+    def line(x0: float, y0: float, x1: float, y1: float) -> None:
+        """稠密采样 + stamp 形成青绿渐变粗线段."""
+        dist = math.hypot(x1 - x0, y1 - y0)
+        steps = max(1, int(dist * 3))
+        for i in range(steps + 1):
+            s = i / steps
+            stamp(x0 + (x1 - x0) * s, y0 + (y1 - y0) * s)
+
+    # prompt 笔划（SVG 24 单位 -> 像素）
+    #    > 折线 (5,7)->(10,12)->(5,17)；_ 下划线 (13,17)->(19,17)
+    line(5 * scale, 7 * scale, 10 * scale, 12 * scale)
+    line(10 * scale, 12 * scale, 5 * scale, 17 * scale)
+    line(13 * scale, 17 * scale, 19 * scale, 17 * scale)
+
+    # 3) 打包 ICO（BMP bottom-up；全零 AND-mask，信任 per-pixel alpha 实现圆角透明）
     pixel_rows: list[bytes] = []
-    cx, cy = width / 2.0, height / 2.0
     for y in range(height - 1, -1, -1):  # BMP bottom-up
         row = bytearray()
         for x in range(width):
-            dx = x - cx + 0.5
-            dy = y - cy + 0.5
-            if dx * dx + dy * dy > (width / 2.0) ** 2:
-                row.extend([0, 0, 0, 0])  # 圆外透明
-            else:
-                t = (x + (height - 1 - y)) / (width + height - 2)
-                r = int(88 + (188 - 88) * t)
-                g = int(166 + (140 - 166) * t)
-                b = 255
-                row.extend([b, g, r, 255])  # BGRA
+            b, g, r, a = buf[y][x]
+            row.extend([b, g, r, a])  # BGRA
         pixel_rows.append(bytes(row))
 
     bmp_hdr = struct.pack(
@@ -50,6 +133,7 @@ def _build_favicon() -> bytes:
 
 
 _FAVICON_ICO: bytes = _build_favicon()
+_FAVICON_SVG: str = _build_favicon_svg()
 
 logger = logging.getLogger(__name__)
 
@@ -61,21 +145,24 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Coding Proxy Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <style>
     :root {
       --bg: #0a0e14;
       --bg-card: #12161e;
       --bg-card-hover: #181d27;
+      --bg-secondary: #161b24;
       --border: rgba(255,255,255,.06);
       --border-subtle: rgba(255,255,255,.04);
       --text-primary: #e6edf3;
       --text-secondary: #8b949e;
       --text-tertiary: #6e7681;
+      --text-muted: #6e7681;
       --accent-blue: #58a6ff;
       --accent-green: #3fb950;
       --accent-yellow: #d29922;
@@ -89,6 +176,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       --shadow-md: 0 8px 24px rgba(0,0,0,.3);
       --glow-blue: 0 0 0 1px rgba(88,166,255,.1), 0 8px 32px rgba(88,166,255,.04);
       --gradient-primary: linear-gradient(135deg, #667eea, #764ba2);
+      --gap-section: 12px;
     }
     @keyframes fadeInUp {
       from { opacity: 0; transform: translateY(10px); }
@@ -116,19 +204,19 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px 16px;
       position: sticky;
       top: 0;
       z-index: 100;
     }
-    .header-left { display: flex; align-items: center; gap: 12px; }
+    .header-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .header-left h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .logo {
       width: 32px; height: 32px;
-      background: var(--gradient-primary);
-      border-radius: 10px;
       display: flex; align-items: center; justify-content: center;
-      font-size: 15px; font-weight: 700; color: #fff;
-      box-shadow: 0 4px 12px rgba(102,126,234,.25);
     }
+    .logo svg { width: 28px; height: 28px; display: block; filter: drop-shadow(0 0 3px rgba(45,212,191,.3)); }
     h1 { font-size: 18px; font-weight: 600; color: var(--text-primary); letter-spacing: -.3px; }
     .header-right { display: flex; align-items: center; gap: 12px; }
     .badge {
@@ -158,9 +246,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     /* ── KPI 卡片 ── */
     .kpi-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 5px;
-      margin-bottom: 24px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: var(--gap-section);
+      margin-bottom: var(--gap-section);
     }
     .kpi-card {
       background: rgba(18,22,30,.7);
@@ -197,12 +285,25 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .kpi-icon { font-size: 15px; opacity: .8; }
     .kpi-label { font-size: 13px; color: var(--text-secondary); font-weight: 600; letter-spacing: .2px; }
     .kpi-value {
-      font-size: 32px; font-weight: 700; line-height: 1.2;
+      font-size: clamp(20px, 2.2vw, 32px); font-weight: 700; line-height: 1.2;
       font-family: 'JetBrains Mono', monospace;
       letter-spacing: -1px;
     }
-    #kpi-cost-today { font-size: 20px; white-space: nowrap; }
+    #kpi-cost-today {
+      font-size: clamp(15px, 1.3vw + 0.25rem, 20px);
+      white-space: normal;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+      line-height: 1.25;
+    }
     .kpi-sub { font-size: 13px; color: var(--text-tertiary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+    /* ── KPI 响应式：桌面/笔记本/平板横屏(≥1024px)强制 6 列单行，杜绝数值裁剪；窄屏优雅降级 ── */
+    @media (max-width: 1023px) {
+      .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 480px) {
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
     .color-blue { color: var(--accent-blue); }
     .color-green { color: var(--accent-green); }
     .color-yellow { color: var(--accent-yellow); }
@@ -214,13 +315,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       display: grid;
       grid-template-columns: 1fr 2fr;
       gap: 16px;
-      margin-bottom: 16px;
+      margin-bottom: var(--gap-section);
     }
     .charts-grid-2 {
       display: grid;
       grid-template-columns: 1fr 2fr;
       gap: 16px;
-      margin-bottom: 16px;
+      margin-bottom: var(--gap-section);
     }
     .charts-grid > .card,
     .charts-grid-2 > .card {
@@ -330,6 +431,17 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       height: 100%; border-radius: 2px;
       transition: width .6s cubic-bezier(.4,0,.2,1);
     }
+    /* ── 供应商状态：拖拽排序（Pointer Events，手柄发起） ── */
+    .vendor-item.dragging { opacity: .4; }
+    .drag-handle {
+      display: flex; align-items: center; flex-shrink: 0;
+      color: var(--text-tertiary); font-size: 15px; line-height: 1;
+      cursor: grab; user-select: none; touch-action: none; padding: 0 2px;
+      opacity: 0; transition: opacity .2s ease;
+    }
+    .drag-handle:active { cursor: grabbing; }
+    .vendor-item:hover .drag-handle { opacity: .55; }
+    .drag-handle:hover { opacity: 1 !important; color: var(--text-secondary); }
     /* ── 故障转移表 ── */
     .ft-table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
@@ -356,7 +468,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     /* ── 时间区间选择栏 ── */
     .time-range-bar {
       display: flex; align-items: center; gap: 8px;
-      margin-bottom: 24px; flex-wrap: wrap;
+      margin-bottom: var(--gap-section); flex-wrap: wrap;
       padding: 8px 16px;
       background: rgba(18,22,30,.5);
       border: 1px solid rgba(255,255,255,.04);
@@ -443,6 +555,21 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .detail-card .detail-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .detail-card .detail-label { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .3px; }
     .detail-card .detail-value { color: var(--text-primary); line-height: 1.4; word-break: break-all; overflow-wrap: break-word; }
+    .detail-title-row {
+      padding-bottom: 10px; margin-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .detail-title-row .detail-value {
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: break-word;
+      line-height: 1.5;
+      max-height: 4.5em;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+    }
     .detail-identity-row {
       display: flex; gap: 16px;
       padding-bottom: 10px; margin-bottom: 10px;
@@ -555,12 +682,19 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border-color: rgba(88,166,255,.2);
     }
     .tab-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+    .range-btn:focus-visible,
+    .btn-refresh:focus-visible,
+    .page-btn:focus-visible,
+    .copy-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
 
     /* ── Model Calling 实时状态 ────────────────────────── */
     .model-calling-card {
-      margin-bottom: 5px;
+      margin-bottom: var(--gap-section);
+    }
+    .model-token-card {
+      margin-bottom: var(--gap-section);
     }
     .mc-empty {
       text-align: center;
@@ -629,6 +763,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       background: rgba(251,146,60,.15);
       color: #fb923c;
     }
+    .mc-badge-peak {
+      background: rgba(148,163,184,.12);
+      color: #94a3b8;
+    }
     .mc-badge-active {
       background: rgba(74,222,128,.12);
       color: #4ade80;
@@ -677,12 +815,21 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       0%,100% { color: inherit; }
       40% { color: #f87171; }
     }
+    /* ── 尊重「减少动态效果」系统偏好（前庭敏感用户）── */
+    @media (prefers-reduced-motion: reduce) {
+      .kpi-card, .card { animation: none !important; }
+      *, *::before, *::after {
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
   </style>
 </head>
 <body>
 <header>
   <div class="header-left">
-    <div class="logo">C</div>
+    <div class="logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="url(#cpBrand)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">{{LOGO_DEFS}}<circle cx="12" cy="12" r="11" fill="none" stroke="url(#cpBrand)" stroke-width="0.5" stroke-opacity=".55"/><g>{{PROMPT}}</g></svg></div>
     <h1>Coding Proxy Dashboard</h1>
     <span class="badge" id="version-badge">v-.-.-</span>
   </div>
@@ -787,7 +934,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <!-- Token 用量（按 Vendor / 模型）堆叠图 -->
-  <div class="card" style="margin-bottom:12px">
+  <div class="card model-token-card">
     <div class="card-title" id="title-model-token-timeline">近 7 天 Token 用量（按 Vendor / 模型）</div>
     <div class="chart-with-legend">
       <div class="chart-wrap-xl">
@@ -1229,12 +1376,15 @@ function renderQuotaBar(qg) {
 }
 
 function updateVendorStatus(status) {
+  // 拖拽进行中 / 重排序 POST 未决时跳过重渲染，避免抢占正在操作的 DOM
+  if (_tierDrag.active || _tierDrag.inFlight) return;
   const tiers = status.tiers || [];
   const list = document.getElementById('vendor-list');
   if (!tiers.length) {
     list.innerHTML = '<div class="empty"><div class="empty-icon">🔌</div>无供应商数据</div>';
     return;
   }
+  const reorderable = tiers.length >= 2;
   list.innerHTML = tiers.map(tier => {
     const cb = tier.circuit_breaker || {};
     const cbClass = cbStateClass(cb.state);
@@ -1248,8 +1398,13 @@ function updateVendorStatus(status) {
     const rlInfo = tier.rate_limit || {};
     const rlHtml = rlInfo.limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
 
-    return `<div class="vendor-item">
+    // Pointer Events 重排：仅需 data-vendor 定位；手柄作为拖拽发起点（无原生 draggable）
+    const dragAttrs = ` data-vendor="${tier.name}"`;
+    const handle = reorderable ? `<div class="drag-handle" title="拖拽调整优先级">⠿</div>` : '';
+
+    return `<div class="vendor-item"${dragAttrs}>
       <div class="vendor-info">
+        ${handle}
         <div class="vendor-avatar">${initial}</div>
         <span class="vendor-name">${tier.name}</span>
       </div>
@@ -1260,6 +1415,145 @@ function updateVendorStatus(status) {
       </div>
     </div>`;
   }).join('');
+}
+
+// ── 供应商状态：拖拽调整优先级（Pointer Events 重排，运行时生效，不重置配额） ────
+// 采用 Pointer Events 而非原生 HTML5 DnD：后者触屏不支持、跨浏览器易「拿不起来」，
+// 是业界公认脆弱的重排序方案（故 SortableJS / dnd-kit 等均改用指针事件）。
+const _tierDrag = {
+  active: false,     // 已越过阈值、进入拖拽
+  srcName: null,     // 被拖拽 vendor 名
+  srcEl: null,       // 被拖拽行
+  pointerId: null,   // 捕获的指针 ID
+  startY: 0,         // pointerdown 起点 Y
+  origOrder: null,   // 拖拽开始时的顺序快照（无变化则跳过 PUT）
+  inFlight: false,   // PUT 未决
+};
+const _TIER_DRAG_THRESHOLD = 4; // px，越过才判定为拖拽（否则视作点击）
+
+function _tierCurrentOrder(listEl) {
+  return Array.from(listEl.querySelectorAll('.vendor-item'))
+    .map(function(el) { return el.dataset.vendor; })
+    .filter(Boolean);
+}
+
+// 依据指针 Y 与各兄弟行中点比较，即时(乐观)重排 DOM
+function _tierDragMoveTo(listEl, clientY) {
+  const dragged = _tierDrag.srcEl;
+  if (!dragged) return;
+  const siblings = Array.from(listEl.querySelectorAll('.vendor-item'))
+    .filter(function(el) { return el !== dragged; });
+  for (var i = 0; i < siblings.length; i++) {
+    const rect = siblings[i].getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) {
+      if (dragged !== siblings[i] && dragged.nextElementSibling !== siblings[i]) {
+        listEl.insertBefore(dragged, siblings[i]);
+      }
+      return;
+    }
+  }
+  if (listEl.lastElementChild !== dragged) listEl.appendChild(dragged); // 落到末尾
+}
+
+function _tierDragReset() {
+  if (_tierDrag.srcEl) {
+    if (_tierDrag.pointerId != null) {
+      try { _tierDrag.srcEl.releasePointerCapture(_tierDrag.pointerId); } catch (_) {}
+    }
+    _tierDrag.srcEl.classList.remove('dragging');
+  }
+  _tierDrag.active = false;
+  _tierDrag.srcName = null;
+  _tierDrag.srcEl = null;
+  _tierDrag.pointerId = null;
+  _tierDrag.startY = 0;
+  _tierDrag.origOrder = null;
+}
+
+function initTierDrag() {
+  // 指针事件委托绑定在静态容器 #vendor-list 上一次；子节点重渲染后仍生效
+  const list = document.getElementById('vendor-list');
+  if (!list || list.dataset.dndBound === '1') return;
+  list.dataset.dndBound = '1';
+
+  list.addEventListener('pointerdown', function(e) {
+    if (e.button != null && e.button !== 0) return;            // 仅主指针/左键
+    const handle = e.target && e.target.closest && e.target.closest('.drag-handle');
+    if (!handle) return;                                       // 仅从手柄发起，避免误触与文本选择
+    const item = handle.closest('.vendor-item');
+    if (!item || !item.dataset.vendor) return;
+    if (list.querySelectorAll('.vendor-item').length < 2) return;
+    _tierDrag.srcEl = item;
+    _tierDrag.srcName = item.dataset.vendor;
+    _tierDrag.pointerId = e.pointerId;
+    _tierDrag.startY = e.clientY;
+    try { item.setPointerCapture(e.pointerId); } catch (_) {}  // 捕获后 DOM 重排不丢事件
+    e.preventDefault();                                        // 阻止文本选择
+  });
+
+  list.addEventListener('pointermove', function(e) {
+    if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
+    if (!_tierDrag.active) {
+      if (Math.abs(e.clientY - _tierDrag.startY) < _TIER_DRAG_THRESHOLD) return;
+      _tierDrag.active = true;                                 // 越阈值 → 正式进入拖拽
+      _tierDrag.origOrder = _tierCurrentOrder(list);
+      _tierDrag.srcEl.classList.add('dragging');
+    }
+    e.preventDefault();
+    _tierDragMoveTo(list, e.clientY);
+  });
+
+  function _tierDragFinish(commit) {
+    if (!_tierDrag.srcEl) return;
+    const wasActive = _tierDrag.active;
+    const order = _tierCurrentOrder(list);
+    const orig = _tierDrag.origOrder;
+    _tierDragReset();
+    if (!wasActive) return;                                    // 仅点击手柄未拖动 → 空操作
+    if (!commit) { _tierRevertToList(); return; }              // 取消 → 回滚服务端真实顺序
+    if (orig && order.join(',') === orig.join(',')) return;   // 顺序未变 → 跳过 PUT
+    persistTierOrder(order);                                   // 提交新顺序（PUT + 失败回滚）
+  }
+
+  list.addEventListener('pointerup', function(e) {
+    if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
+    _tierDragFinish(true);
+  });
+  list.addEventListener('pointercancel', function(e) {
+    if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
+    _tierDragFinish(false);
+  });
+}
+
+function persistTierOrder(names) {
+  if (_tierDrag.inFlight) return;          // 防并发：上一次未决则忽略
+  if (!Array.isArray(names) || names.length < 2) return;
+  _tierDrag.inFlight = true;
+  fetch('/api/tier-order', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vendors: names })
+  }).then(function(res) {
+    _tierDrag.inFlight = false;            // 先清守卫，允许随后的 refreshOverview 重渲染
+    if (res.ok) {
+      // 服务端已更新顺序；刷新以同步请求趋势图等的排序
+      if (!_tierDrag.active) refreshOverview().catch(function() {});
+    } else {
+      console.error('tier-order rejected:', res.status);
+      _tierRevertToList();
+    }
+  }).catch(function(e) {
+    _tierDrag.inFlight = false;
+    console.error('tier-order failed:', e);
+    _tierRevertToList();
+  });
+}
+
+function _tierRevertToList() {
+  // 回滚到服务端真实顺序（PUT 失败 → 服务端顺序未变）
+  fetchJSON('/api/status').then(function(status) {
+    updateVendorStatus(status);
+  }).catch(function() {});
 }
 
 // ── Model Calling 实时状态 ────────────────────────────────
@@ -1282,10 +1576,12 @@ function updateModelCalling(status) {
       models.push({
         vendor: tier.name,
         model: model,
-        limit: d.limit || 0,
+        mode: d.mode || 'limited',
+        limit: d.limit,
         in_use: d.in_use || 0,
-        available: d.available || 0,
+        available: d.available,
         pending: d.pending || 0,
+        peak_pending_recent: d.peak_pending_recent || 0,
       });
     }
   }
@@ -1298,18 +1594,33 @@ function updateModelCalling(status) {
   var html = '<div class="mc-grid">';
   for (var k = 0; k < models.length; k++) {
     var m = models[k];
-    var pct = m.limit > 0 ? Math.round((m.in_use / m.limit) * 100) : 0;
-    var barClass = pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high');
 
-    html += '<div class="mc-model-row">'
-      + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
-      + '<div class="mc-bar-wrap"><div class="mc-bar-fill ' + barClass + '" style="width:' + pct + '%"></div></div>'
-      + '<div class="mc-stats">'
-      + '<span class="mc-badge mc-badge-active">' + m.in_use
-      + '/<span class="mc-limit-editable" data-tier="' + escapeHtml(m.vendor) + '" data-model="' + escapeHtml(m.model) + '" data-limit="' + m.limit + '" title="点击修改并行度">' + m.limit + '</span></span>'
-      + (m.pending > 0 ? '<span class="mc-badge mc-badge-pending">⏳ ' + m.pending + '</span>' : '')
-      + '</div>'
-      + '</div>';
+    if (m.mode === 'monitor') {
+      // monitor 模式：纯计数徽章，无 limit/进度条
+      html += '<div class="mc-model-row">'
+        + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
+        + '<div class="mc-bar-wrap"></div>'
+        + '<div class="mc-stats">'
+        + '<span class="mc-badge mc-badge-active">' + m.in_use + '</span>'
+        + '</div>'
+        + '</div>';
+    } else {
+      // limited 模式：保留现有渲染（进度条 + limit 编辑）
+      var limit = m.limit || 0;
+      var pct = limit > 0 ? Math.round((m.in_use / limit) * 100) : 0;
+      var barClass = pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high');
+
+      html += '<div class="mc-model-row">'
+        + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
+        + '<div class="mc-bar-wrap"><div class="mc-bar-fill ' + barClass + '" style="width:' + pct + '%"></div></div>'
+        + '<div class="mc-stats">'
+        + '<span class="mc-badge mc-badge-active">' + m.in_use
+        + '/<span class="mc-limit-editable" data-tier="' + escapeHtml(m.vendor) + '" data-model="' + escapeHtml(m.model) + '" data-limit="' + limit + '" title="点击修改并行度">' + limit + '</span></span>'
+        + (m.pending > 0 ? '<span class="mc-badge mc-badge-pending">⏳ ' + m.pending + '</span>' : '')
+        + (m.pending === 0 && m.peak_pending_recent > 0 ? '<span class="mc-badge mc-badge-peak">🕘 曾排队 ' + m.peak_pending_recent + '</span>' : '')
+        + '</div>'
+        + '</div>';
+    }
   }
   html += '</div>';
   wrap.innerHTML = html;
@@ -1325,7 +1636,7 @@ function startModelCallingPoll() {
     }).catch(function() {});
   }
   tick();
-  _mcTimer = setInterval(tick, 5000);
+  _mcTimer = setInterval(tick, 10000);
 }
 function stopModelCallingPoll() {
   if (_mcTimer) { clearInterval(_mcTimer); _mcTimer = null; }
@@ -1878,9 +2189,11 @@ function renderSessionPage() {
         '<td>' + formatCategories(s.client_categories) + '</td>' +
         '</tr>' +
         '<tr class="row-detail"><td colspan="11"><div class="detail-card">' +
+          '<div class="detail-title-row">' +
+            '<div class="detail-item"><div class="detail-label">Title</div><div class="detail-value">' + (sessionTitle ? escapeHtml(sessionTitle) : '–') + '</div></div>' +
+          '</div>' +
           '<div class="detail-identity-row">' +
             '<div class="detail-item"><div class="detail-label">Session ID</div><div class="detail-value" title="' + escapeHtml(s.session_key) + '">' + escapeHtml(parsed.session_id || s.session_key) + '</div></div>' +
-            '<div class="detail-item"><div class="detail-label">Title</div><div class="detail-value">' + (sessionTitle ? escapeHtml(sessionTitle) : '–') + '</div></div>' +
             '<div class="detail-item"><div class="detail-label">Device</div><div class="detail-value" title="' + escapeHtml(parsed.device_id || '') + '">' + (parsed.device_id ? escapeHtml(parsed.device_id) : '–') + '</div></div>' +
             '<div class="detail-item"><div class="detail-label">Account</div><div class="detail-value" title="' + escapeHtml(parsed.account_uuid || '') + '">' + (parsed.account_uuid ? escapeHtml(parsed.account_uuid) : '–') + '</div></div>' +
           '</div>' +
@@ -2078,6 +2391,7 @@ function switchTab(name) {
   fetchJSON('/api/dashboard/summary?days=7').then(function(s) {
     if (s && s.version) document.getElementById('version-badge').textContent = 'v' + s.version;
   }).catch(function(){});
+  initTierDrag();                // 绑定供应商列表拖拽（事件委托，幂等）
   refresh();                     // 仅加载初始页签的数据
   setInterval(refresh, 600000);  // 每 10 分钟刷新当前页签
   if (initial === 'overview') startModelCallingPoll();
@@ -2085,7 +2399,7 @@ function switchTab(name) {
 </script>
 </body>
 </html>
-"""
+""".replace("{{PROMPT}}", _PROMPT_PATHS).replace("{{LOGO_DEFS}}", _LOGO_DEFS)
 
 
 # ── 数据计算工具 ──────────────────────────────────────────────────────────
@@ -2162,10 +2476,20 @@ def register_dashboard_routes(app: Any) -> None:
         """返回内嵌 favicon."""
         return Response(content=_FAVICON_ICO, media_type="image/x-icon")
 
+    @app.get("/favicon.svg", include_in_schema=False)
+    async def favicon_svg() -> Response:
+        """返回 SVG favicon（现代浏览器优先）."""
+        return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
+
     @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
     async def dashboard() -> HTMLResponse:
-        """返回 Dashboard HTML 页面."""
-        return HTMLResponse(content=_DASHBOARD_HTML)
+        """返回 Dashboard HTML 页面.
+
+        内联 JS/CSS 随版本变化，禁用缓存以免浏览器留存旧内联脚本掩盖前端修复。
+        """
+        return HTMLResponse(
+            content=_DASHBOARD_HTML, headers={"Cache-Control": "no-cache"}
+        )
 
     @app.get("/api/dashboard/summary")
     async def dashboard_summary(request: Request, days: int = 7) -> Response:

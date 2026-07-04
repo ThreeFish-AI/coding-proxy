@@ -11,9 +11,12 @@ import logging
 import re
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from ..config.session_policy import TitleVendorBinding
 
 from ..vendors.base import (
     NoCompatibleVendorError,
@@ -50,11 +53,13 @@ from ..compat.canonical import (
     CompatibilityStatus,
     build_canonical_request,
 )
-from ..model.compat import CanonicalRequest
+from ..model.compat import CanonicalMessagePart, CanonicalRequest
 
 logger = logging.getLogger(__name__)
 
-_SESSION_TITLE_MAX_LEN = 30
+_SESSION_TITLE_MAX_LEN = 600
+# 回退标题截取长度 — 工具结果等非用户直接输入的摘要上限。
+_FALLBACK_TITLE_MAX_LEN = 80
 
 # Claude Code 注入的"噪声"标签 — 系统级上下文,不应进入 Session 标题。
 # 这些标签由 CC harness 在首个 user 消息 content 中拼接,高度同质,
@@ -63,10 +68,16 @@ _NOISE_TAG_PATTERN = re.compile(
     r"<(?P<tag>system-reminder|user-preferences|"
     r"local-command-stdout|local-command-stderr|"
     r"bash-input|bash-stdout|bash-stderr|"
-    r"ide_selection|stdin|system_instruction)\b[^>]*>"
+    r"ide_selection|stdin|system_instruction|session|"
+    r"artifactMetadata|thinking)\b[^>]*>"
     r".*?</(?P=tag)>",
     flags=re.DOTALL | re.IGNORECASE,
 )
+
+# <session> 标签需要特殊处理:当用户文本在 <session> 标签内部时,
+# 完整块剥离会连同用户文本一起删除。此模式仅去除外壳标签(保留内容),
+# 用于首轮完整剥离结果为空时的二次回退提取。
+_SESSION_TAG_WRAPPER = re.compile(r"</?session\b[^>]*>", flags=re.IGNORECASE)
 
 # Slash command 子标签:用于识别 /commit、/review 等命令式调用,
 # 合成"命令 + 参数"式标题。
@@ -77,6 +88,9 @@ _CMD_WRAPPER_PATTERN = re.compile(
     r"<command-[\w-]+>.*?</command-[\w-]+>", flags=re.DOTALL
 )
 
+# 空白折叠
+_WHITESPACE_PATTERN = re.compile(r"\s+")
+
 
 def _sanitize_user_text(raw: str) -> str:
     """剔除 Claude Code 注入的系统级 XML 块,还原真实用户输入。
@@ -85,8 +99,10 @@ def _sanitize_user_text(raw: str) -> str:
     1. Slash command 优先识别 — 若检测到 <command-name>,合成"命令 + 参数"
        式标题(因为残留文本通常为空,直接取标签内容更有意义)。
     2. 通用噪声剥离 — 移除已知白名单内的 system-reminder 等标签。
-    3. 残留 command-* 包裹清除 — 兜底去除 command-message 等次要标签。
-    4. 前后空白归一化 — 折叠连续空白为单空格,便于 30 字截断。
+    3. <session> 二次回退 — 若首轮剥离后为空,说明用户文本可能在 <session>
+       标签内部;此时仅去除外壳标签,保留内部文本再做噪声剥离。
+    4. 残留 command-* 包裹清除 — 兜底去除 command-message 等次要标签。
+    5. 前后空白归一化 — 折叠连续空白为单空格。
     """
     if not raw:
         return ""
@@ -104,23 +120,140 @@ def _sanitize_user_text(raw: str) -> str:
     # 阶段二: 通用噪声剥离
     cleaned = _NOISE_TAG_PATTERN.sub("", raw)
     cleaned = _CMD_WRAPPER_PATTERN.sub("", cleaned)
+    cleaned = _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
+    if cleaned:
+        return cleaned
 
-    # 阶段三: 空白折叠
-    return re.sub(r"\s+", " ", cleaned).strip()
+    # 阶段三: <session> 二次回退
+    # 当首轮全部剥离为空时,用户文本很可能被 <session> 标签完整包裹。
+    # 此时不去除 <session> 块,而是仅剥掉外壳标签,保留内部文本后重新剥离。
+    if "<session" in raw.lower():
+        inner = _SESSION_TAG_WRAPPER.sub("", raw)
+        cleaned = _NOISE_TAG_PATTERN.sub("", inner)
+        cleaned = _CMD_WRAPPER_PATTERN.sub("", cleaned)
+        cleaned = _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
+        if cleaned:
+            return cleaned
+
+    return ""
 
 
-def _extract_session_title(request: CanonicalRequest) -> str:
-    """从规范化请求中提取首个用户消息文本作为 session 标题。
+# ── Session 标题提取: 多层级回退策略 ──────────────────────────────
+#
+# Level 1: user TEXT → 噪声剥离 → 首条非空文本 (原有逻辑)
+# Level 2: user TOOL_RESULT → text 截取 → "[Tool output] <snippet>"
+# Level 3: user IMAGE → 计数 → "[1 Image]" / "[N Images]"
+# Level 4: 请求元数据 → tool_names / model → "[Tool call] Bash, Read"
+#          / "[Session] claude-opus-4-8"
+# ─────────────────────────────────────────────────────────────────
 
-    跳过 Claude Code 注入的系统级 XML 块(system-reminder、user-preferences 等),
-    确保标题反映用户真实输入而非高同质化的系统模板。
+
+def _extract_title_from_user_text(
+    messages: list[CanonicalMessagePart],
+    exempt_prefixes: list[str] | None = None,
+) -> str:
+    """Level 1: 从 user TEXT 部分提取经噪声剥离后的首条非空文本.
+
+    ``exempt_prefixes`` 非空时，清洗后文本以任一前缀开头则跳过该输入、继续向后
+    查找——用于过滤注入式 Prompt，避免其被误用作 Session 标题。匹配作用于
+    ``_sanitize_user_text`` 清洗后的纯文本（而非带 XML 标签的原始 raw）。
     """
-    for part in request.messages:
+    for part in messages:
         if part.role != "user" or part.type != CanonicalPartType.TEXT:
             continue
         cleaned = _sanitize_user_text(part.text)
+        if not cleaned:
+            continue
+        if exempt_prefixes and any(cleaned.startswith(p) for p in exempt_prefixes):
+            logger.debug(
+                "Title candidate skipped by exempt prefix %r (snippet=%r)",
+                next(p for p in exempt_prefixes if cleaned.startswith(p)),
+                cleaned[:60],
+            )
+            continue
+        return cleaned[:_SESSION_TITLE_MAX_LEN]
+    return ""
+
+
+def _extract_title_from_tool_results(messages: list[CanonicalMessagePart]) -> str:
+    """Level 2: 从 user TOOL_RESULT 部分截取文本摘要."""
+    for part in messages:
+        if part.role != "user" or part.type != CanonicalPartType.TOOL_RESULT:
+            continue
+        if not part.text:
+            continue
+        cleaned = _sanitize_user_text(part.text)
         if cleaned:
-            return cleaned[:_SESSION_TITLE_MAX_LEN]
+            snippet = cleaned[:_FALLBACK_TITLE_MAX_LEN]
+            return f"[Tool output] {snippet}"
+    return ""
+
+
+def _extract_title_from_images(messages: list[CanonicalMessagePart]) -> str:
+    """Level 3: 统计 user IMAGE 部分数量,生成图片描述标题."""
+    count = sum(
+        1 for p in messages if p.role == "user" and p.type == CanonicalPartType.IMAGE
+    )
+    if count == 0:
+        return ""
+    return f"[{count} Image{'s' if count > 1 else ''}]"
+
+
+def _extract_title_from_metadata(request: CanonicalRequest) -> str:
+    """Level 4: 从请求元数据 (tool_names / model) 合成兜底标题."""
+    if request.tool_names:
+        names = ", ".join(request.tool_names[:3])
+        return f"[Tool call] {names}"
+    if request.model:
+        return f"[Session] {request.model}"
+    return ""
+
+
+def _extract_session_title(
+    request: CanonicalRequest,
+    exempt_prefixes: list[str] | None = None,
+) -> str:
+    """从规范化请求中提取 session 标题 — 多层级回退策略。
+
+    依次尝试: user TEXT 噪声剥离 → TOOL_RESULT 摘要 → IMAGE 计数 → 元数据兜底。
+    任一层级产出候选且未被豁免即返回,确保 Dashboard 尽可能展示有辨识度的标题。
+
+    ``exempt_prefixes`` 对所有层级统一生效：任一层产出的候选标题若以任一前缀
+    开头，则视为豁免、继续向下一层回退。Level 1 内部仍保留「逐条消息跳过」
+    语义（清洗后文本以豁免前缀开头则跳过该条、继续查找下一条 user TEXT）；
+    本函数在编排层对每层最终候选再做一次 ``_is_exempt`` 拦截，使 Level 2/3/4
+    的合成标题（如 ``[Tool output]``、``[N Image(s)]``、``[Tool call]``、
+    ``[Session]``）也能被用户显式豁免。全部层级均被豁免时返回空串，调用方
+    ``if title:`` 据此跳过写库，session 标题保持空，待后续请求经
+    ``update_empty_session_title`` 回填有意义标题。默认 ``None`` 时行为与历史一致。
+    """
+    # 防御性过滤空串前缀："" startswith 恒真会误豁免一切。入参虽经配置层与
+    # 构造器两层归一化，模块级直接调用（如测试）仍可能传入 [""]，此处兜底。
+    prefixes = [p for p in (exempt_prefixes or []) if p]
+
+    def _is_exempt(candidate: str) -> bool:
+        """候选标题是否命中任一豁免前缀（大小写敏感 startswith）。"""
+        return bool(prefixes) and any(candidate.startswith(p) for p in prefixes)
+
+    messages = request.messages
+    # Level 1: 内部已对每条 user TEXT 做豁免跳过；外层 _is_exempt 对其最终候选
+    # 再做一次拦截（正常路径下冗余，作为 _sanitize_user_text 一致性兜底）。
+    title = _extract_title_from_user_text(messages, exempt_prefixes=prefixes)
+    if title and not _is_exempt(title):
+        return title[:_SESSION_TITLE_MAX_LEN]
+    # Level 2 / Level 3: 候选为合成标题，统一经 _is_exempt 拦截后回退。
+    for extractor in (
+        _extract_title_from_tool_results,
+        _extract_title_from_images,
+    ):
+        title = extractor(messages)
+        if title and not _is_exempt(title):
+            return title[:_SESSION_TITLE_MAX_LEN]
+    # Level 4: 签名不同（依赖 request 元数据）。被豁免则落到末尾返回空串，
+    # 使调用方 if title: 跳过写库、保留空标题待后续回填。
+    title = _extract_title_from_metadata(request)
+    if title and not _is_exempt(title):
+        return title[:_SESSION_TITLE_MAX_LEN]
     return ""
 
 
@@ -525,6 +658,8 @@ class _RouteExecutor:
         session_manager: RouteSessionManager,
         reauth_coordinator: Any | None = None,
         session_policy_resolver: SessionPolicyResolver | None = None,
+        title_vendor_bindings: list[TitleVendorBinding] | None = None,
+        title_exempt_prefixes: list[str] | None = None,
     ) -> None:
         self._router = router
         self._tiers = tiers
@@ -532,12 +667,41 @@ class _RouteExecutor:
         self._session_mgr = session_manager
         self._reauth_coordinator = reauth_coordinator
         self._policy_resolver = session_policy_resolver or SessionPolicyResolver()
+        self._title_vendor_bindings = title_vendor_bindings or []
+        # 豁免前缀名单：构造期二次归一化（strip + 去空），双重防御配置层 field_validator。
+        # 即便绕过配置层直接构造 executor，也能避免空串 startswith 恒真与纯空白失配。
+        self._title_exempt_prefixes: list[str] = [
+            stripped
+            for p in (title_exempt_prefixes or [])
+            if isinstance(p, str) and (stripped := p.strip())
+        ]
+        self._validate_title_vendor_bindings()
 
         # Tier 名称 → OAuth provider 名称的映射
         self._tier_provider_map: dict[str, str] = {
             "copilot": "github",
             "antigravity": "google",
         }
+
+    def _validate_title_vendor_bindings(self) -> None:
+        """启动期校验标题绑定引用的 vendor 均存在,缺失则告警.
+
+        与手动绑定 API（拒绝未知 vendor）的语义对齐：此处不硬失败，
+        仅记录警告——避免单条误配置阻断整个代理启动；运行时
+        `_resolve_effective_tiers` 会静默跳过未知 vendor 回退默认顺序。
+        """
+        if not self._title_vendor_bindings:
+            return
+        valid = {t.name for t in self._tiers}
+        for binding in self._title_vendor_bindings:
+            if binding.vendor not in valid:
+                logger.warning(
+                    "title_vendor_bindings 引用了未知 vendor %r（前缀 %r）；"
+                    "可用 vendor: %s。该绑定将在运行时被静默跳过。",
+                    binding.vendor,
+                    binding.prefix,
+                    sorted(valid),
+                )
 
     # ── 公开执行入口 ──────────────────────────────────────
 
@@ -564,6 +728,38 @@ class _RouteExecutor:
                 ordered.append(tier)
                 seen.add(tier.name)
         return ordered
+
+    def _extract_session_title(self, request: CanonicalRequest) -> str:
+        """封装模块级标题提取，注入实例持有的豁免前缀名单.
+
+        将 ``self._title_exempt_prefixes`` 透传给模块级 ``_extract_session_title``，
+        使 Level 1 能跳过以豁免前缀开头的注入式 Prompt。4 处标题提取调用点统一
+        经此方法，避免重复透传（零透传污染）。
+        """
+        return _extract_session_title(
+            request, exempt_prefixes=self._title_exempt_prefixes
+        )
+
+    def _apply_title_based_policy(self, session_key: str, title: str) -> None:
+        """根据 Session 标题前缀自动绑定供应商.
+
+        当标题以预配置的前缀开头时，通过 SessionPolicyResolver.upsert()
+        将该 Session 绑定到指定供应商，后续请求无需再走默认路由。
+
+        仅在新 Session 首次提取标题时调用，避免覆盖手动绑定的策略。
+        """
+        if not title or not self._title_vendor_bindings:
+            return
+        for binding in self._title_vendor_bindings:
+            if title.startswith(binding.prefix):
+                self._policy_resolver.upsert(session_key, [binding.vendor])
+                logger.info(
+                    "Session title prefix %r matched → auto-bind to %s (session=%s)",
+                    binding.prefix,
+                    binding.vendor,
+                    session_key[:12],
+                )
+                return
 
     def _prepare_body_for_tier(
         self,
@@ -658,9 +854,17 @@ class _RouteExecutor:
             canonical_request.trace_id,
         )
         if is_new_session:
-            title = _extract_session_title(canonical_request)
+            title = self._extract_session_title(canonical_request)
             if title:
                 await self._recorder.set_session_title(
+                    canonical_request.session_key, title
+                )
+                self._apply_title_based_policy(canonical_request.session_key, title)
+        else:
+            # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
+            title = self._extract_session_title(canonical_request)
+            if title:
+                await self._recorder.update_empty_session_title(
                     canonical_request.session_key, title
                 )
         incompatible_reasons: list[str] = []
@@ -689,15 +893,17 @@ class _RouteExecutor:
                     tier.name, failed_tier_name, session_record, body
                 )
                 body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
-                async for chunk in tier.vendor.send_message_stream(
-                    body_for_tier, headers
-                ):
-                    parse_usage_from_chunk(
-                        chunk,
-                        usage,
-                        vendor_label=_VENDOR_PROTOCOL_LABEL_MAP.get(tier.name),
-                    )
-                    yield chunk, tier.name
+                _mapped_model = tier.vendor.map_model(body.get("model", ""))
+                async with tier.vendor.track_in_flight(_mapped_model):
+                    async for chunk in tier.vendor.send_message_stream(
+                        body_for_tier, headers
+                    ):
+                        parse_usage_from_chunk(
+                            chunk,
+                            usage,
+                            vendor_label=_VENDOR_PROTOCOL_LABEL_MAP.get(tier.name),
+                        )
+                        yield chunk, tier.name
 
                 info = self._recorder.build_usage_info(usage)
                 if has_missing_input_usage_signals(info):
@@ -835,9 +1041,17 @@ class _RouteExecutor:
             canonical_request.trace_id,
         )
         if is_new_session:
-            title = _extract_session_title(canonical_request)
+            title = self._extract_session_title(canonical_request)
             if title:
                 await self._recorder.set_session_title(
+                    canonical_request.session_key, title
+                )
+                self._apply_title_based_policy(canonical_request.session_key, title)
+        else:
+            # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
+            title = self._extract_session_title(canonical_request)
+            if title:
+                await self._recorder.update_empty_session_title(
                     canonical_request.session_key, title
                 )
         incompatible_reasons: list[str] = []
@@ -863,7 +1077,9 @@ class _RouteExecutor:
                     tier.name, failed_tier_name, session_record, body
                 )
                 body_for_tier = self._prepare_body_for_tier(body, tier, source_vendor)
-                resp = await tier.vendor.send_message(body_for_tier, headers)
+                _mapped_model = tier.vendor.map_model(body.get("model", ""))
+                async with tier.vendor.track_in_flight(_mapped_model):
+                    resp = await tier.vendor.send_message(body_for_tier, headers)
 
                 if resp.status_code < 400:
                     duration = int((time.monotonic() - start) * 1000)

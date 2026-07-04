@@ -356,6 +356,20 @@ def _make_429_response(
     )
 
 
+def _make_529_response(
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    """构造 529 HTTP 响应（Overloaded / 并发过载）."""
+    return httpx.Response(
+        status_code=529,
+        content=b'{"error":{"type":"overloaded_error","message":"Overloaded"}}',
+        headers=headers or {},
+        request=httpx.Request(
+            "POST", "https://open.bigmodel.cn/api/anthropic/v1/messages"
+        ),
+    )
+
+
 def _make_200_response() -> httpx.Response:
     """构造 200 HTTP 响应."""
     body = json.dumps(
@@ -666,3 +680,212 @@ class TestRateLimitRetry:
             {},
         )
         assert resp.status_code == 401
+
+    # ── 529 Overloaded（并发过载）重试，行为与 429 一致 ──────
+
+    @pytest.mark.asyncio
+    async def test_nonstream_529_retries_and_succeeds(self):
+        """非流式 529 两次后 200，重试成功."""
+        vendor = _make_zhipu_vendor()
+        call_count = 0
+
+        async def mock_post(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                return _make_529_response()
+            return _make_200_response()
+
+        with (
+            patch.object(vendor, "_get_client") as mock_client,
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            client = AsyncMock()
+            client.post = mock_post
+            mock_client.return_value = client
+
+            resp = await vendor.send_message(
+                {"model": "claude-sonnet-4-20250514", "messages": []},
+                {},
+            )
+
+        assert resp.status_code == 200
+        assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_nonstream_529_exhausted_retries(self):
+        """非流式连续 5 次 529，耗尽重试后返回 529."""
+        vendor = _make_zhipu_vendor()
+        call_count = 0
+
+        async def mock_post(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return _make_529_response()
+
+        with (
+            patch.object(vendor, "_get_client") as mock_client,
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            client = AsyncMock()
+            client.post = mock_post
+            mock_client.return_value = client
+
+            resp = await vendor.send_message(
+                {"model": "claude-sonnet-4-20250514", "messages": []},
+                {},
+            )
+
+        assert resp.status_code == 529
+        assert call_count == 5
+
+    @pytest.mark.asyncio
+    async def test_stream_529_retries_and_succeeds(self):
+        """流式 529 两次后成功."""
+        call_count = 0
+
+        async def fake_stream(self, body, headers):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                resp = _make_529_response()
+                raise httpx.HTTPStatusError(
+                    "529",
+                    request=resp.request,
+                    response=resp,
+                )
+            yield b'data: {"type":"content_block_start"}\n\n'
+            yield b'data: {"type":"content_block_delta"}\n\n'
+
+        vendor = _make_zhipu_vendor()
+        chunks = []
+        with (
+            patch.object(NativeAnthropicVendor, "send_message_stream", fake_stream),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            async for chunk in vendor.send_message_stream(
+                {"model": "claude-sonnet-4-20250514", "messages": []},
+                {},
+            ):
+                chunks.append(chunk)
+
+        assert len(chunks) == 2
+        assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_stream_529_exhausted_retries_raises(self):
+        """流式连续 529，耗尽重试后 raise."""
+        call_count = 0
+
+        async def fake_stream(self, body, headers):
+            nonlocal call_count
+            call_count += 1
+            resp = _make_529_response()
+            raise httpx.HTTPStatusError(
+                "529",
+                request=resp.request,
+                response=resp,
+            )
+            yield  # 使函数成为 async generator（不可达，仅影响类型）
+
+        vendor = _make_zhipu_vendor()
+        with (
+            patch.object(NativeAnthropicVendor, "send_message_stream", fake_stream),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(httpx.HTTPStatusError) as exc_info,
+        ):
+            async for _ in vendor.send_message_stream(
+                {"model": "claude-sonnet-4-20250514", "messages": []},
+                {},
+            ):
+                pass
+
+        assert exc_info.value.response.status_code == 529
+        assert call_count == 5
+
+    @pytest.mark.asyncio
+    async def test_stream_529_respects_retry_after(self):
+        """流式 529 响应含 retry-after 时使用 server 建议延迟.
+
+        回归保障：修复前流式延迟计算把真实状态码 529 传给
+        parse_rate_limit_headers（仅对 429/403 解析），导致 529 忽略
+        retry-after 而回退指数退避（首次最多 1s）。修复后固定按 429
+        语义解析，529 与 429 一样尊重 server retry-after。
+        """
+        call_count = 0
+        sleep_delays = []
+
+        async def fake_stream(self, body, headers):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                resp = _make_529_response(headers={"retry-after": "2"})
+                raise httpx.HTTPStatusError(
+                    "529",
+                    request=resp.request,
+                    response=resp,
+                )
+            yield b'data: {"type":"content_block_start"}\n\n'
+
+        async def mock_sleep(delay):
+            sleep_delays.append(delay)
+
+        vendor = _make_zhipu_vendor()
+        chunks = []
+        with (
+            patch.object(NativeAnthropicVendor, "send_message_stream", fake_stream),
+            patch("asyncio.sleep", side_effect=mock_sleep),
+        ):
+            async for chunk in vendor.send_message_stream(
+                {"model": "claude-sonnet-4-20250514", "messages": []},
+                {},
+            ):
+                chunks.append(chunk)
+
+        assert len(chunks) == 1
+        assert call_count == 2
+        assert len(sleep_delays) == 1
+        # retry-after=2 → 2 * 1.1 = 2.2s（>1s 指数退避首跳，证明用了 server 信号）
+        assert 2.0 <= sleep_delays[0] <= 2.2
+
+    @pytest.mark.asyncio
+    async def test_529_equal_jitter_delay_in_expected_band(self):
+        """非流式 529 无 retry-after 时，Equal Jitter 首跳落在 [0.5, 1.0]s。
+
+        回归保障：Full Jitter 时首跳为 uniform(0, 1000ms)，可能接近 0ms
+        （用户报告的 418.8ms 落在 (0, 1000] 全区间，且整体序列非单调）。
+        Equal Jitter 后区间收窄为 [500, 1000]ms，下界抬升至 500ms，
+        呈现单调非递减的指数退避形态，429/529 同步受益（共用 calculate_delay）。
+        """
+        vendor = _make_zhipu_vendor()
+        sleep_delays = []
+
+        async def mock_sleep(delay):
+            sleep_delays.append(delay)
+
+        call_count = 0
+
+        async def mock_post(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_529_response()  # 无 retry-after
+            return _make_200_response()
+
+        with (
+            patch.object(vendor, "_get_client") as mock_client,
+            patch("asyncio.sleep", side_effect=mock_sleep),
+        ):
+            client = AsyncMock()
+            client.post = mock_post
+            mock_client.return_value = client
+
+            resp = await vendor.send_message(
+                {"model": "claude-sonnet-4-20250514", "messages": []},
+                {},
+            )
+
+        assert resp.status_code == 200
+        assert len(sleep_delays) == 1
+        # Equal Jitter: attempt 0 → temp=1000ms → [500, 1000]ms → sleep([0.5, 1.0])
+        assert 0.5 <= sleep_delays[0] <= 1.0

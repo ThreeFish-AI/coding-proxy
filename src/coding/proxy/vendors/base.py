@@ -44,6 +44,7 @@ from ..compat.canonical import (
 )
 from ..compat.session_store import CompatSessionRecord
 from ..config.schema import FailoverConfig
+from .concurrency import ModelConcurrencyController
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ class BaseVendor(ABC):
         self._client: httpx.AsyncClient | None = None
         self._compat_trace: CompatibilityTrace | None = None
         self._compat_session_record: CompatSessionRecord | None = None
+        # 默认 monitor 模式（仅计数不限流）；子类可覆盖为 limited 模式
+        self._concurrency_controller = ModelConcurrencyController(None)
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -246,7 +249,29 @@ class BaseVendor(ABC):
         diagnostics: dict[str, Any] = {}
         if self._compat_trace is not None:
             diagnostics["compat"] = self._compat_trace.to_dict()
+        concurrency = self._concurrency_controller.get_diagnostics()
+        if concurrency:
+            diagnostics["concurrency"] = concurrency
         return diagnostics
+
+    def track_in_flight(self, mapped_model: str):
+        """返回用于追踪在途请求的异步上下文管理器.
+
+        空 model name 时返回 no-op context（防御性处理）。
+        """
+        if not mapped_model:
+            from contextlib import nullcontext
+
+            return nullcontext()
+        return self._concurrency_controller.track(mapped_model)
+
+    def update_concurrency(self, model: str, limit: int) -> None:
+        """运行时更新指定模型的并发限制.
+
+        默认实现委托给 ``_concurrency_controller.set_limit``。
+        monitor 模式下抛 ``ValueError``。
+        """
+        self._concurrency_controller.set_limit(model, limit)
 
     def should_trigger_failover(
         self, status_code: int, body: dict[str, Any] | None

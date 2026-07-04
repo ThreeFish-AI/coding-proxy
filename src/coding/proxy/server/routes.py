@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 from fastapi import Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 
 from ..vendors.base import NoCompatibleVendorError
 
@@ -197,10 +197,14 @@ def register_health_routes(app: Any) -> None:
         return {"status": "ok"}
 
     @app.head("/")
-    @app.get("/")
-    async def root() -> Response:
+    async def root_head() -> Response:
         """根路径连通性探测 — Claude Code 在建连前发送 HEAD / 作为 health probe."""
         return Response(status_code=200)
+
+    @app.get("/")
+    async def root_get() -> RedirectResponse:
+        """GET / 重定向到 Dashboard."""
+        return RedirectResponse(url="/dashboard", status_code=307)
 
 
 def register_status_route(app: Any, router: Any) -> None:
@@ -254,16 +258,15 @@ def register_concurrency_route(app: Any, router: Any) -> None:
         for tier in router.tiers:
             if tier.name == tier_name:
                 vendor = tier.vendor
-                update_fn = getattr(vendor, "update_concurrency", None)
-                if update_fn is None:
-                    return json_error_response(
-                        400,
-                        error_type="invalid_request_error",
-                        message=f"vendor '{tier_name}' does not support concurrency",
-                    )
                 try:
-                    update_fn(model, limit)
-                except (ValueError, AttributeError) as exc:
+                    vendor.update_concurrency(model, limit)
+                except ValueError as exc:
+                    return json_error_response(
+                        422,
+                        error_type="invalid_request_error",
+                        message=str(exc),
+                    )
+                except AttributeError as exc:
                     return json_error_response(
                         400, error_type="invalid_request_error", message=str(exc)
                     )
@@ -378,6 +381,53 @@ def register_admin_routes(app: Any, router: Any) -> None:
 
         return Response(
             content=json.dumps(result, ensure_ascii=False).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+
+def register_tier_order_route(app: Any, router: Any) -> None:
+    """注册运行时 N-tier 链路顺序调整路由（纯重排序，不重置熔断器/配额守卫）."""
+
+    @app.put("/api/tier-order")
+    async def update_tier_order(request: Request) -> Response:
+        """替换整个 N-tier 链路顺序.
+
+        JSON body: ``{"vendors": ["v1", "v2", ...]}``（需覆盖所有当前启用的 vendor）。
+        与 ``/api/reset`` 的重排序语义一致，但**不会**重置熔断器/配额守卫/rate limit，
+        以保留当日用量统计（供 Web 拖拽调整优先级使用）。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return json_error_response(
+                400, error_type="invalid_request_error", message="body must be JSON"
+            )
+        if not isinstance(body, dict):
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="body must be a JSON object",
+            )
+        raw = body.get("vendors")
+        if not isinstance(raw, list) or not raw:
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="requires non-empty 'vendors' list",
+            )
+        vendor_names = [str(v) for v in raw]
+        try:
+            router.reorder_tiers(vendor_names)
+        except ValueError as exc:
+            return json_error_response(
+                400, error_type="invalid_request_error", message=str(exc)
+            )
+        return Response(
+            content=json.dumps(
+                {"ok": True, "tier_order": router.get_vendor_names()},
+                ensure_ascii=False,
+            ).encode(),
             status_code=200,
             media_type="application/json",
         )
@@ -515,6 +565,7 @@ def register_all_routes(
     register_concurrency_route(app, router)
     register_copilot_routes(app, router)
     register_admin_routes(app, router)
+    register_tier_order_route(app, router)
     register_session_vendor_routes(app, router)
     if reauth_coordinator:
         register_reauth_routes(app, reauth_coordinator)

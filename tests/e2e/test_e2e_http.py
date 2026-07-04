@@ -188,13 +188,16 @@ async def test_http_health_probe(e2e_client: object) -> None:
     )
 
     get_resp = await e2e_client.get("/")
-    assert get_resp.status_code == 200, f"GET / 预期 200，实际 {get_resp.status_code}"
+    assert get_resp.status_code == 307, f"GET / 预期 307，实际 {get_resp.status_code}"
+    assert get_resp.headers["location"] == "/dashboard"
 
     health_resp = await e2e_client.get("/health")
     assert health_resp.status_code == 200
     assert health_resp.json() == {"status": "ok"}
 
-    print("\n[E2E] HTTP health probe 成功: HEAD /=200, GET /=200, /health=ok")
+    print(
+        "\n[E2E] HTTP health probe 成功: HEAD /=200, GET /=307→/dashboard, /health=ok"
+    )
 
 
 @pytest.mark.e2e

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SessionPolicyMatch(BaseModel):
@@ -50,6 +50,22 @@ class SessionPolicy(BaseModel):
     )
 
 
+class TitleVendorBinding(BaseModel):
+    """标题前缀 → 供应商自动绑定规则."""
+
+    prefix: str = Field(
+        min_length=1,
+        description=(
+            "标题前缀匹配模式（大小写敏感的 startswith 匹配）。"
+            "禁止空字符串——空前缀会匹配所有标题,导致全量误绑定。"
+        ),
+    )
+    vendor: str = Field(
+        min_length=1,
+        description="匹配后绑定的目标供应商名称",
+    )
+
+
 class SessionPoliciesConfig(BaseModel):
     """顶层 Session 策略配置容器."""
 
@@ -57,3 +73,45 @@ class SessionPoliciesConfig(BaseModel):
         default_factory=list,
         description="Session 路由策略列表，按定义顺序求值，首次匹配生效",
     )
+    title_vendor_bindings: list[TitleVendorBinding] = Field(
+        default_factory=list,
+        description=(
+            "标题前缀 → 供应商自动绑定规则。"
+            "当 Session 标题以指定前缀开头时，自动绑定到对应供应商。"
+            "匹配规则按列表顺序求值，首次匹配生效。"
+        ),
+    )
+    title_exempt_prefixes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Session 标题豁免前缀名单。标题提取的每一层（user TEXT 噪声剥离、"
+            "TOOL_RESULT 摘要、IMAGE 计数、元数据兜底）产出的候选，若以任一前缀"
+            "开头，则视为豁免、继续向下一层回退；全部层级均被豁免时返回空串，"
+            "调用方据此跳过写库，session 标题保持空待后续真实输入回填。"
+            "既用于过滤注入式 Prompt（如示例语言指令），也可豁免无信息量的合成"
+            "兜底标题（如 [Session]、[Tool call]、[Tool output]）。"
+            "大小写敏感的 startswith 匹配，与 title_vendor_bindings 语义一致。"
+            "加载时会自动 strip + 去空 + 去重；空字符串前缀会被丢弃"
+            "（防空串 startswith 恒真导致全量误豁免）。"
+        ),
+    )
+
+    @field_validator("title_exempt_prefixes", mode="after")
+    @classmethod
+    def _normalize_exempt_prefixes(cls, value: list[str]) -> list[str]:
+        """归一化豁免前缀：strip + 去空 + 去重保序.
+
+        空字符串前缀必须丢弃——``"".startswith`` 恒真会豁免一切用户输入，
+        导致 Level 1 标题提取永久失效。
+        """
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            cleaned = item.strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            result.append(cleaned)
+        return result

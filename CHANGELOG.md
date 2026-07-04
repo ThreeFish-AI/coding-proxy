@@ -4,6 +4,48 @@
 
 ## [Unreleased]
 
+## [v0.5.2a7](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a7) - 2026-07-04
+
+- style(dashboard): Overview 页 6 张 KPI 卡片（今日请求数 / Token 总量 / 输出 Token / 费用估算 / 故障转移 / 平均延迟）固定单行不折行——`.kpi-grid` 由 `repeat(auto-fit, minmax(200px, 1fr))`（视口 < ~1289px 即减列换行）改为 `repeat(6, minmax(0, 1fr))`，`minmax(0,…)` 覆盖 grid 默认 `min-width:auto` 杜绝内容撑列引发的横向溢出，桌面/笔记本/平板横屏（≥1024px）恒定 6 列单行；`gap` 由 off-grid 的 `5px` 归一为 `--gap-section`（12px）；`.kpi-value` 采用 `clamp(20px, 2.2vw, 32px)` 平滑缩放使中宽度不裁剪数值，费用卡 `#kpi-cost-today` 允许在 `" + "` 处换行使双币种始终完整可见；新增 ≤1023px→3 列、≤480px→2 列 优雅降级，`header` 补 `flex-wrap` 修复窄屏横向溢出（Playwright 8 档宽度实测：1440/1280/1024px 均 6 列单行、无横向滚动、无数值裁剪）(#276)；
+- a11y(dashboard): 为 `.range-btn` / `.btn-refresh` / `.page-btn` / `.copy-btn` 补 `:focus-visible` 键盘焦点环，统一交互元素键盘可达性；新增 `@media (prefers-reduced-motion: reduce)` 降级 `fadeInUp` 动画与 hover 过渡，照顾前庭敏感用户 (#276)；
+- fix(dashboard): 补定义 `--bg-secondary` / `--text-muted` 两个此前**未定义**的 CSS 变量（消除 `.mc-model-row` / `.mc-empty` 背景与文字色回退瑕疵）；Google Fonts 补载 JetBrains Mono `700` 字重，修正 `.kpi-value` 合成粗体渲染 (#276)；
+- docs(readme): 页脚补充作者主页（ThreeFish-AI）与 Apache License 2.0 开源协议超链接；
+
+## [v0.5.2a6](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a6) - 2026-07-04
+
+- style(branding): 品牌图标（logo/favicon）迭代至「通透青绿圆环 + Tabler prompt `>_` 笔划」（方案 d05）：全透明底 + 青绿渐变（`#22d3ee` → `#2dd4bf`）细圆环（stroke 0.5，仅原 1/3、通透若隐）+ 饱和青绿渐变 `>_`（stroke 2.5），极细环与饱和笔划形成权重对比、`>_` 为视觉主角，青绿承载终端/代码语义；基础笔划改用 Tabler prompt（chevron `M5 7l5 5l-5 5` + 下划线 `M13 17l6 0`，下划线长 6 单位、不会小尺寸点化）；渐变改 `gradientUnits="userSpaceOnUse"` 绝对坐标，修复纯水平下划线（包围盒高度 0）在默认 objectBoundingBox 渐变下不着色而「消失」的问题；`_LOGO_DEFS` / `_PROMPT_PATHS` 单一事实源统一供 SVG favicon、ICO 回退（省略 0.5px 细环、保留饱和笔划）与页面 logo 消费；`.logo` 容器改全透明、SVG 内嵌圆环 + 青绿 drop-shadow 辉光（实机验证）(#274)；
+- style(branding): 品牌图标醒目度前置优化（同主题演进过程，已并入本版）：容器由「淡色磨砂卡片」改为「玻璃雾卡」（半透明白 + hairline 描边环）与深色毛玻璃 header 语言统一、消除「亮白贴片」压制感，`>_` 笔划加粗 stroke-width 2→2.5 并撑开间距避免粘连、防止下划线小尺寸退化为圆点 (#274)；
+
+## [v0.5.2a5](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a5) - 2026-07-04
+
+- fix(dashboard): 供应商队列拖拽由原生 HTML5 DnD 改为 Pointer Events 实现，修复 v0.5.2a4 引入的拖拽排序功能在浏览器中无法拖动的问题；引入 4px 拖拽阈值、乐观实时重排与指针捕获机制，同步支持触屏设备；拖拽完成后顺序立即影响 cc 运行时供应商优先级调度（实机验证）；为 `/dashboard` 响应增加 `Cache-Control: no-cache`，防止浏览器缓存旧内联脚本；补齐前端守卫测试断言 (#271)；
+- style(branding): 重设计 logo/favicon 为 `#f5f6fb` 淡色磨砂卡片 + 品牌渐变（`#667eea` → `#764ba2`）`>_` 笔划 + 半透明细描边环，轮廓成为视觉主角、小尺寸下更清晰（Linear/Vercel 风）；抽取 `_LOGO_DEFS` 作为品牌渐变 `<defs>` 单一事实源，统一供 SVG favicon、ICO 回退与页面 logo 消费 (#272)；
+
+## [v0.5.2a4](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a4) - 2026-07-03
+
+- feat(dashboard): 供应商状态模块支持拖拽调整供应商优先级，新增纯重排序端点 `PUT /api/tier-order`（复用 `router.reorder_tiers`，不重置熔断器/配额守卫/rate limit），拖拽后配额与用量统计保持当日值不变；与 `reset -v` 同源、运行时内存生效，失败自动回滚至服务端真实顺序 (#269)；
+- feat(session): 扩充标题豁免前缀，新增 `[Session]` 过滤注入式 Prompt 候选；
+- chore(pricing): 更新智谱 GLM-5.2 模型定价配置；
+
+## [v0.5.2a3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a3) - 2026-07-02
+
+- fix(session): 标题豁免前缀扩展至全层级兜底标题，修复 `[Session] <model>` 等 Level 4 合成标题无法豁免（原 `title_exempt_prefixes` 仅 Level 1 生效）；改为在 `_extract_session_title` 编排层对 L1/L2/L3/L4 候选统一拦截，命中回退、全豁免返回空串待后续真实输入回填，默认行为零影响 (#267)；
+
+## [v0.5.2a2](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a2) - 2026-07-02
+
+- feat(session): 新增 Session 标题豁免前缀配置 `title_exempt_prefixes`，过滤注入式 Prompt（典型如 "Write the title in the language the user wrote in..."）被误用为 Session 标题；首条 user 输入经噪声剥离后命中豁免前缀则跳过、继续向后查找 title 候选，Level 2/3/4 回退不受影响 (#265)；
+
+## [v0.5.2a1](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a1) - 2026-06-30
+
+- fix(zhipu): 将 429/529 兜底退避抖动从 Full Jitter 改为 Equal Jitter（`[0, ceiling]` → `[ceiling/2, ceiling]`），修复 529 过载重试延迟非单调（实测 418.8→1857.7→961.6→3769.7ms）问题，重试延迟呈单调非递减指数形态；429 与 529 共用退避路径同步受益，server `retry-after` 优先级不变 (#263)；
+- feat(dashboard): Model Calling 实时监控扩展至全 vendor / 全 model（仅 CC 场景），其他 vendor 在 monitor 模式下仅计数不限流，Zhipu 保留 limited 模式 + FIFO 排队；
+- feat(concurrency): 新增 `peak_pending_recent` 最近 10s 排队峰值追踪，瞬时排队释放后前端仍可见"曾排队 N" 余晖徽章；
+- perf(dashboard): Model Calling 轮询间隔由 5000ms 缩短至 1500ms，提升瞬时排队可观测性；
+- refactor(vendors): `ModelConcurrencyLimiter` 重构为 `ModelConcurrencyController`，统一 monitor / limited 双模式抽象（保留旧名别名）；并发控制由 vendor 内部迁移至 executor 层 `track_in_flight` 包裹，行为对所有 vendor 一致；
+
+> [!NOTE]
+> 本版另补记 v0.5.1 Release Note 遗漏的 4 项并发与监控改动（feat/perf/refactor，代码已随 v0.5.1 上线，文档此前未记录）。
+
 ## [v0.5.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.0) - 2026-05-27
 
 > [!IMPORTANT]

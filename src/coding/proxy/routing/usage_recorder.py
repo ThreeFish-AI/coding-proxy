@@ -33,6 +33,11 @@ class UsageRecorder:
         if self._token_logger:
             await self._token_logger.set_session_title(session_key, title)
 
+    async def update_empty_session_title(self, session_key: str, title: str) -> None:
+        """为标题为空的 session 补写标题（委托给 TokenLogger）."""
+        if self._token_logger:
+            await self._token_logger.update_empty_session_title(session_key, title)
+
     # ── 用量信息构建 ──────────────────────────────────────
 
     @staticmethod

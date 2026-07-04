@@ -161,6 +161,8 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         reauth_coordinator,
         compat_session_store,
         session_policy_resolver=SessionPolicyResolver(config.session_policies.policies),
+        title_vendor_bindings=config.session_policies.title_vendor_bindings,
+        title_exempt_prefixes=config.session_policies.title_exempt_prefixes,
     )
 
     app = FastAPI(title="coding-proxy", version=__version__, lifespan=lifespan)

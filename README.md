@@ -2,7 +2,7 @@
 
 <div align="center">
 
-# ⚡ coding-proxy
+# <img src="assets/logo.svg" alt="coding-proxy" width="32" height="32" align="absmiddle"> coding-proxy
 
 **A High-Availability, Transparent, and Smart Multi-Vendor Proxy for Claude Code**
 
@@ -125,7 +125,7 @@ graph RL
 
     Client["💻<br/>Client (Claude Code)"]:::client
 
-    subgraph CodingProxy["⚡ coding-proxy"]
+    subgraph CodingProxy["coding-proxy"]
         direction RL
 
         Router["RequestRouter<br/><code>routing/router.py</code>"]:::router
@@ -189,5 +189,5 @@ During our chaotic yet rewarding exploration of engineering practices, we were h
 ---
 
 <div align="center">
-  <sub>Built with 🧠, ❤️, and an absurd amount of coffee by ThreeFish-AI </sub>
+  <sub>Built with 🧠, ❤️, and an absurd amount of coffee by <a href="https://github.com/ThreeFish-AI">ThreeFish-AI</a> · Released under the <a href="./LICENSE">Apache License 2.0</a>.</sub>
 </div>
