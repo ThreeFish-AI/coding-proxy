@@ -533,13 +533,16 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
             if response.status_code >= 400:
                 self._on_error_status(response.status_code)
                 error_body = await response.aread()
-                decoded_body = decode_error_body(error_body)
-                self._mark_scope_error_if_needed(decoded_body)
+                # 检测用完整解码文本(判定性逻辑不应受日志展示上限影响);
+                # 日志展示则用 decode_error_body 的 500 字符截断版本。
+                self._mark_scope_error_if_needed(
+                    error_body.decode("utf-8", errors="replace"),
+                )
                 logger.warning(
                     "%s stream error: status=%d body=%s",
                     self.get_name(),
                     response.status_code,
-                    decoded_body,
+                    decode_error_body(error_body),
                 )
                 raise httpx.HTTPStatusError(
                     f"{self.get_name()} API error: {response.status_code}",
