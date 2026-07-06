@@ -25,6 +25,7 @@ from ..model.vendor import (  # noqa: F401
     UsageInfo,
     VendorCapabilities,
     VendorResponse,
+    decode_error_body,
     decode_json_body,
     extract_error_message,
     sanitize_headers_for_synthetic_response,
@@ -328,7 +329,7 @@ class BaseVendor(ABC):
                     "%s stream error: status=%d body=%s",
                     self.get_name(),
                     response.status_code,
-                    error_body[:500],
+                    decode_error_body(error_body),
                 )
                 raise httpx.HTTPStatusError(
                     f"{self.get_name()} API error: {response.status_code}",

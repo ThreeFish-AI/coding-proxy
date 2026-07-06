@@ -24,6 +24,7 @@ from .base import (
     VendorCapabilities,
     VendorResponse,
     _sanitize_headers_for_synthetic_response,
+    decode_error_body,
 )
 
 # GoogleOAuthTokenManager 已从 antigravity_token_manager.py 合并至本文件末尾
@@ -532,14 +533,13 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
             if response.status_code >= 400:
                 self._on_error_status(response.status_code)
                 error_body = await response.aread()
-                self._mark_scope_error_if_needed(
-                    error_body.decode("utf-8", errors="ignore"),
-                )
+                decoded_body = decode_error_body(error_body)
+                self._mark_scope_error_if_needed(decoded_body)
                 logger.warning(
                     "%s stream error: status=%d body=%s",
                     self.get_name(),
                     response.status_code,
-                    error_body[:500],
+                    decoded_body,
                 )
                 raise httpx.HTTPStatusError(
                     f"{self.get_name()} API error: {response.status_code}",
