@@ -25,6 +25,7 @@ from .base import (
     VendorResponse,
     _decode_json_body,
     _extract_error_message,
+    decode_error_body,
 )
 from .copilot_models import (  # noqa: F401
     CopilotMisdirectedRequest,
@@ -423,7 +424,7 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
                     "%s stream error: status=%d body=%s",
                     self.get_name(),
                     response.status_code,
-                    error_body[:500],
+                    decode_error_body(error_body),
                 )
                 raise httpx.HTTPStatusError(
                     f"{self.get_name()} API error: {response.status_code}",
