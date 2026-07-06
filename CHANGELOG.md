@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [v0.5.2a8](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a8) - 2026-07-06
+
+- fix(vendor-logging): 修复流式 4xx/5xx 错误日志中文乱码——根因是 `logger.warning("...body=%s...", error_body[:500])` 对 `bytes` 走 `repr()`，非 ASCII 的 UTF-8 字节被转义为 `\xe6\x82\xa8` 之类不可读序列（上游限流/鉴权等中文错误信息无法辨认）；新增 `decode_error_body(raw, limit=500)` 工具（`errors="replace"` 容错解码、先整体解码再按字符截断以避免在多字节 UTF-8 边界切断产生二次乱码，`limit` 语义为字符数），`base.py` / `copilot.py` / `antigravity.py` 三处流式错误日志统一收敛，并经 `model/__init__` 与 `vendors/base` 导出复用 (#278)；
+- fix(vendor-antigravity): 流式 scope 检测改用完整解码 body，与日志展示的 500 字符截断解耦——此前 `decode_error_body` 截断后的文本被同时喂给 `_mark_scope_error_if_needed` 子串检测，当 `ACCESS_TOKEN_SCOPE_INSUFFICIENT` 标记位于第 500 字符之后时会被截断丢弃，token 不再标记 `needs_reauth` 而持续以 scope 不足的凭证重试；现检测改用 `error_body.decode("utf-8", errors="replace")` 完整文本、日志展示仍用 500 截断，恢复与非流式路径（`send_message` 传完整 `response.text`）的行为一致性；补回归测试（构造标记位于 500 字符之后的 403 错误体，断言检测仍触发，旧截断实现下该用例失败）(#278)；
+
 ## [v0.5.2a7](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a7) - 2026-07-04
 
 - style(dashboard): Overview 页 6 张 KPI 卡片（今日请求数 / Token 总量 / 输出 Token / 费用估算 / 故障转移 / 平均延迟）固定单行不折行——`.kpi-grid` 由 `repeat(auto-fit, minmax(200px, 1fr))`（视口 < ~1289px 即减列换行）改为 `repeat(6, minmax(0, 1fr))`，`minmax(0,…)` 覆盖 grid 默认 `min-width:auto` 杜绝内容撑列引发的横向溢出，桌面/笔记本/平板横屏（≥1024px）恒定 6 列单行；`gap` 由 off-grid 的 `5px` 归一为 `--gap-section`（12px）；`.kpi-value` 采用 `clamp(20px, 2.2vw, 32px)` 平滑缩放使中宽度不裁剪数值，费用卡 `#kpi-cost-today` 允许在 `" + "` 处换行使双币种始终完整可见；新增 ≤1023px→3 列、≤480px→2 列 优雅降级，`header` 补 `flex-wrap` 修复窄屏横向溢出（Playwright 8 档宽度实测：1440/1280/1024px 均 6 列单行、无横向滚动、无数值裁剪）(#276)；
