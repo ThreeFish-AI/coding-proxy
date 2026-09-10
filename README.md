@@ -175,7 +175,6 @@ To ensure this project outlives us all (long-term maintainability), we offer exh
 
 - 📖 **[User Guide](./docs/user-guide.md)** — From installation and bare-minimum configs to the semantic breakdown of every `config.yaml` field and common troubleshooting manuals. (Currently in Chinese)
 - 🏗️ **[Architecture Framework](./docs/framework.md)** — A meticulous decoding of underlying design patterns (Template Method, Circuit Breaker, State Machine, etc.), targeted at devs who want to peek into the matrix or contribute new vendors. (Currently in Chinese)
-- 🤝 **[Engineering Guidelines (AGENTS.md)](./AGENTS.md)** — The systemic context mindset and AI Agent collaboration protocol. It preaches **refactoring, reuse, and orthogonal abstractions** and serves as the ultimate guiding light for all development in this repository.
 
 ---
 

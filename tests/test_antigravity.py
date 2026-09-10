@@ -275,6 +275,51 @@ def test_mark_scope_error_if_needed():
     assert diagnostics["token_manager"]["error_kind"] == "insufficient_scope"
 
 
+@pytest.mark.asyncio
+async def test_stream_scope_detection_scans_full_body_not_log_truncation():
+    """流式 scope 检测必须扫描完整 body,而非日志展示用的 500 字符截断.
+
+    回归守护:``decode_error_body`` 的 ``[:500]`` 截断仅服务日志展示;若把它
+    同时喂给 ``_mark_scope_error_if_needed`` 的子串检测,则标记出现在 500 字符
+    之后的错误体会漏检,token 不会被标记 ``needs_reauth``。本用例构造标记位于
+    500 字符之后的 403 错误体,断言检测仍然触发(旧的截断实现下会失败)。
+    """
+    marker = "ACCESS_TOKEN_SCOPE_INSUFFICIENT"
+    # message 填充 600 字符,把 details 中的 marker 挤到第 500 字符之后
+    body = (
+        f'{{"error":{{"message":"{"x" * 600}","status":"PERMISSION_DENIED",'
+        f'"details":[{{"reason":"{marker}"}}]}}}}'
+    ).encode()
+    assert body.decode().index(marker) > 500  # 前置条件:marker 确在 500 之后
+
+    vendor = AntigravityVendor(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
+    vendor._token_manager.get_token = AsyncMock(return_value="tok")
+    vendor._discover_project_id = AsyncMock(return_value="")  # 避免真实网络发现
+    vendor._client = httpx.AsyncClient(
+        base_url=vendor._base_url,
+        transport=httpx.MockTransport(
+            lambda _req: httpx.Response(
+                403, content=body, headers={"content-type": "application/json"}
+            )
+        ),
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        async for _ in vendor.send_message_stream(
+            {
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+            {},
+        ):
+            pass
+
+    await vendor.close()
+
+    diagnostics = vendor.get_diagnostics()
+    assert diagnostics["token_manager"]["error_kind"] == "insufficient_scope"
+
+
 def test_antigravity_supports_request_with_tools_thinking_and_metadata():
     vendor = AntigravityVendor(AntigravityConfig(), FailoverConfig(), ModelMapper([]))
     supported, reasons = vendor.supports_request(

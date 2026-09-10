@@ -712,5 +712,5 @@ session_policies:
   # ⚠️ 自定义 yaml 中该字段为整体替换（loader 的 list 合并约定，非追加合并）；
   #    写空列表即关闭豁免。加载时会自动 strip + 去空 + 去重。
   title_exempt_prefixes:
-    - "Write the title in the language"
+    - "Write the title in the"
     - "[Session]"

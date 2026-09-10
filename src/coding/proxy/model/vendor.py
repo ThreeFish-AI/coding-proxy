@@ -75,6 +75,20 @@ def extract_error_message(
     return text[:500] if text else None
 
 
+def decode_error_body(raw: bytes, limit: int = 500) -> str:
+    """将上游错误响应体（bytes）安全解码为可读文本，供日志展示.
+
+    直接以 ``%s`` 格式化 ``bytes`` 会走 ``repr()``，导致非 ASCII 的 UTF-8
+    字节被转义为 ``\\xe6\\x82\\xa8`` 之类的不可读序列（中文乱码）。本函数：
+
+    - 使用 ``errors="replace"`` 容忍非法字节，非法字节降级为 ``�`` 而非抛异常，
+      确保日志路径绝对健壮；
+    - 先整体解码再按字符截断，避免在多字节 UTF-8 边界切断产生乱码
+      （因此 ``limit`` 语义为「字符数」而非「字节数」）。
+    """
+    return raw.decode("utf-8", errors="replace")[:limit]
+
+
 # ═══════════════════════════════════════════════════════════════
 # 供应商核心数据类型
 # ═══════════════════════════════════════════════════════════════
@@ -229,6 +243,7 @@ __all__ = [
     "CopilotMisdirectedRequest",
     "CopilotModelCatalog",
     # 工具函数
+    "decode_error_body",
     "decode_json_body",
     "extract_error_message",
     "sanitize_headers_for_synthetic_response",
