@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- fix(quota-guard): `coding-proxy reset` / `POST /api/reset` 不再清空配额守卫的滑动窗口用量——根因是 `QuotaGuard.reset()` 把「状态机复位」与「用量计数清零」耦合在一个方法里（`_entries.clear()` + `_total = 0`），而窗口基线 `load_baseline()` 的唯一调用点在进程启动的 lifespan 钩子中、运行期不再回填，导致 Dashboard 的 `1d配额 45%` 徽章复位后永久停在 0%；现 `reset()` 只保留 `_transition_to(WITHIN_QUOTA)`（该方法本身已清 `_cap_error_active` 并还原探测间隔），CLI / API / Dashboard 三条路径经单一事实源同时修复。语义取舍为**如实**：用量确已超过 `token_budget × threshold_percent` 时，复位后下一次判定立即回落 `QUOTA_EXCEEDED`，不伪造用量数字，真正被解开的是熔断、Rate Limit 与上游 cap 错误卡死标志；文档口径（`cli-reference.md` / `api-reference.md`）同步补明「仅复位状态、不清用量」；
+- feat(dashboard): Overview 页「供应商状态」卡片标题栏右侧新增 **⟲ 状态复位** 按钮，一键把处于熔断 / 限流等异常态的供应商复位为可正常访问——调用无 body 的 `POST /api/reset`，因此**不触发重排序、不改动供应商优先级**，配合上述配额修复亦**不清空额度用量**；新增 `.btn-card-action` 卡片标题栏控件通用类（复用 `.card-title` 既有的 `justify-content: space-between`，零布局 CSS 改动）并纳入 `:focus-visible` 焦点环列表；交互沿用 `persistTierOrder` 的 in-flight 防并发范式与 `copyFromParent` 的瞬时反馈范式（复位中… → ✓ 已复位 / ✗ 失败，1.5s 还原），成功后定向重渲染供应商列表而不必等 10 分钟轮询（实机验证）；
+- fix(dashboard): 修复「限速中」徽章从未渲染的问题——前端读 `rlInfo.limited`，而后端 `VendorTier.get_rate_limit_info()` 产出的键是 `is_rate_limited`，键名不匹配使 Rate Limit 异常态在 UI 上完全不可观测；补前端守卫测试锁定键名；
+
 ## [v0.5.2a8](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a8) - 2026-07-06
 
 - fix(vendor-logging): 修复流式 4xx/5xx 错误日志中文乱码——根因是 `logger.warning("...body=%s...", error_body[:500])` 对 `bytes` 走 `repr()`，非 ASCII 的 UTF-8 字节被转义为 `\xe6\x82\xa8` 之类不可读序列（上游限流/鉴权等中文错误信息无法辨认）；新增 `decode_error_body(raw, limit=500)` 工具（`errors="replace"` 容错解码、先整体解码再按字符截断以避免在多字节 UTF-8 边界切断产生二次乱码，`limit` 语义为字符数），`base.py` / `copilot.py` / `antigravity.py` 三处流式错误日志统一收敛，并经 `model/__init__` 与 `vendors/base` 导出复用 (#278)；

@@ -1067,6 +1067,52 @@ def test_reset_reorder_also_resets_circuit_breaker_and_rate_limit():
     assert not anthropic_tier.is_rate_limited
 
 
+def test_reset_preserves_quota_usage():
+    """核心：/api/reset 复位守卫状态但**不**清空滑动窗口用量.
+
+    旧实现在 QuotaGuard.reset() 里连带 `_entries.clear()` + `_total = 0`，
+    使 Dashboard 的配额百分比归零且无法自愈（基线仅在进程启动时回填）。
+    """
+    app = _make_reorder_app()
+    router = app.state.router
+    tier = router.tiers[0]
+    qg = tier.quota_guard
+    assert qg is not None
+    qg._enabled = True
+    qg._budget = 100_000
+    qg.record_usage(40_000)
+    qg.notify_cap_error()  # 制造 cap 卡死态
+    assert qg.get_info()["state"] == "quota_exceeded"
+
+    with TestClient(app) as client:
+        resp = client.post("/api/reset")
+        assert resp.status_code == 200
+
+    after = qg.get_info()
+    assert after["state"] == "within_quota"  # 状态已复位
+    assert after["window_usage_tokens"] == 40_000  # 用量原样保留
+    assert after["usage_percent"] == 40.0
+    assert qg.can_use_primary() is True  # cap 卡死标志已清除
+
+
+def test_reset_preserves_quota_usage_with_reorder():
+    """带 -v 重排序的 /api/reset 同样不得清空用量（CLI `coding reset -v ...` 路径）."""
+    app = _make_reorder_app()
+    qg = app.state.router.tiers[0].quota_guard
+    assert qg is not None
+    qg._enabled = True
+    qg._budget = 100_000
+    qg.record_usage(45_000)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/reset", json={"vendors": ["anthropic", "zhipu", "copilot"]}
+        )
+        assert resp.status_code == 200
+
+    assert qg.get_info()["window_usage_tokens"] == 45_000
+
+
 def test_reorder_tiers_shared_reference():
     """验证 reorder_tiers 使用切片赋值，Executor 立即可见."""
     from coding.proxy.routing.router import RequestRouter
@@ -1235,3 +1281,32 @@ def test_dashboard_serves_pointer_drag_reorder_and_no_cache():
         # 已移除脆弱的原生 HTML5 DnD（不再渲染 draggable 属性 / 监听 dragstart）
         assert 'draggable="true"' not in html
         assert "addEventListener('dragstart'" not in html
+
+
+def test_dashboard_serves_vendor_status_reset_control():
+    """供应商状态卡片标题栏交付「状态复位」按钮，且走无 body 的 POST /api/reset.
+
+    无 body 是语义关键：服务端据此跳过重排序（routes.py 的 vendor_names 守卫），
+    因此复位不会改动供应商优先级。
+    """
+    with _make_app() as client:
+        html = client.get("/dashboard").text
+        # 按钮随卡片标题栏交付
+        assert 'id="btn-vendor-reset"' in html
+        assert "btn-card-action" in html
+        assert "resetVendorStatus(this)" in html
+        # 处理器在位，且为无 body 的 POST（不触发重排序）
+        assert "function resetVendorStatus(btn)" in html
+        assert "fetch('/api/reset', { method: 'POST' })" in html
+        assert "_vendorResetInFlight" in html  # 防并发守卫
+
+
+def test_dashboard_rate_limit_badge_reads_correct_key():
+    """「限速中」徽章须读后端真实键名 is_rate_limited（tier.get_rate_limit_info）.
+
+    旧实现读 rlInfo.limited —— 后端从未产出该键，徽章永远不渲染。
+    """
+    with _make_app() as client:
+        html = client.get("/dashboard").text
+        assert "rlInfo.is_rate_limited" in html
+        assert "rlInfo.limited " not in html

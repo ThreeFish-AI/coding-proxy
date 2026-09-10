@@ -90,14 +90,37 @@ def test_probe_success_restores_within_quota():
     assert qg.get_info()["state"] == "within_quota"
 
 
-def test_reset_clears_all_state():
+def test_reset_preserves_window_usage():
+    """复位只清状态机，滑动窗口用量计数须原样保留."""
     qg = _make_guard()
     qg.record_usage(500)
     qg.notify_cap_error()
     qg.reset()
     info = qg.get_info()
     assert info["state"] == "within_quota"
-    assert info["window_usage_tokens"] == 0
+    assert info["window_usage_tokens"] == 500
+
+
+def test_reset_clears_cap_error_stall():
+    """cap 错误卡死态：复位清除 _cap_error_active，预算未超时立即恢复放行."""
+    qg = _make_guard(token_budget=1000)
+    qg.record_usage(100)
+    qg.notify_cap_error()
+    assert qg.can_use_primary() is False
+    qg.reset()
+    assert qg.can_use_primary() is True
+    assert qg.get_info()["window_usage_tokens"] == 100
+
+
+def test_reset_does_not_unblock_genuinely_exhausted_quota():
+    """用量确实超阈值时，复位后下一次判定立即回落 EXCEEDED（不伪造用量）."""
+    qg = _make_guard(token_budget=1000, threshold_percent=99.0)
+    qg.record_usage(995)
+    assert qg.can_use_primary() is False
+    qg.reset()
+    assert qg.get_info()["state"] == "within_quota"
+    assert qg.can_use_primary() is False
+    assert qg.get_info()["window_usage_tokens"] == 995
 
 
 def test_get_info_returns_correct_data():

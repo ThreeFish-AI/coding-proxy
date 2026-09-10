@@ -175,14 +175,18 @@ class QuotaGuard:
                 )
 
     def reset(self) -> None:
-        """手动重置为 WITHIN_QUOTA 状态."""
+        """手动重置为 WITHIN_QUOTA 状态（保留滑动窗口用量计数）.
+
+        仅复位状态机与 cap 错误标志；``_entries`` / ``_total`` 记录的是真实
+        用量，清零会使 ``usage_percent`` 永久归零（基线仅在进程启动时回填），
+        故不予触碰。用量确已超阈值时，下一次判定将立即回落 QUOTA_EXCEEDED。
+        """
         with self._lock:
             self._transition_to(QuotaState.WITHIN_QUOTA)
-            self._entries.clear()
-            self._total = 0
             logger.info(
-                "Quota guard [%s]: manually reset to WITHIN_QUOTA",
+                "Quota guard [%s]: manually reset to WITHIN_QUOTA (usage %d tokens preserved)",
                 self._window_label,
+                self._total,
             )
 
     def get_info(self) -> dict:

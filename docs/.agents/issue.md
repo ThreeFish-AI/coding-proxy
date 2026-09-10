@@ -4,6 +4,52 @@
 
 ---
 
+## `coding reset` 误清配额窗口用量（Dashboard 配额百分比归零且不自愈）
+
+**问题描述**
+
+执行 `coding-proxy reset`（含 `-v anthropic,zhipu` 形态）后，Dashboard「供应商状态」卡片里 zhipu 的「1d配额 45%」徽章掉到 **0%**，且不会随时间恢复。用户预期该指令只复位熔断等异常状态，不应触碰额度记录。
+
+**表因**
+
+`/api/status` 的 `quota_guard.usage_percent` 由 `QuotaGuard.get_info()` 从内存字段 `_total` 计算，reset 后 `_total` 为 0。
+
+**根因**
+
+`QuotaGuard.reset()`（`routing/quota_guard.py`）把**状态机复位**与**用量计数清零**两件正交的事耦合在了一个方法里：
+
+```python
+self._transition_to(QuotaState.WITHIN_QUOTA)
+self._entries.clear()   # ← 连带清空滑动窗口
+self._total = 0         # ← 用量归零
+```
+
+之所以「不自愈」，是因为窗口基线 `load_baseline()` 的**唯一**调用点在 `server/app.py` 的 lifespan 启动钩子里 —— 进程运行期间不会再回填，只能靠新请求从 0 重新累加。文档口径（`cli-reference.md` / `api-reference.md`）自始至终只承诺「配额守卫**状态** → WITHIN_QUOTA」，从未声明会清空用量，**实现与契约不一致**。
+
+CLI `reset` 只是 `POST /api/reset` 的瘦 HTTP 客户端，`/api/reset` 又对全部 tier 调 `quota_guard.reset()` + `weekly_quota_guard.reset()`，故 CLI 与 API 两条路径同时中招。
+
+**处理方式**
+
+在 `QuotaGuard.reset()` 中删除 `_entries.clear()` / `_total = 0` 两行，只保留 `_transition_to(QuotaState.WITHIN_QUOTA)`（该方法本身已负责清 `_cap_error_active` 并还原 `_effective_probe_interval`）。**单一事实源修复**：CLI、`/api/reset`、Dashboard 新增的「状态复位」按钮三条路径自动同时受益，无需各自加 `--keep-quota` 之类开关。
+
+语义取舍：用量确已超过 `budget × threshold` 时，复位后守卫会在下一次判定立即回落 `QUOTA_EXCEEDED`（即「点了没反应」）。这是**如实**行为 —— 宁可不放行，也不伪造用量数字；真正被解开的是熔断、Rate Limit 与 cap 错误卡死标志（`_cap_error_active`），后者正是 5h 限额型 vendor 的主要卡死来源。
+
+**后续防范**
+
+- **写操作测试须补「不误伤其他运行时状态」守卫断言**：`tests/test_app_routes.py::test_tier_order_preserves_quota_guard` 早已是这一范式的样板，但 `/api/reset` 侧长期缺失同类断言，缺陷才得以潜伏。新增写端点时，除「改了什么」外必须同时断言「没改什么」。
+- **警惕「状态机复位」与「计数清零」的耦合**：`reset()` 这类命名天然模糊。凡是同时持有状态字段与累计计数的组件（`CircuitBreaker` 的 `_failure_count` 属于状态、`QuotaGuard` 的 `_total` 属于观测数据），复位语义须显式区分二者。
+- **旧测试固化了错误行为**：`test_reset_clears_all_state` 曾断言 `window_usage_tokens == 0`，等于把缺陷写成契约。修复时应先让新测试在旧实现下 FAIL，确认其真正咬住缺陷。
+
+**同类问题影响与处理注意事项**
+
+- **不可用线上进程验证**：`/api/reset` 会永久抹掉运行中进程的配额基线（直到重启）。验证须另起隔离实例（独立端口 + `/tmp` 数据库），严禁对用户正在使用的代理进程执行 reset。
+- **`weekly_quota_guard` 复用同一个类**，修复自动覆盖周级守卫，无需单独处理。
+- **`-v` 的重排序语义未变**：`-v` 仍是「提升/替换 N-tier 链路顺序」，不是「只复位这几个 vendor」的过滤器；Dashboard 按钮走无 body 路径，因此不触碰优先级。
+
+**关联缺陷（同批修复）**
+
+Dashboard 的「限速中」徽章读 `rlInfo.limited`，而后端 `VendorTier.get_rate_limit_info()` 产出的键是 `is_rate_limited` —— 键名不匹配导致该徽章**从未渲染过**，Rate Limit 异常态在 UI 上完全不可观测。已同步修正为 `rlInfo.is_rate_limited`。
+
 ## Session 标题豁免前缀对 `[Session]` 兜底标题不生效（豁免仅 Level 1 生效）
 
 **问题描述**
