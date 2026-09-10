@@ -175,19 +175,39 @@ class QuotaGuard:
                 )
 
     def reset(self) -> None:
-        """手动重置为 WITHIN_QUOTA 状态（保留滑动窗口用量计数）.
+        """手动复位配额守卫（保留滑动窗口用量计数）.
 
-        仅复位状态机与 cap 错误标志；``_entries`` / ``_total`` 记录的是真实
-        用量，清零会使 ``usage_percent`` 永久归零（基线仅在进程启动时回填），
-        故不予触碰。用量确已超阈值时，下一次判定将立即回落 QUOTA_EXCEEDED。
+        - 用量未超阈值 / 守卫非 EXCEEDED → 状态机回到 WITHIN_QUOTA；
+        - 用量确已超阈值 → 保持 QUOTA_EXCEEDED：不伪造用量，也不走
+          WITHIN_QUOTA → QUOTA_EXCEEDED 回环（回环会把 ``_last_probe`` 刷成
+          当前时刻，令探测恢复凭空推迟一个 probe_interval，反复复位即饿死探测）。
+
+        两种分支均清除 cap 错误卡死标志并还原探测间隔。``_entries`` / ``_total``
+        记录的是真实用量，清零会使 ``usage_percent`` 永久归零（基线仅在进程
+        启动时回填），任何情况下不予触碰。
         """
         with self._lock:
-            self._transition_to(QuotaState.WITHIN_QUOTA)
-            logger.info(
-                "Quota guard [%s]: manually reset to WITHIN_QUOTA (usage %d tokens preserved)",
-                self._window_label,
-                self._total,
+            self._expire()
+            over = self._budget > 0 and self._total >= int(
+                self._budget * self._threshold
             )
+            if over and self._state == QuotaState.QUOTA_EXCEEDED:
+                self._cap_error_active = False
+                self._effective_probe_interval = self._probe_interval
+                logger.info(
+                    "Quota guard [%s]: manually reset (usage %d tokens over "
+                    "threshold, EXCEEDED state kept, probe interval restored)",
+                    self._window_label,
+                    self._total,
+                )
+            else:
+                self._transition_to(QuotaState.WITHIN_QUOTA)
+                logger.info(
+                    "Quota guard [%s]: manually reset to WITHIN_QUOTA "
+                    "(usage %d tokens preserved)",
+                    self._window_label,
+                    self._total,
+                )
 
     def get_info(self) -> dict:
         """获取配额守卫状态信息."""

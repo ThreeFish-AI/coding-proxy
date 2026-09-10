@@ -32,7 +32,9 @@ CLI `reset` 只是 `POST /api/reset` 的瘦 HTTP 客户端，`/api/reset` 又对
 
 在 `QuotaGuard.reset()` 中删除 `_entries.clear()` / `_total = 0` 两行，只保留 `_transition_to(QuotaState.WITHIN_QUOTA)`（该方法本身已负责清 `_cap_error_active` 并还原 `_effective_probe_interval`）。**单一事实源修复**：CLI、`/api/reset`、Dashboard 新增的「状态复位」按钮三条路径自动同时受益，无需各自加 `--keep-quota` 之类开关。
 
-语义取舍：用量确已超过 `budget × threshold` 时，复位后守卫会在下一次判定立即回落 `QUOTA_EXCEEDED`（即「点了没反应」）。这是**如实**行为 —— 宁可不放行，也不伪造用量数字；真正被解开的是熔断、Rate Limit 与 cap 错误卡死标志（`_cap_error_active`），后者正是 5h 限额型 vendor 的主要卡死来源。
+语义取舍：用量确已超过 `budget × threshold` 时，复位后守卫**保持** `QUOTA_EXCEEDED`（即「点了没反应」）。这是**如实**行为 —— 宁可不放行，也不伪造用量数字；但仍会清除 cap 错误卡死标志（`_cap_error_active`，正是 5h 限额型 vendor 的主要卡死来源）并把被 `Retry-After` 拉长的探测间隔还原为默认值。
+
+**评审回归（PR #279）**：初版修复让 `reset()` 无条件 `_transition_to(WITHIN_QUOTA)`，用量仍超阈值时下一次判定再回落 `QUOTA_EXCEEDED` —— 而该回环会把 `_last_probe` 刷成当前时刻，令探测恢复凭空推迟一个 `probe_interval`（默认 300s），反复点击「状态复位」可**无限饿死探测**（旧实现清零用量，不存在此回环）。教训：**改「复位」语义时必须检查状态机每条转移的附带副作用**（`_transition_to` 不是纯赋值，EXCEEDED 分支带 `_last_probe = now`），修复后的 `reset()` 在用量仍超阈值时只清 `_cap_error_active` 与 `_effective_probe_interval`、不触发任何状态转移；补 `test_reset_does_not_delay_probe_when_over_budget`（mock 时钟断言探测点不被推后）与 `test_reset_still_clears_cap_stall_when_over_budget` 两条回归用例。
 
 **后续防范**
 

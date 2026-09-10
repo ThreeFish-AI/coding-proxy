@@ -113,14 +113,57 @@ def test_reset_clears_cap_error_stall():
 
 
 def test_reset_does_not_unblock_genuinely_exhausted_quota():
-    """用量确实超阈值时，复位后下一次判定立即回落 EXCEEDED（不伪造用量）."""
+    """用量确实超阈值时，复位不放行也不伪造用量——保持 EXCEEDED，不做状态回环."""
     qg = _make_guard(token_budget=1000, threshold_percent=99.0)
     qg.record_usage(995)
     assert qg.can_use_primary() is False
     qg.reset()
-    assert qg.get_info()["state"] == "within_quota"
+    assert qg.get_info()["state"] == "quota_exceeded"
     assert qg.can_use_primary() is False
     assert qg.get_info()["window_usage_tokens"] == 995
+
+
+def test_reset_does_not_delay_probe_when_over_budget():
+    """回归：用量仍超阈值时复位不得推后探测时钟.
+
+    若 reset() 走 WITHIN_QUOTA → 下一次判定再回落 QUOTA_EXCEEDED 的回环，
+    `_transition_to(EXCEEDED)` 会把 `_last_probe` 刷成当前时刻，令探测恢复
+    凭空推迟一个 probe_interval；反复点击「状态复位」即可无限饿死探测。
+    """
+    qg = _make_guard(
+        token_budget=1000, threshold_percent=99.0, probe_interval_seconds=300
+    )
+    base = time.monotonic()
+    with patch("coding.proxy.routing.quota_guard.time") as mock_time:
+        mock_time.monotonic.return_value = base
+        qg.record_usage(995)
+        assert qg.can_use_primary() is False  # → EXCEEDED，_last_probe = base
+
+        # 距下次探测仅剩 10s 时复位
+        mock_time.monotonic.return_value = base + 290
+        qg.reset()
+
+        # 原定探测点（base+300）之后应照常放行探测，而非被推到 base+590
+        mock_time.monotonic.return_value = base + 301
+        assert qg.can_use_primary() is True
+
+
+def test_reset_still_clears_cap_stall_when_over_budget():
+    """用量超阈值但由 cap 错误拉长了探测间隔时，复位须还原 probe_interval."""
+    qg = _make_guard(
+        token_budget=1000, threshold_percent=99.0, probe_interval_seconds=300
+    )
+    base = time.monotonic()
+    with patch("coding.proxy.routing.quota_guard.time") as mock_time:
+        mock_time.monotonic.return_value = base
+        qg.record_usage(995)
+        qg.notify_cap_error(retry_after_seconds=3600)  # 探测间隔被拉到 3960s
+        assert qg.can_use_primary() is False
+
+        qg.reset()
+        mock_time.monotonic.return_value = base + 301
+        # 若 _effective_probe_interval 未还原为 300，此处仍会被拒
+        assert qg.can_use_primary() is True
 
 
 def test_get_info_returns_correct_data():

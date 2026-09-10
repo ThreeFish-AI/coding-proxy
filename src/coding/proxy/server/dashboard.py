@@ -1582,9 +1582,10 @@ function resetVendorStatus(btn) {
   fetch('/api/reset', { method: 'POST' }).then(function(res) {
     if (!res.ok) throw new Error(res.status);
     btn.textContent = '✓ 已复位';
+    // 复位已生效，状态刷新失败不应误报失败、诱导重复点击 → 单独吞掉
     return fetchJSON('/api/status').then(function(status) {
       updateVendorStatus(status);                    // 定向重渲染，不等 10 分钟轮询
-    });
+    }).catch(function() {});
   }).catch(function(e) {
     console.error('vendor reset failed:', e);
     btn.textContent = '✗ 失败';

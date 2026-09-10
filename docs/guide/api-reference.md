@@ -277,7 +277,7 @@ curl -X POST http://127.0.0.1:3392/api/reset \
 
 **重置范围**：circuit_breaker（→ CLOSED）、quota_guard（→ WITHIN_QUOTA）、weekly_quota_guard（→ WITHIN_QUOTA）、rate_limit deadline（→ 清除）。
 
-> **仅复位状态，不清用量**：配额守卫的滑动窗口用量计数（`window_usage_tokens` / `usage_percent`）**原样保留**。该基线仅在进程启动时从数据库回填，一旦清零，Dashboard 的配额百分比会永久停在 0% 直到重启。若某 vendor 窗口用量确已超过 `token_budget × threshold_percent`，复位后会在下一次判定时立即回落 `QUOTA_EXCEEDED`；真正被解开的是熔断、Rate Limit 与上游 cap 错误卡死标志。
+> **仅复位状态，不清用量**：配额守卫的滑动窗口用量计数（`window_usage_tokens` / `usage_percent`）**原样保留**。该基线仅在进程启动时从数据库回填，一旦清零，Dashboard 的配额百分比会永久停在 0% 直到重启。若某 vendor 窗口用量确已超过 `token_budget × threshold_percent`，守卫**保持** `QUOTA_EXCEEDED`（不伪造用量），但仍会清除上游 cap 错误卡死标志并把被 `Retry-After` 拉长的探测间隔还原为默认值；真正被解开的是熔断、Rate Limit 与 cap 错误卡死标志。
 
 ## 7. GET /api/copilot/diagnostics
 
