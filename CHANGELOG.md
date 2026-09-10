@@ -2,11 +2,14 @@
 
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [v0.5.2](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2) - 2026-09-10
 
 - fix(quota-guard): `coding-proxy reset` / `POST /api/reset` 不再清空配额守卫的滑动窗口用量——根因是 `QuotaGuard.reset()` 把「状态机复位」与「用量计数清零」耦合在一个方法里（`_entries.clear()` + `_total = 0`），而窗口基线 `load_baseline()` 的唯一调用点在进程启动的 lifespan 钩子中、运行期不再回填，导致 Dashboard 的 `1d配额 45%` 徽章复位后永久停在 0%；现 `reset()` 只保留 `_transition_to(WITHIN_QUOTA)`（该方法本身已清 `_cap_error_active` 并还原探测间隔），CLI / API / Dashboard 三条路径经单一事实源同时修复。语义取舍为**如实**：用量确已超过 `token_budget × threshold_percent` 时守卫保持 `QUOTA_EXCEEDED`（不伪造用量数字），但仍清除上游 cap 错误卡死标志并把被 `Retry-After` 拉长的探测间隔还原为默认值——刻意不走 WITHIN_QUOTA → QUOTA_EXCEEDED 回环，因为 `_transition_to(EXCEEDED)` 会把 `_last_probe` 刷成当前时刻，令探测恢复凭空推迟一个 probe_interval，反复复位即可饿死探测（PR 评审发现的回归，补 2 条用例锁定）；文档口径（`cli-reference.md` / `api-reference.md`）同步补明「仅复位状态、不清用量」；
 - feat(dashboard): Overview 页「供应商状态」卡片标题栏右侧新增 **⟲ 状态复位** 按钮，一键把处于熔断 / 限流等异常态的供应商复位为可正常访问——调用无 body 的 `POST /api/reset`，因此**不触发重排序、不改动供应商优先级**，配合上述配额修复亦**不清空额度用量**；新增 `.btn-card-action` 卡片标题栏控件通用类（复用 `.card-title` 既有的 `justify-content: space-between`，零布局 CSS 改动）并纳入 `:focus-visible` 焦点环列表；交互沿用 `persistTierOrder` 的 in-flight 防并发范式与 `copyFromParent` 的瞬时反馈范式（复位中… → ✓ 已复位 / ✗ 失败，1.5s 还原），成功后定向重渲染供应商列表而不必等 10 分钟轮询；定向刷新 `/api/status` 失败时单独吞掉、不误报「✗ 失败」诱导重复点击（复位已生效，刷新失败仅影响展示）（实机验证）；
 - fix(dashboard): 修复「限速中」徽章从未渲染的问题——前端读 `rlInfo.limited`，而后端 `VendorTier.get_rate_limit_info()` 产出的键是 `is_rate_limited`，键名不匹配使 Rate Limit 异常态在 UI 上完全不可观测；补前端守卫测试锁定键名；
+
+> [!NOTE]
+> 本版为 v0.5.2 周期（v0.5.2a1–a8）的正式收口版，完整变更见上方各 alpha 段落；以下条目为 v0.5.2a8 之后的增量（#279）。
 
 ## [v0.5.2a8](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2a8) - 2026-07-06
 
