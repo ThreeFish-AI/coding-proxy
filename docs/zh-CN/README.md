@@ -175,7 +175,6 @@ graph RL
 
 - 📖 **[用户操作指引 (User Guide)](../user-guide.md)** — 从安装、最小配置要求，到每一项配置文件（`config.yaml`）的具体语义和常见排障指南。
 - 🏗️ **[架构设计与工程方案 (Architecture Framework)](../framework.md)** — 详细解码底层设计模式（Template Method、Circuit Breaker、State Machine 等），适用于希望深入了解源码或贡献新供应商的开发者。
-- 🤝 **[工程准则 (AGENTS.md)](../../AGENTS.md)** — 系统的上下文心法和 AI Agent 协作协议，强调**重构、复用与正交抽象**，是本仓库一切开发的指导方针。
 
 ---
 

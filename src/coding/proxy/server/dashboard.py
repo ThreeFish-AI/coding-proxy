@@ -350,6 +350,19 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       margin-bottom: 16px;
       display: flex; align-items: center; justify-content: space-between;
     }
+    /* 卡片标题栏右侧操作控件（.card-title 的 space-between 自动推至右端） */
+    .btn-card-action {
+      padding: 4px 10px; border-radius: 6px;
+      background: rgba(48,54,61,.4); border: 1px solid rgba(255,255,255,.08);
+      color: var(--text-secondary); font-size: 12px; font-weight: 500;
+      letter-spacing: 0; cursor: pointer; white-space: nowrap;
+      transition: all .15s ease;
+    }
+    .btn-card-action:hover:not(:disabled) {
+      background: var(--bg-card-hover); color: var(--text-primary);
+      border-color: rgba(88,166,255,.3);
+    }
+    .btn-card-action:disabled { opacity: .35; cursor: default; }
     .chart-wrap { position: relative; height: 260px; min-width: 0; }
     .chart-wrap-lg { position: relative; height: 260px; min-width: 0; }
     .chart-wrap-xl { position: relative; height: 280px; min-width: 0; }
@@ -685,6 +698,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .range-btn:focus-visible,
     .btn-refresh:focus-visible,
     .page-btn:focus-visible,
+    .btn-card-action:focus-visible,
     .copy-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
@@ -904,7 +918,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <!-- 供应商状态 + 请求量趋势折线图 -->
   <div class="charts-grid">
     <div class="card">
-      <div class="card-title">供应商状态</div>
+      <div class="card-title">供应商状态<button type="button" class="btn-card-action" id="btn-vendor-reset" onclick="resetVendorStatus(this)" aria-label="复位供应商状态" title="复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）">⟲ 状态复位</button></div>
       <div class="vendor-list" id="vendor-list">
         <div class="empty">加载中…</div>
       </div>
@@ -1396,7 +1410,7 @@ function updateVendorStatus(status) {
     if (tier.weekly_quota_guard) quotaHTML += renderQuotaBar(tier.weekly_quota_guard);
 
     const rlInfo = tier.rate_limit || {};
-    const rlHtml = rlInfo.limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
+    const rlHtml = rlInfo.is_rate_limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
 
     // Pointer Events 重排：仅需 data-vendor 定位；手柄作为拖拽发起点（无原生 draggable）
     const dragAttrs = ` data-vendor="${tier.name}"`;
@@ -1554,6 +1568,34 @@ function _tierRevertToList() {
   fetchJSON('/api/status').then(function(status) {
     updateVendorStatus(status);
   }).catch(function() {});
+}
+
+// ── 供应商状态：一键复位（熔断 / 限流 / 配额守卫状态；不动额度用量与优先级）────
+var _vendorResetInFlight = false;
+function resetVendorStatus(btn) {
+  if (_vendorResetInFlight) return;                  // 防并发，同 persistTierOrder 范式
+  _vendorResetInFlight = true;
+  var label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '复位中…';
+  // 无 body → 服务端跳过重排序，仅对全部 tier 复位弹性设施状态
+  fetch('/api/reset', { method: 'POST' }).then(function(res) {
+    if (!res.ok) throw new Error(res.status);
+    btn.textContent = '✓ 已复位';
+    // 复位已生效，状态刷新失败不应误报失败、诱导重复点击 → 单独吞掉
+    return fetchJSON('/api/status').then(function(status) {
+      updateVendorStatus(status);                    // 定向重渲染，不等 10 分钟轮询
+    }).catch(function() {});
+  }).catch(function(e) {
+    console.error('vendor reset failed:', e);
+    btn.textContent = '✗ 失败';
+  }).finally(function() {
+    setTimeout(function() {
+      btn.textContent = label;
+      btn.disabled = false;
+      _vendorResetInFlight = false;
+    }, 1500);
+  });
 }
 
 // ── Model Calling 实时状态 ────────────────────────────────
