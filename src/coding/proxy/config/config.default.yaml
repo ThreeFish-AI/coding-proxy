@@ -115,7 +115,7 @@ vendors:
       success_threshold: 2
     quota_guard:
       enabled: true # 启用后按 Premium Requests 配额管理
-      token_budget: 1000000000 # 一天 token 预算（根据订阅计划调整）
+      token_budget: 3000000000 # 一天 token 预算（根据订阅计划调整）
       window_hours: 24.0
       threshold_percent: 95.0
       probe_interval_seconds: 300
