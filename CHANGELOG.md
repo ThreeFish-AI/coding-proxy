@@ -2,7 +2,7 @@
 
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [v0.6.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.0) - 2026-11-14
 
 > 本周期主轴：配置系统由 YAML 迁移至 `config.db` + Dashboard Config 页（含管理面安全加固）。以下条目按重要程度排列。
 
