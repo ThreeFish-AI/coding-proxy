@@ -1,4 +1,4 @@
-"""Token 持久化存储 — ~/.coding-proxy/tokens.json.
+"""Token 持久化存储 — $CODING_PROXY_HOME/tokens.json.
 
 ``ProviderTokens`` 数据模型已迁移至 :mod:`coding.proxy.model.auth`。
 本文件保留 ``TokenStoreManager`` 持久化管理器，类型通过 re-export 提供。
@@ -14,19 +14,19 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from ..config.home import default_token_store_path
+
 # noqa: F401
 from ..model.auth import ProviderTokens
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_STORE_PATH = Path("~/.coding-proxy/tokens.json")
 
 
 class TokenStoreManager:
     """管理所有 Provider 的 Token 持久化."""
 
     def __init__(self, store_path: Path | None = None) -> None:
-        self._path = (store_path or _DEFAULT_STORE_PATH).expanduser()
+        self._path = (store_path or default_token_store_path()).expanduser()
         self._data: dict[str, dict[str, Any]] = {}
 
     def load(self) -> None:

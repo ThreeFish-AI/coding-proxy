@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from .home import default_compat_db_str, default_usage_db_str
 
 
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 3392
+    # 管理面（Dashboard / 非透传 /api/*）额外允许的 Host 主机名；loopback 恒允许
+    allowed_hosts: list[str] = Field(default_factory=list)
 
 
 class DatabaseConfig(BaseModel):
-    path: str = "~/.coding-proxy/usage.db"
-    compat_state_path: str = "~/.coding-proxy/compat.db"
+    # 默认由 $CODING_PROXY_HOME 推导（未设置时等价于旧字面量 ~/.coding-proxy/*.db）
+    path: str = Field(default_factory=default_usage_db_str)
+    compat_state_path: str = Field(default_factory=default_compat_db_str)
     compat_state_ttl_seconds: int = 86400
 
 
