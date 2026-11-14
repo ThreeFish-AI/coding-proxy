@@ -107,6 +107,11 @@
 | `test_cli_usage.py`          | CLI 用量查询命令                                        |
 | `test_banner.py`             | CLI Banner 显示                                         |
 | `test_logging_dual_write.py` | 日志双写机制                                            |
+| `test_generations.py`        | GenerationManager 单元测试：build/activate/swap、bootstrap pin、degraded 启动回退、排空与关停 |
+| `test_generations_app.py`    | 真实 app/store 下的 PUT 热切换、流式跨切换、会话绑定迁移、真实 uvicorn |
+| `test_generations_cli.py`    | CLI `start` 与 GenerationManager 接线、Dashboard URL 提示、degraded 启动 |
+| `test_security_middleware.py`| L1 跨站请求拒绝 / L2 管理面 Host 白名单 / 响应安全头加固 |
+| `test_dashboard_config_tab.py`| Config 页 HTML 接线、CSP/XSS 静态检查与 config.js Node harness |
 
 ### 2.9 其他
 

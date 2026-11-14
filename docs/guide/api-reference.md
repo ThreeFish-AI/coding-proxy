@@ -332,7 +332,7 @@ curl -X POST http://127.0.0.1:3392/api/reauth/github
 
 ### 11.1 GET /api/config
 
-返回 Config 页所需的完整视图：`mode`（`store` / `legacy_readonly` / `degraded` / `defaults`）、`values`（当前生效值，密钥字段省略）、`defaults`（包内默认值）、`revisions`（per-section 乐观并发版本）、`secrets`（每个密钥路径的 `{kind, env_var?, resolved, hint}`，无明文）、`sources`（env / cli 覆盖来源）、`running`（运行中的 generation 状态）、`registry`（字段元数据）。
+返回 Config 页所需的完整视图：`mode`（`store` / `legacy_readonly` / `degraded` / `defaults`）、`values`（当前生效值，密钥字段省略）、`defaults`（包内默认值）、`revisions`（per-section 乐观并发版本）、`secrets`（每个密钥路径的 `{kind, env_var?, resolved, hint, default_env?, recorded}`，无明文；`kind` 取 `stored` / `env` / `empty` / `default`，`default_env` 为包内默认环境变量名，`recorded` 表示存在 stored/env 密钥记录——目标地址变化触发的清空只作用于有记录的密钥）、`sources`（env / cli 覆盖来源）、`running`（运行中的 generation 状态）、`registry`（字段元数据）。
 
 ```bash
 curl -H "X-Coding-Proxy-Admin: $TOKEN" http://127.0.0.1:3392/api/config
@@ -346,8 +346,8 @@ curl -H "X-Coding-Proxy-Admin: $TOKEN" http://127.0.0.1:3392/api/config
 - **409**：`{error: "conflict", sections: [...]}` —— 期望 revision 与存储不一致（并发修改），重读 `revisions` 后重试。
 - **422**：`{errors: [{loc, msg}]}` —— 校验失败，只含字段路径与原因，从不回显输入值。
 - **423**：当前以旧 YAML 只读运行（导入未通过等价校验），禁止写入。
-- 业务 section（vendors、tiers、failover、model_mapping、pricing、native_api、session_policies）可写；bootstrap section（server、logging、database、auth）经 HTTP 只读（仅 CLI `config set` 可改）。
-- vendor 的 `base_url` / `token_url` 变化时，未在同一请求显式 `set` / `clear` 的密钥自动清空（防密钥发往新目标），响应 `cleared_secrets` 列出。
+- 业务 section（vendors、tiers、failover、model_mapping、pricing、native_api、session_policies）可写；bootstrap section（server、logging、database、auth）经 HTTP 只读（仅 CLI `config set` 可改；例外：`auth.google_client_secret` 可经 `secret_ops` 在线修改，CLI 对应 `config set-secret`）。
+- vendor 的 `base_url` / `token_url` 变化时，未在同一请求显式 `set` / `clear` 的密钥自动清空（防密钥发往新目标），响应 `cleared_secrets` 列出；新目标即包内默认端点时（`reset` / 改回默认）保留密钥，`cleared_secrets` 为空。
 
 ```bash
 curl -X PUT -H "X-Coding-Proxy-Admin: $TOKEN" http://127.0.0.1:3392/api/config \

@@ -85,7 +85,12 @@ def start(
     """
     import uvicorn
 
-    from ..config.importer import LegacyConfigError, StaleYamlError, boot
+    from ..config.importer import (
+        ExplicitConfigMissingError,
+        LegacyConfigError,
+        StaleYamlError,
+        boot,
+    )
     from ..config.resolver import MODE_LEGACY
     from ..config.secrets import MasterKeyError
     from ..config.store import ConfigStoreError
@@ -98,6 +103,7 @@ def start(
         booted = boot(cfg_path)
     except (
         StaleYamlError,
+        ExplicitConfigMissingError,
         LegacyConfigError,
         MasterKeyError,
         ConfigStoreError,
@@ -138,8 +144,10 @@ def start(
     print_banner(console, host=server_cfg.host, port=server_cfg.port)
     _print_dashboard_url(server_cfg.host, server_cfg.port, server_cfg.allowed_hosts)
 
-    # 解析文件日志路径：未显式配置时使用默认值
-    _file_path: str | None = logging_cfg.file or ".logs/coding-proxy.log"
+    # 解析文件日志路径：未设置时用默认值；显式空串 = 禁用文件日志（透传 build_log_config）
+    _file_path: str | None = (
+        logging_cfg.file if logging_cfg.file is not None else ".logs/coding-proxy.log"
+    )
     uvicorn.run(
         manager,
         host=server_cfg.host,
@@ -193,12 +201,13 @@ def _print_dashboard_url(
     import json
 
     from ..config.home import load_or_create_admin_token
+    from ..config.store import ConfigStoreError
 
     shown = _dashboard_host(host)
     url = f"http://{shown}:{port}/dashboard?tab=config"
     try:
         url += f"#admin={load_or_create_admin_token()}"
-    except OSError as exc:
+    except (OSError, ConfigStoreError) as exc:
         err_console.print(
             f"[yellow]admin token 不可用（{type(exc).__name__}），"
             "Config 页需执行 `coding-proxy config token` 后解锁[/yellow]"

@@ -14,6 +14,7 @@ from coding.proxy.config.home import (
     proxy_home,
 )
 from coding.proxy.config.importer import (
+    ExplicitConfigMissingError,
     ImportPlanError,
     LegacyConfigError,
     StaleYamlError,
@@ -31,7 +32,7 @@ from coding.proxy.config.loader import _get_default_config_path, load_config
 from coding.proxy.config.normalize import VENDOR_SECRET_FIELD_NAMES
 from coding.proxy.config.resolver import resolve_config
 from coding.proxy.config.secrets import LEGACY_VENDOR_SECTIONS, SecretCipher
-from coding.proxy.config.service import ConfigService
+from coding.proxy.config.service import ConfigService, ConfigValidationError
 from coding.proxy.config.store import ConfigStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -352,7 +353,17 @@ class TestLegacySectionSecrets:
         assert resolve_config().config.fallback.api_key == SECTION_SECRETS["zhipu"]
 
         service = ConfigService()
-        service.set_path("zhipu", {})
+        # legacy/alias section 经 `config set` 直接拒绝（不参与运行时路由）
+        with pytest.raises(ConfigValidationError) as exc_info:
+            service.set_path("zhipu", {})
+        assert "config import" in exc_info.value.errors[0]["msg"]
+        # 底层写入通道回写空 alias 行：仍不保留空行、密钥注入不受影响
+        service.apply_changes(
+            {"revisions": {"zhipu": 0}, "sections": {"zhipu": {}}},
+            actor="cli",
+            allow_bootstrap=True,
+            allow_env_any=True,
+        )
         assert "zhipu" not in ConfigStore(config_db_path()).snapshot().sections
         assert resolve_config().config.fallback.api_key == SECTION_SECRETS["zhipu"]
 
@@ -459,9 +470,13 @@ class TestBoot:
         with pytest.raises(StaleYamlError):
             boot(path)
 
-    def test_missing_explicit_path_uses_defaults(self):
-        result = boot(Path.cwd() / "missing.yaml")
-        assert result.resolved.config.server.port == 3392
+    def test_missing_explicit_path_fails_fast(self):
+        """-c 指向不存在的文件：直接报错，不以包内默认启动、不固化空 marker."""
+        missing = Path.cwd() / "missing.yaml"
+        with pytest.raises(ExplicitConfigMissingError) as exc_info:
+            boot(missing)
+        assert str(missing) in str(exc_info.value)
+        assert not config_db_path().exists()
 
     def test_plan_error_falls_back_to_legacy_readonly(self):
         path = _write(
@@ -502,3 +517,43 @@ class TestBoot:
         assert result.resolved.config is None
         assert result.resolved.errors[0]["loc"] == ["server", "port"]
         assert "PLANTED" not in str(result.resolved.errors)
+
+
+def test_import_list_form_session_policies_normalizes(tmp_path, monkeypatch):
+    """YAML 注释示例的 list 形态 session_policies 导入后以 dict 覆盖落库（gate F-1）."""
+    import yaml as _yaml
+
+    from coding.proxy.config.importer import plan_import
+
+    src = tmp_path / "config.yaml"
+    src.write_text(
+        _yaml.safe_dump(
+            {
+                "vendors": [{"vendor": "zhipu", "api_key": "sk-x"}],
+                "tiers": ["zhipu"],
+                "session_policies": [
+                    {
+                        "name": "vip",
+                        "match": {"session_keys": ["s1"]},
+                        "tiers": ["zhipu"],
+                    }
+                ],
+            }
+        )
+    )
+    plan = plan_import(src)
+    assert plan.sections["session_policies"] == {
+        "policies": [
+            {"name": "vip", "match": {"session_keys": ["s1"]}, "tiers": ["zhipu"]}
+        ]
+    }
+
+
+def test_irrelevant_home_yaml_not_treated_as_source(tmp_path, monkeypatch):
+    """home 下无关 config.yaml（无 coding-proxy 字段）不作为待导入源（gate F-3）."""
+    from coding.proxy.config.home import legacy_home_yaml_path
+    from coding.proxy.config.importer import _initial_source
+
+    legacy_home_yaml_path().parent.mkdir(parents=True, exist_ok=True)
+    legacy_home_yaml_path().write_text("language: go\ntools: [goimports]\n")
+    assert _initial_source(None) is None

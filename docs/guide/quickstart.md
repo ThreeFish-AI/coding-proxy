@@ -21,7 +21,7 @@ pip install -e .
 
 ## 3. 最小配置
 
-运行时配置存放在 `~/.coding-proxy/config.db`（加密 SQLite），无需创建或编辑任何 YAML：包内默认值开箱即用，最小配置只需提供一个 API Key。两种方式任选：
+运行时配置存放在 `~/.coding-proxy/config.db`（SQLite，0600 权限；密钥字段 Fernet 加密），无需创建或编辑任何 YAML：包内默认值开箱即用，最小配置只需提供一个 API Key。两种方式任选：
 
 ```bash
 # 方式一：环境变量（默认配置即引用 ${ZHIPU_API_KEY}）
@@ -36,7 +36,7 @@ coding-proxy config set-secret vendors.zhipu.api_key --stdin
 > **从旧版本升级（已有 `~/.coding-proxy/config.yaml`）**：首次 `coding-proxy start` 会自动做一次性导入（源文件不改写），此后不再读取 YAML。
 >
 > - 项目目录下的 `./config.yaml` **不会**被自动导入（防止第三方仓库内的配置被误当全局配置）；如需导入请显式 `coding-proxy start -c ./config.yaml` 或 `coding-proxy config import ./config.yaml`。
-> - 导入后修改旧 YAML 会导致启动被拒（内容与已导入版本不一致），请改用 Dashboard / `coding-proxy config` 修改。
+> - 导入源本体（或 `start -c` 指定文件）被修改会导致启动被拒（内容与已导入版本不一致），请改用 Dashboard / `coding-proxy config` 修改；其余来源仅提示。
 
 > **安全最佳实践**：
 > - API Key 优先使用环境变量引用或 `config set-secret` 加密写入，避免明文散落

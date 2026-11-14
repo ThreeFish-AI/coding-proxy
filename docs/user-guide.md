@@ -11,7 +11,7 @@
   - [2. 文档导航](#2-文档导航)
   - [3. 快速上手入门](#3-快速上手入门)
   - [4. 配置概览](#4-配置概览)
-    - [4.1 配置文件位置与加载优先级](#41-配置文件位置与加载优先级)
+    - [4.1 配置存储与生效方式](#41-配置存储与生效方式)
     - [4.2 vendors — 供应商列表](#42-vendors--供应商列表)
     - [4.3 tiers — 降级链路优先级](#43-tiers--降级链路优先级)
     - [4.4 环境变量引用](#44-环境变量引用)
@@ -136,7 +136,7 @@ curl http://127.0.0.1:3392/health
 - **在线修改**：Dashboard → **Config** 页（浏览器打开 `http://127.0.0.1:3392/dashboard`，首次进入用 `coding-proxy config token` 输出的 admin token 解锁）或 [`coding-proxy config`](./guide/cli-reference.md#9-coding-proxy-config) 命令；业务配置保存后**进程内热切换生效，无需重启**。
 - **密钥**：各供应商 `api_key` / OAuth 凭据等只写不读，Fernet 加密落盘（主密钥 `master.key`，0600），展示仅尾 4 位；写入用 `config set-secret` 或 Config 页的密钥控件。
 - **bootstrap 字段**（`server` / `logging` / `database` / `auth` 路径类）：Dashboard 只读展示，经 CLI `config set` 修改后需重启生效。
-- **旧 YAML 迁移**：首次 `start` 自动一次性导入 `~/.coding-proxy/config.yaml`（或 `start -c FILE` 指定源）；`./config.yaml` 不会被自动导入。导入有等价校验（不通过则本次以旧 YAML 只读运行），源文件不改写；之后再改旧 YAML 会触发启动拒绝，提示重新导入。
+- **旧 YAML 迁移**：首次 `start` 自动一次性导入 `~/.coding-proxy/config.yaml`（或 `start -c FILE` 指定源）；`./config.yaml` 不会被自动导入。导入有等价校验（不通过则本次以旧 YAML 只读运行），源文件不改写；此后导入源本体（或 `start -c` 指定文件）被修改会触发启动拒绝并提示重新导入，其余来源仅提示。
 
 ### 4.2 vendors — 供应商列表
 

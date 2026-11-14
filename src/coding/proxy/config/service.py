@@ -260,6 +260,12 @@ def _check_vendors(value: Any, errors: list, rules: list) -> None:
             errors.append(_err(loc, "vendor 类型重复"))
             continue
         seen.add(vtype)
+        # 与非 vendors section 一致：密钥字段经 secret_ops / CLI set-secret 写入，不静默丢弃
+        errors += [
+            _err([*loc, field_name], "密钥请使用 secret_ops / `config set-secret`")
+            for field_name in VENDOR_SECRET_FIELD_NAMES
+            if field_name in vendor
+        ]
         _check_keys(strip_vendor_secrets(vendor), VendorConfig, loc, rules)
         account_type = vendor.get("account_type", "individual")
         if not is_tmpl(account_type) and account_type not in _ACCOUNT_TYPES:
@@ -571,6 +577,9 @@ class ConfigService:
             value = copy.deepcopy(value)
             if section == "vendors":
                 value = [strip_vendor_secrets(v) for v in value]
+            if section == "session_policies" and isinstance(value, list):
+                # list 形态（schema legacy 兼容写法）归一为 dict 后再落库
+                value = {"policies": value}
             override = minimize_override(section, defaults.get(section), value)
             if override is NO_OVERRIDE:
                 new_sections.pop(section, None)
@@ -802,6 +811,7 @@ class ConfigService:
     ) -> list[str]:
         """vendor 目标地址（base_url / token_url）变化 → 清空其密钥来源.
 
+        清空仅发生在新目标**不是**包内默认端点时（reset 或改回默认目标保留密钥）。
         比较基准：已在有效列表中的 vendor 取变化前的值；新加入（含从 ``$absent``
         恢复）的 vendor 取包内默认值。同一请求显式指定的来源（``set`` / ``clear``；
         ``default_env`` 经 HTTP 时已限定目标为包内默认，见
@@ -815,6 +825,9 @@ class ConfigService:
         for vtype, new_dict in new_vendors.items():
             before = old_vendors.get(vtype, default_vendors.get(vtype))
             if _target(before) == _target(new_dict):
+                continue
+            if _target(new_dict) == _target(default_vendors.get(vtype, new_dict)):
+                # 新目标即包内默认端点（reset / 改回默认）：密钥不会发往新地址，保留
                 continue
             for field_name in SECRET_FIELDS_BY_VENDOR.get(vtype, ()):
                 path = f"vendors.{vtype}.{field_name}"
@@ -846,11 +859,20 @@ class ConfigService:
             )
         ):
             raise ConfigValidationError([_err(parts, "密钥请使用 `config set-secret`")])
-        is_legacy = section in _LEGACY_FLAT_KEYS or section in ALIAS_KEYS
+        if section in _LEGACY_FLAT_KEYS or section in ALIAS_KEYS:
+            raise ConfigValidationError(
+                [
+                    _err(
+                        parts,
+                        "legacy 字段不参与运行时路由；请经 `config export` → 编辑 → "
+                        "`config import` 往返调整",
+                    )
+                ]
+            )
         pattern = ".".join("*" if p.isdigit() else p for p in parts)
         if len(parts) >= 3 and parts[0] == "vendors":
             pattern = ".".join(["vendors", "*", *parts[2:]])
-        if len(parts) > 1 and not is_legacy:
+        if len(parts) > 1:
             if is_hidden(pattern) or find_spec(pattern) is None:
                 raise ConfigValidationError([_err(parts, "未知配置路径")])
 

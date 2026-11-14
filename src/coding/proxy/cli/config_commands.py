@@ -179,6 +179,10 @@ def config_reset(
     except _EXPECTED_ERRORS as exc:
         raise _fail(exc) from None
     console.print(f"[green]已恢复默认: {section}[/green]")
+    if result.cleared_secrets:
+        console.print(
+            f"[yellow]目标地址已变更，已清空密钥: {', '.join(result.cleared_secrets)}[/yellow]"
+        )
     _print_pinned(result.pinned_secrets)
 
 
@@ -218,7 +222,11 @@ def config_set_secret(
 @app.command("token")
 def config_token() -> None:
     """输出 Dashboard 管理 token（不存在时创建）."""
-    sys.stdout.write(load_or_create_admin_token() + "\n")
+    try:
+        token = load_or_create_admin_token()
+    except (OSError, ConfigStoreError) as exc:
+        raise _fail(exc) from None
+    sys.stdout.write(token + "\n")
 
 
 __all__ = ["app"]

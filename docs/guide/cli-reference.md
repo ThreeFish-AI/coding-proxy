@@ -281,7 +281,7 @@ coding-proxy config export [--out FILE]
 coding-proxy config import FILE [--dry-run]
 ```
 
-`--dry-run` 只输出计划不落盘；导入后源文件若再被修改，`start` 会拒绝启动并提示重导。
+`--dry-run` 只输出计划不落盘。此后的 `start` 拒启（strict）限：`start -c` 显式指定的文件（始终 strict）、该文件即导入源、或存储无导入源（含首启）时旧版会读取的 `./config.yaml` / `~/.coding-proxy/config.yaml` 与已导入版本不一致；其余来源（如经 `config import` 导入自定义路径后修改的文件）仅提示不拒启。
 
 ### 9.4 config set
 
@@ -311,7 +311,7 @@ coding-proxy config set-secret vendors.zhipu.api_key --default-env          # �
 coding-proxy config set-secret vendors.zhipu.api_key --clear                # 显式置空
 ```
 
-> vendor 的 `base_url` / `token_url` 变化时，未在同一请求显式写入的密钥会被清空（防密钥发往新目标），命令输出会列出被清空的路径。
+> vendor 的 `base_url` / `token_url` 变化时，未在同一请求显式写入的密钥会被清空（防密钥发往新目标），命令输出会列出被清空的路径；新目标即包内默认端点（如 `reset` 恢复默认）时保留密钥。
 
 ### 9.7 config token
 

@@ -20,11 +20,15 @@ from coding.proxy.config.home import (
 )
 from coding.proxy.config.importer import (
     BootResult,
+    ImportPlan,
     StoredConfigInvalidError,
+    apply_import,
     ensure_store_ready,
+    make_marker,
 )
 from coding.proxy.config.resolver import ResolvedConfig, resolve_config
 from coding.proxy.config.schema import ProxyConfig
+from coding.proxy.config.secrets import SecretCipher
 from coding.proxy.config.service import BOOTSTRAP_MSG, ConfigService
 from coding.proxy.config.store import ConfigStore, StoreBusyError
 from coding.proxy.server import config_routes
@@ -160,6 +164,10 @@ class TestMasking:
         assert secrets["vendors.minimax.api_key"]["hint"] == "••••cdef"
         assert secrets["vendors.zhipu.api_key"]["kind"] == "env"
         assert secrets["vendors.zhipu.api_key"]["resolved"] is True
+        # recorded：仅有存储记录的密钥才参与「目标地址变化 → 清空」
+        assert secrets["vendors.minimax.api_key"]["recorded"] is True
+        assert secrets["vendors.zhipu.api_key"]["recorded"] is False  # 包内默认推导
+        assert secrets["auth.google_client_secret"]["recorded"] is True
         for vendor in resp.json()["values"]["vendors"]:
             assert "api_key" not in vendor and "refresh_token" not in vendor
         assert "google_client_secret" not in resp.json()["values"]["auth"]
@@ -298,6 +306,25 @@ class TestPut:
         assert all(set(e) == {"loc", "msg"} for e in errors)
         assert "PLANTED" not in resp.text
 
+    def test_vendor_inline_secret_rejected_like_other_sections(self, client, token):
+        """vendors 内联密钥与非 vendors section 一致：422 拒绝而非静默丢弃."""
+        view = _view(client, token)
+        vendors = _vendors_with(view, "zhipu", api_key=PLANTED)
+        resp = _put(
+            client,
+            token,
+            {"revisions": {"vendors": 0}, "sections": {"vendors": vendors}},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["errors"] == [
+            {
+                "loc": ["vendors", "zhipu", "api_key"],
+                "msg": "密钥请使用 secret_ops / `config set-secret`",
+            }
+        ]
+        assert PLANTED not in resp.text
+        assert PLANTED.encode() not in config_db_path().read_bytes()
+
     def test_bootstrap_sections_rejected(self, client, token):
         for section in ("server", "logging", "database", "auth", "primary"):
             resp = _put(
@@ -418,6 +445,13 @@ class _FakeRouter:
         return self._names
 
 
+class _FakePrepared:
+    """模拟 PreparedGeneration：携带（pin 后的）配置供 no-op 判定比较."""
+
+    def __init__(self, cfg: ProxyConfig) -> None:
+        self.config = cfg
+
+
 class _FakeManager:
     """模拟 2A GenerationManager：activate 成功后切换 current_app 并同步 revision."""
 
@@ -434,13 +468,13 @@ class _FakeManager:
         if self.fail_build:
             raise RuntimeError(PLANTED)
         self.built.append(cfg)
-        return ("prepared", len(self.built), cfg)
+        return _FakePrepared(cfg)
 
     async def activate(self, prepared, *, revisions=None):
         if self.fail_activate:
             raise RuntimeError(PLANTED)
         self.activated.append(prepared)
-        cfg = prepared[2]
+        cfg = prepared.config
         self.current_app = FastAPI()
         self.current_app.state.config = cfg
         self.current_app.state.router = _FakeRouter(cfg)
@@ -470,7 +504,8 @@ class TestGenerationManager:
         assert body["applied"] is True and body["apply_error"] is None
         assert body["reset_runtime"] == ["熔断器状态将重置"]
         assert manager.built[-1].tiers == ["zhipu"]
-        assert [p[:2] for p in manager.activated] == [("prepared", len(manager.built))]
+        assert len(manager.activated) == len(manager.built)
+        assert manager.activated[-1].config is manager.built[-1]
 
     def test_build_failure_is_422_and_not_persisted(self, app, client, token):
         self._install(app, fail_build=True)
@@ -586,7 +621,7 @@ class TestGenerationManager:
             service_module.logger.info = original_info
         assert [resp_a.status_code, resp_b.status_code] == [200, 200]
         assert resp_b.json()["revisions"]["tiers"] == 2
-        assert [p[2].tiers for p in manager.activated] == [["zhipu"], ["anthropic"]]
+        assert [p.config.tiers for p in manager.activated] == [["zhipu"], ["anthropic"]]
         assert manager.current_app.state.config.tiers == resolve_config().config.tiers
 
     def test_status_in_flight(self, app, client):
@@ -604,9 +639,16 @@ class TestGenerationManager:
 
 class TestCreateApp:
     def test_no_legacy_yaml_fallback(self):
-        # 旧搜索链会读取 ./config.yaml；create_app() 只读 config.db
+        # 旧搜索链会读取 ./config.yaml；create_app() 只读 config.db。
+        # cwd 存在待迁移 YAML 时 ensure_store_ready 会拦截，这里直接初始化空 store
         Path("config.yaml").write_text("server:\n  port: 4567\n")
-        ensure_store_ready()
+        apply_import(
+            ConfigStore(config_db_path()),
+            SecretCipher(),
+            ImportPlan(source="", source_sha256=""),
+            make_marker(None, None),
+            replace=False,
+        )
         app = create_app()
         assert app.state.config.server.port == 3392
         assert app.docs_url is None and app.openapi_url is None

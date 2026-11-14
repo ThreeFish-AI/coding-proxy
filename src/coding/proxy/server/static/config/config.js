@@ -154,22 +154,35 @@
     });
     return out;
   }
-  // 预测「目标地址变化 → 清空密钥」（服务端为准，仅用于确认框提示）
+  // 预测「目标地址变化 → 清空密钥」（服务端为准，仅用于确认框提示）：
+  // 计入有存储记录（recorded）的密钥，以及本次保存将新建覆盖的 vendor——
+  // 服务端会先物化其默认 env 密钥记录，再因目标地址变化将其清空
   function predictClearedSecrets(o) {
     var before = vendorMap(o.base.vendors), after = vendorMap(o.work.vendors), dflt = vendorMap(o.defaults.vendors);
     var target = function (v) {
       return ['base_url', 'token_url'].map(function (k) { return v && k in v ? v[k] : o.targetDefaults[k]; });
     };
+    var overridden = function (v) { return v !== undefined && !deepEqual(v, dflt[v.vendor] || v); };
     var out = [];
     Object.keys(after).forEach(function (t) {
       if (deepEqual(target(before[t] || dflt[t]), target(after[t]))) return;
+      if (deepEqual(target(after[t]), target(dflt[t]))) return; // 新目标即包内默认 → 服务端保留密钥
+      var newlyOverridden = !overridden(before[t]) && overridden(after[t]);
       (o.secretFields[t] || []).forEach(function (f) {
         var p = 'vendors.' + t + '.' + f, op = (o.ops || {})[p], st = (o.secrets || {})[p];
-        if ((op && op.op !== 'keep') || !st || st.kind === 'empty') return;
-        out.push(p);
+        if (op && op.op !== 'keep') return;
+        if (st && (st.recorded || (newlyOverridden && st.default_env && st.kind === 'env'))) out.push(p);
       });
     });
     return out;
+  }
+  // move(from, to) 后展开行的新下标：被移动行跟随自身，夹在区间内的其余行 ±1 平移
+  function movedOpenIndex(open, from, to) {
+    if (open === null || open === undefined) return open;
+    if (open === from) return to;
+    if (from < to && open > from && open <= to) return open - 1;
+    if (to < from && open >= to && open < from) return open + 1;
+    return open;
   }
   function enabledChain() {
     var m = vendorMap(S.work.vendors);
@@ -196,6 +209,7 @@
     parsePrice: parsePrice, entryCurrency: entryCurrency, priceText: priceText, withCurrency: withCurrency,
     locToPath: locToPath, pathCandidates: pathCandidates, pillOf: pillOf, dirtySections: dirtySections,
     countChangedFields: countChangedFields, buildPayload: buildPayload, predictClearedSecrets: predictClearedSecrets,
+    movedOpenIndex: movedOpenIndex,
     effectiveChain: effectiveChain, newDefaultRows: newDefaultRows, pricingMergeRows: pricingMergeRows,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = helpers;
@@ -217,6 +231,7 @@
     root: null, token: null, view: null, base: {}, work: {}, ops: {}, errors: [], notice: null,
     pill: 'vendors', vendor: null, expanded: {}, loaded: false, saving: false, readonly: false,
     specs: [], specMap: {}, schema: { fields: {}, groups: {} },
+    retryOnly: null, fatalText: null,
   };
   var uid = 0;
 
@@ -289,15 +304,19 @@
   }
 
   // ── 加载 ──────────────────────────────────────────────────
+  // 返回 Promise<true|false|'locked'>（成功 adopt 为 true；'locked' 已渲染解锁界面；
+  // false 为致命失败并已 renderFatal）——调用方据 false 走 fatal 分支
   function load(only) {
-    if (!validToken(token())) { renderLocked(); return Promise.resolve(); }
+    if (!validToken(token())) { renderLocked(); return Promise.resolve('locked'); }
     return request('GET').then(function (r) {
-      if (r.status === 401) { forgetToken(); renderLocked('管理 token 无效或已更换，请重新解锁'); return; }
-      if (r.status !== 200) { renderFatal('加载配置失败（HTTP ' + r.status + '）' + errText(r.data)); return; }
+      if (r.status === 401) { forgetToken(); renderLocked('管理 token 无效或已更换，请重新解锁'); return 'locked'; }
+      if (r.status !== 200) { renderFatal('加载配置失败（HTTP ' + r.status + '）' + errText(r.data)); return false; }
       adopt(r.data, only);
       S.loaded = true;
+      S.retryOnly = null;
       rerender();
-    }, function () { renderFatal('加载配置失败：网络错误'); });
+      return true;
+    }, function () { renderFatal('加载配置失败：网络错误'); return false; });
   }
   function adopt(view, only) {
     var prev = S.view;
@@ -424,10 +443,19 @@
   }
   function renderFatal(text) {
     if (!S.root) return;
+    S.fatalText = text;
     clear(S.root);
     // 保留保存结果提示：PUT 已成功而重载失败时，不让「加载失败」掩盖「已保存」
     if (S.notice) { var nb = noticeBanner(function () { nb.remove(); }); S.root.appendChild(nb); }
-    S.root.appendChild(banner('err', text, [btn('重试', function () { load(); }, 'cfg-btn-sm')]));
+    S.root.appendChild(banner('err', text, [btn('重试', function () { retryLoad(); }, 'cfg-btn-sm')]));
+  }
+
+  // 重试按失败时的定向范围加载（409 冲突重载失败 → 仅重载冲突 section，保住其余本地修改）
+  function retryLoad() {
+    var only = S.retryOnly;
+    if (only) S.notice = null; // 「重新加载失败」的提示在重试后不再成立
+    // 失败时保留 only：再次点「重试」仍仅重载冲突 section，其余本地修改不丢
+    return load(only);
   }
 
   // ── 表单行与控件 ──────────────────────────────────────────
@@ -662,7 +690,7 @@
     var move = function (from, to) {
       var a = arr().slice(), item = a.splice(from, 1)[0];
       a.splice(to, 0, item);
-      setArr(a, S.expanded[o.key] === from ? to : S.expanded[o.key]);
+      setArr(a, movedOpenIndex(S.expanded[o.key], from, to));
     };
     var rows = [];
     arr().forEach(function (item, i) {
@@ -1143,10 +1171,25 @@
     S.errors = [];
     if (isObj(revisions)) Object.keys(revisions).forEach(function (s) { S.view.revisions[s] = revisions[s]; });
   }
-  // 重载完成前保持冻结：重载会覆盖工作副本
+  // 重载完成前保持冻结：重载会覆盖工作副本；'locked'（已渲染解锁界面）不叠 fatal 视图
   function reloadAfterSave(only) {
-    var done = function () { S.saving = false; updateDirty(); };
-    return load(only).then(done, function () { done(); renderFatal('重新加载配置失败，请重试'); });
+    return load(only).then(function (ok) {
+      S.saving = false;
+      updateDirty();
+      if (ok === false && only) conflictReloadFailed(only);
+    });
+  }
+
+  // 409 冲突 section 定向重载失败：不得保留「已重新加载 / 其余保留」的承诺；
+  // 重试按钮限定为仅重载冲突 section（保住其余 section 的本地修改）
+  function conflictReloadFailed(secs) {
+    S.notice = {
+      kind: 'err',
+      text: '以下 section 已被其他会话或 CLI 修改，但重新加载失败：' + secs.join(', ') +
+        '。其中的本地修改已丢弃，其余修改仍保留在本地；请点击「重试」仅重新加载上述 section。',
+    };
+    S.retryOnly = secs;
+    renderFatal(S.fatalText);
   }
   function handleSave(r, payload) {
     var d = r.data;

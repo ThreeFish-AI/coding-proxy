@@ -82,6 +82,17 @@ def test_config_set_rejects_unknown_path():
     assert "未知配置路径" in result.output
 
 
+@pytest.mark.parametrize(
+    "path", ["primary.base_url", "zhipu.timeout_ms", "fallback", "circuit_breaker"]
+)
+def test_config_set_rejects_legacy_sections(path):
+    """legacy flat / alias section 经 `config set` 直接拒绝（保存成功但不生效的死配置）."""
+    result = runner.invoke(app, ["config", "set", path, "1"])
+    assert result.exit_code == 1
+    output = _flat(result.output)
+    assert "config export" in output and "config import" in output
+
+
 def test_set_secret_stdin_never_echoed():
     result = _ok(
         ["config", "set-secret", "vendors.zhipu.api_key", "--stdin"],
@@ -174,6 +185,19 @@ def test_write_commands_require_migration_when_yaml_pending():
     assert not config_db_path().exists()
 
 
+def test_write_commands_require_migration_when_cwd_yaml_pending():
+    """cwd 下含 coding-proxy 字段的 config.yaml 同样前置拦截（与 start 首启门槛一致）."""
+    Path("config.yaml").write_text("server:\n  port: 1\n")
+    for args in (["config", "set", "server.port", "2"], ["config", "export"]):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 1
+        assert "尚未迁移" in result.output and "start -c" in result.output
+    assert not config_db_path().exists()
+    # 不含 coding-proxy 字段的 cwd YAML（第三方文件）不拦截写入
+    Path("config.yaml").write_text("foo: bar\nlint: {rules: []}\n")
+    assert _ok(["config", "set", "server.port", "2"]).exit_code == 0
+
+
 class TestUsage:
     @pytest.fixture
     def usage_mocks(self):
@@ -204,6 +228,37 @@ class TestUsage:
 
 
 class TestStart:
+    def test_start_missing_explicit_config_fails_fast(self):
+        """-c 指向不存在的文件：exit 2 + 明确报错，不静默以默认配置启动."""
+        with patch("uvicorn.run") as run:
+            result = runner.invoke(app, ["start", "-c", "no-such.yaml"])
+        assert result.exit_code == 2
+        assert "no-such.yaml" in result.output and "不存在" in result.output
+        run.assert_not_called()
+
+    def test_start_logging_file_empty_string_disables_file_log(self):
+        """logging.file="" 禁用文件日志（契约与 tooltip 一致）；未设置回落默认路径."""
+        captured: dict = {}
+
+        def _fake_run(app_obj, **kwargs):
+            captured.update(kwargs)
+
+        with (
+            patch("uvicorn.run", side_effect=_fake_run),
+            patch("coding.proxy.server.app.create_app", return_value=MagicMock()),
+            patch("coding.proxy.cli._auto_login_if_needed", new_callable=AsyncMock),
+            patch("coding.proxy.cli.banner.print_banner"),
+        ):
+            _ok(["config", "set", "logging.file", ""])
+            runner.invoke(app, ["start"])
+            assert "file" not in captured["log_config"]["handlers"]
+            _ok(["config", "reset", "logging"])
+            captured.clear()
+            runner.invoke(app, ["start"])
+            assert captured["log_config"]["handlers"]["file"]["filename"].endswith(
+                "coding-proxy.log"
+            )
+
     def test_start_boots_store_and_applies_cli_overrides(self):
         legacy_home_yaml_path().parent.mkdir(parents=True)
         legacy_home_yaml_path().write_text("server:\n  port: 4100\n")

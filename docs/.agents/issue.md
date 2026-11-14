@@ -11,15 +11,15 @@
 | ID | 标题 | 状态 | 完成时间 | 详情 |
 | --- | --- | --- | --- | --- |
 | I-001 | YAML 配置面整体迁移至 Dashboard Config 页（config.db + 热切换 + 密钥加密） | ✅ 已完成 | 2026-11-14 | [详情](#I-001) |
-| I-002 | `coding reset` 误清配额窗口用量（Dashboard 配额百分比归零且不自愈） | ✅ 已完成 | — | [详情](#I-002) |
-| I-003 | Session 标题豁免前缀对 `[Session]` 兜底标题不生效（豁免仅 Level 1 生效） | ✅ 已完成 | — | [详情](#I-003) |
-| I-004 | Zhipu 529 过载重试退避非单调（对齐 429 指数退避语义） | ✅ 已完成 | — | [详情](#I-004) |
-| I-005 | streaming usage parse failed: 'NoneType' object has no attribute 'get' | ✅ 已完成 | — | [详情](#I-005) |
-| I-006 | anthropic 400: `tool_use` ids were found without `tool_result` blocks immediately after | ✅ 已完成 | — | [详情](#I-006) |
-| I-007 | count_tokens 路由 `AttributeError: 'ZhipuVendor' object has no attribute 'name' | ✅ 已完成 | — | [详情](#I-007) |
-| I-008 | Gemini embedding 透传至 Vertex AI 上游返回 `request body doesn't contain valid prompts | ✅ 已完成 | — | [详情](#I-008) |
-| I-009 | Dashboard Sessions 页 `Tokens` 列漏算缓存 Token | ✅ 已完成 | — | [详情](#I-009) |
-| I-010 | Zhipu vendor 间歇性 `[1210][API 调用参数有误]` 拒绝（诊断阶段） | ✅ 已完成 | — | [详情](#I-010) |
+| I-002 | `coding reset` 误清配额窗口用量（Dashboard 配额百分比归零且不自愈） | ✅ 已完成 | 2026-09-10 | [详情](#I-002) |
+| I-003 | Session 标题豁免前缀对 `[Session]` 兜底标题不生效（豁免仅 Level 1 生效） | ✅ 已完成 | 2026-07-02 | [详情](#I-003) |
+| I-004 | Zhipu 529 过载重试退避非单调（对齐 429 指数退避语义） | ✅ 已完成 | 2026-06-30 | [详情](#I-004) |
+| I-005 | streaming usage parse failed: 'NoneType' object has no attribute 'get' | ✅ 已完成 | 2026-04-28 | [详情](#I-005) |
+| I-006 | anthropic 400: `tool_use` ids were found without `tool_result` blocks immediately after | ✅ 已完成 | 2026-04-27 | [详情](#I-006) |
+| I-007 | count_tokens 路由 `AttributeError: 'ZhipuVendor' object has no attribute 'name'` | ✅ 已完成 | 2026-05-11 | [详情](#I-007) |
+| I-008 | Gemini embedding 透传至 Vertex AI 上游返回 `request body doesn't contain valid prompts` | ✅ 已完成 | 2026-05-13 | [详情](#I-008) |
+| I-009 | Dashboard Sessions 页 `Tokens` 列漏算缓存 Token | ✅ 已完成 | 2026-05-16 | [详情](#I-009) |
+| I-010 | Zhipu vendor 间歇性 `[1210][API 调用参数有误]` 拒绝（诊断阶段） | ✅ 已完成 | 2026-05-26 | [详情](#I-010) |
 
 ---
 
@@ -137,8 +137,6 @@ Dashboard 的「限速中」徽章读 `rlInfo.limited`，而后端 `VendorTier.g
 
 ---
 
----
-
 <a id="I-004"></a>
 ## I-004：Zhipu 529 过载重试退避非单调（对齐 429 指数退避语义）
 
@@ -180,8 +178,6 @@ Zhipu 配置下区间变为 `[500,1000] → [1000,2000] → [2000,4000] → [400
 - **双 `RetryConfig` 死代码（重要遗留债）**：仓库存在两个 `RetryConfig`——`routing/retry.py:25`（活跃 dataclass，仅 Zhipu 用）与 `config/resiliency.py:15`（Pydantic 死代码，`config/routing.py:285` 注册为 `retry` 字段但 `VendorTier.retry_config` 从未赋值，全仓库 `grep "retry_config="` 为空）。`docs/arch/routing.md:22` 与 `config-reference.md:95` 引用了不同的 `RetryConfig`，构成认知陷阱。本次修复**未触碰**死代码（超出范围），后续应单独清理。这也是本次"为何选方案 A（直改 `calculate_delay`）而非方案 B（加可配置 jitter_strategy 字段）"的决定性理由——方案 B 会扩大 schema 与运行时的裂缝。
 - **`calculate_delay` 唯一消费者确证**：经全仓库 grep，仅 `vendors/zhipu.py:247` 调用（`routing/__init__.py` 仅 re-export，`tier.retry_config` 字段未激活）。修改其抖动策略爆炸半径仅限 Zhipu，安全。
 - **测试缺口已补**：修复前 `calculate_delay` 无任何独立单元测试（仅通过 zhipu 集成测试间接覆盖，且那些测试要么禁用 jitter、要么走 retry-after 路径），现已新建 `tests/test_retry.py`。
-
----
 
 ---
 
@@ -227,8 +223,6 @@ if "usage" in data:        # 仅判断 key 存在
 
 - 本仓库内 `parse_usage_from_chunk` 的 Gemini `usageMetadata` 分支 (line ~219) 已经使用 `isinstance(um, dict)` 防御, 不受影响, 可作为参考实现。
 - 检查其他解析器 (如 routing / vendor adapter 层) 是否还有 `if "key" in data: v = data["key"]; v.get(...)` 这种模式, 必要时同步加固。
-
----
 
 ---
 
@@ -278,10 +272,8 @@ Zhipu GLM-5 流式响应偶发将 inline `tool_result` 块输出在**对应的 `
 
 ---
 
----
-
 <a id="I-007"></a>
-## I-007：count_tokens 路由 `AttributeError: 'ZhipuVendor' object has no attribute 'name'
+## I-007：count_tokens 路由 `AttributeError: 'ZhipuVendor' object has no attribute 'name'`
 
 **问题描述**
 
@@ -323,10 +315,8 @@ AttributeError: 'ZhipuVendor' object has no attribute 'name'
 
 ---
 
----
-
 <a id="I-008"></a>
-## I-008：Gemini embedding 透传至 Vertex AI 上游返回 `request body doesn't contain valid prompts
+## I-008：Gemini embedding 透传至 Vertex AI 上游返回 `request body doesn't contain valid prompts`
 
 **问题描述**
 
@@ -380,8 +370,6 @@ litellm 按 Google AI Studio 格式构造请求：
 
 ---
 
----
-
 <a id="I-009"></a>
 ## I-009：Dashboard Sessions 页 `Tokens` 列漏算缓存 Token
 
@@ -424,8 +412,6 @@ SUM(input_tokens + output_tokens
 
 - 历次 PR 中 cache token 字段的引入是渐进式的（schema 已有四列、`log()` 入参齐全、Overview 已全口径消费），但部分聚合视图的口径升级被遗漏；任何向 `usage_log` 增列后，**必须**审计所有 `SUM(input_tokens` / `SUM(output_tokens` 出现处的聚合表达式是否需要同步更新。
 - 跨标签页同一指标（如"总 Tokens"）的口径一致性，建议在添加新视图时主动与 Overview 现有口径做交叉核对，必要时在 SQL 注释中标注口径来源，便于后续 review。
-
----
 
 ---
 

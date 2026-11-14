@@ -116,12 +116,17 @@ def _apply_lock(manager: Any) -> asyncio.Lock:
     return lock
 
 
-def _up_to_date(result: Any, manager: Any, running_cfg: Any) -> bool:
+def _up_to_date(result: Any, manager: Any, running_cfg: Any, prepared: Any) -> bool:
     """运行中的 generation 已对应提交后的存储：revision 与有效配置（含密钥）均一致.
 
-    比较时忽略 CLI ``-p/-h`` 对 server.host/port 的内存覆盖。
+    配置比较取 ``manager.build`` 的产物（已 ``_pin_bootstrap``：server/logging 与
+    database/auth 的 bootstrap 字段沿用运行值），CLI ``-p/-h`` 覆盖与待重启的
+    bootstrap 漂移天然被吸收，无需手工掩蔽。
     """
     if result.changed_sections or not isinstance(running_cfg, ProxyConfig):
+        return False
+    prepared_cfg = getattr(prepared, "config", None)
+    if not isinstance(prepared_cfg, ProxyConfig):
         return False
     running_revs = getattr(manager, "running_revisions", None) or {}
     if any(
@@ -129,11 +134,7 @@ def _up_to_date(result: Any, manager: Any, running_cfg: Any) -> bool:
         for s in {*result.revisions, *running_revs}
     ):
         return False
-    new: ProxyConfig = result.config
-    server = new.server.model_copy(
-        update={"host": running_cfg.server.host, "port": running_cfg.server.port}
-    )
-    return new.model_copy(update={"server": server}) == running_cfg
+    return prepared_cfg == running_cfg
 
 
 def _activation_error(exc: Exception) -> str:
@@ -154,7 +155,7 @@ def _json(status: int, content: dict) -> JSONResponse:
 def _configured_token() -> str:
     try:
         return load_or_create_admin_token()
-    except OSError as exc:
+    except (OSError, ConfigStoreError) as exc:
         logger.warning("admin token 不可用，管理 API 已锁定: %s", type(exc).__name__)
         return ""
 
@@ -323,7 +324,7 @@ def install_admin_surface(
                 running_cfg = getattr(
                     _serving_app(request.app, manager).state, "config", None
                 )
-                if _up_to_date(result, manager, running_cfg):
+                if _up_to_date(result, manager, running_cfg, prepared["generation"]):
                     applied, apply_error = True, None
                 else:
                     try:

@@ -239,9 +239,16 @@ def compute_secret_states(
     environ: Mapping[str, str],
     resolved_stored: Mapping[str, bool] | None = None,
 ) -> dict[str, dict]:
-    """每个可操作密钥路径的 ``{kind, env_var, resolved, hint, default_env}``."""
+    """每个可操作密钥路径的 ``{kind, env_var, resolved, hint, default_env, recorded}``.
+
+    ``recorded``：存在 stored/env 密钥记录（empty 记录与 default 推导为 False）——
+    「目标地址变化 → 清空」只作用于有记录的密钥，前端据此对齐服务端预测。
+    """
     default_vendors = vendor_map(defaults_raw.get("vendors") or [])
     states: dict[str, dict] = {}
+
+    def _recorded(record: SecretRecord | None) -> bool:
+        return record is not None and record.kind != "empty"
 
     def _record_state(record: SecretRecord, path: str) -> dict:
         if record.kind == "env":
@@ -273,6 +280,7 @@ def compute_secret_states(
             else:
                 state = _state_from_value(default_dict.get(field_name), environ)
             state["default_env"] = whole_env_var(default_dict.get(field_name))
+            state["recorded"] = _recorded(record)
             states[path] = state
 
     record = secrets.get(AUTH_SECRET_PATH)
@@ -291,6 +299,7 @@ def compute_secret_states(
         if isinstance(auth_default, dict)
         else None
     )
+    state["recorded"] = _recorded(record)
     states[AUTH_SECRET_PATH] = state
     return states
 

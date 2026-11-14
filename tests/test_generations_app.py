@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
+import pytest
 import uvicorn
 from fastapi import FastAPI
 
@@ -94,17 +95,31 @@ async def test_put_tiers_changes_status_without_restart():
         assert old_client.is_closed  # 旧 vendor client 随 lifespan 退出关闭
 
 
-async def test_noop_put_does_not_swap_generation():
+@pytest.mark.parametrize("bootstrap_drift", [False, True], ids=["aligned", "drift"])
+async def test_noop_put_does_not_swap_generation(bootstrap_drift):
+    """空 PUT 不换代；CLI 改过 bootstrap 字段（待重启）后，追平存储激活一次即止."""
     token = load_or_create_admin_token()
     async with serving() as (manager, client):
-        old_app = manager.current_app
         resp = await client.put(
             "/api/config",
             headers=_auth(token),
             json={"revisions": {"tiers": 0}, "sections": {}},
         )
         assert resp.json()["applied"] is True
-        assert manager.current_app is old_app  # 无变更不切换
+        if bootstrap_drift:
+            await asyncio.to_thread(
+                ConfigService().set_path, "logging.level", "DEBUG"
+            )  # CLI 修改 bootstrap 字段，提示需重启但未重启
+            # 第一次空保存：revision 追平存储，激活一次（合理）
+            resp = await client.put("/api/config", headers=_auth(token), json={})
+            assert resp.json()["applied"] is True
+        current = manager.current_app
+        for _ in range(2):
+            resp = await client.put("/api/config", headers=_auth(token), json={})
+            body = resp.json()
+            assert body["applied"] is True and body["reset_runtime"] == []
+            # pin 面已吸收 bootstrap 漂移：等价保存不再整代热切换
+            assert manager.current_app is current
 
 
 # ── 流式请求跨切换（真实 app）────────────────────────────────────

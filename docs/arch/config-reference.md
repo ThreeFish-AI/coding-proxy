@@ -58,13 +58,13 @@
 
 ### 2.1 密钥（只写不读）
 
-密钥字段（各供应商 `api_key` / `github_token` / `client_id` / `client_secret` / `refresh_token`、`auth.google_client_secret`）在存储中脱离 section 文档：GET 只返回 `{kind, env_var?, resolved, hint}`（长度 ≥ 16 才展示尾 4 位）；写入用 op 表达（`set` / `clear` / `default_env` / `env`），值从不回显。vendor 的 `base_url` / `token_url` 变化时该 vendor 的已存密钥自动清空（防密钥发往新目标），同一请求显式 `set` 可保留。
+密钥字段（各供应商 `api_key` / `github_token` / `client_id` / `client_secret` / `refresh_token`、`auth.google_client_secret`）在存储中脱离 section 文档：GET 只返回 `{kind, env_var?, resolved, hint, default_env?, recorded}`（`kind` 含 `stored` / `env` / `empty` / `default` 四态；`recorded` 标识是否存在密钥记录，前端据此预测「目标地址变更 → 清空」；长度 ≥ 16 才展示尾 4 位；完整载荷见 [API 参考 §11.1](../guide/api-reference.md#111-get-apiconfig)）；写入用 op 表达（`set` / `clear` / `default_env` / `env`），值从不回显。vendor 的 `base_url` / `token_url` 变化时该 vendor 的已存密钥自动清空（防密钥发往新目标），同一请求显式 `set` 可保留；新目标即包内默认端点（`reset` / 改回默认）时保留密钥。
 
 ### 2.2 旧 YAML 一次性导入（boot）
 
 - 首次 `start`（或 `config import`）时，源为 `start -c FILE` 指定的路径或 `~/.coding-proxy/config.yaml`（存在时）；`./config.yaml` **不会**被自动导入。
 - 导入前跑旧 loader 做等价校验：`resolve_config() == legacy load_config(source)`；不通过则不建库，本次以旧 YAML 只读运行（Config 页显示失败字段路径并禁写）。
-- 源文件不改名、不改写；marker 记录 sha256。之后源文件内容与已导入版本不一致时拒绝启动（提示 `config import` 重导或改用独立 `CODING_PROXY_HOME`）。
+- 源文件不改名、不改写；marker 记录 sha256。拒启（strict）覆盖：`start -c` 显式指定的文件（始终 strict，与导入来源无关）；该文件即导入源（marker.source 指向它）；或存储无导入源（`imported_from` 为 None，含首启）时旧版会读取的 `./config.yaml` / `~/.coding-proxy/config.yaml`；其余情形（如经 `config import /tmp/custom.yaml` 导入后，home 下遗留的旧 YAML 被修改）只提示「不一致，确认无用后请删除」，不拒启。
 - 旧 `config/loader.py` 搜索链（`./config.yaml` → `~/.coding-proxy/config.yaml` → Pydantic 默认）保留为导入参考实现与测试基准，运行时不再读取。
 
 ---
@@ -77,6 +77,7 @@
 | ------ | ---- | ------------- | -------- |
 | `host` | str  | `"127.0.0.1"` | 监听地址 |
 | `port` | int  | `3392`        | 监听端口 |
+| `allowed_hosts` | list[str] | `[]` | 管理面（Dashboard / 非透传 `/api/*`）Host 白名单的额外条目；`127.0.0.1` / `localhost` / `::1` 恒允许，绑定 IP 的本机访问亦放行。bootstrap 字段，经 `coding-proxy config set` 修改后需重启 |
 
 ### 3.2 DatabaseConfig
 
@@ -91,7 +92,7 @@
 | 字段           | 类型        | 默认值    | 说明                                     |
 | -------------- | ----------- | --------- | ---------------------------------------- |
 | `level`        | str         | `"INFO"`  | 控制台日志级别                           |
-| `file`         | str \| null | `null`    | 文件日志路径（`null` 时输出到控制台）    |
+| `file`         | str \| null | `null`    | 文件日志路径；`null` 时 CLI 启动回落 `.logs/coding-proxy.log`，空串 `""` 禁用文件日志（仅控制台） |
 | `max_bytes`    | int         | `5242880` | 单个日志文件最大字节数（5 MB），触发轮转 |
 | `backup_count` | int         | `5`       | 保留的已压缩备份文件数                   |
 
@@ -101,8 +102,8 @@
 | ------------------- | ---------------- | ---------------------------------- | ---------------------------------------------------------- |
 | `token_store_path`  | str              | `~/.coding-proxy/tokens.json`（派生自 `$CODING_PROXY_HOME`） | Token Store 文件路径 |
 | `github_client_id`  | str              | 公开 ID                            | GitHub OAuth Client ID（隐藏字段，仅导入/导出往返）         |
-| `google_client_id`  | str              | `""`                               | Google OAuth Client ID（可选）                              |
-| `google_client_secret` | 密钥            | 空                                 | 密钥字段，经 `config set-secret` / Dashboard 写入          |
+| `google_client_id`  | str              | 内置公开凭据                       | Google OAuth Client ID（开箱即用，可覆盖）                 |
+| `google_client_secret` | 密钥            | 内置公开凭据（开箱即用）           | 密钥字段，经 `config set-secret` / Dashboard 写入          |
 
 ---
 

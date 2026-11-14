@@ -324,17 +324,67 @@ _NODE_HARNESS = textwrap.dedent(
     h.assignField(w2, b2, ['quota_guard', 'enabled'], false, false);
     assert.deepStrictEqual(w2, b2);
 
-    // 目标地址变化 → 预测清空的密钥（显式 op 与 empty 记录除外）
+    // 目标地址变化 → 预测清空的密钥（仅计入有存储记录 recorded 的条目；显式 op 除外）
     const cleared = h.predictClearedSecrets({
       base: { vendors: [{ vendor: 'zhipu', base_url: 'https://a' }] },
       work: { vendors: [{ vendor: 'zhipu', base_url: 'https://b' },
-                        { vendor: 'kimi', base_url: 'https://k' }] },
+                        { vendor: 'kimi', base_url: 'https://k2' }] },
       defaults: { vendors: [{ vendor: 'kimi', base_url: 'https://k' }] },
-      secrets: { 'vendors.zhipu.api_key': { kind: 'stored' }, 'vendors.kimi.api_key': { kind: 'env' } },
+      secrets: { 'vendors.zhipu.api_key': { kind: 'stored', recorded: true },
+                 'vendors.kimi.api_key': { kind: 'env', recorded: false } },
       ops: {}, secretFields: { zhipu: ['api_key'], kimi: ['api_key'] },
       targetDefaults: { base_url: '', token_url: 'https://t' },
     });
     assert.deepStrictEqual(cleared, ['vendors.zhipu.api_key']);
+
+    // 新建覆盖 + 目标地址变化：服务端会物化默认 env 记录再清空，确认框需预判（gate F-3）
+    const cleared2 = h.predictClearedSecrets({
+      base: { vendors: [] },
+      work: { vendors: [{ vendor: 'minimax', base_url: 'https://m2' }] },
+      defaults: { vendors: [{ vendor: 'minimax', base_url: 'https://m' }] },
+      secrets: { 'vendors.minimax.api_key': { kind: 'env', env_var: 'MINIMAX_API_KEY', recorded: false, default_env: 'MINIMAX_API_KEY' } },
+      ops: {}, secretFields: { minimax: ['api_key'] },
+      targetDefaults: { base_url: '', token_url: 'https://t' },
+    });
+    assert.deepStrictEqual(cleared2, ['vendors.minimax.api_key']);
+    // 未新建覆盖（沿用默认 vendor dict 仅动 base_url 视为覆盖）但无 default_env 的不预判
+    const cleared3 = h.predictClearedSecrets({
+      base: { vendors: [{ vendor: 'kimi', base_url: 'https://k' }] },
+      work: { vendors: [{ vendor: 'kimi', base_url: 'https://k2' }] },
+      defaults: { vendors: [{ vendor: 'kimi', base_url: 'https://k' }] },
+      secrets: { 'vendors.kimi.api_key': { kind: 'default', recorded: false } },
+      ops: {}, secretFields: { kimi: ['api_key'] },
+      targetDefaults: { base_url: '', token_url: 'https://t' },
+    });
+    assert.deepStrictEqual(cleared3, []);
+    // 自定义 URL + stored 密钥 → 改回包内默认 URL：服务端保留，不预判清空（gate F-2）
+    const cleared4 = h.predictClearedSecrets({
+      base: { vendors: [{ vendor: 'zhipu', base_url: 'https://custom.example' }] },
+      work: { vendors: [{ vendor: 'zhipu', base_url: 'https://open.bigmodel.cn/api/anthropic' }] },
+      defaults: { vendors: [{ vendor: 'zhipu', base_url: 'https://open.bigmodel.cn/api/anthropic' }] },
+      secrets: { 'vendors.zhipu.api_key': { kind: 'stored', recorded: true } },
+      ops: {}, secretFields: { zhipu: ['api_key'] },
+      targetDefaults: { base_url: '', token_url: 'https://t' },
+    });
+    assert.deepStrictEqual(cleared4, []);
+    // pinned empty 记录（曾覆盖后移除）：服务端不清空（前后保持空串），不预判（gate F-1）
+    const cleared5 = h.predictClearedSecrets({
+      base: { vendors: [] },
+      work: { vendors: [{ vendor: 'zhipu', base_url: 'https://custom.example' }] },
+      defaults: { vendors: [{ vendor: 'zhipu', base_url: 'https://open.bigmodel.cn/api/anthropic' }] },
+      secrets: { 'vendors.zhipu.api_key': { kind: 'empty', recorded: false, default_env: 'ZHIPU_API_KEY' } },
+      ops: {}, secretFields: { zhipu: ['api_key'] },
+      targetDefaults: { base_url: '', token_url: 'https://t' },
+    });
+    assert.deepStrictEqual(cleared5, []);
+
+    // move 后展开行的新下标：被移动行跟随自身，夹在区间内的其余行 ∓1 平移
+    assert.strictEqual(h.movedOpenIndex(1, 0, 1), 0);   // [A,B,C] move(0,1) → [B,A,C]，B 1→0
+    assert.strictEqual(h.movedOpenIndex(1, 0, 2), 0);   // [A,B,C] move(0,2) → [B,C,A]，B 1→0
+    assert.strictEqual(h.movedOpenIndex(1, 2, 0), 2);   // [A,B,C] move(2,0) → [C,A,B]，B 1→2
+    assert.strictEqual(h.movedOpenIndex(0, 1, 2), 0);   // 区间外不动
+    assert.strictEqual(h.movedOpenIndex(2, 0, 1), 2);   // 区间外不动
+    assert.strictEqual(h.movedOpenIndex(null, 0, 1), null);
 
     // tiers 链路 / 定价默认新增行 / token / 模板节点
     assert.deepStrictEqual(h.effectiveChain(null, [{ vendor: 'a' }, { vendor: 'b', enabled: false }]), ['a']);
@@ -491,13 +541,15 @@ _DOM_HARNESS = textwrap.dedent(
       addEventListener() {},
     };
     let view;
-    // PUT 经 putGate 放行（模拟 preflight + activate 耗时）；getFail > 0 时 GET 返回 500
-    const net = { puts: [], gets: 0, getFail: 0, putGate: Promise.resolve(), putBody: null };
+    // PUT 经 putGate 放行（模拟 preflight + activate 耗时）；put409 非 null 时 PUT 返回 409；
+    // getFail > 0 时 GET 返回 500
+    const net = { puts: [], gets: 0, getFail: 0, putGate: Promise.resolve(), putBody: null, put409: null };
     const resp = (status, body) => ({ status: status, ok: status === 200, json: () => Promise.resolve(JSON.parse(JSON.stringify(body))) });
     const fetchFn = (url, init) => {
       if (url === '/api/status') return Promise.resolve(resp(200, { tiers: [], in_flight: 0 }));
       if (init && init.method === 'PUT') {
         net.puts.push(JSON.parse(init.body));
+        if (net.put409) return Promise.resolve(resp(409, { error: 'conflict', sections: net.put409 }));
         return net.putGate.then(() => resp(200, net.putBody || { revisions: {}, applied: true, apply_error: null, cleared_secrets: [], reset_runtime: [] }));
       }
       net.gets++;
@@ -707,6 +759,46 @@ _DOM_HARNESS = textwrap.dedent(
       assert.deepStrictEqual(net.puts[net.puts.length - 1].secret_ops, { 'auth.google_client_secret': { op: 'clear' } });
       const note = banners().find(t => t.startsWith('已保存'));
       assert.ok(note && !note.startsWith('已保存并生效') && note.includes('CLI 登录'), String(note));
+
+      // 10) 排序后展开行仍指向原条目：move 对夹在区间内的展开下标做 ∓1 平移
+      view = mkView([], pricing.slice());
+      view.values.model_mapping = [
+        { pattern: 'A', target: 'a', is_regex: false, vendors: [] },
+        { pattern: 'B', target: 'b', is_regex: false, vendors: [] },
+        { pattern: 'C', target: 'c', is_regex: false, vendors: [] },
+      ];
+      await CT.refresh(true);
+      pill('model_mapping');
+      rows()[1].click(); // 展开 B（index 1）
+      assert.ok(root.querySelector('.cfg-detail-row .cfg-row[data-path="model_mapping.1.pattern"]'));
+      rows()[0].querySelector('.cfg-btn-icon[aria-label="下移"]').click(); // [A,B,C] → [B,A,C]
+      assert.ok(root.querySelector('.cfg-detail-row .cfg-row[data-path="model_mapping.0.pattern"]'),
+        'expanded row must follow the original entry after move');
+      assert.ok(root.querySelectorAll('.cfg-detail-row').length === 1);
+
+      // 11) 409 + 定向重载失败：不保留「已重新加载」承诺；重试仅重载冲突 section
+      view = mkView([], pricing.slice());
+      view.values.failover = { status_codes: [429] };
+      await CT.refresh(true);
+      pill('pricing');
+      delRow(0); // pricing 与 failover 同时有本地修改
+      pill('failover');
+      addChip('500');
+      assert.ok(CT.isDirty());
+      net.put409 = ['pricing'];
+      net.getFail = 1; // 409 后的定向重载失败
+      saveBtn().click();
+      await until(() => root.textContent.includes('加载配置失败'), 'fatal not rendered');
+      assert.ok(!root.textContent.includes('已重新加载'), 'must not claim reloaded');
+      assert.ok(root.textContent.includes('但重新加载失败'), root.textContent);
+      assert.ok(CT.isDirty(), 'unrelated local edits must survive');
+      root.querySelectorAll('.cfg-banner .cfg-btn').find(b => b.textContent === '重试').click();
+      await until(() => root.querySelector('.cfg-body'), 'retry did not restore the form');
+      assert.ok(CT.isDirty(), 'failover edit must survive section-scoped retry');
+      pill('failover');
+      assert.ok(chips().includes('500'));
+      assert.ok(!root.textContent.includes('但重新加载失败'));
+      net.put409 = null;
       console.log('ok');
     })().catch(e => { console.error(e && e.stack || e); process.exit(1); });
     """

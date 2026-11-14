@@ -131,12 +131,20 @@ class TestResolution:
             "resolved": True,
             "hint": "",
             "default_env": "KIMI_API_KEY",
+            "recorded": True,
         }
         assert states["vendors.doubao.api_key"]["kind"] == "empty"
         assert states["vendors.zhipu.api_key"]["kind"] == "env"
         assert states["vendors.zhipu.api_key"]["env_var"] == "ZHIPU_API_KEY"
         assert states["vendors.xiaomi.api_key"]["kind"] == "empty"
         assert states["auth.google_client_secret"]["kind"] == "default"
+        # recorded = 存在 stored/env 记录：empty 记录与 default/默认 ${VAR} 推导为 False
+        assert states["vendors.minimax.api_key"]["recorded"] is True
+        assert states["vendors.kimi.api_key"]["recorded"] is True
+        assert states["vendors.doubao.api_key"]["recorded"] is False
+        assert states["vendors.zhipu.api_key"]["recorded"] is False
+        assert states["vendors.xiaomi.api_key"]["recorded"] is False
+        assert states["auth.google_client_secret"]["recorded"] is False
 
     def test_unset_env_resolves_empty(self):
         _store()

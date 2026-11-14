@@ -109,6 +109,14 @@ class StoreNotReadyError(RuntimeError):
     """配置尚未迁移（存在待导入的 YAML）."""
 
 
+class ExplicitConfigMissingError(RuntimeError):
+    """``-c`` 显式指定的配置文件不存在（fail-fast，不固化空 marker）."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        super().__init__(f"配置文件不存在: {path}（`-c` 只指定已有文件，不会创建）")
+
+
 class StoredConfigInvalidError(RuntimeError):
     """config.db 中的配置无法通过校验（消息只含字段路径）."""
 
@@ -326,6 +334,9 @@ def plan_from_raw(
     for section, value in user.items():
         if section in ("vendors", "tiers"):
             continue
+        if section == "session_policies" and isinstance(value, list):
+            # list 形态（YAML 注释示例引导的合法写法）归一为 dict，避免以 list 落库
+            value = {"policies": value}
         override = minimize_override(section, defaults_raw.get(section), value)
         if override is not NO_OVERRIDE:
             plan.sections[section] = override
@@ -557,9 +568,13 @@ def _legacy_effective_raw(source: Path) -> dict:
 
 def _initial_source(explicit_path: Path | None) -> Path | None:
     if explicit_path is not None:
+        # 显式 -c 不做内容过滤：缺失即 fail-fast，内容由等价门把关
         return explicit_path if explicit_path.is_file() else None
     home_yaml = legacy_home_yaml_path()
-    return home_yaml if home_yaml.is_file() else None
+    # 与 cwd 候选同口径：无关 YAML 不作为待导入源（避免永久 legacy_readonly 写锁）
+    if home_yaml.is_file() and _is_proxy_yaml(home_yaml):
+        return home_yaml
+    return None
 
 
 def _is_proxy_yaml(path: Path) -> bool:
@@ -648,6 +663,9 @@ def boot(
     environ: Mapping[str, str] | None = None,
 ) -> BootResult:
     """``start`` 的配置引导：必要时一次性导入，然后解析运行时配置."""
+    if explicit_path is not None and not explicit_path.is_file():
+        # 显式输入缺失即报错：静默以包内默认启动会把一次手误持久化为「已迁移」
+        raise ExplicitConfigMissingError(explicit_path)
     environ = os.environ if environ is None else environ
     store = ConfigStore(config_db_path())
     snap = store.snapshot()
@@ -720,6 +738,13 @@ def require_migrated_or_empty() -> bool:
             f"配置尚未迁移：请先运行 `coding-proxy start`，或执行 "
             f"`coding-proxy config import {legacy_home_yaml_path()}`"
         )
+    cwd_yaml = Path("config.yaml")
+    if cwd_yaml.is_file() and _is_proxy_yaml(cwd_yaml):
+        # 与 start 的首启门槛一致：旧版会读取该文件，先放行写入会被随后的导入整体丢弃
+        raise StoreNotReadyError(
+            f"配置尚未迁移：请先运行 `coding-proxy start -c {cwd_yaml}`，或执行 "
+            f"`coding-proxy config import {cwd_yaml}`"
+        )
     return False
 
 
@@ -769,6 +794,7 @@ __all__ = [
     "StaleYamlError",
     "LegacyConfigError",
     "StoreNotReadyError",
+    "ExplicitConfigMissingError",
     "StoredConfigInvalidError",
     "BootResult",
     "plan_import",

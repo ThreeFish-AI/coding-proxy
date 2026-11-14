@@ -27,7 +27,15 @@ def proxy_home() -> Path:
 def ensure_home() -> Path:
     """创建 home 目录（0700）；目录属主为当前用户时收紧权限至 0700."""
     home = proxy_home()
-    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        from .store import ConfigStoreError
+
+        raise ConfigStoreError(
+            f"无法创建配置目录 {home}（{exc.strerror or exc}）。"
+            "请检查 CODING_PROXY_HOME 指向的路径及其父目录权限"
+        ) from None
     getuid = getattr(os, "getuid", None)  # Windows 无 getuid
     try:
         if getuid is not None and home.stat().st_uid == getuid():
@@ -86,7 +94,14 @@ def default_token_store_str() -> str:
 
 def create_private_file(path: Path, data: bytes) -> None:
     """以 O_EXCL + 0600 创建并写入文件；文件已存在时抛 FileExistsError."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        from .store import StoreAccessError
+
+        raise StoreAccessError(path, f"创建文件失败: {exc.strerror or exc}") from None
     try:
         with os.fdopen(fd, "wb") as fh:
             fd = -1

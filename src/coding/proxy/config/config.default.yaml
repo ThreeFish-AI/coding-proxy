@@ -7,7 +7,7 @@ server:
 
 logging:
   level: "INFO"
-  # file: ".logs/coding-proxy.log"    # 文件日志路径；设为 null 或空字符串禁用
+  # file: ".logs/coding-proxy.log"    # 文件日志路径；未设置时默认 .logs/coding-proxy.log，设为空字符串禁用
   # max_bytes: 5242880                # 单文件上限（5 MB），触发轮转
   # backup_count: 5                   # 保留 gzip 压缩备份文件数
 
@@ -38,7 +38,7 @@ tiers: ["zhipu", "anthropic", "copilot", "antigravity"]
 # 优先级规则：
 #   - 若配置了 tiers，以其指定的顺序为准
 #   - 否则 vendors 列表顺序即优先级（index 越小越优先）
-#   - 无 circuit_breaker 的 vendor 自动成为终端层（不再向下故障转移）
+#   - circuit_breaker 为 null 仅表示不启用熔断；兜底（终端层）由链路位置决定
 
 vendors:
   # Vendor 0: Claude Plans（最高优先级）
@@ -101,13 +101,13 @@ vendors:
       threshold_percent: 95.0
       probe_interval_seconds: 300
 
-  # Vendor 3: 智谱 GLM（终端兜底，无 circuit_breaker）
+  # Vendor 3: 智谱 GLM（tiers 链路末位兜底；熔断器独立配置生效）
   - vendor: zhipu
     enabled: true
     base_url: "https://open.bigmodel.cn/api/anthropic"
     api_key: "${ZHIPU_API_KEY}"
     timeout_ms: 3000000
-    # 不配置 circuit_breaker → 自动成为终端层，不触发向下故障转移
+    # 兜底与否由 tiers 位置决定；熔断器只控制「跳过该层」，两者相互独立
     circuit_breaker:
       failure_threshold: 3
       recovery_timeout_seconds: 30

@@ -245,12 +245,20 @@ class TestBoundary:
             7,
         )
 
-    def test_vendor_secret_fields_in_section_are_ignored(self, service):
+    def test_vendor_secret_fields_in_section_are_rejected(self, service):
+        """vendor 内联密钥与非 vendors section 一致：422 拒绝（不静默丢弃）."""
         vendors = _with_vendor(service, "zhipu", api_key=PLANTED, timeout_ms=5)
-        result = _http(
-            service, {"revisions": {"vendors": 0}, "sections": {"vendors": vendors}}
-        )
-        assert _api_key(result.config) != PLANTED
+        with pytest.raises(ConfigValidationError) as exc_info:
+            _http(
+                service, {"revisions": {"vendors": 0}, "sections": {"vendors": vendors}}
+            )
+        assert _errors(exc_info) == [
+            {
+                "loc": ["vendors", "zhipu", "api_key"],
+                "msg": "密钥请使用 secret_ops / `config set-secret`",
+            }
+        ]
+        assert PLANTED not in str(exc_info.value)
         assert PLANTED.encode() not in config_db_path().read_bytes()
 
 
@@ -932,3 +940,108 @@ class TestExportImport:
         path.write_text('vendors:\n  - vendor: zhipu\n    api_key: "<redacted>"\n')
         with pytest.raises(ImportPlanError, match="vendors.zhipu.api_key"):
             service.import_yaml(path, dry_run=True)
+
+
+class TestTargetAddressDefaultExemption:
+    """清空规则收紧：新目标 == 包内默认端点时保留密钥（reset / 改回默认）."""
+
+    def test_reset_vendors_keeps_stored_secret(self, service):
+        """自定义 URL + 已存密钥 → reset vendors：密钥保留（文档承诺「Reset 不丢密钥」）."""
+        # 同一请求内改目标 + 显式 set：密钥保留（显式 op 优先于清空规则）
+        _http(
+            service,
+            {
+                "revisions": {"vendors": 0},
+                "sections": {
+                    "vendors": _with_vendor(
+                        service, "zhipu", base_url="https://custom.example"
+                    )
+                },
+                "secret_ops": {
+                    "vendors.zhipu.api_key": {"op": "set", "value": PLANTED}
+                },
+            },
+        )
+        assert service.view()["secrets"]["vendors.zhipu.api_key"]["kind"] == "stored"
+        result = service.reset_section("vendors")
+        assert result.cleared_secrets == []
+        state = service.view()["secrets"]["vendors.zhipu.api_key"]
+        assert state["kind"] == "stored" and state["recorded"] is True
+
+    def test_edit_back_to_default_target_keeps_secret(self, service):
+        """改到非默认目标清空；显式重设后改回包内默认目标保留."""
+        _http(
+            service,
+            {"secret_ops": {"vendors.zhipu.api_key": {"op": "set", "value": PLANTED}}},
+        )
+        vendors = _with_vendor(service, "zhipu", base_url="https://evil.example")
+        r1 = _http(
+            service, {"revisions": {"vendors": 0}, "sections": {"vendors": vendors}}
+        )
+        assert r1.cleared_secrets == ["vendors.zhipu.api_key"]
+        _http(
+            service,
+            {
+                "revisions": {"vendors": service.revision("vendors")},
+                "sections": {"vendors": _vendors(service)},
+                "secret_ops": {
+                    "vendors.zhipu.api_key": {"op": "set", "value": PLANTED}
+                },
+            },
+        )
+        vendors = _with_vendor(
+            service, "zhipu", base_url=default_vendor_dict("zhipu")["base_url"]
+        )
+        r2 = _http(
+            service,
+            {
+                "revisions": {"vendors": service.revision("vendors")},
+                "sections": {"vendors": vendors},
+            },
+        )
+        assert r2.cleared_secrets == []
+        assert service.view()["secrets"]["vendors.zhipu.api_key"]["kind"] == "stored"
+
+
+class TestSessionPoliciesListNormalization:
+    """list 形态 session_policies 归一为 dict 落库（gate F-1：避免 Config 页死区）."""
+
+    def test_put_list_form_is_wrapped(self, service):
+        result = _http(
+            service,
+            {
+                "revisions": {"session_policies": 0},
+                "sections": {"session_policies": []},
+            },
+        )
+        assert result.changed_sections == []
+        snap = ConfigStore(config_db_path()).snapshot()
+        assert (
+            "session_policies" not in snap.sections
+        )  # 与默认（空 policies）等价 → 无覆盖
+
+    def test_put_list_with_policy_wraps_to_dict(self, service):
+        result = _http(
+            service,
+            {
+                "revisions": {"session_policies": 0},
+                "sections": {
+                    "session_policies": [
+                        {
+                            "name": "vip",
+                            "match": {"session_keys": ["s1"]},
+                            "tiers": ["zhipu"],
+                        }
+                    ]
+                },
+            },
+        )
+        assert "session_policies" in result.changed_sections
+        snap = ConfigStore(config_db_path()).snapshot()
+        assert snap.sections["session_policies"] == {
+            "policies": [
+                {"name": "vip", "match": {"session_keys": ["s1"]}, "tiers": ["zhipu"]}
+            ]
+        }
+        view = service.view()["values"]["session_policies"]
+        assert isinstance(view, dict) and len(view["policies"]) == 1
