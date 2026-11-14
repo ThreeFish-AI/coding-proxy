@@ -59,12 +59,16 @@ uv add coding-proxy
 ```bash
 ## (Optional) Highly recommended to enable Zhipu GLM. Use env vars to defensively inject your keys
 # export ZHIPU_API_KEY="your-api-key-here"
+## ...or store the key encrypted in the config store (never echoed back)
+# echo -n "sk-..." | uv run coding-proxy config set-secret vendors.zhipu.api_key --stdin
 
-# Start coding-proxy with the default configuration
-# The default config lives at: ~/.coding-proxy/config.yaml.
+# Start coding-proxy with the stored configuration
+# Runtime config lives in ~/.coding-proxy/config.db (SQLite, secrets encrypted);
+# edit it via the Dashboard → Config page or the `coding-proxy config` CLI — no YAML to manage.
+# An existing ~/.coding-proxy/config.yaml from older versions is imported once on first start.
 uv run coding-proxy start
 
-## Use the `-c` flag to gracefully point to a custom config path
+## Use the `-c` flag to import a legacy YAML as the one-time migration source
 # uv run coding-proxy start -c ./coding-proxy.yaml
 
 # INFO:     Started server process [1403]
@@ -94,6 +98,8 @@ Curious about your real-time token spend, latency, and circuit breaker pulse? Po
 open http://127.0.0.1:3392/dashboard
 ```
 
+The **Config** tab edits the whole configuration online (vendors, tiers, failover, model mapping, pricing, native API, session policies) — saves hot-swap the running proxy with zero restarts. Unlock it once with the admin token printed by `coding-proxy config token`.
+
 ---
 
 ## 🛠️ The CLI Console Guide
@@ -102,7 +108,8 @@ open http://127.0.0.1:3392/dashboard
 
 | Command  | Description                                                                                                                                          | Example Usage                                 |
 | :------- | :--------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------- |
-| `start`  | **Fire up the proxy server.** Supports custom ports and configuration paths.                                                                         | `coding-proxy start -p 8080 -c ~/config.yaml` |
+| `start`  | **Fire up the proxy server.** Supports custom ports and a one-time legacy YAML import via `-c`.                                                      | `coding-proxy start -p 8080`                  |
+| `config` | **Manage the config store** (`~/.coding-proxy/config.db`). Sub-commands: `set`, `reset`, `set-secret` (encrypted keys), `import`/`export`, `token`. | `coding-proxy config set vendors.zhipu.timeout_ms 60000` |
 | `auth`   | **Manage OAuth credentials.** Sub-commands: `login` (browser OAuth), `status` (token validity), `reauth` (re-authenticate), `logout` (clear tokens). | `coding-proxy auth login -p github`           |
 | `status` | **Check proxy health.** Shows circuit breaker states (OPEN/CLOSED) and quota status across all tiers.                                                | `coding-proxy status`                         |
 | `usage`  | **Token Stats Dashboard.** Stalks every single token consumed, failovers triggered, and latency across day/vendor/model dimensions.                  | `coding-proxy usage -d 7 -v anthropic`        |
@@ -173,7 +180,7 @@ graph RL
 
 To ensure this project outlives us all (long-term maintainability), we offer exhaustive, Evidence-Based documentation:
 
-- 📖 **[User Guide](./docs/user-guide.md)** — From installation and bare-minimum configs to the semantic breakdown of every `config.yaml` field and common troubleshooting manuals. (Currently in Chinese)
+- 📖 **[User Guide](./docs/user-guide.md)** — From installation and bare-minimum setup to the semantic breakdown of every config field and common troubleshooting manuals. (Currently in Chinese)
 - 🏗️ **[Architecture Framework](./docs/framework.md)** — A meticulous decoding of underlying design patterns (Template Method, Circuit Breaker, State Machine, etc.), targeted at devs who want to peek into the matrix or contribute new vendors. (Currently in Chinese)
 
 ---

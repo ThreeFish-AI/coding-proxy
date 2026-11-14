@@ -50,11 +50,19 @@
 
 ### 2.3 配置（config）
 
-| 测试文件                | 覆盖范围                                                               |
-| ----------------------- | ---------------------------------------------------------------------- |
-| `test_config_loader.py` | 配置文件搜索优先级、环境变量展开、缺失文件处理、vendors 格式解析       |
-| `test_config_init.py`   | 配置模块初始化与 re-export 验证                                        |
-| `test_schema.py`        | ProxyConfig 校验、legacy 迁移、tiers 引用校验、vendor 专属字段 warning |
+| 测试文件                  | 覆盖范围                                                                   |
+| ------------------------- | -------------------------------------------------------------------------- |
+| `test_config_store.py`    | config.db 0600 创建、事务与 revision、409 冲突、损坏/占用错误分类、隔离守卫 |
+| `test_config_secrets.py`  | 密钥三态、Fernet 加解密、key_check canary、主密钥不匹配                    |
+| `test_config_normalize.py`| `$tmpl` 归一化、最小化覆盖、vendors 存储结构                                |
+| `test_config_loader.py`   | 旧 YAML 搜索优先级、环境变量展开、缺失文件处理、vendors 格式解析（导入基准）|
+| `test_config_import.py`   | 一次性导入等价矩阵（首启全量 / 仅 vendors / legacy flat / alias / ¥ 定价）  |
+| `test_config_service.py`  | 读写服务、边界校验、密钥 op、目标地址联动、错误不回显 input                 |
+| `test_config_ui_registry.py` | 字段注册表覆盖门（非 legacy 叶子字段必须在 REGISTRY 或 HIDDEN）          |
+| `test_config_api.py`      | GET/PUT /api/config、admin token 鉴权、409/422/503 映射                    |
+| `test_config_cli.py`      | `config path/export/import/set/reset/set-secret/token`                    |
+| `test_config_init.py`     | 配置模块初始化与 re-export 验证                                            |
+| `test_schema.py`          | ProxyConfig 校验、legacy 迁移、tiers 引用校验、vendor 专属字段 warning     |
 
 ### 2.4 格式转换（convert）
 
@@ -99,6 +107,11 @@
 | `test_cli_usage.py`          | CLI 用量查询命令                                        |
 | `test_banner.py`             | CLI Banner 显示                                         |
 | `test_logging_dual_write.py` | 日志双写机制                                            |
+| `test_generations.py`        | GenerationManager 单元测试：build/activate/swap、bootstrap pin、degraded 启动回退、排空与关停 |
+| `test_generations_app.py`    | 真实 app/store 下的 PUT 热切换、流式跨切换、会话绑定迁移、真实 uvicorn |
+| `test_generations_cli.py`    | CLI `start` 与 GenerationManager 接线、Dashboard URL 提示、degraded 启动 |
+| `test_security_middleware.py`| L1 跨站请求拒绝 / L2 管理面 Host 白名单 / 响应安全头加固 |
+| `test_dashboard_config_tab.py`| Config 页 HTML 接线、CSP/XSS 静态检查与 config.js Node harness |
 
 ### 2.9 其他
 

@@ -23,7 +23,7 @@ def _isolate_cli_deps():
     tl_mock = AsyncMock()
 
     with (
-        patch("coding.proxy.cli.load_config", return_value=cfg_mock),
+        patch("coding.proxy.cli._offline_config", return_value=cfg_mock),
         patch("coding.proxy.cli.TokenLogger", return_value=tl_mock),
         patch("coding.proxy.cli.show_usage", new_callable=AsyncMock) as mock_show,
     ):

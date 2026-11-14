@@ -581,11 +581,12 @@ def test_message_read_error_returns_502():
     assert "socket closed" in data["error"]["message"]
 
 
-def test_stream_unexpected_exception_returns_sse_error_not_500():
+def test_stream_unexpected_exception_returns_sse_error_not_500(caplog):
     """流式路径的未预期异常应返回 SSE error event（HTTP 200 + event: error），而非框架级 500.
 
     验证 catch-all Exception 处理器将未知异常转换为结构化 SSE 错误事件，
-    客户端可正常解析错误信息而非收到裸 HTTP 500。
+    客户端可正常解析错误信息而非收到裸 HTTP 500；异常消息（可能携带密钥，
+    如非法 header value）不回显客户端、也不落日志（I2）。
     """
     app = create_app(
         ProxyConfig(
@@ -603,6 +604,7 @@ def test_stream_unexpected_exception_returns_sse_error_not_500():
 
     with (
         TestClient(app) as client,
+        caplog.at_level("ERROR", logger="coding.proxy.server.routes"),
         client.stream(
             "POST",
             "/v1/messages",
@@ -620,7 +622,13 @@ def test_stream_unexpected_exception_returns_sse_error_not_500():
     assert "event: error" in body
     assert '"type": "api_error"' in body
     # 确认包含异常类型信息，便于调试定位
-    assert "ValueError" in body or "unexpected" in body.lower()
+    assert "ValueError" in body
+    # I2：异常消息不回显客户端，也不落日志（日志只含类型与堆栈帧）
+    assert "unexpected parsing error" not in body
+    assert all(
+        "ValueError: unexpected parsing error" not in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_non_stream_unexpected_exception_returns_500_json_not_raw_500():

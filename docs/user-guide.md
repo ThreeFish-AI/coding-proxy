@@ -11,7 +11,7 @@
   - [2. 文档导航](#2-文档导航)
   - [3. 快速上手入门](#3-快速上手入门)
   - [4. 配置概览](#4-配置概览)
-    - [4.1 配置文件位置与加载优先级](#41-配置文件位置与加载优先级)
+    - [4.1 配置存储与生效方式](#41-配置存储与生效方式)
     - [4.2 vendors — 供应商列表](#42-vendors--供应商列表)
     - [4.3 tiers — 降级链路优先级](#43-tiers--降级链路优先级)
     - [4.4 环境变量引用](#44-环境变量引用)
@@ -74,7 +74,7 @@ graph TD
     style T3 fill:#1a5276,color:#fff
 ```
 
-正常情况下，coding-proxy 将请求透传到 **Tier 0（默认为智谱 GLM）**。当检测到限流、配额耗尽或服务过载等错误时，按优先级链自动降级到下一层供应商。每层独立配备熔断器和配额守卫——**未配置 `circuit_breaker` 的 vendor 自动成为终端层**，始终接受请求且不触发进一步故障转移。供应商恢复后，代理会自动尝试切回更高优先级的层级。整个过程对用户透明。
+正常情况下，coding-proxy 将请求透传到 **Tier 0（默认为智谱 GLM）**。当检测到限流、配额耗尽或服务过载等错误时，按优先级链自动降级到下一层供应商。每层独立配备熔断器和配额守卫——**未配置 `circuit_breaker` 的 vendor 不启用熔断**（是否作为兜底层由其在 tiers 链路中的位置决定）。供应商恢复后，代理会自动尝试切回更高优先级的层级。整个过程对用户透明。
 
 > `tiers` 链路可通过配置自定义，不限于上图所示的 4 层。详见 [供应商配置 — tiers](./guide/vendors.md#4-tiers--降级链路优先级)。
 
@@ -92,7 +92,7 @@ graph TD
 | --------------------------------------------- | --------------------------------------------------------------- |
 | **[快速开始](./guide/quickstart.md)**         | 环境要求、安装、最小配置、启动服务、Claude Code 集成            |
 | **[供应商配置](./guide/vendors.md)**          | 全部 9 种供应商配置详情、模型映射、定价                         |
-| **[CLI 命令参考](./guide/cli-reference.md)**  | start / status / usage / reset / auth 全部命令                  |
+| **[CLI 命令参考](./guide/cli-reference.md)**  | start / status / usage / reset / auth / config 全部命令         |
 | **[HTTP API 端点](./guide/api-reference.md)** | /v1/messages、health、status、reset、copilot、reauth、dashboard |
 | **[Dashboard 看板](./guide/dashboard.md)**    | Web 可视化看板功能与操作                                        |
 | **[监控·运维·排查](./guide/monitoring.md)**   | 日志、用量统计、性能调优、常见场景、故障排查                    |
@@ -111,11 +111,10 @@ graph TD
 # 1. 安装
 uv sync
 
-# 2. 配置（仅需设置 API Key）
+# 2. 配置（提供智谱 API Key，密钥会加密写入 config.db）
 export ZHIPU_API_KEY="your-api-key-here"
-cp config.default.yaml config.yaml
 
-# 3. 启动
+# 3. 启动（首次启动自动一次性导入旧 YAML，如存在）
 coding-proxy start
 
 # 4. 配置 Claude Code
@@ -129,15 +128,15 @@ curl http://127.0.0.1:3392/health
 
 ## 4. 配置概览
 
-### 4.1 配置文件位置与加载优先级
+### 4.1 配置存储与生效方式
 
-加载器先按以下顺序查找用户配置文件（找到第一个即停止）：
+运行时配置存放在 **`$CODING_PROXY_HOME/config.db`**（默认 `~/.coding-proxy/config.db`），包内 `config.default.yaml` 仅作默认值基线，无需也不应再编辑任何 YAML：
 
-1. `--config` 参数指定的路径（最高优先级）
-2. `./config.yaml`（项目根目录）
-3. `~/.coding-proxy/config.yaml`（用户主目录）
-
-找到用户配置后，以内置 `config.default.yaml` 为基础模板进行**深度合并**，用户配置覆盖模板默认值。未找到用户配置文件时，直接使用模板默认值。
+- **解析管线**：包内默认值 ⊕ config.db 中的用户覆盖（深度合并）⊕ 密钥注入 → `${VAR}` 模板展开 → `ProxyConfig` 校验。解析无副作用，`start` / `usage` / `auth` 共用。
+- **在线修改**：Dashboard → **Config** 页（浏览器打开 `http://127.0.0.1:3392/dashboard`，首次进入用 `coding-proxy config token` 输出的 admin token 解锁）或 [`coding-proxy config`](./guide/cli-reference.md#9-coding-proxy-config) 命令；业务配置保存后**进程内热切换生效，无需重启**。
+- **密钥**：各供应商 `api_key` / OAuth 凭据等只写不读，Fernet 加密落盘（主密钥 `master.key`，0600），展示仅尾 4 位；写入用 `config set-secret` 或 Config 页的密钥控件。
+- **bootstrap 字段**（`server` / `logging` / `database` / `auth` 路径类）：Dashboard 只读展示，经 CLI `config set` 修改后需重启生效。
+- **旧 YAML 迁移**：首次 `start` 自动一次性导入 `~/.coding-proxy/config.yaml`（或 `start -c FILE` 指定源）；`./config.yaml` 不会被自动导入。导入有等价校验（不通过则本次以旧 YAML 只读运行），源文件不改写；此后导入源本体（或 `start -c` 指定文件）被修改会触发启动拒绝并提示重新导入，其余来源仅提示。
 
 ### 4.2 vendors — 供应商列表
 
@@ -169,36 +168,42 @@ tiers: ["zhipu", "anthropic", "copilot", "antigravity"]
 
 ### 4.4 环境变量引用
 
-配置文件中可使用 `${VARIABLE_NAME}` 语法引用环境变量：
+配置中的密钥可绑定环境变量（包内默认值即采用该方式，如 `${ZHIPU_API_KEY}`），解析时展开；未定义变量展开为空串。绑定关系保存在 config.db 的密钥记录中：
 
-```yaml
-- vendor: zhipu
-  api_key: "${ZHIPU_API_KEY}"
+```bash
+# 使用包内默认绑定的变量（默认 vendors.zhipu.api_key → ${ZHIPU_API_KEY}）
+export ZHIPU_API_KEY="your-api-key-here"
+
+# 绑定任意环境变量（仅 CLI 可用，防 HTTP 读取进程任意 env）
+coding-proxy config set-secret vendors.zhipu.api_key --env MY_ZHIPU_KEY
 ```
 
-启动时自动替换。如果环境变量未设置，保留原始文本。
+经 Dashboard / CLI 写入的普通字符串一律按字面量保存，不会被当作模板展开；`${VAR}` 模板只随包内默认值与旧 YAML 导入进入存储。
 
 ### 4.5 auth — OAuth 登录配置
 
 ```yaml
 auth:
-  token_store_path: "~/.coding-proxy/tokens.json"
+  token_store_path: "~/.coding-proxy/tokens.json"   # 默认派生自 $CODING_PROXY_HOME
   # github_client_id: "..."    # 可选，默认使用公开 ID
   # google_client_id: ""        # 可选，默认使用公开凭据
-  # google_client_secret: ""
+  # google_client_secret: ""    # 密钥字段，经 config set-secret 写入
 ```
 
 > 完整字段定义参见 [配置字段参考 — AuthConfig](./arch/config-reference.md#34-authconfig)。
 
 ### 4.6 server / database / logging
 
+bootstrap 字段（Dashboard 只读，经 `coding-proxy config set` 修改，重启生效）：
+
 ```yaml
 server:
-  host: "127.0.0.1"    # 设为 "0.0.0.0" 接受外部连接
+  host: "127.0.0.1"    # 设为 "0.0.0.0" 接受外部连接（配合 server.allowed_hosts 白名单）
   port: 3392
+  allowed_hosts: []    # 管理面 Host 白名单，默认仅允许回环地址
 
 database:
-  path: "~/.coding-proxy/usage.db"
+  path: "~/.coding-proxy/usage.db"    # 默认派生自 $CODING_PROXY_HOME
 
 logging:
   level: "INFO"          # DEBUG / INFO / WARNING / ERROR
@@ -257,19 +262,23 @@ curl http://127.0.0.1:3392/api/openai/v1/chat/completions \
 
 ## 5. 日常操作速查
 
-| 操作        | 命令                                         |
-| ----------- | -------------------------------------------- |
-| 启动代理    | `coding-proxy start`                         |
-| 查看状态    | `coding-proxy status`                        |
-| 查看用量    | `coding-proxy usage`                         |
-| 查看本周    | `coding-proxy usage -w 1`                    |
-| 查看本月    | `coding-proxy usage -m 1`                    |
-| 重置熔断器  | `coding-proxy reset`                         |
-| 提升供应商  | `coding-proxy reset -v anthropic`            |
-| GitHub 登录 | `coding-proxy auth login -p github`          |
-| 重认证      | `coding-proxy auth reauth github`            |
-| 查看凭证    | `coding-proxy auth status`                   |
-| Dashboard   | 浏览器访问 `http://127.0.0.1:3392/dashboard` |
+| 操作           | 命令                                         |
+| -------------- | -------------------------------------------- |
+| 启动代理       | `coding-proxy start`                         |
+| 查看状态       | `coding-proxy status`                        |
+| 查看用量       | `coding-proxy usage`                         |
+| 查看本周       | `coding-proxy usage -w 1`                    |
+| 查看本月       | `coding-proxy usage -m 1`                    |
+| 重置熔断器     | `coding-proxy reset`                         |
+| 提升供应商     | `coding-proxy reset -v anthropic`            |
+| GitHub 登录    | `coding-proxy auth login -p github`          |
+| 重认证         | `coding-proxy auth reauth github`            |
+| 查看凭证       | `coding-proxy auth status`                   |
+| 修改配置       | `coding-proxy config set <path> <value>`     |
+| 写入密钥       | `coding-proxy config set-secret <path> --stdin` |
+| 导入旧 YAML    | `coding-proxy config import FILE`            |
+| Dashboard      | 浏览器访问 `http://127.0.0.1:3392/dashboard` |
+| Config 在线编辑 | Dashboard → Config 页（admin token 解锁）   |
 
 > 完整命令选项参见 [CLI 命令参考](./guide/cli-reference.md)。
 
@@ -281,7 +290,7 @@ curl http://127.0.0.1:3392/api/openai/v1/chat/completions \
 | ------------------------------------------------------ | -------------------------------------------------------------------- |
 | **Vendor（供应商）**                                   | API 后端提供方，即 `vendors` 列表中的一个条目                        |
 | **Tier（层级）**                                       | 一个 Vendor + 其关联弹性设施的路由单元                               |
-| **Terminal Tier（终端层）**                            | 未配置 `circuit_breaker` 的 Vendor，始终接受请求，不触发向下故障转移 |
+| **Terminal Tier（终端层）**                            | tiers 链路中的最后一层，无论是否配置 `circuit_breaker` 都作为兜底接受请求 |
 | **故障转移（Failover）**                               | 当前供应商不可用时自动切换到下一优先级供应商                         |
 | **熔断器（Circuit Breaker）**                          | 连续失败达到阈值后暂时切断对该供应商的请求                           |
 | **配额守卫（Quota Guard）**                            | 基于滑动窗口的 Token 用量预算管理，超限时跳过该供应商                |
