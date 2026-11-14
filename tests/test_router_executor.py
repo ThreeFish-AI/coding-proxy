@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -539,7 +540,7 @@ class TestExecuteStream:
         assert name == "good"
 
     @pytest.mark.asyncio
-    async def test_stream_unexpected_exception_on_last_tier_propagates(self):
+    async def test_stream_unexpected_exception_on_last_tier_propagates(self, caplog):
         """最后一层流式未预期异常应向上传播（由 _stream_proxy 接管）."""
         vendor = _mock_vendor()
 
@@ -550,9 +551,20 @@ class TestExecuteStream:
         vendor.send_message_stream = _raise_unexpected
         exec_inst = _executor([_make_tier(vendor)])
 
-        with pytest.raises(RuntimeError, match="stream corrupted"):
+        with (
+            caplog.at_level(logging.ERROR, logger="coding.proxy.routing.executor"),
+            pytest.raises(RuntimeError, match="stream corrupted"),
+        ):
             async for _ in exec_inst.execute_stream({"model": "test"}, {}):
                 pass  # noqa: PLC0107
+
+        # I2：未预期异常日志只含类型与堆栈帧，不渲染 str(exc)（可能携带密钥明文）
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert errors and "RuntimeError" in errors[0].getMessage()
+        assert all(
+            "RuntimeError: stream corrupted" not in r.getMessage()
+            for r in caplog.records
+        )
 
 
 # ── 错误处理测试 ─────────────────────────────────────────

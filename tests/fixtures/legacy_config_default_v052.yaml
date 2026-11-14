@@ -1,0 +1,716 @@
+# coding-proxy 默认配置（模板）
+# 复制到 ./config.yaml（项目根目录）或 ~/.coding-proxy/config.yaml 并修改自定义设置
+# 优先级：./config.yaml > ~/.coding-proxy/config.yaml
+
+server:
+  host: "127.0.0.1"
+  port: 3392
+
+logging:
+  level: "INFO"
+  # file: ".logs/coding-proxy.log"    # 文件日志路径；设为 null 或空字符串禁用
+  # max_bytes: 5242880                # 单文件上限（5 MB），触发轮转
+  # backup_count: 5                   # 保留 gzip 压缩备份文件数
+
+# === 降级链路优先级（可选） ===
+#
+# 显式指定故障转移时的供应商尝试顺序。
+# 未配置时回退到 vendors 列表的原始顺序。
+#
+# 引用的 vendor 名称必须在上方 vendors 中定义且 enabled=true。
+# 可用于在不改变 vendors 定义顺序的情况下灵活调整降级策略。
+#
+# 示例 1：完整四层降级链路（默认行为等效）
+#   tiers: ["anthropic", "copilot", "antigravity", "zhipu"]
+#
+# 示例 2：跳过中间层，仅保留首尾两级
+#   tiers: ["anthropic", "zhipu"]
+#
+# 示例 3：将 zhipu 提升为首选，anthropic 作为后备
+#   tiers: ["zhipu", "anthropic"]
+
+tiers: ["zhipu", "anthropic", "copilot", "antigravity"]
+
+# === 供应商定义（vendors 列表） ===
+#
+# 每个 vendor 通过 vendor 字段指定供应商类型：
+#   anthropic | zhipu | minimax | alibaba | xiaomi | kimi | doubao | copilot | antigravity
+#
+# 优先级规则：
+#   - 若配置了 tiers，以其指定的顺序为准
+#   - 否则 vendors 列表顺序即优先级（index 越小越优先）
+#   - 无 circuit_breaker 的 vendor 自动成为终端层（不再向下故障转移）
+
+vendors:
+  # Vendor 0: Claude Plans（最高优先级）
+  - vendor: anthropic
+    base_url: "https://api.anthropic.com"
+    timeout_ms: 300000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 65000000 # 5 小时 token 预算（根据订阅计划调整）
+      window_hours: 5.0
+      threshold_percent: 99.0
+      probe_interval_seconds: 300
+    weekly_quota_guard:
+      enabled: false
+      token_budget: 800000000 # 一周 token 预算（根据订阅计划调整）
+      window_hours: 168.0 # 7 天滑动窗口
+      threshold_percent: 99.0
+      probe_interval_seconds: 1800 # 每 30 分钟探测一次
+
+  # Vendor 1: GitHub Copilot Plans（中间层，默认禁用）
+  - vendor: copilot
+    enabled: true # 启用需 OAuth 登录或手动配置 github_token
+    github_token: "${GITHUB_TOKEN}" # GitHub token（可选，运行 coding-proxy auth login 自动获取）
+    account_type: "individual" # individual / business / enterprise
+    token_url: "https://api.github.com/copilot_internal/v2/token"
+    base_url: "" # 留空时按 account_type 自动解析；仅在特殊网络环境下显式覆盖
+    timeout_ms: 300000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: true
+      token_budget: 0
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+  # Vendor 2: Google Antigravity Plans（中间层，默认禁用）
+  - vendor: antigravity
+    enabled: false # 启用需配置 OAuth 凭据
+    client_id: "${GOOG_CLIENT_ID}" # Google OAuth2 Client ID
+    client_secret: "${GOOG_CLIENT_SECRET}" # Google OAuth2 Client Secret
+    refresh_token: "${GOOG_REFRESH_TOKEN}" # Google OAuth2 Refresh Token
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+    model_endpoint: "models/claude-sonnet-4-20250514"
+    timeout_ms: 300000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false # 启用后按 Premium Requests 配额管理
+      token_budget: 0
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+  # Vendor 3: 智谱 GLM（终端兜底，无 circuit_breaker）
+  - vendor: zhipu
+    enabled: true
+    base_url: "https://open.bigmodel.cn/api/anthropic"
+    api_key: "${ZHIPU_API_KEY}"
+    timeout_ms: 3000000
+    # 不配置 circuit_breaker → 自动成为终端层，不触发向下故障转移
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 30
+      success_threshold: 2
+    quota_guard:
+      enabled: true # 启用后按 Premium Requests 配额管理
+      token_budget: 1000000000 # 一天 token 预算（根据订阅计划调整）
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+    # 每模型并发限制：默认 3 个并行请求；超出则按 FIFO 排队等待
+    # 可通过 models 字段覆盖单个模型的限制（如 glm-5.1: 5）
+    concurrency:
+      default: 3
+      # models:
+      #   glm-5v-turbo: 3
+      #   glm-5.1: 3
+      #   glm-4.5-air: 3
+
+  # Vendor 4: MiniMax（默认禁用，需手动启用并添加到 tiers）
+  - vendor: minimax
+    enabled: false
+    base_url: "https://api.minimaxi.com/anthropic"
+    api_key: "${MINIMAX_API_KEY}"
+    timeout_ms: 3000000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 1000000000
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+  # Vendor 5: 阿里 Qwen（默认禁用）
+  - vendor: alibaba
+    enabled: false
+    base_url: "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic"
+    api_key: "${ALIBABA_API_KEY}"
+    timeout_ms: 3000000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 1000000000
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+  # Vendor 6: 小米 MiMo（默认禁用）
+  - vendor: xiaomi
+    enabled: false
+    base_url: "https://token-plan-cn.xiaomimimo.com/anthropic"
+    api_key: "${XIAOMI_API_KEY}"
+    timeout_ms: 3000000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 1000000000
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+  # Vendor 7: Kimi（默认禁用）
+  - vendor: kimi
+    enabled: false
+    base_url: "https://api.kimi.com/coding/"
+    api_key: "${KIMI_API_KEY}"
+    timeout_ms: 3000000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 1000000000
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+  # Vendor 8: 豆包 Doubao（默认禁用）
+  - vendor: doubao
+    enabled: false
+    base_url: "https://ark.cn-beijing.volces.com/api/coding"
+    api_key: "${ARK_API_KEY}"
+    timeout_ms: 3000000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_seconds: 300
+      success_threshold: 2
+    quota_guard:
+      enabled: false
+      token_budget: 1000000000
+      window_hours: 24.0
+      threshold_percent: 95.0
+      probe_interval_seconds: 300
+
+# === 故障转移触发条件 ===
+failover:
+  status_codes: [429, 403, 503, 500, 529]
+  error_types:
+    - "rate_limit_error"
+    - "overloaded_error"
+    - "api_error"
+  error_message_patterns:
+    - "quota"
+    - "usage cap"
+    - "internal network failure"
+
+# === 模型映射 ===
+model_mapping:
+  # GitHub Copilot 可用模型（通过 /api/copilot/models 诊断获取）
+  - pattern: "claude-opus-.*"
+    vendors: ["copilot"]
+    target: "claude-opus-4.6"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    vendors: ["copilot"]
+    target: "claude-sonnet-4.6"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["copilot"]
+    target: "claude-haiku-4.5"
+    is_regex: true
+  # Google Antigravity 模型映射
+  - pattern: "claude-opus-.*"
+    vendors: ["antigravity"]
+    target: "Claude Opus 4.6 Thinking"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    vendors: ["antigravity"]
+    target: "Claude Sonnet 4.6"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["antigravity"]
+    target: "Gemini 3 Flash"
+    is_regex: true
+  # 智谱 GLM 映射（官方原生 Anthropic 兼容端点）
+  # glm-5v-turbo 完整承载 Claude Code 满血能力（tool calling / thinking / 多模态）
+  - pattern: "claude-opus-.*"
+    vendors: ["zhipu"]
+    target: "glm-5.2"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    vendors: ["zhipu"]
+    target: "glm-5.1"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["zhipu"]
+    target: "glm-5.1"
+    is_regex: true
+  # MiniMax 模型映射（原生 Anthropic 兼容端点）
+  - pattern: "claude-opus-.*"
+    vendors: ["minimax"]
+    target: "minimax-m2.7"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    vendors: ["minimax"]
+    target: "minimax-m2.7"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["minimax"]
+    target: "minimax-m2.7"
+    is_regex: true
+  # 阿里 Qwen 模型映射（原生 Anthropic 兼容端点）
+  - pattern: "claude-opus-.*"
+    vendors: ["alibaba"]
+    target: "qwen3.6-plus"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    vendors: ["alibaba"]
+    target: "qwen3.6-plus"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["alibaba"]
+    target: "qwen3.6-plus"
+    is_regex: true
+  # 小米 MiMo 模型映射（原生 Anthropic 兼容端点）
+  - pattern: "claude-opus-.*"
+    vendors: ["xiaomi"]
+    target: "mimo-v2-pro"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    vendors: ["xiaomi"]
+    target: "mimo-v2-pro"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["xiaomi"]
+    target: "mimo-v2-pro"
+    is_regex: true
+  # Kimi 模型映射（原生 Anthropic 兼容端点）
+  - pattern: "claude-opus-.*"
+    vendors: ["kimi"]
+    target: "kimi-k2.5"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    vendors: ["kimi"]
+    target: "kimi-k2.5"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["kimi"]
+    target: "kimi-k2.5"
+    is_regex: true
+  # 豆包 Doubao 模型映射（三个不同模型对应不同 Claude 模型槽位）
+  - pattern: "claude-opus-.*"
+    vendors: ["doubao"]
+    target: "doubao-seed-2.0-code"
+    is_regex: true
+  - pattern: "claude-sonnet-.*"
+    vendors: ["doubao"]
+    target: "doubao-seed-2.0-pro"
+    is_regex: true
+  - pattern: "claude-haiku-.*"
+    vendors: ["doubao"]
+    target: "doubao-seed-2.0-lite"
+    is_regex: true
+
+# === 模型定价（USD / 1M tokens） ===
+# vendor: 供应商名称（对应 `usage` 统计表中的"供应商"列）
+# model:  实际模型名（对应 `usage` 统计表中的"实际模型"列）
+# 未配置定价的模型在统计中 Cost 列显示 "-"
+pricing:
+  # ── Anthropic Claude ──
+  - vendor: anthropic
+    model: claude-fable-5
+    input_cost_per_mtok: $10.0
+    output_cost_per_mtok: $50.0
+    cache_write_cost_per_mtok: $12.50
+    cache_read_cost_per_mtok: $1.00
+  - vendor: anthropic
+    model: claude-opus-4-8
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: anthropic
+    model: claude-opus-4-7
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: anthropic
+    model: claude-opus-4-6
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: anthropic
+    model: claude-sonnet-4-6
+    input_cost_per_mtok: $3.0
+    output_cost_per_mtok: $15.0
+    cache_write_cost_per_mtok: $3.75
+    cache_read_cost_per_mtok: $0.30
+  - vendor: anthropic
+    model: claude-haiku-4-5-20251001
+    input_cost_per_mtok: $1
+    output_cost_per_mtok: $5
+    cache_write_cost_per_mtok: $1.25
+    cache_read_cost_per_mtok: $0.10
+  # ── GitHub Copilot（透传 Claude，参照 Anthropic 定价估算） ──
+  - vendor: copilot
+    model: claude-opus-4.6
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: copilot
+    model: Claude Opus 4.6
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: copilot
+    model: Claude Sonnet 4.6
+    input_cost_per_mtok: $3.0
+    output_cost_per_mtok: $15.0
+    cache_write_cost_per_mtok: $3.75
+    cache_read_cost_per_mtok: $0.30
+  - vendor: copilot
+    model: claude-sonnet-4.6
+    input_cost_per_mtok: $3.0
+    output_cost_per_mtok: $15.0
+    cache_write_cost_per_mtok: $3.75
+    cache_read_cost_per_mtok: $0.30
+  - vendor: copilot
+    model: claude-haiku-4.5
+    input_cost_per_mtok: $1
+    output_cost_per_mtok: $5
+    cache_write_cost_per_mtok: $1.25
+    cache_read_cost_per_mtok: $0.10
+  - vendor: copilot
+    model: claude-haiku-4-5-20251001
+    input_cost_per_mtok: $1
+    output_cost_per_mtok: $5
+    cache_write_cost_per_mtok: $1.25
+    cache_read_cost_per_mtok: $0.10
+  - vendor: copilot
+    model: Claude Haiku 4.5
+    input_cost_per_mtok: $1
+    output_cost_per_mtok: $5
+    cache_write_cost_per_mtok: $1.25
+    cache_read_cost_per_mtok: $0.10
+  # -- OpenAI --
+  - vendor: openai
+    model: gpt-5.4-pro
+    input_cost_per_mtok: $30.00
+    output_cost_per_mtok: $180.00
+    cache_read_cost_per_mtok: $3.00
+  - vendor: openai
+    model: gpt-5.4-2026-03-05
+    input_cost_per_mtok: $2.50
+    output_cost_per_mtok: $15.00
+    cache_read_cost_per_mtok: $0.25
+  - vendor: openai
+    model: gpt-5.4-mini-2026-03-17
+    input_cost_per_mtok: $0.75
+    output_cost_per_mtok: $4.50
+    cache_read_cost_per_mtok: $0.07
+  - vendor: openai
+    model: gpt-5.4-nano
+    input_cost_per_mtok: $0.20
+    output_cost_per_mtok: $1.25
+    cache_read_cost_per_mtok: $0.02
+  - vendor: openai
+    model: gpt-5-mini-2025-08-07
+    input_cost_per_mtok: $0.25
+    output_cost_per_mtok: $2.00
+    cache_read_cost_per_mtok: $0.02
+  - vendor: openai
+    model: gpt-5-nano-2025-08-07
+    input_cost_per_mtok: $0.05
+    output_cost_per_mtok: $0.40
+    cache_read_cost_per_mtok: $0.01
+  - vendor: openai
+    model: text-embedding-3-large
+    input_cost_per_mtok: $0.13
+  - vendor: openai
+    model: text-embedding-3-small
+    input_cost_per_mtok: $0.02
+  - vendor: openai
+    model: text-embedding-ada-002
+    input_cost_per_mtok: $0.10
+  # -- Anthropic Native --
+  - vendor: anthropic-native
+    model: claude-opus-4-7
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: anthropic-native
+    model: claude-opus-4-6
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: anthropic-native
+    model: claude-sonnet-4-6
+    input_cost_per_mtok: $3.0
+    output_cost_per_mtok: $15.0
+    cache_write_cost_per_mtok: $3.75
+    cache_read_cost_per_mtok: $0.30
+  - vendor: anthropic-native
+    model: claude-haiku-4-5-20251001
+    input_cost_per_mtok: $1
+    output_cost_per_mtok: $5
+    cache_write_cost_per_mtok: $1.25
+    cache_read_cost_per_mtok: $0.10
+  # -- Gemini --
+  - vendor: gemini
+    model: gemini-3.1-pro-preview
+    input_cost_per_mtok: $2.00
+    output_cost_per_mtok: $12.00
+    cache_read_cost_per_mtok: $0.20
+  - vendor: gemini
+    model: gemini-3-flash-preview
+    input_cost_per_mtok: $0.50
+    output_cost_per_mtok: $3.00
+    cache_read_cost_per_mtok: $0.03
+  - vendor: gemini
+    model: gemini-2.5-flash
+    input_cost_per_mtok: $0.30
+    output_cost_per_mtok: $2.50
+    cache_read_cost_per_mtok: $0.03
+  - vendor: gemini
+    model: gemini-embedding-001
+    input_cost_per_mtok: $0.15
+  - vendor: gemini
+    model: text-embedding-004
+    input_cost_per_mtok: $0.10
+  - vendor: gemini
+    model: text-embedding-005
+    input_cost_per_mtok: $0.10
+  # ── Google Antigravity（参照 Anthropic 定价估算） ──
+  - vendor: antigravity
+    model: claude-opus-4-6-thinking
+    input_cost_per_mtok: $5.0
+    output_cost_per_mtok: $25.0
+    cache_write_cost_per_mtok: $6.25
+    cache_read_cost_per_mtok: $0.50
+  - vendor: antigravity
+    model: claude-sonnet-4-6-thinking
+    input_cost_per_mtok: $3.0
+    output_cost_per_mtok: $15.0
+    cache_write_cost_per_mtok: $3.75
+    cache_read_cost_per_mtok: $0.30
+  - vendor: antigravity
+    model: gemini-3.1-pro
+    input_cost_per_mtok: $2.0
+    output_cost_per_mtok: $12.0
+    cache_read_cost_per_mtok: $0.20
+  - vendor: antigravity
+    model: gemini-3-flash
+    input_cost_per_mtok: $0.50
+    output_cost_per_mtok: $3.00
+    cache_read_cost_per_mtok: $0.05
+  # ── 智谱 GLM ──
+  - vendor: zhipu
+    model: glm-5.2 # 待区分长短上下文定价
+    input_cost_per_mtok: ¥8.00
+    output_cost_per_mtok: ¥28.00
+    cache_read_cost_per_mtok: ¥2.00
+  - vendor: zhipu
+    model: glm-5.1 # 待区分长短上下文定价
+    input_cost_per_mtok: ¥6.00
+    output_cost_per_mtok: ¥24.00
+    cache_read_cost_per_mtok: ¥1.30
+  - vendor: zhipu
+    model: glm-5-turbo # 待区分长短上下文定价
+    input_cost_per_mtok: ¥5.00
+    output_cost_per_mtok: ¥22.00
+    cache_read_cost_per_mtok: ¥1.20
+  - vendor: zhipu
+    model: glm-5 # 待区分长短上下文定价
+    input_cost_per_mtok: ¥4.00
+    output_cost_per_mtok: ¥18.00
+    cache_read_cost_per_mtok: ¥1.00
+  - vendor: zhipu
+    model: glm-5v-turbo # 待区分长短上下文定价
+    input_cost_per_mtok: ¥5.00
+    output_cost_per_mtok: ¥22.00
+    cache_read_cost_per_mtok: ¥1.20
+  - vendor: zhipu
+    model: glm-4.7 # 待区分长短上下文定价
+    input_cost_per_mtok: ¥2.00
+    output_cost_per_mtok: ¥8.00
+    cache_read_cost_per_mtok: ¥0.40
+  - vendor: zhipu
+    model: glm-4.5-air # 待区分长短上下文定价
+    input_cost_per_mtok: ¥0.80
+    output_cost_per_mtok: ¥2.00
+    cache_read_cost_per_mtok: ¥0.16
+  # ── MiniMax ──
+  - vendor: minimax
+    model: minimax-m2.7
+    input_cost_per_mtok: ¥2.10
+    output_cost_per_mtok: ¥8.40
+    cache_write_cost_per_mtok: ¥2.625
+    cache_read_cost_per_mtok: ¥0.42
+  - vendor: minimax
+    model: minimax-m2.5
+    input_cost_per_mtok: ¥2.10
+    output_cost_per_mtok: ¥8.40
+    cache_write_cost_per_mtok: ¥2.625
+    cache_read_cost_per_mtok: ¥0.21
+  # ── 阿里 Qwen ──
+  - vendor: alibaba
+    model: qwen3.6-plus
+    input_cost_per_mtok: $0.276
+    output_cost_per_mtok: $1.651
+  # ── 小米 MiMo ──
+  - vendor: xiaomi
+    model: mimo-v2-pro
+    input_cost_per_mtok: ¥7.00
+    output_cost_per_mtok: ¥21.00
+    cache_read_cost_per_mtok: ¥1.40
+  - vendor: xiaomi
+    model: mimo-v2-omni
+    input_cost_per_mtok: ¥2.80
+    output_cost_per_mtok: ¥14.00
+    cache_read_cost_per_mtok: ¥0.56
+  - vendor: xiaomi
+    model: mimo-v2-flash
+    input_cost_per_mtok: ¥0.70
+    output_cost_per_mtok: ¥2.10
+    cache_read_cost_per_mtok: ¥0.07
+  # ── Kimi ──
+  - vendor: kimi
+    model: kimi-k2.5
+    input_cost_per_mtok: $0.60
+    output_cost_per_mtok: $3.00
+  # ── 豆包 Doubao ──
+  - vendor: doubao
+    model: doubao-seed-2.0-code
+    input_cost_per_mtok: ¥3.20
+    output_cost_per_mtok: ¥16.00
+    cache_write_cost_per_mtok: ¥0.64
+    cache_read_cost_per_mtok: ¥0.017
+  - vendor: doubao
+    model: doubao-seed-2.0-pro
+    input_cost_per_mtok: ¥3.20
+    output_cost_per_mtok: ¥16.00
+    cache_write_cost_per_mtok: ¥0.64
+    cache_read_cost_per_mtok: ¥0.017
+  - vendor: doubao
+    model: doubao-seed-2.0-lite
+    input_cost_per_mtok: ¥0.60
+    output_cost_per_mtok: ¥3.60
+    cache_write_cost_per_mtok: ¥0.12
+    cache_read_cost_per_mtok: ¥0.017
+
+database:
+  path: "~/.coding-proxy/usage.db"
+
+# === OAuth 登录配置 ===
+auth:
+  # GitHub Device Flow client_id（默认使用 Copilot VS Code 扩展公开 ID）
+  # github_client_id: "Iv1.b507a08c87ecfe98"
+  # Google OAuth 凭据（默认使用 Antigravity Enterprise 公开凭据，无需手动配置）
+  # google_client_id: ""
+  # google_client_secret: ""
+  token_store_path: "~/.coding-proxy/tokens.json"
+
+# === 原生 API 透传（/api/{openai,gemini,anthropic}/**）===
+#
+# 三家 provider 默认 enabled=true（开箱即用）。
+# 客户端将 SDK base_url 改为 http://127.0.0.1:3392/api/{openai,gemini,anthropic}
+# 即可直接触达官方上游；认证（Authorization / x-api-key / ?key=）由客户端自带，
+# proxy 不保管凭据。
+#
+# 将 base_url 指向第三方代理的两种方式（优先级：env > yaml > 内置默认）：
+#   方式 A（推荐部署/容器场景）：设置环境变量
+#     NATIVE_OPENAI_BASE_URL     / NATIVE_GEMINI_BASE_URL     / NATIVE_ANTHROPIC_BASE_URL
+#   方式 B（推荐本地开发/团队共享）：直接编辑下方 base_url 字段
+#
+# 如需禁用某家 provider，将对应 enabled 改为 false 即可。
+# base_url 字段的值与 Pydantic 内置默认保持一致（由 tests/test_native_api_base_url_override.py
+# 的 test_default_config_yaml_matches_pydantic_builtin 守护双写同步）。
+native_api:
+  openai:
+    enabled: true
+    base_url: "https://api.openai.com"
+    timeout_ms: 300000
+    connect_timeout_ms: 15000
+  gemini:
+    enabled: true
+    base_url: "https://generativelanguage.googleapis.com"
+    timeout_ms: 300000
+    connect_timeout_ms: 15000
+  anthropic:
+    enabled: true
+    base_url: "https://api.anthropic.com"
+    timeout_ms: 300000
+    connect_timeout_ms: 15000
+
+# === Session 级别路由策略（可选）===
+#
+# 为特定 Session 或客户端类别定制 vendor 优先级顺序。
+# 匹配策略按定义顺序求值，首次匹配生效。
+#
+# 支持的匹配条件（OR 语义，满足任一即匹配）：
+#   session_keys:    精确匹配的 session key 列表
+#   client_category: 按客户端类别匹配（⚠️ 预留字段，当前版本暂未生效，后续版本支持）
+#
+# tiers: 覆盖全局 tier 顺序的供应商优先级列表（未提及的 vendor 保持在末尾）
+#
+# 示例 1：为特定 session 绑定专属 vendor 组合
+#   session_policies:
+#     - name: "vip-session"
+#       match:
+#         session_keys: ["my-specific-session-id"]
+#       tiers: ["anthropic", "copilot", "zhipu"]
+#
+# 示例 2：Claude Code 请求优先走 Copilot
+#   session_policies:
+#     - name: "claude-code-preferred"
+#       match:
+#         client_category: "cc"
+#       tiers: ["copilot", "anthropic", "zhipu"]
+#
+# 未配置时（默认），所有 Session 使用全局 tiers 顺序。
+session_policies:
+  policies: []
+  # 标题前缀 → 供应商自动绑定。
+  # 当 Session 标题以指定前缀开头时，自动将该 Session 绑定到对应供应商。
+  # 匹配规则按列表顺序求值，首次匹配生效。
+  title_vendor_bindings:
+    - prefix: "# 目标"
+      vendor: "zhipu"
+  # Session 标题豁免前缀：标题提取每一层（user 文本 / 工具结果 / 图片 / 元数据兜底）
+  # 产出的候选以任一前缀开头则跳过，继续向下一层回退。既用于过滤注入式 Prompt
+  # （如示例语言指令），也可豁免无信息量的合成兜底标题。大小写敏感 startswith。
+  # 例：添加 "[Session]" 可让 [Session] <model> 这类兜底标题不再写入，
+  #     session 标题保持空，待后续真实输入经延迟补写回填。
+  # ⚠️ 自定义 yaml 中该字段为整体替换（loader 的 list 合并约定，非追加合并）；
+  #    写空列表即关闭豁免。加载时会自动 strip + 去空 + 去重。
+  title_exempt_prefixes:
+    - "Write the title in the"
+    - "[Session]"

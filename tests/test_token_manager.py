@@ -115,13 +115,18 @@ async def test_acquire_error_propagation():
 
 @pytest.mark.asyncio
 async def test_acquire_unexpected_error_wrapped():
-    """_acquire 抛出意外异常时统一包装为 TokenAcquireError."""
+    """_acquire 抛出意外异常时统一包装为 TokenAcquireError.
+
+    包装消息只含异常类型：原异常消息可能携带凭证（请求头构建失败等），不外露（I2）。
+    """
     tm = _UnexpectedFailingTokenManager()
     with pytest.raises(TokenAcquireError) as exc_info:
         await tm.get_token()
-    assert "Token 获取异常" in str(exc_info.value)
+    assert "Token 获取异常: KeyError" in str(exc_info.value)
+    assert "access_token" not in str(exc_info.value)
     assert exc_info.value.needs_reauth is False
     assert tm.get_diagnostics()["last_error"].startswith("Token 获取异常")
+    assert "access_token" not in tm.get_diagnostics()["last_error"]
 
 
 @pytest.mark.asyncio
