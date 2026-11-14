@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from unittest.mock import AsyncMock, patch
@@ -152,4 +153,6 @@ def test_python_m_dash_m_start_still_works(tmp_path):
         timeout=120,
     )
     assert proc.returncode == 0, proc.stderr
-    assert "--port" in proc.stdout
+    # CI 下 GITHUB_ACTIONS 会让 typer 输出彩色彩帮助信息，先剥离 ANSI 转义再断言
+    plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", proc.stdout)
+    assert "--port" in plain
