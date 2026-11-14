@@ -22,23 +22,50 @@
 
 `config/schema.py` 作为聚合入口点 re-export 所有符号，并保留 `ProxyConfig` 顶层模型及旧格式迁移逻辑。
 
+运行时配置的存储与解析由 `config/` 下的新增模块承担：
+
+| 模块              | 文件                                                                      | 职责                                                                            |
+| ----------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| **home**          | [`config/home.py`](../../src/coding/proxy/config/home.py)                 | `proxy_home()`（env `CODING_PROXY_HOME` → 默认 `~/.coding-proxy`）与派生路径    |
+| **defaults**      | [`config/defaults.py`](../../src/coding/proxy/config/defaults.py)         | 随包 `config.default.yaml` 基线的解析（默认值单一事实源）                       |
+| **store**         | [`config/store.py`](../../src/coding/proxy/config/store.py)               | `config.db`（sqlite3）读写、per-section revision 乐观并发、损坏/占用错误分类    |
+| **secrets**       | [`config/secrets.py`](../../src/coding/proxy/config/secrets.py)           | 密钥三态记录（stored 密文 / env 变量 / empty）、Fernet 加解密、主密钥管理       |
+| **resolver**      | [`config/resolver.py`](../../src/coding/proxy/config/resolver.py)         | `resolve_config()`：默认 ⊕ 覆盖 ⊕ 密钥注入 → `$tmpl` 展开 → `ProxyConfig`       |
+| **importer**      | [`config/importer.py`](../../src/coding/proxy/config/importer.py)         | 旧 YAML 一次性导入（等价校验）、`boot()` 首启流程、YAML 一致性检查             |
+| **service**       | [`config/service.py`](../../src/coding/proxy/config/service.py)           | `ConfigService`：Dashboard / CLI 共用的读写与校验服务                          |
+| **ui_registry**   | [`config/ui_registry.py`](../../src/coding/proxy/config/ui_registry.py)   | Dashboard Config 页字段元数据（label / widget / 中文说明）                      |
+| **loader**        | [`config/loader.py`](../../src/coding/proxy/config/loader.py)             | 旧 YAML 搜索链读取，保留为导入参考实现与等价基准（运行时不再使用）             |
+
 ---
 
-## 2. 配置搜索优先级
+## 2. 配置解析与存储
 
-[`config/loader.py`](../../src/coding/proxy/config/loader.py) 按以下顺序搜索配置文件：
+运行时配置源为 **`$CODING_PROXY_HOME/config.db`**（默认 `~/.coding-proxy/config.db`，sqlite3、0600）；`config.default.yaml` 退化为随包发布的默认值基线，用户不再编辑任何 YAML。
 
-```mermaid
-flowchart TD
-    A["CLI --config 参数<br/>（显式指定）"] -->|"未指定"| B["./config.yaml<br/>（项目根目录）"]
-    B -->|"不存在"| C["~/.coding-proxy/config.yaml<br/>（用户目录）"]
-    C -->|"不存在"| D["Pydantic 默认值"]
+![配置解析与存储](../diagrams/config-resolution-storage/config-resolution-storage.svg)
 
-    style A fill:#1a5276,color:#fff
-    style D fill:#7b241c,color:#fff
-```
+上图（配置源 → 合并 → 密钥注入 → `$tmpl` 展开 → `ProxyConfig` 校验 → 运行时热切换，含三条写入路径与导入门）为双主题 SVG，深浅模式自适应；交互版与图源见 [`docs/diagrams/config-resolution-storage/`](../diagrams/config-resolution-storage/)。
 
-**环境变量展开**：语法 `${VARIABLE_NAME}`，递归处理 dict/list/str，未定义变量保留原文。
+**写入路径**（仅三条，均经 `ConfigService` 校验后持久化，保存即在进程内热切换生效）：
+
+- Dashboard → Config 页（`PUT /api/config`，需 `X-Coding-Proxy-Admin` 头）
+- CLI：`coding-proxy config set / reset / set-secret`（含 bootstrap 字段）
+- `coding-proxy config import`（旧 YAML 一次性导入，见 §2.2）
+
+**存储模型**：`config_section` 行存在 = 该 section 被覆盖，删除行 = 恢复默认；`secret` 表按路径独立存放密钥（Fernet 加密，主密钥为 `$CODING_PROXY_HOME/master.key` 或 env `CODING_PROXY_MASTER_KEY`），Reset section 不会丢失密钥；per-section revision 支持乐观并发（冲突返回 409）。
+
+**环境变量展开**：语法 `${VARIABLE_NAME}`，递归处理 dict/list/str，未定义变量展开为空串。模板仅随包默认值与旧 YAML 导入进入存储；Dashboard / CLI 写入的字符串一律按字面量保存，不会再被展开。
+
+### 2.1 密钥（只写不读）
+
+密钥字段（各供应商 `api_key` / `github_token` / `client_id` / `client_secret` / `refresh_token`、`auth.google_client_secret`）在存储中脱离 section 文档：GET 只返回 `{kind, env_var?, resolved, hint}`（长度 ≥ 16 才展示尾 4 位）；写入用 op 表达（`set` / `clear` / `default_env` / `env`），值从不回显。vendor 的 `base_url` / `token_url` 变化时该 vendor 的已存密钥自动清空（防密钥发往新目标），同一请求显式 `set` 可保留。
+
+### 2.2 旧 YAML 一次性导入（boot）
+
+- 首次 `start`（或 `config import`）时，源为 `start -c FILE` 指定的路径或 `~/.coding-proxy/config.yaml`（存在时）；`./config.yaml` **不会**被自动导入。
+- 导入前跑旧 loader 做等价校验：`resolve_config() == legacy load_config(source)`；不通过则不建库，本次以旧 YAML 只读运行（Config 页显示失败字段路径并禁写）。
+- 源文件不改名、不改写；marker 记录 sha256。之后源文件内容与已导入版本不一致时拒绝启动（提示 `config import` 重导或改用独立 `CODING_PROXY_HOME`）。
+- 旧 `config/loader.py` 搜索链（`./config.yaml` → `~/.coding-proxy/config.yaml` → Pydantic 默认）保留为导入参考实现与测试基准，运行时不再读取。
 
 ---
 
@@ -53,11 +80,11 @@ flowchart TD
 
 ### 3.2 DatabaseConfig
 
-| 字段                       | 类型 | 默认值                        | 说明                  |
-| -------------------------- | ---- | ----------------------------- | --------------------- |
-| `path`                     | str  | `"~/.coding-proxy/usage.db"`  | SQLite 数据库文件路径 |
-| `compat_state_path`        | str  | `"~/.coding-proxy/compat.db"` | 兼容性会话存储路径    |
-| `compat_state_ttl_seconds` | int  | `86400`                       | 兼容性会话 TTL（秒）  |
+| 字段                       | 类型 | 默认值                        | 说明                                                |
+| -------------------------- | ---- | ----------------------------- | --------------------------------------------------- |
+| `path`                     | str  | `"~/.coding-proxy/usage.db"`  | SQLite 数据库文件路径（派生自 `$CODING_PROXY_HOME`） |
+| `compat_state_path`        | str  | `"~/.coding-proxy/compat.db"` | 兼容性会话存储路径（同上派生）                      |
+| `compat_state_ttl_seconds` | int  | `86400`                       | 兼容性会话 TTL（秒）                                |
 
 ### 3.3 LoggingConfig
 
@@ -70,9 +97,12 @@ flowchart TD
 
 ### 3.4 AuthConfig
 
-| 字段               | 类型 | 默认值 | 说明                                 |
-| ------------------ | ---- | ------ | ------------------------------------ |
-| `token_store_path` | str  | `""`   | Token Store 文件路径（空则使用默认） |
+| 字段                | 类型             | 默认值                             | 说明                                                       |
+| ------------------- | ---------------- | ---------------------------------- | ---------------------------------------------------------- |
+| `token_store_path`  | str              | `~/.coding-proxy/tokens.json`（派生自 `$CODING_PROXY_HOME`） | Token Store 文件路径 |
+| `github_client_id`  | str              | 公开 ID                            | GitHub OAuth Client ID（隐藏字段，仅导入/导出往返）         |
+| `google_client_id`  | str              | `""`                               | Google OAuth Client ID（可选）                              |
+| `google_client_secret` | 密钥            | 空                                 | 密钥字段，经 `config set-secret` / Dashboard 写入          |
 
 ---
 
@@ -89,13 +119,13 @@ flowchart TD
 
 ## 5. VendorConfig 弹性字段
 
-| 字段                 | 类型           | 默认值               | 说明                                |
-| -------------------- | -------------- | -------------------- | ----------------------------------- |
-| `circuit_breaker`    | config \| None | `None`               | 熔断器配置（None = 终端层）         |
-| `retry`              | config         | `RetryConfig()`      | 重试策略配置                        |
-| `quota_guard`        | config         | `QuotaGuardConfig()` | 日度配额守卫配置                    |
-| `weekly_quota_guard` | config         | `QuotaGuardConfig()` | 周度配额守卫配置                    |
-| `concurrency`        | config \| None | `None`               | `[zhipu]` 每模型并发限制（详见 5.5） |
+| 字段                 | 类型           | 默认值               | 说明                                        |
+| -------------------- | -------------- | -------------------- | ------------------------------------------- |
+| `circuit_breaker`    | config \| None | `None`               | 熔断器配置（None = 不启用熔断，兜底由 tiers 中的位置决定） |
+| `retry`              | config         | `RetryConfig()`      | 重试策略配置                                |
+| `quota_guard`        | config         | `QuotaGuardConfig()` | 日度配额守卫配置                            |
+| `weekly_quota_guard` | config         | `QuotaGuardConfig()` | 周度配额守卫配置                            |
+| `concurrency`        | config \| None | `None`               | `[zhipu]` 每模型并发限制（详见 5.5）         |
 
 <a id="elastic-params"></a>
 
@@ -153,7 +183,7 @@ flowchart TD
 | `default` | int            | `3`    | 全局默认并行度（适用于所有未在 `models` 中显式覆盖的模型）；取值范围 `[1, 20]`   |
 | `models`  | map[str → int] | `{}`   | 按映射后模型名（如 `glm-5v-turbo` / `glm-5.1` / `glm-4.5-air`）自定义并行度上限 |
 
-YAML 示例：
+配置示例（Dashboard → Config 或 `config set vendors.zhipu.concurrency '{...}'`）：
 
 ```yaml
 - vendor: zhipu
@@ -235,9 +265,9 @@ YAML 示例：
 
 ---
 
-## 9. vendors 列表格式（推荐）
+## 9. vendors 列表格式
 
-推荐使用 `vendors` 列表格式，每个 vendor 自包含其弹性配置：
+`vendors` 以列表形式定义所有供应商，每个 vendor 自包含其弹性配置（Dashboard → Config 的 Vendors 分区或 `config set vendors` 以同一结构读写；`config export` 导出的也是该格式）：
 
 ```yaml
 vendors:
@@ -255,7 +285,7 @@ vendors:
 
   - vendor: copilot
     enabled: false
-    github_token: "${GITHUB_TOKEN}"
+    # 密钥字段在导出中只会是 ${VAR} 或 <redacted>；实际值经 config set-secret / Dashboard 写入
     account_type: individual
     circuit_breaker:
       failure_threshold: 3
@@ -266,19 +296,17 @@ vendors:
 
   - vendor: zhipu
     enabled: true
-    api_key: "${ZHIPU_API_KEY}"
-    # 无 circuit_breaker -> 终端层
+    # 无 circuit_breaker -> 不启用熔断；是否兜底由 tiers 中的位置决定
 
   - vendor: minimax
     enabled: false
-    api_key: "${MINIMAX_API_KEY}"
 
 tiers: [anthropic, copilot, zhipu]  # 显式优先级（可选）
 ```
 
-### Legacy Flat 格式（向后兼容）
+### Legacy Flat 格式（仅导入兼容）
 
-旧的 flat 格式字段（`primary`/`copilot`/`antigravity`/`fallback`/`circuit_breaker`/`*_quota_guard`）仍受支持，通过 `ProxyConfig._migrate_legacy_fields()` 自动迁移为 vendors 列表格式。
+旧的 flat 格式字段（`primary`/`copilot`/`antigravity`/`fallback`/`circuit_breaker`/`*_quota_guard`）在一次性导入时经 `ProxyConfig._migrate_legacy_fields()` 自动迁移为 vendors 列表格式，随导入存入 config.db；此后不再出现在写入路径中。
 
 迁移规则：
 1. `anthropic` 字段名 → `primary`
@@ -324,7 +352,7 @@ tiers: [anthropic, copilot, zhipu]  # 显式优先级（可选）
 由 `NativeApiConfig._apply_env_overrides` `@model_validator(mode="after")` 注入：
 
 ```text
-env var（运行时） > YAML 显式字段（部署时） > Pydantic 内置默认（兜底）
+env var（运行时） > 存储的显式字段（Dashboard / CLI 配置） > Pydantic 内置默认（兜底）
 ```
 
 | 环境变量                     | 覆写目标                  |

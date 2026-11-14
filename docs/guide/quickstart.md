@@ -21,35 +21,40 @@ pip install -e .
 
 ## 3. 最小配置
 
-```bash
-# 复制配置模板到项目根目录（模板已内置完整默认值，仅需覆盖密钥）
-cp config.default.yaml config.yaml
-```
-
-设置智谱 API Key（默认 Tier 0 供应商）：
+运行时配置存放在 `~/.coding-proxy/config.db`（加密 SQLite），无需创建或编辑任何 YAML：包内默认值开箱即用，最小配置只需提供一个 API Key。两种方式任选：
 
 ```bash
+# 方式一：环境变量（默认配置即引用 ${ZHIPU_API_KEY}）
 export ZHIPU_API_KEY="your-api-key-here"
+
+# 方式二：密钥加密写入 config.db（值不回显）
+coding-proxy config set-secret vendors.zhipu.api_key --stdin
 ```
 
-配置文件中使用 `${ZHIPU_API_KEY}` 引用，代理启动时自动替换。
+日常的全部业务配置（vendors、tiers、failover、模型映射、定价、native_api、会话策略）在 Dashboard → Config 页在线编辑，保存即热切换生效；无需重启。
+
+> **从旧版本升级（已有 `~/.coding-proxy/config.yaml`）**：首次 `coding-proxy start` 会自动做一次性导入（源文件不改写），此后不再读取 YAML。
+>
+> - 项目目录下的 `./config.yaml` **不会**被自动导入（防止第三方仓库内的配置被误当全局配置）；如需导入请显式 `coding-proxy start -c ./config.yaml` 或 `coding-proxy config import ./config.yaml`。
+> - 导入后修改旧 YAML 会导致启动被拒（内容与已导入版本不一致），请改用 Dashboard / `coding-proxy config` 修改。
 
 > **安全最佳实践**：
-> - API Key 优先使用 `${ENV_VAR}` 环境变量引用，避免明文写入配置文件
-> - `config.yaml` 已在 `.gitignore` 中，不会被提交到版本库
+> - API Key 优先使用环境变量引用或 `config set-secret` 加密写入，避免明文散落
+> - 密钥在 config.db 中以 Fernet 加密存储（主密钥 `~/.coding-proxy/master.key`，0600），展示仅尾 4 位
 > - OAuth Token 存储于 `~/.coding-proxy/tokens.json`，建议 `chmod 600` 限制访问
+> - Dashboard 配置管理需 admin token（`coding-proxy config token` 查看），管理 API 只认 `X-Coding-Proxy-Admin` 请求头
 > - 若设置 `server.host: "0.0.0.0"` 接受外部连接，确保在可信网络环境中运行
 
 ## 4. 启动服务
 
 ```bash
-# 使用默认配置启动
+# 使用存储的配置启动（首次启动自动导入旧 YAML，如存在）
 coding-proxy start
 
-# 指定端口
+# 指定端口 / 监听地址（仅本次运行生效，不改存储）
 coding-proxy start --port 8080
 
-# 指定配置文件
+# 指定旧 YAML 作为一次性导入源（导入后配置存入 config.db）
 coding-proxy start --config /path/to/config.yaml
 ```
 

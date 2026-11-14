@@ -294,7 +294,7 @@ flowchart TD
 
 <a id="fault-overhead"></a>
 
-故障转移的判定在 `BaseVendor.should_trigger_failover()` 中实现，依据三层条件（可通过配置文件自定义）：
+故障转移的判定在 `BaseVendor.should_trigger_failover()` 中实现，依据三层条件（可通过配置自定义）：
 
 | 层级        | 条件                                       | 默认值                                                                             |
 | ----------- | ------------------------------------------ | ---------------------------------------------------------------------------------- |
@@ -430,7 +430,7 @@ flowchart TD
 3. 在 [`config/routing.py`](../src/coding/proxy/config/routing.py) 的 `VendorType` 中添加新类型
 4. 在 [`config/vendors.py`](../src/coding/proxy/config/vendors.py) 中添加专属 Config（或复用 `api_key` 字段）
 5. 在 [`server/factory.py`](../src/coding/proxy/server/factory.py) 的工厂函数中添加新分支
-6. 在配置文件的 `vendors` 列表中添加新条目
+6. 在配置存储的 `vendors` 列表中添加新条目（Dashboard → Config 或 `coding-proxy config set vendors`）
 
 #### 路径 B：自定义协议供应商（适用于需要格式转换的场景）
 
@@ -441,7 +441,7 @@ flowchart TD
 
 ### 5.2 添加新映射规则
 
-在配置文件的 `model_mapping` 节添加规则即可，无需修改代码：
+在配置的 `model_mapping` 节添加规则即可（Dashboard → Config 或 `coding-proxy config set model_mapping`），无需修改代码：
 
 ```yaml
 model_mapping:
@@ -458,11 +458,11 @@ model_mapping:
 
 ### 5.3 自定义故障转移策略
 
-通过配置文件调整 `failover` 节的三个字段即可自定义触发条件。参见 [配置参考 -- FailoverConfig](./arch/config-reference.md#elastic-params)。
+通过配置调整 `failover` 节的三个字段即可自定义触发条件（Dashboard → Config 或 `coding-proxy config set`）。参见 [配置参考 -- FailoverConfig](./arch/config-reference.md#elastic-params)。
 
 ### 5.4 自定义配额管理策略
 
-通过配置文件分别调整 `quota_guard` / `weekly_quota_guard` 的参数，可为每个供应商独立配置多层级配额管理策略。参见 [配置参考 -- QuotaGuardConfig](./arch/config-reference.md#elastic-params)。
+通过配置分别调整 `quota_guard` / `weekly_quota_guard` 的参数，可为每个供应商独立配置多层级配额管理策略（Dashboard → Config 或 `coding-proxy config set`）。参见 [配置参考 -- QuotaGuardConfig](./arch/config-reference.md#elastic-params)。
 
 ---
 

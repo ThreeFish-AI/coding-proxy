@@ -2,9 +2,60 @@
 
 > 维护已处理过的 Issue 摘要（问题描述、表因根因、处理方式、后续防范、同类问题影响与处理注意事项），便于同类问题的跨上下文处理。识别相同 Issue 时应在原条目追加复盘，避免同 Issue 多处维护。
 
+> ID 全文唯一递增，索引行与详情块均按 ID 升序；同 Issue 增量更新既有条目，不重复登记。
+
 ---
 
-## `coding reset` 误清配额窗口用量（Dashboard 配额百分比归零且不自愈）
+## 头部索引
+
+| ID | 标题 | 状态 | 完成时间 | 详情 |
+| --- | --- | --- | --- | --- |
+| I-001 | YAML 配置面整体迁移至 Dashboard Config 页（config.db + 热切换 + 密钥加密） | ✅ 已完成 | 2026-11-14 | [详情](#I-001) |
+| I-002 | `coding reset` 误清配额窗口用量（Dashboard 配额百分比归零且不自愈） | ✅ 已完成 | — | [详情](#I-002) |
+| I-003 | Session 标题豁免前缀对 `[Session]` 兜底标题不生效（豁免仅 Level 1 生效） | ✅ 已完成 | — | [详情](#I-003) |
+| I-004 | Zhipu 529 过载重试退避非单调（对齐 429 指数退避语义） | ✅ 已完成 | — | [详情](#I-004) |
+| I-005 | streaming usage parse failed: 'NoneType' object has no attribute 'get' | ✅ 已完成 | — | [详情](#I-005) |
+| I-006 | anthropic 400: `tool_use` ids were found without `tool_result` blocks immediately after | ✅ 已完成 | — | [详情](#I-006) |
+| I-007 | count_tokens 路由 `AttributeError: 'ZhipuVendor' object has no attribute 'name' | ✅ 已完成 | — | [详情](#I-007) |
+| I-008 | Gemini embedding 透传至 Vertex AI 上游返回 `request body doesn't contain valid prompts | ✅ 已完成 | — | [详情](#I-008) |
+| I-009 | Dashboard Sessions 页 `Tokens` 列漏算缓存 Token | ✅ 已完成 | — | [详情](#I-009) |
+| I-010 | Zhipu vendor 间歇性 `[1210][API 调用参数有误]` 拒绝（诊断阶段） | ✅ 已完成 | — | [详情](#I-010) |
+
+---
+
+<a id="I-001"></a>
+## I-001：YAML 配置面整体迁移至 Dashboard Config 页（config.db + 热切换 + 密钥加密）
+
+**问题描述**
+
+用户要求把 `config.default.yaml` 及相关配置项全部迁移到 `http://localhost:3392/dashboard?tab=config` 页管理，YAML 不再承载配置；密钥在显示与存储侧保密。原配置链路存在四类结构性风险：默认值多写漂移（Pydantic 默认 ≠ YAML 默认）、首启整份复制导致用户配置冻结在旧版本、管理 API 无鉴权可被跨站/同机进程滥用、密钥明文散落在 YAML 与 `${VAR}` 展开结果中。
+
+**表因根因**
+
+配置读取（loader 深合并 + env 展开）、运行时装配（create_app 一次性快照）、持久化（无）三者耦合：所有字段在进程启动时按值拷贝进 vendor/CB/QG 对象，任何在线修改都无从落地；而 `_ensure_user_config` 首启复制又把包内默认固化成用户文件，后续版本的新增 pricing/vendors 永远到不了存量用户。
+
+**处理方式**
+
+新增 `$CODING_PROXY_HOME/config.db`（sqlite3 0600、secure_delete、per-section revision 乐观并发）作为唯一配置存储：`config.default.yaml` 退化为随包基线，存储只保存与默认 diff 后的最小覆盖（dict 递归、vendors 按 vendor 类型整 dict、list 整表替换），未触碰的 section 跟随包升级。密钥按稳定路径独立存表，Fernet 加密（master.key 0600 / env 覆写 + key_check canary），HTTP 侧只写不读（keep/set/clear/default_env），vendor 目标地址（base_url/token_url）变更自动清空关联密钥，HTTP 写入含 `${` 的字面量一律拒绝（杜绝 env 外带原语）。生效走进程内 generation swap（`server/generations.py`：preflight 构建 → lifespan 独立 task → 原子切换 → 旧代排空 600s），listener 不关、长流跑完、失败保留旧代并回退 degraded 模式。管理面加双 L 防护（L1 全局跨站/Origin 拦截、L2 Host 白名单 + 本机 IP + allowed_hosts）与 admin token（`X-Coding-Proxy-Admin` 头，非常量时间比较；uvicorn `proxy_headers=False` 防 XFF 伪造 loopback）。迁移侧：首启一次性导入 `-c`/home 下 YAML，等价门（新旧 loader 产物 ProxyConfig 全等，含 ¥ 币种 PrivateAttr）不过则不建库、legacy 只读运行；源文件不改名，marker 记 sha256，漂移即拒启。CLI 新增 `config path/export/import/set/reset/set-secret/token`，bootstrap 字段（host/port/logging/database/token_store_path）只读展示、仅 CLI 可改。
+
+**后续防范**
+
+- 改任何「复位/重载」类语义前，先枚举状态机每条转移的附带副作用（同 I-00x 教训，本次 generation swap 的 reauth 交接即按此逐 provider 排查）。
+- 密钥相关接口的错误响应必须 `errors(include_input=False)` + `hide_input_in_errors`，并拒绝控制字符（C0/C1/DEL）——否则密钥可经 422 回显或 SSE 错误流外泄（集成评审实测复现后修复）。
+- 默认值只能有一个事实源；新增默认字段时同步跑 `test_config_ui_registry` 覆盖门与 native_api 双写守护测试。
+
+**Follow-up Issues**
+
+#282 auto-login 读 legacy 字段失效 · #283 Google reauth 阻塞事件循环 · #284 tokens.json 非原子写/丢更新 · #285 Overview 运行时调整不持久化 · #286 配置修订历史与回滚 · #287 非 loopback 管理面强鉴权
+
+**同类问题影响**
+
+loader/search 链、`_ensure_user_config`、`create_app` 默认参数、`usage --db`（本次顺带修复）、所有读 `~/.coding-proxy` 字面量路径的代码（统一改由 `config/home.py::proxy_home()` 推导，可用 `CODING_PROXY_HOME` 隔离/多实例）。处理时注意：旧 YAML 的 legacy flat 字段与 alias key（anthropic/zhipu）按原样保留进存储（auto-login 仍读 legacy 字段，行为不变，修复列入 follow-up issue）。
+
+---
+
+<a id="I-002"></a>
+## I-002：`coding reset` 误清配额窗口用量（Dashboard 配额百分比归零且不自愈）
 
 **问题描述**
 
@@ -52,7 +103,10 @@ CLI `reset` 只是 `POST /api/reset` 的瘦 HTTP 客户端，`/api/reset` 又对
 
 Dashboard 的「限速中」徽章读 `rlInfo.limited`，而后端 `VendorTier.get_rate_limit_info()` 产出的键是 `is_rate_limited` —— 键名不匹配导致该徽章**从未渲染过**，Rate Limit 异常态在 UI 上完全不可观测。已同步修正为 `rlInfo.is_rate_limited`。
 
-## Session 标题豁免前缀对 `[Session]` 兜底标题不生效（豁免仅 Level 1 生效）
+---
+
+<a id="I-003"></a>
+## I-003：Session 标题豁免前缀对 `[Session]` 兜底标题不生效（豁免仅 Level 1 生效）
 
 **问题描述**
 
@@ -83,7 +137,10 @@ Dashboard 的「限速中」徽章读 `rlInfo.limited`，而后端 `VendorTier.g
 
 ---
 
-## Zhipu 529 过载重试退避非单调（对齐 429 指数退避语义）
+---
+
+<a id="I-004"></a>
+## I-004：Zhipu 529 过载重试退避非单调（对齐 429 指数退避语义）
 
 **问题描述**
 
@@ -126,7 +183,10 @@ Zhipu 配置下区间变为 `[500,1000] → [1000,2000] → [2000,4000] → [400
 
 ---
 
-## streaming usage parse failed: 'NoneType' object has no attribute 'get'
+---
+
+<a id="I-005"></a>
+## I-005：streaming usage parse failed: 'NoneType' object has no attribute 'get'
 
 **问题描述**
 
@@ -170,7 +230,10 @@ if "usage" in data:        # 仅判断 key 存在
 
 ---
 
-## anthropic 400: `tool_use` ids were found without `tool_result` blocks immediately after
+---
+
+<a id="I-006"></a>
+## I-006：anthropic 400: `tool_use` ids were found without `tool_result` blocks immediately after
 
 **问题描述**
 
@@ -215,7 +278,10 @@ Zhipu GLM-5 流式响应偶发将 inline `tool_result` 块输出在**对应的 `
 
 ---
 
-## count_tokens 路由 `AttributeError: 'ZhipuVendor' object has no attribute 'name'`
+---
+
+<a id="I-007"></a>
+## I-007：count_tokens 路由 `AttributeError: 'ZhipuVendor' object has no attribute 'name'
 
 **问题描述**
 
@@ -257,7 +323,10 @@ AttributeError: 'ZhipuVendor' object has no attribute 'name'
 
 ---
 
-## Gemini embedding 透传至 Vertex AI 上游返回 `request body doesn't contain valid prompts`
+---
+
+<a id="I-008"></a>
+## I-008：Gemini embedding 透传至 Vertex AI 上游返回 `request body doesn't contain valid prompts
 
 **问题描述**
 
@@ -311,7 +380,10 @@ litellm 按 Google AI Studio 格式构造请求：
 
 ---
 
-## Dashboard Sessions 页 `Tokens` 列漏算缓存 Token
+---
+
+<a id="I-009"></a>
+## I-009：Dashboard Sessions 页 `Tokens` 列漏算缓存 Token
 
 **问题描述**
 
@@ -355,7 +427,10 @@ SUM(input_tokens + output_tokens
 
 ---
 
-## Zhipu vendor 间歇性 `[1210][API 调用参数有误]` 拒绝（诊断阶段）
+---
+
+<a id="I-010"></a>
+## I-010：Zhipu vendor 间歇性 `[1210][API 调用参数有误]` 拒绝（诊断阶段）
 
 **问题描述**
 
@@ -400,3 +475,5 @@ PR #247 (Step 1 v2) 部署后，2026-05-26 16:30–16:31 的诊断日志显示 8
 - 其他薄透传 vendor（minimax / kimi / doubao / alibaba / xiaomi）共用 `NativeAnthropicVendor._prepare_request`，若它们也开始报「参数错误」类语义拒绝，可复用本次扩展的诊断函数定位差异。
 - 若证据指向 `tools` 字段（如工具 schema 不兼容）、`metadata` 字段（如自定义键被 zhipu 拒收）等具体路径，修复时应优先复用 `convert/vendor_channels.py` 中已有的 `normalize_for_zhipu` / `strip_thinking_blocks` 工具，避免在 vendor 内部重复实现剥离逻辑。
 - 部署 Step 1 v2 后，建议观察至少 48 小时收集足够样本（>20 次失败），通过失败/成功请求形态对比统计找出**唯一差异维度**，再进入 Step 2。
+
+---

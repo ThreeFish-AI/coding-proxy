@@ -12,6 +12,14 @@
   - [6. coding-proxy auth status](#6-coding-proxy-auth-status)
   - [7. coding-proxy auth reauth](#7-coding-proxy-auth-reauth)
   - [8. coding-proxy auth logout](#8-coding-proxy-auth-logout)
+  - [9. coding-proxy config](#9-coding-proxy-config)
+    - [9.1 config path](#91-config-path)
+    - [9.2 config export](#92-config-export)
+    - [9.3 config import](#93-config-import)
+    - [9.4 config set](#94-config-set)
+    - [9.5 config reset](#95-config-reset)
+    - [9.6 config set-secret](#96-config-set-secret)
+    - [9.7 config token](#97-config-token)
 
 </details>
 
@@ -23,20 +31,22 @@
 coding-proxy start [OPTIONS]
 ```
 
-| 参数       | 缩写 | 说明                     |
-| ---------- | ---- | ------------------------ |
-| `--config` | `-c` | 配置文件路径             |
-| `--port`   | `-p` | 监听端口（覆盖配置文件） |
-| `--host`   | `-h` | 监听地址（覆盖配置文件） |
+| 参数       | 缩写 | 说明                                                                                                                              |
+| ---------- | ---- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `--config` | `-c` | 旧 YAML 的一次性导入源（存储尚未初始化时导入；与已导入版本不一致时拒绝启动）                                                      |
+| `--port`   | `-p` | 监听端口（仅本次运行覆盖存储配置）                                                                                                |
+| `--host`   | `-h` | 监听地址（仅本次运行覆盖存储配置）                                                                                                |
+
+运行时配置来自 `~/.coding-proxy/config.db`（可用 env `CODING_PROXY_HOME` 重定向）；首次启动若存在 `~/.coding-proxy/config.yaml` 会自动一次性导入（等价校验通过才落库，源文件不改写）。
 
 **示例**：
 
 ```bash
-# 默认配置启动
+# 以存储的配置启动
 coding-proxy start
 
-# 自定义端口和配置
-coding-proxy start -p 9000 -c ~/my-config.yaml
+# 首次启动时从指定 YAML 导入
+coding-proxy start -c ~/my-config.yaml
 
 # 自定义监听地址和端口
 coding-proxy start --host 0.0.0.0 --port 3392
@@ -93,7 +103,9 @@ coding-proxy usage [OPTIONS]
 | `--total`  | `-t` | 统计全部历史记录（按供应商+模型聚合）                           |
 | `--vendor` | `-v` | 过滤供应商（支持逗号分隔多选，如 `anthropic,zhipu`）            |
 | `--model`  | —    | 过滤实际服务模型（支持逗号分隔多选，如 `glm-5v-turbo,glm-5.1`） |
-| `--db`     | —    | 数据库文件路径                                                  |
+| `--db`     | —    | 覆盖用量数据库路径（默认取存储配置的 `database.path`）          |
+
+> 用量统计按存储的配置解析数据库路径（不解密密钥）；存储尚未初始化（未做过首次导入）时按旧 YAML 只读解析并提示先执行 `start`。
 
 > **时间维度互斥**，优先级：`-t > -m > -w > -d`。
 
@@ -225,7 +237,7 @@ coding-proxy auth reauth github
 coding-proxy auth reauth google -p 9090
 ```
 
-> 此命令通过 [`POST /api/reauth/{provider}`](./api-reference.md#510-post-apireauthprovider) 向运行中的代理发送重认证请求，无需重启服务。
+> 此命令通过 [`POST /api/reauth/{provider}`](./api-reference.md#10-post-apireauthprovider) 向运行中的代理发送重认证请求，无需重启服务。
 
 ## 8. coding-proxy auth logout
 
@@ -238,3 +250,73 @@ coding-proxy auth logout [OPTIONS]
 | 参数         | 缩写 | 说明                                   |
 | ------------ | ---- | -------------------------------------- |
 | `--provider` | `-p` | 指定 provider；省略则登出所有 provider |
+
+> `auth login` / `auth status` / `auth logout` 的 Token Store 路径与 Google 凭据同样按存储的配置解析；存储尚未初始化时按旧 YAML 只读解析并提示先执行 `start`。
+
+## 9. coding-proxy config
+
+配置管理子命令（读写 `~/.coding-proxy/config.db`；业务配置保存后对运行中的代理热切换生效，bootstrap 字段需重启）。
+
+### 9.1 config path
+
+显示配置相关文件路径（home、config.db、master.key、admin_token）。
+
+```bash
+coding-proxy config path
+```
+
+### 9.2 config export
+
+把当前生效配置导出为 YAML（密钥只输出 `${VAR}` 或 `<redacted>`，不泄露明文）。
+
+```bash
+coding-proxy config export [--out FILE]
+```
+
+### 9.3 config import
+
+从 YAML 导入配置（整体替换当前覆盖，先做与旧 loader 的等价校验；导出文件中的 `<redacted>` 表示保留本地已存密钥）。
+
+```bash
+coding-proxy config import FILE [--dry-run]
+```
+
+`--dry-run` 只输出计划不落盘；导入后源文件若再被修改，`start` 会拒绝启动并提示重导。
+
+### 9.4 config set
+
+修改单个字段（JSON 值；含 Dashboard 不可写的 bootstrap 字段，如 `server.port`）。
+
+```bash
+coding-proxy config set vendors.zhipu.timeout_ms 60000
+coding-proxy config set server.port 8080          # bootstrap 字段，需重启生效
+```
+
+### 9.5 config reset
+
+删除某 section 的覆盖，恢复包内默认值（密钥不受影响）。
+
+```bash
+coding-proxy config reset vendors
+```
+
+### 9.6 config set-secret
+
+写入密钥（值从不回显；仅允许可打印 Latin-1 字符）。
+
+```bash
+echo -n "sk-..." | coding-proxy config set-secret vendors.zhipu.api_key --stdin
+coding-proxy config set-secret vendors.zhipu.api_key --env ZHIPU_API_KEY    # 绑定任意环境变量（仅 CLI）
+coding-proxy config set-secret vendors.zhipu.api_key --default-env          # 恢复包内默认变量
+coding-proxy config set-secret vendors.zhipu.api_key --clear                # 显式置空
+```
+
+> vendor 的 `base_url` / `token_url` 变化时，未在同一请求显式写入的密钥会被清空（防密钥发往新目标），命令输出会列出被清空的路径。
+
+### 9.7 config token
+
+输出 Dashboard 管理 token（不存在时创建）；用于 Config 页解锁或直接调 `GET` / `PUT /api/config`（请求头 `X-Coding-Proxy-Admin`）。
+
+```bash
+coding-proxy config token
+```
