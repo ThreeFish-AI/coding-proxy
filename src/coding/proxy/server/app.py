@@ -1,6 +1,7 @@
 """FastAPI 应用工厂与生命周期管理.
 
-路由端点注册已正交分解至 :mod:`.routes`.
+路由端点注册已正交分解至 :mod:`.routes`，管理 API 与安全边界见
+:mod:`.config_routes` / :mod:`.security`.
 """
 
 from __future__ import annotations
@@ -18,7 +19,8 @@ from ..auth.providers.google import GoogleOAuthProvider
 from ..auth.runtime import RuntimeReauthCoordinator
 from ..auth.store import TokenStoreManager
 from ..compat.session_store import CompatSessionStore
-from ..config.loader import load_config
+from ..config.importer import StoredConfigInvalidError
+from ..config.resolver import resolve_config
 from ..config.schema import ProxyConfig
 from ..logging.db import TokenLogger
 from ..native_api import NativeProxyHandler
@@ -28,12 +30,14 @@ from ..routing.tier import VendorTier
 from ..routing.usage_recorder import UsageRecorder
 from ..vendors.antigravity import AntigravityVendor
 from ..vendors.copilot import CopilotVendor
+from .config_routes import install_admin_surface
 from .factory import (  # noqa: F401
     _build_circuit_breaker,
     _build_quota_guard,
     _create_vendor_from_config,
 )
 from .routes import register_all_routes
+from .security import install_security
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +94,17 @@ async def lifespan(app: FastAPI):
 
 
 def create_app(config: ProxyConfig | None = None) -> FastAPI:
-    """创建 FastAPI 应用实例."""
+    """创建 FastAPI 应用实例.
+
+    ``config`` 缺省时经 :func:`resolve_config` 读取 config.db（不再回退旧 YAML 搜索链）；
+    存储的配置无效时抛 :class:`StoredConfigInvalidError`。
+    """
     if config is None:
-        config = load_config()
+        resolved = resolve_config()
+        if resolved.config is None:
+            locs = ", ".join(".".join(map(str, e["loc"])) for e in resolved.errors)
+            raise StoredConfigInvalidError(f"存储的配置无效: {locs}")
+        config = resolved.config
 
     token_logger = TokenLogger(config.db_path)
     compat_session_store = CompatSessionStore(
@@ -165,7 +177,15 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         title_exempt_prefixes=config.session_policies.title_exempt_prefixes,
     )
 
-    app = FastAPI(title="coding-proxy", version=__version__, lifespan=lifespan)
+    app = FastAPI(
+        title="coding-proxy",
+        version=__version__,
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    install_security(app, allowed_hosts=config.server.allowed_hosts)
     app.state.router = router
     app.state.token_logger = token_logger
     app.state.compat_session_store = compat_session_store
@@ -185,7 +205,8 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         )
         app.state.native_handler = native_handler
 
-    # 注册所有路由端点
+    # 注册所有路由端点（管理 API 先于原生透传 catch-all）
+    install_admin_surface(app)
     register_all_routes(app, router, reauth_coordinator)
 
     return app
