@@ -1,0 +1,181 @@
+/* Dashboard → Config 页样式（深色主题，复用 dashboard :root token）.
+ * 规范：表格固定列宽（同属性同宽 token）、单行 + 省略号 + tooltip；
+ * 表单行 label 恰占 1/12、ⓘ 独占右侧 20px、控件同一行。
+ */
+/* 列宽 token（--col-*）定义在 dashboard :root，与 Sessions 表共用 */
+#config-root { color-scheme: dark; --cfg-control-bg: rgba(48,54,61,.4); }
+
+/* ── 截断：单行 + 省略号（完整文本经 title tooltip，仅截断时设置） ── */
+.cfg-trunc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* ── 顶部 section pills（复用 .range-btn） ── */
+.cfg-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: var(--gap-section); padding: 8px 16px; flex-wrap: wrap;
+  background: rgba(18,22,30,.5); border: 1px solid rgba(255,255,255,.04); border-radius: var(--radius);
+}
+.cfg-pills, .cfg-subpills { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.cfg-spacer { flex: 1; }
+.cfg-subpills { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.cfg-subpills .range-btn { padding: 4px 12px; font-size: 13px; }
+.range-btn.cfg-muted { color: var(--text-tertiary); }
+.range-btn.cfg-has-dot::after, .tab-btn.cfg-dirty::after {
+  content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 6px;
+  border-radius: 50%; background: var(--accent-yellow); vertical-align: middle;
+}
+.range-btn.cfg-has-err { border-color: rgba(248,81,73,.45); }
+
+/* ── 卡片与分组 ── */
+.cfg-body { margin-bottom: 72px; }
+.cfg-body[inert] { opacity: .65; pointer-events: none; } /* 保存进行中冻结表单（pointer-events 兜底不支持 inert 的浏览器） */
+.cfg-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 12px; }
+.cfg-section-title {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  font-size: 15px; font-weight: 600; color: var(--text-primary);
+}
+.cfg-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.cfg-group { margin-bottom: 18px; }
+.cfg-group-title {
+  font-size: 12px; font-weight: 600; color: var(--text-tertiary); letter-spacing: .4px;
+  text-transform: uppercase; margin: 0 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border-subtle);
+}
+.cfg-list { margin-bottom: 20px; }
+.cfg-vendor-head { margin-bottom: 12px; }
+.cfg-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.cfg-note { font-size: 13px; color: var(--text-tertiary); margin: 4px 0 10px; }
+.status-badge.sb-muted { background: rgba(110,118,129,.12); color: var(--text-tertiary); border: 1px solid rgba(110,118,129,.25); }
+.status-badge.cfg-trunc { display: inline-block; max-width: 280px; vertical-align: middle; }
+
+/* ── 表单行：[label 恰占行宽 1/12][ⓘ 20px][control] 同一行（详情卡内同样适用） ── */
+.cfg-row {
+  display: grid; grid-template-columns: calc(100% / 12) 20px minmax(0, 1fr);
+  align-items: center; min-height: 36px; padding: 3px 0;
+}
+.cfg-label { font-size: 13px; color: var(--text-secondary); padding-right: 6px; cursor: default; }
+.cfg-control { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; padding-left: 8px; }
+.cfg-unit { font-size: 12px; color: var(--text-tertiary); font-family: 'JetBrains Mono', monospace; }
+.cfg-ro { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text-primary); max-width: 640px; }
+.cfg-ro-list { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 100%; font-size: 13px; }
+.cfg-row.cfg-invalid .cfg-label, .cfg-invalid > td { color: var(--accent-red); }
+.cfg-list-row.cfg-invalid > td:first-child { box-shadow: inset 2px 0 0 var(--accent-red); }
+.cfg-err { flex-basis: 100%; font-size: 12px; color: var(--accent-red); }
+
+/* ── ⓘ 说明：hover / focus 显示，Esc 关闭 ── */
+.cfg-info-wrap { position: relative; display: inline-flex; width: 20px; justify-content: center; }
+.cfg-info {
+  width: 18px; height: 18px; padding: 0; border: none; border-radius: 50%;
+  background: transparent; color: var(--text-tertiary); font-size: 13px; line-height: 18px; cursor: help;
+}
+.cfg-info:hover, .cfg-info:focus-visible { color: var(--accent-blue); outline: none; background: rgba(88,166,255,.1); }
+.cfg-tip {
+  display: none; position: absolute; left: 22px; top: 50%; transform: translateY(-50%); z-index: 20;
+  width: max-content; max-width: 360px; padding: 8px 10px; white-space: normal;
+  font-size: 12px; font-weight: 400; line-height: 1.5; color: var(--text-primary); text-transform: none; letter-spacing: 0;
+  background: rgba(10,14,20,.97); border: 1px solid rgba(255,255,255,.1); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+.cfg-info-wrap:hover .cfg-tip, .cfg-info:focus-visible + .cfg-tip { display: block; }
+.cfg-info-wrap.cfg-tip-off .cfg-tip { display: none; }
+
+/* ── 控件 ── */
+.cfg-input {
+  height: 30px; padding: 4px 8px; min-width: 0; width: 360px; max-width: 100%;
+  background: var(--cfg-control-bg); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-primary); font-size: 13px; font-family: inherit; color-scheme: dark;
+}
+.cfg-input:focus { outline: none; border-color: rgba(88,166,255,.55); box-shadow: 0 0 0 2px rgba(88,166,255,.12); }
+.cfg-input:disabled, .cfg-input[readonly] { opacity: .6; cursor: not-allowed; }
+.cfg-input.cfg-bad { border-color: var(--accent-red); }
+select.cfg-input { width: auto; min-width: 140px; }
+select.cfg-input option { background: var(--bg-card); color: var(--text-primary); }
+.cfg-num { width: 160px; font-family: 'JetBrains Mono', monospace; }
+.cfg-check { width: 16px; height: 16px; accent-color: var(--accent-blue); cursor: pointer; }
+.cfg-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cfg-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 280px; padding: 2px 4px 2px 8px;
+  font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-secondary);
+  background: rgba(88,166,255,.08); border: 1px solid rgba(88,166,255,.15); border-radius: 8px;
+}
+.cfg-chip-x { border: none; background: none; color: var(--text-tertiary); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+.cfg-chip-x:hover { color: var(--accent-red); }
+.cfg-chip-add { width: 200px; }
+.cfg-map { display: flex; flex-direction: column; gap: 6px; }
+.cfg-map-row { display: flex; align-items: center; gap: 8px; }
+.cfg-map-key { width: 240px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+span.cfg-map-key { color: var(--text-secondary); }
+.cfg-secret { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cfg-secret-menu { min-width: 120px; }
+.cfg-secret-input { width: 320px; font-family: 'JetBrains Mono', monospace; }
+
+/* ── 按钮 ── */
+.cfg-btn {
+  padding: 5px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+  background: rgba(48,54,61,.5); border: 1px solid rgba(255,255,255,.08);
+  color: var(--text-secondary); font-size: 13px; font-family: inherit; transition: all .15s ease;
+}
+.cfg-btn:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--text-primary); border-color: rgba(88,166,255,.3); }
+.cfg-btn:disabled { opacity: .35; cursor: default; }
+.cfg-btn:focus-visible, .cfg-link:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+.cfg-btn-sm { padding: 3px 9px; font-size: 12px; }
+.cfg-btn-icon { padding: 1px 7px; font-size: 12px; }
+.cfg-btn-primary { background: rgba(88,166,255,.16); border-color: rgba(88,166,255,.35); color: var(--accent-blue); }
+.cfg-btn-primary:hover:not(:disabled) { background: rgba(88,166,255,.24); color: #fff; }
+.cfg-btn-danger:hover:not(:disabled) { color: var(--accent-red); border-color: rgba(248,81,73,.4); }
+.cfg-link {
+  border: none; background: none; padding: 0; max-width: 100%; cursor: pointer; font: inherit; color: var(--accent-blue);
+  text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cfg-link:hover { text-decoration: underline; }
+
+/* ── 表格：固定列宽 + 单行省略 ── */
+.cfg-table { table-layout: fixed; width: 100%; min-width: max-content; font-size: 13px; }
+.cfg-table th, .cfg-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cfg-table th { background: var(--bg-card); }
+.cfg-table td { padding: 6px 10px; vertical-align: middle; }
+.cfg-table col.cfg-col-fill { width: auto; }
+.cfg-table .cfg-mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.cfg-table .cfg-cell-actions { overflow: visible; }
+.cfg-table .cfg-cell-actions .cfg-btn + .cfg-btn { margin-left: 4px; }
+.cfg-list-row { cursor: pointer; }
+.cfg-row-open > td { background: rgba(88,166,255,.05); }
+.cfg-detail-row > td { padding: 0 0 6px; white-space: normal; overflow: visible; }
+.cfg-detail { margin: 4px 0 0; padding: 12px 16px; }
+
+/* ── Banner / 保存栏 / 对话框 ── */
+.cfg-banner {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; margin-bottom: var(--gap-section); border-radius: var(--radius-sm); font-size: 13px;
+}
+.cfg-banner-text { min-width: 0; }
+.cfg-banner .cfg-note { margin: 2px 0 0; color: inherit; opacity: .85; }
+.cfg-banner-info { background: rgba(88,166,255,.08); border: 1px solid rgba(88,166,255,.2); color: var(--text-primary); }
+.cfg-banner-ok { background: rgba(63,185,80,.08); border: 1px solid rgba(63,185,80,.25); color: var(--text-primary); }
+.cfg-banner-warn { background: rgba(210,153,34,.08); border: 1px solid rgba(210,153,34,.3); color: var(--text-primary); }
+.cfg-banner-err { background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.3); color: var(--text-primary); }
+.cfg-savebar {
+  position: sticky; bottom: 12px; z-index: 50; display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px; background: rgba(18,22,30,.96); border: 1px solid rgba(88,166,255,.25);
+  border-radius: var(--radius); box-shadow: var(--shadow-md); backdrop-filter: blur(6px);
+}
+.cfg-savebar[hidden] { display: none; }
+.cfg-savebar-msg { flex: 1; min-width: 0; font-size: 13px; color: var(--text-secondary); }
+.cfg-savebar-errors { list-style: none; margin: 4px 0 0; padding: 0; max-height: 120px; overflow-y: auto; }
+.cfg-savebar-errors .cfg-link { color: var(--accent-red); font-size: 12px; }
+.cfg-lock { max-width: 720px; }
+.cfg-lock-row { display: flex; gap: 8px; margin-top: 6px; }
+.cfg-lock-row .cfg-input { width: 420px; font-family: 'JetBrains Mono', monospace; }
+.cfg-dialog {
+  margin: auto; /* 抵消 dashboard 全局 * { margin: 0 }，恢复 modal 居中 */
+  max-width: 640px; width: calc(100% - 32px); padding: 20px 24px; color: var(--text-primary);
+  background: var(--bg-card); border: 1px solid rgba(255,255,255,.1); border-radius: var(--radius); box-shadow: var(--shadow-md);
+}
+.cfg-dialog::backdrop { background: rgba(0,0,0,.55); }
+.cfg-dialog-block { margin: 12px 0; font-size: 13px; }
+.cfg-dialog-block ul { margin: 0; padding-left: 18px; color: var(--text-secondary); }
+.cfg-dialog-block li { overflow-wrap: anywhere; }
+.cfg-dialog-warn .cfg-group-title, .cfg-dialog-warn li { color: var(--accent-yellow); }
+.cfg-dialog .cfg-actions { margin-top: 16px; }
+
+@media (max-width: 960px) {
+  .cfg-input, .cfg-secret-input, .cfg-lock-row .cfg-input { width: 100%; }
+}

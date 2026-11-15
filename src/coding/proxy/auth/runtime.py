@@ -33,6 +33,14 @@ class RuntimeReauthCoordinator:
     - 重认证期间 TokenManager 持续抛 TokenAcquireError
     - Router 触发 failover → 熔断器 OPEN → 请求路由到下一层级
     - 重认证完成后 TokenManager 获得新凭证 → 熔断器恢复 → 后端可用
+
+    .. warning::
+        ``server/generations.py`` 的 generation 交接逻辑直接读写本类私有属性
+        （``_providers`` / ``_states`` / ``_locks`` / ``_last_error`` /
+        ``_last_completed`` / ``_token_updaters`` / ``_token_store``），
+        行为由 ``tests/test_generations_app.py`` 锁定。重命名属性、加
+        ``__slots__`` 或改动数据结构时必须同步 ``_relay_reauth`` /
+        ``_finish_relay`` / ``_forward_tokens``。
     """
 
     def __init__(

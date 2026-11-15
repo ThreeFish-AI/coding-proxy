@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "coding-proxy 配置解析与存储",
+    "locale": "zh-CN",
+    "output": ".archify/dataflow-config-resolution-20261114-161029/config-resolution-storage.html",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 610]
+  },
+  "stages": [
+    { "label": "写入路径" },
+    { "label": "校验与门禁" },
+    { "label": "配置源（config.db）" },
+    { "label": "解析合并" },
+    { "label": "展开校验与运行时" }
+  ],
+  "nodes": [
+    { "id": "n-dash", "type": "frontend", "label": "Dashboard Config 页", "sublabel": "PUT /api/config", "tag": "X-Coding-Proxy-Admin", "stage": 0, "row": 0 },
+    { "id": "n-cli", "type": "frontend", "label": "CLI config 命令", "sublabel": "set / reset / set-secret", "tag": "可改 bootstrap", "stage": 0, "row": 2 },
+    { "id": "n-import", "type": "frontend", "label": "config import", "sublabel": "旧 YAML 一次性导入", "tag": "幂等 marker", "stage": 0, "row": 3 },
+    { "id": "n-svc", "type": "backend", "label": "ConfigService", "sublabel": "边界校验 · 乐观并发", "tag": "最小化写入", "stage": 1, "row": 1 },
+    { "id": "n-equiv", "type": "security", "label": "等价校验门", "sublabel": "verify_equivalence", "tag": "失败即拒写", "stage": 1, "row": 2 },
+    { "id": "n-legacy", "type": "external", "label": "旧 YAML 只读", "sublabel": "load_config 直读", "tag": "legacy_readonly", "stage": 1, "row": 3 },
+    { "id": "n-secret", "type": "database", "label": "secret 表", "sublabel": "按路径独立存放", "tag": "stored/env/empty", "stage": 2, "row": 0 },
+    { "id": "n-mkey", "type": "security", "label": "master.key", "sublabel": "Fernet 主密钥", "tag": "env 可覆写", "stage": 2, "row": 1 },
+    { "id": "n-section", "type": "database", "label": "config_section 表", "sublabel": "行存在=覆盖 · 删行=默认", "tag": "JSON 覆盖", "stage": 2, "row": 2 },
+    { "id": "n-defaults", "type": "backend", "label": "config.default.yaml", "sublabel": "随包默认基线", "tag": "$tmpl 节点", "stage": 2, "row": 3 },
+    { "id": "n-inject", "type": "security", "label": "密钥注入", "sublabel": "stored 解密·env·empty", "tag": "三态解析", "stage": 3, "row": 0 },
+    { "id": "n-compose", "type": "backend", "label": "compose_raw", "sublabel": "defaults ⊕ 覆盖", "tag": "深度合并", "stage": 3, "row": 2 },
+    { "id": "n-expand", "type": "backend", "label": "$tmpl 展开", "sublabel": "${VAR} 递归展开", "tag": "未定义→空串", "stage": 4, "row": 0 },
+    { "id": "n-validate", "type": "backend", "label": "ProxyConfig 校验", "sublabel": "pydantic 构建", "tag": "失败→degraded", "stage": 4, "row": 1 },
+    { "id": "n-gen", "type": "backend", "label": "GenerationManager", "sublabel": "generation 热切换", "tag": "排空旧实例", "stage": 4, "row": 2 }
+  ],
+  "flows": [
+    { "id": "f-dash-svc", "from": "n-dash", "to": "n-svc", "label": "PUT /api/config", "classification": "admin 头鉴权", "variant": "default" },
+    { "id": "f-cli-svc", "from": "n-cli", "to": "n-svc", "label": "set / reset", "classification": "含 bootstrap", "variant": "default" },
+    { "id": "f-import-equiv", "from": "n-import", "to": "n-equiv", "label": "导入计划", "classification": "plan_import", "variant": "default" },
+    { "id": "f-svc-section", "from": "n-svc", "to": "n-section", "label": "写入覆盖", "classification": "最小化 diff", "variant": "default" },
+    { "id": "f-svc-secret", "from": "n-svc", "to": "n-secret", "label": "put_secret", "classification": "Fernet 加密", "variant": "security" },
+    { "id": "f-equiv-section", "from": "n-equiv", "to": "n-section", "label": "apply_import", "classification": "单事务写入", "variant": "default", "toSide": "bottom", "via": [[450.5, 385], [450.5, 438], [530, 438]], "labelAt": [450, 438] },
+    { "id": "f-equiv-legacy", "from": "n-equiv", "to": "n-legacy", "label": "等价校验失败", "classification": "只读回退", "variant": "dashed", "labelAt": [315, 442] },
+    { "id": "f-defaults-compose", "from": "n-defaults", "to": "n-compose", "label": "默认值", "classification": "随包基线", "variant": "default", "toSide": "bottom", "via": [[665.5, 499], [665.5, 438], [745, 438]], "labelAt": [620, 499] },
+    { "id": "f-section-compose", "from": "n-section", "to": "n-compose", "label": "覆盖", "classification": "行存在即覆盖", "variant": "emphasis" },
+    { "id": "f-compose-inject", "from": "n-compose", "to": "n-inject", "label": "合并后文档", "classification": "compose_raw", "variant": "emphasis", "labelAt": [745, 271] },
+    { "id": "f-secret-inject", "from": "n-secret", "to": "n-inject", "label": "三态记录", "variant": "security" },
+    { "id": "f-mkey-secret", "from": "n-mkey", "to": "n-secret", "label": "Fernet 加解密", "classification": "stored 密文", "variant": "security", "labelAt": [530, 214] },
+    { "id": "f-inject-expand", "from": "n-inject", "to": "n-expand", "label": "注入后文档", "classification": "密钥已就位", "variant": "emphasis" },
+    { "id": "f-expand-validate", "from": "n-expand", "to": "n-validate", "label": "展开后文档", "classification": "待校验", "variant": "emphasis", "labelAt": [960, 214] },
+    { "id": "f-validate-gen", "from": "n-validate", "to": "n-gen", "label": "ProxyConfig", "classification": "build + activate", "variant": "emphasis", "labelAt": [960, 328] }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "读取与解析主线",
+      "items": [
+        "config.default.yaml 提供随包默认值；config_section 行存在即覆盖、删行即恢复默认",
+        "密钥注入按记录三态解析：stored 解密、env 读环境变量、empty 置空",
+        "$tmpl 展开 ${VAR}（未定义展开为空串）后经 pydantic 构建为 ProxyConfig",
+        "resolve_config 只读打开 config.db，不创建任何文件"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "密钥与主密钥",
+      "items": [
+        "secret 表按字段路径独立存放，任何 section 文档都不含明文密钥",
+        "stored 记录为 Fernet 密文；主密钥取 master.key 或环境变量 CODING_PROXY_MASTER_KEY",
+        "主密钥与 config.db 的 key_check 不匹配时直接报错，绝不重新生成",
+        "密钥只写不读：GET 仅返回 kind / env_var / resolved / hint"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "写入路径与并发",
+      "items": [
+        "仅 Dashboard、CLI、config import 三条写入路径，均先校验再持久化",
+        "per-section revision 乐观并发：期望 revision 不一致时拒绝写入（HTTP 409）",
+        "Dashboard / CLI 写入按字面量保存，不能新建 ${VAR} 模板",
+        "bootstrap 字段（server / logging / database / auth）仅 CLI 可改，保存后需重启生效"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "导入与降级",
+      "items": [
+        "首次启动或 config import 时将旧 YAML 物化为显式覆盖，单事务写入",
+        "等价校验失败则不建库，本次以旧 YAML 只读运行（legacy_readonly）",
+        "存储配置无效时进入 degraded 模式：Dashboard 可用，/v1 一律 503",
+        "Dashboard 保存有效配置后构建新 generation 并原子切换"
+      ]
+    }
+  ]
+}

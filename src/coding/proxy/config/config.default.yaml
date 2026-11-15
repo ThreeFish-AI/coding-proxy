@@ -1,6 +1,5 @@
-# coding-proxy 默认配置（模板）
-# 复制到 ./config.yaml（项目根目录）或 ~/.coding-proxy/config.yaml 并修改自定义设置
-# 优先级：./config.yaml > ~/.coding-proxy/config.yaml
+# coding-proxy 默认配置
+# 随包默认值基线；运行时配置请在 Dashboard → Config 或 `coding-proxy config` 中修改
 
 server:
   host: "127.0.0.1"
@@ -8,7 +7,7 @@ server:
 
 logging:
   level: "INFO"
-  # file: ".logs/coding-proxy.log"    # 文件日志路径；设为 null 或空字符串禁用
+  # file: ".logs/coding-proxy.log"    # 文件日志路径；未设置时默认 .logs/coding-proxy.log，设为空字符串禁用
   # max_bytes: 5242880                # 单文件上限（5 MB），触发轮转
   # backup_count: 5                   # 保留 gzip 压缩备份文件数
 
@@ -39,7 +38,7 @@ tiers: ["zhipu", "anthropic", "copilot", "antigravity"]
 # 优先级规则：
 #   - 若配置了 tiers，以其指定的顺序为准
 #   - 否则 vendors 列表顺序即优先级（index 越小越优先）
-#   - 无 circuit_breaker 的 vendor 自动成为终端层（不再向下故障转移）
+#   - circuit_breaker 为 null 仅表示不启用熔断；兜底（终端层）由链路位置决定
 
 vendors:
   # Vendor 0: Claude Plans（最高优先级）
@@ -102,20 +101,20 @@ vendors:
       threshold_percent: 95.0
       probe_interval_seconds: 300
 
-  # Vendor 3: 智谱 GLM（终端兜底，无 circuit_breaker）
+  # Vendor 3: 智谱 GLM（tiers 链路末位兜底；熔断器独立配置生效）
   - vendor: zhipu
     enabled: true
     base_url: "https://open.bigmodel.cn/api/anthropic"
     api_key: "${ZHIPU_API_KEY}"
     timeout_ms: 3000000
-    # 不配置 circuit_breaker → 自动成为终端层，不触发向下故障转移
+    # 兜底与否由 tiers 位置决定；熔断器只控制「跳过该层」，两者相互独立
     circuit_breaker:
       failure_threshold: 3
       recovery_timeout_seconds: 30
       success_threshold: 2
     quota_guard:
       enabled: true # 启用后按 Premium Requests 配额管理
-      token_budget: 1000000000 # 一天 token 预算（根据订阅计划调整）
+      token_budget: 3000000000 # 一天 token 预算（根据订阅计划调整）
       window_hours: 24.0
       threshold_percent: 95.0
       probe_interval_seconds: 300
@@ -339,6 +338,30 @@ model_mapping:
 # 未配置定价的模型在统计中 Cost 列显示 "-"
 pricing:
   # ── Anthropic Claude ──
+  - vendor: anthropic
+    model: claude-sonnet-5-5
+    input_cost_per_mtok: $2.0
+    output_cost_per_mtok: $10.0
+    cache_write_cost_per_mtok: $2.50
+    cache_read_cost_per_mtok: $0.2
+  - vendor: anthropic
+    model: claude-opus-5-5
+    input_cost_per_mtok: $4.0
+    output_cost_per_mtok: $20.0
+    cache_write_cost_per_mtok: $5.0
+    cache_read_cost_per_mtok: $0.2
+  - vendor: anthropic
+    model: claude-fable-5-1
+    input_cost_per_mtok: $10.0
+    output_cost_per_mtok: $50.0
+    cache_write_cost_per_mtok: $12.50
+    cache_read_cost_per_mtok: $0.25
+  - vendor: anthropic
+    model: claude-sonnet-5
+    input_cost_per_mtok: $2.0
+    output_cost_per_mtok: $10.0
+    cache_write_cost_per_mtok: $2.50
+    cache_read_cost_per_mtok: $0.2
   - vendor: anthropic
     model: claude-fable-5
     input_cost_per_mtok: $10.0
@@ -626,17 +649,15 @@ pricing:
     cache_write_cost_per_mtok: ¥0.12
     cache_read_cost_per_mtok: ¥0.017
 
-database:
-  path: "~/.coding-proxy/usage.db"
-
-# === OAuth 登录配置 ===
-auth:
-  # GitHub Device Flow client_id（默认使用 Copilot VS Code 扩展公开 ID）
-  # github_client_id: "Iv1.b507a08c87ecfe98"
-  # Google OAuth 凭据（默认使用 Antigravity Enterprise 公开凭据，无需手动配置）
-  # google_client_id: ""
-  # google_client_secret: ""
-  token_store_path: "~/.coding-proxy/tokens.json"
+# === 数据库与 OAuth 登录配置 ===
+# database.path / database.compat_state_path / auth.token_store_path 默认由
+# $CODING_PROXY_HOME（默认 ~/.coding-proxy）推导为 usage.db / compat.db / tokens.json。
+# auth:
+#   # GitHub Device Flow client_id（默认使用 Copilot VS Code 扩展公开 ID）
+#   github_client_id: "Iv1.b507a08c87ecfe98"
+#   # Google OAuth 凭据（默认使用 Antigravity Enterprise 公开凭据，无需手动配置）
+#   google_client_id: ""
+#   google_client_secret: ""
 
 # === 原生 API 透传（/api/{openai,gemini,anthropic}/**）===
 #

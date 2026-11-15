@@ -183,7 +183,7 @@ tiers: ["zhipu", "anthropic", "copilot", "antigravity"]
 | Anthropic 首选 | `["anthropic", "zhipu"]`                                      | 仅保留首尾两级             |
 | 全部启用       | `["zhipu", "anthropic", "copilot", "minimax", "antigravity"]` | 五层降级                   |
 
-> **终端层**：未配置 `circuit_breaker` 的 vendor 自动成为终端层（始终接受请求，不触发向下故障转移）。`config.default.yaml` 中所有已启用 vendor 均配置了 `circuit_breaker`，因此默认无终端层；若需设置终端层，移除对应 vendor 的 `circuit_breaker` 配置即可。
+> **终端层**：tiers 链路（或未配置 tiers 时的 vendors 列表）的最后一层即兜底层——无论该 vendor 是否配置 `circuit_breaker`。`circuit_breaker: null` 仅表示不启用熔断（失败不跳过该层），与是否兜底无关；末层不再向下转移，但仍受自身 `circuit_breaker` / `quota_guard` 门控（熔断 OPEN 或配额超限时请求直接失败）；调整兜底位置请改 `tiers` 顺序，而不是增删 `circuit_breaker`。
 >
 > **故障转移触发条件**：详见 [配置字段参考 — FailoverConfig](../arch/config-reference.md#54-failoverconfig--故障转移参数)。
 

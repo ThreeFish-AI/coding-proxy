@@ -59,12 +59,16 @@ uv add coding-proxy
 ```bash
 ## （可选）推荐启用智谱 GLM，使用环境变量防御性地注入密钥
 # export ZHIPU_API_KEY="your-api-key-here"
+## 也可把密钥加密写入配置存储（值不回显）
+# echo -n "sk-..." | uv run coding-proxy config set-secret vendors.zhipu.api_key --stdin
 
-# 使用默认配置启动 coding-proxy
-# 默认配置地址：~/.coding-proxy/config.yaml，
+# 以存储的配置启动 coding-proxy
+# 运行时配置存于 ~/.coding-proxy/config.db（SQLite，密钥加密）；
+# 经 Dashboard → Config 页或 `coding-proxy config` 命令在线修改，无需编辑 YAML。
+# 旧版 ~/.coding-proxy/config.yaml 会在首次启动时自动一次性导入。
 uv run coding-proxy start
 
-## 参数 `-c` 可以指定自定义配置文件路径
+## 参数 `-c` 指定旧 YAML 作为一次性迁移导入源
 # uv run coding-proxy start -c ./coding-proxy.yaml
 
 # INFO:     Started server process [1403]
@@ -94,6 +98,8 @@ claude
 open http://127.0.0.1:3392/dashboard
 ```
 
+**Config** 页签支持在线编辑全部配置（vendors、tiers、故障转移、模型映射、定价、native_api、会话策略），保存即热切换生效、无需重启；首次进入用 `coding-proxy config token` 输出的 admin token 解锁。
+
 ---
 
 ## 🛠️ CLI 控制台指南
@@ -102,7 +108,8 @@ open http://127.0.0.1:3392/dashboard
 
 | 指令     | 说明                                                                                                                            | 示例用法                                      |
 | :------- | :------------------------------------------------------------------------------------------------------------------------------ | :-------------------------------------------- |
-| `start`  | **启动代理服务器**。支持自定义端口与配置路径。                                                                                  | `coding-proxy start -p 8080 -c ~/config.yaml` |
+| `start`  | **启动代理服务器**。支持自定义端口；`-c` 指定旧 YAML 作为一次性迁移导入源。                                                      | `coding-proxy start -p 8080`                  |
+| `config` | **管理配置存储**（`~/.coding-proxy/config.db`）。子命令：`set`、`reset`、`set-secret`（加密写入密钥）、`import` / `export`、`token`。 | `coding-proxy config set vendors.zhipu.timeout_ms 60000` |
 | `auth`   | **管理 OAuth 登录凭证**。子命令：`login`（浏览器 OAuth 登录）、`status`（令牌状态）、`reauth`（重认证）、`logout`（清除令牌）。 | `coding-proxy auth login -p github`           |
 | `status` | **查看代理健康状态**。展示各层级熔断器（OPEN/CLOSED）与配额状态。                                                               | `coding-proxy status`                         |
 | `usage`  | **Token 统计看板**。按天/供应商/模型维度追踪每一次的 Token 消耗、故障转移及耗时。                                               | `coding-proxy usage -d 7 -v anthropic`        |
@@ -173,7 +180,7 @@ graph RL
 
 为了保障长期的项目可维护性，我们提供了循证工程级别 (Evidence-Based) 的详尽文档：
 
-- 📖 **[用户操作指引 (User Guide)](../user-guide.md)** — 从安装、最小配置要求，到每一项配置文件（`config.yaml`）的具体语义和常见排障指南。
+- 📖 **[用户操作指引 (User Guide)](../user-guide.md)** — 从安装、最小配置要求，到每一项配置字段的具体语义和常见排障指南。
 - 🏗️ **[架构设计与工程方案 (Architecture Framework)](../framework.md)** — 详细解码底层设计模式（Template Method、Circuit Breaker、State Machine 等），适用于希望深入了解源码或贡献新供应商的开发者。
 
 ---

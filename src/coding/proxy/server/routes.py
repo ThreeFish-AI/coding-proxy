@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import traceback
 from typing import Any
 
 import httpx
@@ -15,6 +16,7 @@ from ..vendors.base import NoCompatibleVendorError
 # 向后兼容别名
 NoCompatibleBackendError = NoCompatibleVendorError  # noqa: F401  (deprecated)
 from ..vendors.token_manager import TokenAcquireError
+from .config_routes import in_flight
 from .responses import (
     extract_stream_http_error,
     json_error_response,
@@ -22,6 +24,20 @@ from .responses import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _log_unexpected(scope: str, exc: BaseException) -> None:
+    """记录未预期异常：类型 + 堆栈帧，不含 ``str(exc)``（I2）.
+
+    供应商请求头构建失败等异常的消息体会携带密钥明文（如非法 header value 的
+    bytes repr），只记类型与调用栈即可定位，不落异常消息。
+    """
+    logger.error(
+        "%s 未预期异常: %s\n%s",
+        scope,
+        type(exc).__name__,
+        "".join(traceback.format_tb(exc.__traceback__)),
+    )
 
 
 async def _stream_proxy(router: Any, body: dict, headers: dict) -> Any:
@@ -45,15 +61,10 @@ async def _stream_proxy(router: Any, body: dict, headers: dict) -> Any:
         error_type, message = extract_stream_http_error(exc)
         yield stream_error_event(error_type, message)
     except Exception as exc:
-        logger.error(
-            "_stream_proxy 未预期异常: %s: %s",
-            type(exc).__name__,
-            exc,
-            exc_info=True,
-        )
+        _log_unexpected("_stream_proxy", exc)
         yield stream_error_event(
             "api_error",
-            f"内部错误: {type(exc).__name__}: {exc}",
+            f"内部错误: {type(exc).__name__}",
         )
 
 
@@ -92,12 +103,7 @@ def register_core_routes(app: Any, router: Any) -> None:
                 502, error_type="api_error", message=f"上游不可达: {exc}"
             )
         except Exception as exc:
-            logger.error(
-                "messages() 非流式路径未预期异常: %s: %s",
-                type(exc).__name__,
-                exc,
-                exc_info=True,
-            )
+            _log_unexpected("messages() 非流式路径", exc)
             return json_error_response(
                 500, error_type="api_error", message=f"内部错误: {type(exc).__name__}"
             )
@@ -211,8 +217,8 @@ def register_status_route(app: Any, router: Any) -> None:
     """注册状态查询路由."""
 
     @app.get("/api/status")
-    async def status() -> dict:
-        result: dict[str, Any] = {"tiers": []}
+    async def status(request: Request) -> dict:
+        result: dict[str, Any] = {"tiers": [], "in_flight": in_flight(request.app)}
         for tier in router.tiers:
             info: dict[str, Any] = {"name": tier.name}
             if tier.circuit_breaker:

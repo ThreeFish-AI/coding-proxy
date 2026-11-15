@@ -19,10 +19,13 @@
   - [8. GET /api/copilot/models](#8-get-apicopilotmodels)
   - [9. GET /api/reauth/status](#9-get-apireauthstatus)
   - [10. POST /api/reauth/{provider}](#10-post-apireauthprovider)
-  - [11. Dashboard 端点](#11-dashboard-端点)
-    - [11.1 GET /dashboard](#111-get-dashboard)
-    - [11.2 GET /api/dashboard/summary](#112-get-apidashboardsummary)
-    - [11.3 GET /api/dashboard/timeline](#113-get-apidashboardtimeline)
+  - [11. 配置管理端点](#11-配置管理端点)
+    - [11.1 GET /api/config](#111-get-apiconfig)
+    - [11.2 PUT /api/config](#112-put-apiconfig)
+  - [12. Dashboard 端点](#12-dashboard-端点)
+    - [12.1 GET /dashboard](#121-get-dashboard)
+    - [12.2 GET /api/dashboard/summary](#122-get-apidashboardsummary)
+    - [12.3 GET /api/dashboard/timeline](#123-get-apidashboardtimeline)
 
 </details>
 
@@ -323,11 +326,40 @@ curl -X POST http://127.0.0.1:3392/api/reauth/github
 
 返回 202 表示重认证请求已接收，用户需在浏览器中完成授权。
 
-## 11. Dashboard 端点
+## 11. 配置管理端点
+
+读写配置存储（`~/.coding-proxy/config.db`）的管理 API，需携带请求头 `X-Coding-Proxy-Admin: <token>`（token 由 `coding-proxy config token` 输出；缺失或不符返回 401）。请求体必须为 `application/json`。
+
+### 11.1 GET /api/config
+
+返回 Config 页所需的完整视图：`mode`（`store` / `legacy_readonly` / `degraded` / `defaults`）、`values`（当前生效值，密钥字段省略）、`defaults`（包内默认值）、`revisions`（per-section 乐观并发版本）、`secrets`（每个密钥路径的 `{kind, env_var?, resolved, hint, default_env?, recorded}`，无明文；`kind` 取 `stored` / `env` / `empty` / `default`，`default_env` 为包内默认环境变量名，`recorded` 表示存在 stored/env 密钥记录——目标地址变化触发的清空只作用于有记录的密钥）、`sources`（env / cli 覆盖来源）、`running`（运行中的 generation 状态）、`registry`（字段元数据）。
+
+```bash
+curl -H "X-Coding-Proxy-Admin: $TOKEN" http://127.0.0.1:3392/api/config
+```
+
+### 11.2 PUT /api/config
+
+提交配置变更：`{"revisions": {section: int}, "sections": {section: 有效值|null}, "reset": [section], "secret_ops": {path: {op: "set"|"clear"|"default_env"|"keep", "value"?}}}`。
+
+- **200**：`{revisions, applied, apply_error, cleared_secrets, reset_runtime}` —— 持久化后在进程内热切换（generation swap）；`applied=false` 时 `apply_error` 说明原因（如 `restart required`）。
+- **409**：`{error: "conflict", sections: [...]}` —— 期望 revision 与存储不一致（并发修改），重读 `revisions` 后重试。
+- **422**：`{errors: [{loc, msg}]}` —— 校验失败，只含字段路径与原因，从不回显输入值。
+- **423**：当前以旧 YAML 只读运行（导入未通过等价校验），禁止写入。
+- 业务 section（vendors、tiers、failover、model_mapping、pricing、native_api、session_policies）可写；bootstrap section（server、logging、database、auth）经 HTTP 只读（仅 CLI `config set` 可改；例外：`auth.google_client_secret` 可经 `secret_ops` 在线修改，CLI 对应 `config set-secret`）。
+- vendor 的 `base_url` / `token_url` 变化时，未在同一请求显式 `set` / `clear` 的密钥自动清空（防密钥发往新目标），响应 `cleared_secrets` 列出；新目标即包内默认端点时（`reset` / 改回默认）保留密钥，`cleared_secrets` 为空。
+
+```bash
+curl -X PUT -H "X-Coding-Proxy-Admin: $TOKEN" http://127.0.0.1:3392/api/config \
+  -H "Content-Type: application/json" \
+  -d '{"revisions": {"tiers": 0}, "sections": {"tiers": ["zhipu", "anthropic"]}}'
+```
+
+## 12. Dashboard 端点
 
 为 [Dashboard 看板](./dashboard.md)提供数据的 API 端点。
 
-### 11.1 GET /dashboard
+### 12.1 GET /dashboard
 
 返回 Dashboard HTML 页面。
 
@@ -335,7 +367,7 @@ curl -X POST http://127.0.0.1:3392/api/reauth/github
 curl http://127.0.0.1:3392/dashboard
 ```
 
-### 11.2 GET /api/dashboard/summary
+### 12.2 GET /api/dashboard/summary
 
 返回 Dashboard 汇总数据（今日 + 所选区间）。
 
@@ -349,7 +381,7 @@ curl "http://127.0.0.1:3392/api/dashboard/summary?days=7"
 
 **返回结构**：`version`（版本号）、`today`（今日 KPI）、`range`（区间 KPI）、`failover_stats`（故障转移统计）。
 
-### 11.3 GET /api/dashboard/timeline
+### 12.3 GET /api/dashboard/timeline
 
 返回按天分组的时序数据（用于图表绘制）。
 

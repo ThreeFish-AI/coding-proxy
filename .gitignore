@@ -28,3 +28,6 @@ config.yaml
 
 # Log files (dual-write logging)
 .logs/
+
+# Archify authoring workspace
+.archify/
