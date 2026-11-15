@@ -2,6 +2,18 @@
 
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.1](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.1) - 2026-11-16
+
+> 本周期主轴：Dashboard Sessions 页「Vendor Bind」升级为「Model Bind」，支持对运行中的 Claude Code 会话在不打断任务执行的前提下切换实际所用模型（含跨系列）。经 7 轮独立 Review-Fix 循环收敛（16 项缺陷修复）。
+
+- feat(session-model-bind): 新增**会话级模型绑定**——`SessionPolicy` 增可选 `model` 字段，绑定后该 Session 的后续请求体 `model` 统一改写（shadow copy，逐请求生效），在途请求按旧捕获值完成、下一请求即时按新值路由，任务执行零打断（隔离实例 + mock 上游实验 15/15 断言实证）；Dashboard「Vendor Bind」列整体替换为「Model Bind」（选项来自新配置 `session_policies.bindable_models` 清单，默认 claude 三档零额外配置；Default = 清除整条绑定，vendor-only 绑定以 `Default (vendor: …)` 标注可见）；跨系列原生模型名（如 `glm-5.3`）入清单需配套 identity `model_mapping` 规则，防 `ModelMapper` default 静默改写；CLI `session bind` 增 `--model`（与 `--vendor` 可组合）；`PUT /api/session-vendor` 增可选 `model`（清单外 400，清单为空时报错指向根因配置项），`GET` 回显 model、`/api/status` 增返 `bindable_models`；
+- fix(session-policy): 修复**标题前缀自动绑定覆盖手动绑定**的既有缺陷——`_apply_title_based_policy` 遇已有运行时绑定即跳过（compat TTL 24h 过期导致长会话被重新判定为新会话时同样受保护）；仅绑模型（tiers 为空）时 resolver 继承链按「现有运行时绑定 > key 级配置备份 > category 配置」兑现「不改 vendor 顺序」承诺，PUT 响应回显继承后的生效 tiers/model；
+- feat(model-mapper): `ModelMapper` 增 `map_with_reason`（exact / pattern / default），`BaseVendor` 新增 `map_model_with_reason` 扩展点（native 系与 antigravity 覆写真实命中原因）——会话模型漂移告警据此区分「配置内等价映射」（如 claude 档位名 → glm 档位名，不告警）与「default 回退改写 / 上游换名」（WARNING，缺规则场景附 identity 规则修复指引），默认配置主路径零告警噪声；
+- fix(generations): **配置热切换（generation swap）迁移保留模型绑定**——`_migrate_bindings` 由只搬 vendors 扩为三元迁移（vendor 需仍在新链路、模型需仍在 `bindable_models` 清单，单侧失效降级保留另一侧），`reset_runtime` 对称提示整条移除 / vendor 侧降级 / 模型侧降级，文案不再预设绑定含模型；
+- feat(config-ui): Config 页 Session Policies 分区交付 `bindable_models` 清单编辑（Label/Model/Tiers 三列 listBlock）与策略条目的 `Model` 覆盖字段（`policies.*.model` 空串清空归一为未设置，不再 422 卡死）；config ui_registry 覆盖门同步登记 5 个新叶子；
+- docs: 新增 `arch/session-model-bind.md` 设计与实现锚点（数据流、配置、API/CLI、UI、风险边界、测试锚点）；`arch/config-reference.md` 补 §11 session_policies 节（含生命周期口径：重启回落配置态、热切换迁移保留）；`arch/vendors.md` 补 `map_model_with_reason` 方法契约；
+- test: 补齐 30+ 守护用例——resolver 继承链与 model 语义、在途请求隔离（流式 / 非流式）、漂移告警三分支与负向控制、路由级 PUT/DELETE/GET 全分支、默认清单加载守护、CLI payload、热切换迁移计数、Config 页渲染契约；
+
 ## [v0.6.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.0) - 2026-11-14
 
 > 本周期主轴：配置系统由 YAML 迁移至 `config.db` + Dashboard Config 页（含管理面安全加固）。以下条目按重要程度排列。
