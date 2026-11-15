@@ -65,6 +65,13 @@ async def lifespan(app: FastAPI):
         if native_handler._usage_recorder is not None:  # noqa: SLF001
             native_handler._usage_recorder.set_pricing_table(pricing_table)  # noqa: SLF001
 
+    # Antigravity 客户端透传 handler：同上运行时注入
+    antigravity_handler = getattr(app.state, "antigravity_handler", None)
+    if antigravity_handler is not None:
+        antigravity_handler._pricing_table = pricing_table  # noqa: SLF001
+        if antigravity_handler._usage_recorder is not None:  # noqa: SLF001
+            antigravity_handler._usage_recorder.set_pricing_table(pricing_table)  # noqa: SLF001
+
     # 为每个有 QuotaGuard 的 tier 加载基线
     for tier in router.tiers:
         if tier.quota_guard and tier.quota_guard.enabled:
@@ -84,6 +91,8 @@ async def lifespan(app: FastAPI):
     await router.close()
     if native_handler is not None:
         await native_handler.aclose()
+    if antigravity_handler is not None:
+        await antigravity_handler.aclose()
     await compat_session_store.close()
     await token_logger.close()
     logger.info("coding-proxy stopped")
@@ -184,6 +193,21 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             usage_recorder=native_usage_recorder,
         )
         app.state.native_handler = native_handler
+
+    # Antigravity IDE 客户端透传 handler — 独立于 native_api 的并列通道
+    if config.antigravity_gateway.enabled:
+        from ..antigravity_gateway.handler import AntigravityGatewayHandler
+
+        antigravity_usage_recorder = UsageRecorder(
+            token_logger=token_logger, pricing_table=None
+        )
+        antigravity_handler = AntigravityGatewayHandler(
+            config.antigravity_gateway,
+            token_logger=token_logger,
+            pricing_table=None,
+            usage_recorder=antigravity_usage_recorder,
+        )
+        app.state.antigravity_handler = antigravity_handler
 
     # 注册所有路由端点
     register_all_routes(app, router, reauth_coordinator)

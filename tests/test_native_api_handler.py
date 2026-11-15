@@ -561,3 +561,105 @@ def test_gemini_vertex_embed_official_upstream_unchanged() -> None:
         upstream = captured[0]
         assert "v1beta/models" in str(upstream.url)
         assert "v1beta1/publishers" not in str(upstream.url)
+
+
+# ── opt-in stream_options.include_usage 注入（P1） ─────────────
+
+
+def _stream_route(captured_usage: list):
+    def route(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured_usage.append(body.get("stream_options"))
+        sse = "\n\n".join(
+            [
+                'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}',
+                'data: {"id":"c1","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":6}}',
+                "data: [DONE]",
+            ]
+        )
+        return httpx.Response(
+            200, content=sse.encode(), headers={"content-type": "text/event-stream"}
+        )
+
+    return route
+
+
+def test_inject_include_usage_when_enabled() -> None:
+    captured_usage: list = []
+
+    def factory(make_transport):
+        cfg = NativeApiConfig(
+            openai=NativeProviderConfig(
+                enabled=True,
+                base_url="https://api.openai.com",
+                inject_include_usage=True,
+            ),
+        )
+        transport = make_transport(_stream_route(captured_usage))
+        return NativeProxyHandler(cfg, transport=transport), transport
+
+    for client, captured in _make_app(factory):
+        with client.stream(
+            "POST",
+            "/api/openai/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [], "stream": True},
+        ) as r:
+            assert r.status_code == 200
+        assert captured_usage == [{"include_usage": True}]
+
+
+def test_inject_include_usage_disabled_by_default() -> None:
+    captured_usage: list = []
+
+    def factory(make_transport):
+        cfg = NativeApiConfig(
+            openai=NativeProviderConfig(
+                enabled=True, base_url="https://api.openai.com"
+            ),
+        )
+        transport = make_transport(_stream_route(captured_usage))
+        return NativeProxyHandler(cfg, transport=transport), transport
+
+    for client, captured in _make_app(factory):
+        with client.stream(
+            "POST",
+            "/api/openai/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [], "stream": True},
+        ) as r:
+            assert r.status_code == 200
+        assert captured_usage == [None]
+
+
+def test_inject_include_usage_respects_existing_and_nonstream() -> None:
+    captured_usage: list = []
+
+    def factory(make_transport):
+        cfg = NativeApiConfig(
+            openai=NativeProviderConfig(
+                enabled=True,
+                base_url="https://api.openai.com",
+                inject_include_usage=True,
+            ),
+        )
+        transport = make_transport(_stream_route(captured_usage))
+        return NativeProxyHandler(cfg, transport=transport), transport
+
+    for client, captured in _make_app(factory):
+        # 已显式 include_usage=false → 不覆盖
+        with client.stream(
+            "POST",
+            "/api/openai/v1/chat/completions",
+            json={
+                "model": "gpt-4o",
+                "messages": [],
+                "stream": True,
+                "stream_options": {"include_usage": False},
+            },
+        ) as r:
+            assert r.status_code == 200
+        # 非流式请求 → 不注入
+        client.post(
+            "/api/openai/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": []},
+        )
+        assert captured_usage == [{"include_usage": False}, None]

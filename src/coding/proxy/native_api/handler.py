@@ -24,6 +24,16 @@ from urllib.parse import unquote
 
 import httpx
 
+from ..passthrough_kernel import (
+    UPSTREAM_NETWORK_ERRORS,
+    build_502_response_body,
+    build_nonstream_evidence_records,
+    build_not_enabled_response_body,
+    build_upstream_url,
+    filter_request_headers,
+    filter_response_headers,
+    iter_sse_tee,
+)
 from .operation import OperationClassifier
 from .usage_registry import (
     ExtractionResult,
@@ -42,47 +52,39 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# RFC 7230 §6.1 hop-by-hop + 常见代理相关头 + accept-encoding（避免 httpx 解压）
-_HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
-    {
-        "connection",
-        "content-length",
-        "transfer-encoding",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "proxy-connection",
-        "te",
-        "trailer",
-        "upgrade",
-        "accept-encoding",
-        "host",
-    }
-)
-
-# 响应侧 hop-by-hop（不含 accept-encoding，但保留 content-length 剥除以免长度错位）
-_RESPONSE_HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
-    {
-        "connection",
-        "content-length",
-        "transfer-encoding",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "proxy-connection",
-        "te",
-        "trailer",
-        "upgrade",
-        "content-encoding",  # 上游若返回 gzip/br, httpx 已解压, 原始编码头需剥除
-    }
-)
-
 # vendor 命名 — 与既有 'anthropic' (cc 流量) 区分
 _VENDOR_LABEL: dict[str, str] = {
     "openai": "openai",
     "gemini": "gemini",
     "anthropic": "anthropic-native",
 }
+
+
+def _inject_include_usage(body_bytes: bytes) -> bytes:
+    """为 OpenAI chat/completions 流式请求体注入 ``stream_options.include_usage``.
+
+    仅当 body 为 JSON dict 且 ``stream`` 为真且未显式设置 ``include_usage``
+    时改写；任何解析失败 / 已设置 / 非流式请求一律原样返回（防御性，
+    保证严格透传语义仅在 opt-in 配置下被有限打破）。
+    """
+    try:
+        body = json.loads(body_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return body_bytes
+    if not isinstance(body, dict) or not body.get("stream"):
+        return body_bytes
+    stream_options = body.get("stream_options")
+    # 客户端已显式给出 include_usage（含显式 false）→ 尊重原值不覆盖
+    if isinstance(stream_options, dict) and "include_usage" in stream_options:
+        return body_bytes
+    if not isinstance(stream_options, dict):
+        stream_options = {}
+        body["stream_options"] = stream_options
+    stream_options["include_usage"] = True
+    try:
+        return json.dumps(body).encode()
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return body_bytes
 
 
 class NativeProxyHandler:
@@ -162,14 +164,9 @@ class NativeProxyHandler:
         cfg = self._config.get(provider)
         if cfg is None or not cfg.enabled:
             return FastAPIResponse(
-                content=json.dumps(
-                    {
-                        "error": {
-                            "message": f"native api provider '{provider}' is not enabled",
-                            "type": "not_found",
-                        }
-                    }
-                ).encode(),
+                content=build_not_enabled_response_body(
+                    f"native api provider '{provider}'"
+                ),
                 status_code=404,
                 media_type="application/json",
             )
@@ -186,11 +183,15 @@ class NativeProxyHandler:
             else f"/{decoded_rest_path}"
         )
 
-        upstream_headers = _filter_request_headers(dict(request.headers))
+        upstream_headers = filter_request_headers(dict(request.headers))
         # 强制 identity —— 阻止上游压缩（httpx 默认会自动补 gzip,deflate;
         # 响应端即使剥 content-encoding 也已被 httpx 解压，长度/字节错位）。
         upstream_headers["accept-encoding"] = "identity"
         body_bytes = await request.body()
+        # opt-in：为 openai chat 流式请求注入 stream_options.include_usage，
+        # 使上游末尾回发 usage chunk（否则流式 tokens 记 0）。
+        if provider == "openai" and operation == "chat" and cfg.inject_include_usage:
+            body_bytes = _inject_include_usage(body_bytes)
         query_string = str(request.url.query)
 
         start_ts = time.perf_counter()
@@ -219,9 +220,7 @@ class NativeProxyHandler:
             )
 
         # 构造上游 URL（保留 query）
-        upstream_url = endpoint
-        if query_string:
-            upstream_url = f"{endpoint}?{query_string}"
+        upstream_url = build_upstream_url(endpoint, query_string)
 
         req = client.build_request(
             method=method,
@@ -233,12 +232,7 @@ class NativeProxyHandler:
         # 发送 — 流式方式读取以便 SSE 透传
         try:
             upstream_resp = await client.send(req, stream=True)
-        except (
-            httpx.TimeoutException,
-            httpx.ConnectError,
-            httpx.ReadError,
-            httpx.RemoteProtocolError,
-        ) as exc:
+        except UPSTREAM_NETWORK_ERRORS as exc:
             duration_ms = int((time.perf_counter() - start_ts) * 1000)
             await self._record_failure(
                 provider=provider,
@@ -248,20 +242,13 @@ class NativeProxyHandler:
                 reason=str(exc),
             )
             return FastAPIResponse(
-                content=json.dumps(
-                    {
-                        "error": {
-                            "message": f"upstream unreachable: {exc}",
-                            "type": "api_error",
-                        }
-                    }
-                ).encode(),
+                content=build_502_response_body(str(exc)),
                 status_code=502,
                 media_type="application/json",
             )
 
         content_type = upstream_resp.headers.get("content-type", "").lower()
-        resp_headers = _filter_response_headers(dict(upstream_resp.headers))
+        resp_headers = filter_response_headers(dict(upstream_resp.headers))
         status = upstream_resp.status_code
         vendor_label = _VENDOR_LABEL[provider]
 
@@ -307,7 +294,7 @@ class NativeProxyHandler:
             duration_ms=duration_ms,
             status=status,
             extraction=extraction,
-            evidence_records=_build_nonstream_evidence(
+            evidence_records=build_nonstream_evidence_records(
                 vendor=vendor_label, extraction=extraction
             ),
         )
@@ -439,12 +426,7 @@ class NativeProxyHandler:
 
         try:
             upstream_resp = await client.send(req, stream=True)
-        except (
-            httpx.TimeoutException,
-            httpx.ConnectError,
-            httpx.ReadError,
-            httpx.RemoteProtocolError,
-        ) as exc:
+        except UPSTREAM_NETWORK_ERRORS as exc:
             duration_ms = int((time.perf_counter() - start_ts) * 1000)
             await self._record_failure(
                 provider=provider,
@@ -454,14 +436,7 @@ class NativeProxyHandler:
                 reason=str(exc),
             )
             return FastAPIResponse(
-                content=json.dumps(
-                    {
-                        "error": {
-                            "message": f"upstream unreachable: {exc}",
-                            "type": "api_error",
-                        }
-                    }
-                ).encode(),
+                content=build_502_response_body(str(exc)),
                 status_code=502,
                 media_type="application/json",
             )
@@ -474,7 +449,7 @@ class NativeProxyHandler:
         duration_ms = int((time.perf_counter() - start_ts) * 1000)
         status = upstream_resp.status_code
         content_type = upstream_resp.headers.get("content-type", "").lower()
-        resp_headers = _filter_response_headers(dict(upstream_resp.headers))
+        resp_headers = filter_response_headers(dict(upstream_resp.headers))
 
         # 用量抽取
         extraction = ExtractionResult()
@@ -496,7 +471,7 @@ class NativeProxyHandler:
             duration_ms=duration_ms,
             status=status,
             extraction=extraction,
-            evidence_records=_build_nonstream_evidence(
+            evidence_records=build_nonstream_evidence_records(
                 vendor=vendor_label, extraction=extraction
             ),
         )
@@ -555,12 +530,7 @@ class NativeProxyHandler:
             )
             try:
                 resp = await client.send(req, stream=False)
-            except (
-                httpx.TimeoutException,
-                httpx.ConnectError,
-                httpx.ReadError,
-                httpx.RemoteProtocolError,
-            ) as exc:
+            except UPSTREAM_NETWORK_ERRORS as exc:
                 return {"error": {"message": f"upstream unreachable: {exc}"}}, 502
             try:
                 return resp.json(), resp.status_code
@@ -615,7 +585,7 @@ class NativeProxyHandler:
             duration_ms=duration_ms,
             status=200,
             extraction=extraction,
-            evidence_records=_build_nonstream_evidence(
+            evidence_records=build_nonstream_evidence_records(
                 vendor=vendor_label, extraction=extraction
             ),
         )
@@ -639,30 +609,11 @@ class NativeProxyHandler:
         start_ts: float,
     ) -> AsyncIterator[bytes]:
         acc = StreamingUsageAccumulator(vendor_label=vendor_label)
-        try:
-            # 因请求侧已强制 ``Accept-Encoding: identity``，上游不会压缩响应，
-            # 这里用 ``aiter_bytes()`` 与 ``aiter_raw()`` 等价且兼容 MockTransport。
-            async for chunk in upstream_resp.aiter_bytes():
-                if chunk:
-                    acc.feed(chunk)
-                    yield chunk
-        except (
-            httpx.TimeoutException,
-            httpx.ConnectError,
-            httpx.ReadError,
-            httpx.RemoteProtocolError,
-        ) as exc:
-            logger.warning(
-                "native api stream interrupted provider=%s op=%s: %s",
-                provider,
-                operation,
-                exc,
-            )
-        finally:
-            try:
-                await upstream_resp.aclose()
-            except Exception:  # pragma: no cover - defensive
-                pass
+        # SSE 字节级 tee 中继（含网络中断降级与连接关闭）— 共享内核
+        async for chunk in iter_sse_tee(
+            upstream_resp, acc.feed, log_name=f"native api provider={provider}"
+        ):
+            yield chunk
 
         duration_ms = int((time.perf_counter() - start_ts) * 1000)
         extraction, evidence = acc.finalize(
@@ -764,59 +715,6 @@ class NativeProxyHandler:
                 operation,
                 exc,
             )
-
-
-# ── 头过滤工具 ────────────────────────────────────────────────
-
-
-def _filter_request_headers(headers: dict[str, str]) -> dict[str, str]:
-    """剥除 hop-by-hop / 代理相关头，保留认证与业务头."""
-    out: dict[str, str] = {}
-    for k, v in headers.items():
-        if k.lower() in _HOP_BY_HOP_HEADERS:
-            continue
-        out[k] = v
-    return out
-
-
-def _filter_response_headers(headers: dict[str, str]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for k, v in headers.items():
-        if k.lower() in _RESPONSE_HOP_BY_HOP_HEADERS:
-            continue
-        out[k] = v
-    return out
-
-
-def _build_nonstream_evidence(
-    *, vendor: str, extraction: ExtractionResult
-) -> list[dict]:
-    """非流式响应的 evidence 记录（仅在抽取到 raw_usage 时生成）."""
-    if not extraction.raw_usage:
-        return []
-    return [
-        {
-            "vendor": vendor,
-            "request_id": extraction.request_id or "",
-            "model_served": extraction.model_served or "",
-            "evidence_kind": extraction.evidence_kind or "native_generic_scan",
-            "raw_usage_json": json.dumps(
-                extraction.raw_usage, ensure_ascii=False, sort_keys=True, default=str
-            ),
-            "parsed_input_tokens": extraction.input_tokens,
-            "parsed_output_tokens": extraction.output_tokens,
-            "parsed_cache_creation_tokens": extraction.cache_creation_tokens,
-            "parsed_cache_read_tokens": extraction.cache_read_tokens,
-            "cache_signal_present": extraction.cache_creation_tokens > 0
-            or extraction.cache_read_tokens > 0,
-            "source_field_map_json": json.dumps(
-                extraction.source_field_map,
-                ensure_ascii=False,
-                sort_keys=True,
-                default=str,
-            ),
-        }
-    ]
 
 
 # 在 handler 模块加载时同步触发三家 provider 抽取器注册（side-effect import）

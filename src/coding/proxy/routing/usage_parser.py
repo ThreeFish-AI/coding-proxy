@@ -24,7 +24,7 @@ def _set_if_nonzero(usage: dict, key: str, value: int) -> None:
         usage[key] = value
 
 
-def _append_usage_evidence(
+def append_usage_evidence(
     usage: dict[str, Any],
     *,
     evidence_kind: str,
@@ -183,7 +183,7 @@ def parse_usage_from_chunk(
                 usage["request_id"] = msg["id"]
             if "model" in msg:
                 usage["model_served"] = msg["model"]
-            _append_usage_evidence(
+            append_usage_evidence(
                 usage,
                 evidence_kind="message_usage",
                 raw_usage=dict(u),
@@ -203,7 +203,24 @@ def parse_usage_from_chunk(
             _set_if_nonzero(usage, "input_tokens", input_tokens)
             _set_if_nonzero(usage, "cache_creation_tokens", cache_creation_tokens)
             _set_if_nonzero(usage, "cache_read_tokens", cache_read_tokens)
-            _append_usage_evidence(
+
+            # OpenAI details 子字段（与非流式 extractor 口径对齐）：
+            # prompt_tokens_details.cached_tokens → cache_read；
+            # completion_tokens_details.reasoning_tokens → extra_usage
+            pdetails = u.get("prompt_tokens_details")
+            if isinstance(pdetails, dict):
+                _set_if_nonzero(
+                    usage, "cache_read_tokens", pdetails.get("cached_tokens", 0)
+                )
+            cdetails = u.get("completion_tokens_details")
+            if isinstance(cdetails, dict):
+                reasoning = cdetails.get("reasoning_tokens")
+                if isinstance(reasoning, int) and reasoning > 0:
+                    extra = usage.setdefault("extra_usage", {})
+                    if isinstance(extra, dict):
+                        extra["reasoning_tokens"] = reasoning
+
+            append_usage_evidence(
                 usage,
                 evidence_kind="data_usage",
                 raw_usage=dict(u),
@@ -239,7 +256,7 @@ def parse_usage_from_chunk(
                         if tool_use_tc > 0:
                             extra["tool_use_prompt_tokens"] = tool_use_tc
 
-                _append_usage_evidence(
+                append_usage_evidence(
                     usage,
                     evidence_kind="gemini_usage_metadata",
                     raw_usage=dict(um),

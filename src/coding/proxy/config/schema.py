@@ -19,6 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from ..antigravity_gateway.config import AntigravityGatewayConfig  # noqa: F401
 from ..native_api.config import NativeApiConfig  # noqa: F401
 from .auth_schema import AuthConfig  # noqa: F401
 from .resiliency import (  # noqa: F401
@@ -152,6 +153,14 @@ class ProxyConfig(BaseModel):
         description=(
             "OpenAI / Gemini / Anthropic 原生 API 透传配置。"
             "三个 provider 默认 enabled=False，显式启用才暴露 /api/{provider}/* 端点。"
+        ),
+    )
+    # Antigravity IDE 客户端透传通道 — 与 native_api 并列（共享 passthrough 内核）
+    antigravity_gateway: AntigravityGatewayConfig = Field(
+        default_factory=AntigravityGatewayConfig,
+        description=(
+            "Antigravity IDE 客户端透传配置（/api/antigravity/**，"
+            "CLOUD_CODE_URL 接入 → Cloud Code v1internal 后端透传 + 用量统计）。"
         ),
     )
     # Session 级别路由策略

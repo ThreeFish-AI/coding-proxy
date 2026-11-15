@@ -580,3 +580,10 @@ def register_all_routes(
         from ..native_api import register_native_api_routes
 
         register_native_api_routes(app, native_handler)
+
+    # Antigravity 客户端透传 catch-all — 同样最后注册
+    antigravity_handler = getattr(app.state, "antigravity_handler", None)
+    if antigravity_handler is not None:
+        from ..antigravity_gateway.routes import register_antigravity_gateway_routes
+
+        register_antigravity_gateway_routes(app, antigravity_handler)
