@@ -764,3 +764,35 @@ def test_model_only_upsert_without_config_policy_keeps_empty_tiers():
     policy = resolver.resolve("key-plain")
     assert policy is not None
     assert policy.tiers == []
+
+
+def test_model_only_upsert_after_runtime_vendor_binding_keeps_tiers():
+    """先建运行时 vendor 绑定、再仅绑模型：继承运行时 tiers，vendor 绑定不丢."""
+    resolver = SessionPolicyResolver()
+    resolver.upsert("key-rt", ["zhipu", "anthropic"])
+    resolver.upsert("key-rt", [], model="glm-5.3")
+    policy = resolver.resolve("key-rt")
+    assert policy is not None
+    assert policy.tiers == ["zhipu", "anthropic"]
+    assert policy.model == "glm-5.3"
+
+
+def test_model_only_upsert_runtime_empty_tiers_falls_to_config():
+    """运行时绑定本身无 tiers 时回落配置态策略（不自我继承空值）."""
+    resolver = SessionPolicyResolver(
+        [_make_policy("cfg", keys=["key-fb"], tiers=["copilot"])]
+    )
+    resolver.upsert("key-fb", [], model="m1")  # 继承 cfg tiers=[copilot]
+    resolver.upsert("key-fb", [], model="m2")  # 再次 model-only：回落链到 backup
+    policy = resolver.resolve("key-fb")
+    assert policy is not None
+    assert policy.tiers == ["copilot"]
+    assert policy.model == "m2"
+
+
+def test_session_policy_model_empty_string_normalized_to_none():
+    """空串/纯空白 model 归一为未设置（Config 页清空输入框的保存路径）."""
+    match = SessionPolicyMatch(session_keys=["k"])
+    assert SessionPolicy(name="p", match=match, model="").model is None
+    assert SessionPolicy(name="p", match=match, model="   ").model is None
+    assert SessionPolicy(name="p", match=match, model="glm-5.3").model == "glm-5.3"

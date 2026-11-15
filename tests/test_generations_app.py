@@ -455,3 +455,42 @@ async def test_real_uvicorn_serves_manager_and_hot_swaps():
         server.should_exit = True
         await asyncio.wait_for(serve, 15)
     assert manager.current_app is not first_app
+
+
+async def test_session_model_binding_survives_swap():
+    """热切换迁移保留 model 覆盖；vendor 失效但模型仍有效时降级为纯模型绑定."""
+    token = load_or_create_admin_token()
+    async with serving() as (manager, client):
+        resp = await client.put(
+            "/api/session-vendor",
+            json={"session_key": "s-m", "model": "claude-opus-4.6"},
+        )
+        assert resp.status_code == 200, resp.text
+        resp = await client.put(
+            "/api/session-vendor",
+            json={
+                "session_key": "s-vm",
+                "vendors": ["anthropic"],
+                "model": "claude-sonnet-4.6",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        resp = await _put_tiers(client, token, ["zhipu", "copilot"])  # anthropic 出链
+        body = resp.json()
+        assert body["applied"] is True
+
+        bindings = {
+            b["session_key"]: b
+            for b in (await client.get("/api/session-vendor")).json()["bindings"]
+        }
+        # 纯模型绑定与组合绑定的 model 均经迁移保留
+        assert bindings["s-m"]["model"] == "claude-opus-4.6"
+        # anthropic 出链但模型仍在清单 → 降级为纯模型绑定，而非整条丢弃
+        assert bindings["s-vm"]["model"] == "claude-sonnet-4.6"
+        assert bindings["s-vm"]["vendors"] == []
+        # vendor 侧降级有对称提示（模型保留），不误报整条移除
+        assert any(
+            "vendor 绑定已移除（模型覆盖保留）" in n for n in body["reset_runtime"]
+        )
+        assert not any("（如有）均不在新链路" in n for n in body["reset_runtime"])

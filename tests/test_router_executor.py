@@ -63,6 +63,7 @@ def _mock_vendor(name: str = "test", **caps_kwargs) -> BaseVendor:
     vendor = MagicMock(spec=BaseVendor)
     vendor.get_name.return_value = name
     vendor.map_model.return_value = name + "-model"
+    vendor.map_model_with_reason.return_value = (name + "-model", "pattern")
     caps = VendorCapabilities(**caps_kwargs)
     vendor.get_capabilities.return_value = caps
     vendor.get_compatibility_profile.return_value = MagicMock()
@@ -3340,15 +3341,26 @@ class TestSessionModelOverride:
         return exec_inst, vendor
 
     @pytest.mark.asyncio
-    async def test_override_rewrites_body_model(self):
-        """绑定后同会话请求体 model 被改写；原 dict 不被污染（shadow copy）."""
+    async def test_override_rewrites_body_model(self, caplog):
+        """绑定后同会话请求体 model 被改写；原 dict 不被污染（shadow copy）.
+
+        改写命中本身即证明 session_key 稳定（绑定按原始 body 派生的 key 命中）；
+        INFO 日志留存客户端原始模型名供审计。
+        """
         exec_inst, vendor = self._bound_executor("glm-5.3")
         body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-model"}}
-        resp = await exec_inst.execute_message(body, {})
+        with caplog.at_level("INFO"):
+            resp = await exec_inst.execute_message(body, {})
         assert resp.status_code == 200
         sent = vendor.send_message.call_args[0][0]
         assert sent["model"] == "glm-5.3"
         assert body["model"] == "claude-sonnet-4.6"
+        infos = [
+            r.message
+            for r in caplog.records
+            if "Session model override active" in r.message
+        ]
+        assert infos and "claude-sonnet-4.6" in infos[0] and "glm-5.3" in infos[0]
 
     @pytest.mark.asyncio
     async def test_override_same_model_no_rewrite(self):
@@ -3385,15 +3397,6 @@ class TestSessionModelOverride:
         chunks = [c async for c, _ in exec_inst.execute_stream(body, {})]
         assert chunks == [b"chunk"]
         assert captured["model"] == "glm-5.3"
-
-    @pytest.mark.asyncio
-    async def test_drift_warning_when_served_differs(self, caplog):
-        """served 模型偏离绑定模型时打 WARNING（failover / 映射 default 改写）."""
-        exec_inst, _vendor = self._bound_executor("glm-5.3")
-        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-model"}}
-        with caplog.at_level("WARNING"):
-            await exec_inst.execute_message(body, {})
-        assert any("Session model drift" in r.message for r in caplog.records)
 
     def test_title_auto_bind_skips_existing_runtime_binding(self):
         """已有运行时绑定（含 model override）时，标题自动绑定不得覆盖."""
@@ -3475,15 +3478,25 @@ class TestSessionModelOverride:
         vendor_b.send_message_stream.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_drift_warning_on_failover_takeover(self, caplog):
-        """绑定 tier 失败后其他 tier 接单：漂移 WARNING 含绑定与接单信息."""
+    async def test_drift_warning_when_served_differs_from_mapping(self, caplog):
+        """served 偏离接单 vendor 映射预期（上游换名）时 WARNING 含双方模型名."""
         resolver = SessionPolicyResolver()
         resolver.upsert("sess-drift", [], model="glm-5.3")
         vendor_a = _mock_vendor("zhipu")
-        vendor_a.map_model = MagicMock(side_effect=lambda m: m)  # identity
         vendor_a.send_message = AsyncMock(side_effect=TokenAcquireError("expired"))
         vendor_b = _mock_vendor("anthropic")
         vendor_b.map_model = MagicMock(side_effect=lambda m: "claude-opus-x")
+        vendor_b.map_model_with_reason = MagicMock(
+            return_value=("claude-opus-x", "pattern")
+        )
+        vendor_b.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b"{}",
+                usage=UsageInfo(input_tokens=10, output_tokens=5),
+                model_served="gemini-flash",  # ≠ 绑定名 ≠ 映射预期
+            )
+        )
         exec_inst = _executor(
             [_make_tier(vendor_a), _make_tier(vendor_b)],
             session_policy_resolver=resolver,
@@ -3496,8 +3509,50 @@ class TestSessionModelOverride:
         drifts = [
             r.message for r in caplog.records if "Session model drift" in r.message
         ]
-        assert drifts, "failover 接单偏离绑定模型时必须告警"
-        assert "glm-5.3" in drifts[0] and "anthropic" in drifts[0]
+        assert drifts, "served 偏离绑定与映射预期时必须告警"
+        assert "glm-5.3" in drifts[0] and "gemini-flash" in drifts[0]
+
+    @pytest.mark.asyncio
+    async def test_no_drift_warning_on_configured_equivalent_mapping(self, caplog):
+        """配置内等价映射（如 claude 档位 → glm 档位）属预期，不告警."""
+        resolver = SessionPolicyResolver()
+        resolver.upsert("sess-equiv", [], model="claude-opus-4.6")
+        vendor = _mock_vendor("zhipu")
+        vendor.map_model = MagicMock(side_effect=lambda m: "glm-5.2")
+        vendor.map_model_with_reason = MagicMock(return_value=("glm-5.2", "pattern"))
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b"{}",
+                usage=UsageInfo(input_tokens=10, output_tokens=5),
+                model_served="glm-5.2",
+            )
+        )
+        exec_inst = _executor([_make_tier(vendor)], session_policy_resolver=resolver)
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-equiv"}}
+        with caplog.at_level("WARNING"):
+            resp = await exec_inst.execute_message(body, {})
+        assert resp.status_code == 200
+        assert not any("Session model drift" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_drift_warning_on_default_fallback_rewrite(self, caplog):
+        """绑定名命中映射 default 回退被改写（缺 identity 规则）时 WARNING."""
+        resolver = SessionPolicyResolver()
+        resolver.upsert("sess-fb", [], model="glm-5.3")
+        vendor = _mock_vendor("zhipu")
+        vendor.map_model = MagicMock(side_effect=lambda m: "glm-5.1")  # default 目标
+        vendor.map_model_with_reason = MagicMock(return_value=("glm-5.1", "default"))
+        exec_inst = _executor([_make_tier(vendor)], session_policy_resolver=resolver)
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-fb"}}
+        with caplog.at_level("WARNING"):
+            resp = await exec_inst.execute_message(body, {})
+        assert resp.status_code == 200
+        drifts = [
+            r.message for r in caplog.records if "Session model drift" in r.message
+        ]
+        assert drifts, "default 回退改写绑定模型必须告警"
+        assert "identity mapping" in drifts[0]
 
     @pytest.mark.asyncio
     async def test_no_drift_warning_when_bound_model_served(self, caplog):
@@ -3506,6 +3561,7 @@ class TestSessionModelOverride:
         resolver.upsert("sess-exact", [], model="glm-5.3")
         vendor = _mock_vendor("zhipu")
         vendor.map_model = MagicMock(side_effect=lambda m: m)  # identity
+        vendor.map_model_with_reason = MagicMock(side_effect=lambda m: (m, "exact"))
         exec_inst = _executor([_make_tier(vendor)], session_policy_resolver=resolver)
         body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-exact"}}
         with caplog.at_level("WARNING"):

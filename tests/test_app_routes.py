@@ -1500,3 +1500,46 @@ def test_bind_vendors_not_a_list_rejected():
             )
             assert resp.status_code == 400, bad
             assert resp.json()["error"]["message"] == "vendors must be a list"
+
+
+def test_bind_model_after_vendor_binding_inherits_runtime_tiers():
+    """先绑 vendor 再仅绑模型（清单 entry 无 tiers）：继承原绑定，响应回显生效值."""
+    with _bindable_app() as client:
+        vendor = _first_vendor_name(client)
+        first = client.put(
+            "/api/session-vendor",
+            json={"session_key": "s-seq", "vendors": [vendor]},
+        )
+        assert first.status_code == 200
+        # 用无 tiers 的清单条目，使 vendors 解析为 []、真正触发 upsert 继承分支
+        second = client.put(
+            "/api/session-vendor",
+            json={"session_key": "s-seq", "model": "claude-opus-4.6"},
+        )
+        assert second.status_code == 200
+        data = second.json()
+        assert data["model"] == "claude-opus-4.6"
+        assert data["vendors"] == [vendor]  # 继承的运行时 tiers，而非请求空值
+        binding = next(
+            b
+            for b in client.get("/api/session-vendor").json()["bindings"]
+            if b["session_key"] == "s-seq"
+        )
+        assert binding["vendors"] == [vendor]
+        assert binding["model"] == "claude-opus-4.6"
+
+
+def test_dashboard_marks_vendor_only_binding_on_default_option():
+    """vendor-only 绑定（无模型覆盖）在 Model Bind 列以 Default (vendor: …) 标注可见."""
+    with _bindable_app() as client:
+        vendor = _first_vendor_name(client)
+        assert (
+            client.put(
+                "/api/session-vendor",
+                json={"session_key": "s-vonly", "vendors": [vendor]},
+            ).status_code
+            == 200
+        )
+        html = client.get("/dashboard").text
+        assert "var vendorOnly" in html
+        assert "Default (vendor: ' + vendorOnly + ')'" in html

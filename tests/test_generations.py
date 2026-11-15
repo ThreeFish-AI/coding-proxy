@@ -550,3 +550,43 @@ async def test_startup_failed_message_has_no_exception_text(caplog):
         "message": "RuntimeError during startup",
     }
     assert PLANTED not in caplog.text
+
+
+def test_migrate_bindings_counts_double_invalidation_once():
+    """双侧失效（vendor 出链 + 模型出清单）只计整条丢弃，不误报模型降级保留."""
+    from unittest.mock import MagicMock
+
+    from coding.proxy.routing.session_policy import SessionPolicyResolver
+    from coding.proxy.server import generations as g
+
+    resolver = SessionPolicyResolver()
+    router = MagicMock()
+    router.get_vendor_names.return_value = ["zhipu"]
+    router.get_bindable_models.return_value = [
+        {"label": "Keep", "model": "keep-me", "tiers": []}
+    ]
+    router._executor._policy_resolver = resolver
+    app = MagicMock()
+    app.state.router = router
+
+    bindings = {
+        "s-both": (("anthropic",), "claude-opus-4.6"),  # 双侧失效 → 整条丢弃
+        "s-vm": (
+            ("zhipu",),
+            "claude-opus-4.6",
+        ),  # vendor 存活、模型失效 → 降级 vendor-only
+        "s-vd": (("anthropic",), "keep-me"),  # vendor 失效、模型存活 → 降级纯模型
+        "s-model": ((), "keep-me"),  # 纯模型且仍有效 → 保留
+    }
+    dropped, model_dropped, vendor_dropped = g._migrate_bindings(bindings, app)
+    assert dropped == 1  # 仅 s-both
+    assert model_dropped == 1  # 仅 s-vm 降级计数；s-both 不重复计入
+    assert vendor_dropped == 1  # 仅 s-vd；vendor-only 整条丢弃的 s-both 不计
+    remaining = {b["session_key"]: b for b in resolver.list_runtime_bindings()}
+    assert set(remaining) == {"s-vm", "s-vd", "s-model"}
+    assert remaining["s-vm"]["vendors"] == ["zhipu"]
+    assert remaining["s-vm"]["model"] is None
+    assert remaining["s-vd"]["vendors"] == []
+    assert remaining["s-vd"]["model"] == "keep-me"
+    assert remaining["s-model"]["vendors"] == []
+    assert remaining["s-model"]["model"] == "keep-me"

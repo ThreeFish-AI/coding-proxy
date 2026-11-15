@@ -650,7 +650,7 @@ _DOM_HARNESS = textwrap.dedent(
       const migration = root.querySelectorAll('.cfg-row').filter(r => r.getAttribute('data-path') === null);
       assert.strictEqual(migration.length, 5);
 
-      // 3) Sessions 溢出单元格经 truncTitle 补 tooltip；Vendor Bind 单元格除外
+      // 3) Sessions 溢出单元格经 truncTitle 补 tooltip；Model Bind 单元格除外
       const table = doc.body.appendChild(new Node('table')); table.className = 'session-table';
       const tr = table.appendChild(new Node('tr')); tr.setAttribute('data-row', '');
       const td = tr.appendChild(new Node('td')); td.textContent = '1,234,567';
@@ -808,3 +808,19 @@ _DOM_HARNESS = textwrap.dedent(
 @pytest.mark.skipif(_NODE is None, reason="node 不可用")
 def test_config_js_rendering_under_node(tmp_path: Path):
     _run_node(tmp_path, _DOM_HARNESS)
+
+
+def test_session_policies_section_renders_model_fields():
+    """Config 页 session_policies 节渲染 bindable_models 清单与 policies 的 model 字段."""
+    src = _CONFIG_JS.read_text(encoding="utf-8")
+    # bindable_models listBlock：Label/Model/Tiers 三列 + 三字段编辑
+    assert "specPath: 'session_policies.bindable_models'" in src
+    assert (
+        "itemFields(parts.concat(['bindable_models']), i, ['label', 'model', 'tiers'])"
+        in src
+    )
+    # policies 条目编辑器含 model 覆盖字段
+    assert (
+        "itemFields(parts.concat(['policies']), i, "
+        "['name', 'match.session_keys', 'tiers', 'model'])" in src
+    )

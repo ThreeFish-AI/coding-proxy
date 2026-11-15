@@ -823,3 +823,28 @@ def test_diagnostics_includes_discovery_status():
     vendor._project_id = "manual-p"
     diag = vendor.get_diagnostics()
     assert diag["project_id_source"] == "configured"
+
+
+def test_map_model_with_reason_distinguishes_rule_hit_from_default():
+    """显式规则命中且 target 恰为 model_endpoint 时 reason 为 pattern，不误判 default."""
+    endpoint = AntigravityConfig().model_endpoint
+    assert endpoint  # default endpoint 名存在
+    mapper = ModelMapper(
+        [
+            ModelMappingRule(
+                pattern="claude-opus-*",
+                target=endpoint,  # 规则 target 恰为 endpoint —— 旧的值比较会误判
+                vendors=["antigravity"],
+            )
+        ]
+    )
+    vendor = AntigravityVendor(AntigravityConfig(), FailoverConfig(), mapper)
+
+    resolved, reason = vendor.map_model_with_reason("claude-opus-4-20250514")
+    assert resolved == endpoint
+    assert reason == "pattern"  # 而非 "config_default_model_endpoint"
+
+    # 未命中任何规则 → 真实 default 回退（default 为去前缀的 endpoint 模型名）
+    resolved2, reason2 = vendor.map_model_with_reason("totally-unknown-model")
+    assert resolved2 != "totally-unknown-model"
+    assert reason2 == "default"
