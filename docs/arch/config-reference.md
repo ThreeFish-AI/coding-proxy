@@ -310,6 +310,7 @@ tiers: [anthropic, copilot, zhipu]  # 显式优先级（可选）
 | `base_url`            | str  | 见下方内置默认      | 上游 API base_url（纯域名前缀，不含 `/v1`）                           |
 | `timeout_ms`          | int  | `300000`            | 单次请求超时（毫秒），LLM 大模型建议 ≥ 120s                           |
 | `connect_timeout_ms`  | int  | `15000`             | 连接建立超时（毫秒）                                                  |
+| `inject_include_usage` | bool | `false`            | （仅 openai 生效）为 chat/completions 流式请求注入 `stream_options.include_usage=true`，使上游末尾回发 usage chunk（否则流式 tokens 记 0）；注入会改写请求体，默认关闭保持严格字节级透传 |
 
 ### 10.3 内置默认 `base_url`
 
@@ -336,3 +337,29 @@ env var（运行时） > YAML 显式字段（部署时） > Pydantic 内置默�
 空串或纯空白视作未设置，保留上一层值（避免"未设置 env → 空串覆盖内置默认"陷阱）。
 
 > `ANTHROPIC_BASE_URL`（client → proxy，Claude Code 使用）与 `NATIVE_ANTHROPIC_BASE_URL`（proxy → upstream，原生透传使用）方向正交，勿混用。参见 [用户指引 § 4.7 native_api](../user-guide.md#47-native_api--原生-api-透传)。
+
+## 11. antigravity_gateway — Antigravity 客户端透传配置
+
+> **定义位置**：[`antigravity_gateway/config.py`](../../src/coding/proxy/antigravity_gateway/config.py)
+>
+> **端点**：`/api/antigravity/**` catch-all 透传通道。Antigravity IDE（默认 Gemini agent）经 `CLOUD_CODE_URL` 环境变量将模型流指向本 proxy，proxy 字节级透传至 Google Cloud Code `v1internal` 后端并旁路解析信封完成用量统计（`client_category='antigravity'`，vendor 标签 `antigravity-gateway`）。认证由 IDE 自带，proxy 不保管凭据。
+
+### 11.1 AntigravityGatewayConfig 字段
+
+| 字段                 | 类型 | 默认值                                          | 说明                                                                  |
+| -------------------- | ---- | ----------------------------------------------- | --------------------------------------------------------------------- |
+| `enabled`            | bool | `true`                                          | 是否启用 `/api/antigravity/**` 端点（默认启用，开箱即用）            |
+| `base_url`           | str  | `https://daily-cloudcode-pa.googleapis.com`     | Antigravity 后端（Cloud Code v1internal）base_url                    |
+| `timeout_ms`         | int  | `300000`                                        | 单次请求超时（毫秒）                                                  |
+| `connect_timeout_ms` | int  | `15000`                                         | 连接建立超时（毫秒）                                                  |
+
+### 11.2 接入方式与上游覆写
+
+```bash
+# Antigravity 侧（未文档化 env hook，桌面端与 agy CLI 均生效）：
+export CLOUD_CODE_URL="http://127.0.0.1:3392/api/antigravity"
+```
+
+上游域名随 Antigravity 版本漂移过（`cloudcode-pa` → `daily-cloudcode-pa`）。若 IDE 报 404/400，可设环境变量 `ANTIGRAVITY_GATEWAY_BASE_URL` 切换（优先级 env > YAML > 内置默认，空串视作未设置）。
+
+> 完整调研背景（三条接入通道裁决矩阵）参见 [Antigravity 客户端接入可行性调研](../research/antigravity-client-feasibility.md)。
