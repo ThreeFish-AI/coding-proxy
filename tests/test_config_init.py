@@ -1,156 +1,96 @@
-"""配置自动初始化单元测试."""
+"""首次运行行为：不再复制默认配置到用户目录，路径默认值由 home 推导."""
 
+from __future__ import annotations
+
+import os
 from pathlib import Path
 
-from coding.proxy.config.loader import _ensure_user_config, load_config
+import pytest
 
-# ── A 组：_ensure_user_config 核心逻辑 ───────────────────────────
-
-
-class TestEnsureUserConfig:
-    """_ensure_user_config 幂等性与安全性测试."""
-
-    def test_creates_config_when_none_exists(self, tmp_path: Path, monkeypatch):
-        """无任何用户配置时，自动从 default 复制到 ~/.coding-proxy/config.yaml."""
-        home_dir = tmp_path / "home"
-        home_dir.mkdir()
-        monkeypatch.setenv("HOME", str(home_dir))
-
-        result = _ensure_user_config()
-
-        assert result is not None
-        expected_path = home_dir / ".coding-proxy" / "config.yaml"
-        assert result == expected_path
-        assert expected_path.exists()
-        # 验证内容非空（确实是从 default 复制的）
-        content = expected_path.read_text()
-        assert "server:" in content
-        assert "vendors:" in content
-
-    def test_returns_cwd_config_if_exists(self, tmp_path: Path, monkeypatch):
-        """CWD 下已有 config.yaml 时直接返回，不创建新文件."""
-        cwd_cfg = tmp_path / "config.yaml"
-        cwd_cfg.write_text("server:\n  port: 7777\n")
-        monkeypatch.chdir(tmp_path)
-
-        home_dir = tmp_path / "home"
-        home_dir.mkdir()
-        monkeypatch.setenv("HOME", str(home_dir))
-
-        result = _ensure_user_config()
-
-        # 返回的是相对路径 "config.yaml"，解析后应与 cwd_cfg 一致
-        assert result.resolve() == cwd_cfg.resolve()
-        # 不应在 home 下创建
-        assert not (home_dir / ".coding-proxy" / "config.yaml").exists()
-
-    def test_returns_home_config_if_exists(self, tmp_path: Path, monkeypatch):
-        """~/.coding-proxy/config.yaml 已存在时直接返回，不覆盖."""
-        home_dir = tmp_path / "home"
-        cp_dir = home_dir / ".coding-proxy"
-        cp_dir.mkdir(parents=True)
-        existing = cp_dir / "config.yaml"
-        existing.write_text("server:\n  port: 8888\n")
-        monkeypatch.setenv("HOME", str(home_dir))
-        empty_dir = tmp_path / "empty"
-        empty_dir.mkdir()
-        monkeypatch.chdir(empty_dir)
-
-        result = _ensure_user_config()
-
-        assert result == existing
-        # 不应覆盖现有内容
-        assert existing.read_text() == "server:\n  port: 8888\n"
-
-    def test_idempotent_multiple_calls(self, tmp_path: Path, monkeypatch):
-        """多次调用不产生副作用（幂等性）."""
-        home_dir = tmp_path / "home"
-        home_dir.mkdir()
-        monkeypatch.setenv("HOME", str(home_dir))
-        monkeypatch.chdir(tmp_path)
-
-        first = _ensure_user_config()
-        second = _ensure_user_config()
-
-        assert first == second
-        assert first.exists()
-
-    def test_creates_parent_directory(self, tmp_path: Path, monkeypatch):
-        """~/.coding-proxy/ 目录不存在时自动创建."""
-        home_dir = tmp_path / "home"
-        home_dir.mkdir()  # 只创建 home，不创建 .coding-proxy
-        monkeypatch.setenv("HOME", str(home_dir))
-        monkeypatch.chdir(tmp_path)
-
-        result = _ensure_user_config()
-
-        assert result is not None
-        assert result.parent.exists()
-        assert result.parent.is_dir()
-
-    def test_graceful_when_default_missing(self, tmp_path: Path, monkeypatch):
-        """config.default.yaml 缺失时返回 None，不崩溃."""
-        home_dir = tmp_path / "home"
-        home_dir.mkdir()
-        monkeypatch.setenv("HOME", str(home_dir))
-        monkeypatch.chdir(tmp_path)
-
-        import coding.proxy.config.loader as loader_module
-
-        monkeypatch.setattr(loader_module, "_get_default_config_path", lambda: None)
-
-        result = _ensure_user_config()
-
-        assert result is None
-        # 不应创建任何文件
-        assert not (home_dir / ".coding-proxy").exists()
+import coding.proxy.config.loader as loader_module
+from coding.proxy.auth.store import TokenStoreManager
+from coding.proxy.config.home import (
+    ensure_home,
+    legacy_home_yaml_path,
+    proxy_home,
+)
+from coding.proxy.config.loader import load_config
+from coding.proxy.config.resolver import resolve_config
+from coding.proxy.config.schema import ProxyConfig
 
 
-# ── B 组：与 load_config 的集成测试 ─────────────────────────────
+class TestNoFirstRunCopy:
+    def test_ensure_user_config_removed(self):
+        assert not hasattr(loader_module, "_ensure_user_config")
 
-
-class TestAutoInitIntegration:
-    """验证 _ensure_user_config 与 load_config 的集成行为."""
-
-    def test_load_config_auto_creates_home_config(self, tmp_path: Path, monkeypatch):
-        """无配置时 load_config 自动创建 ~/.coding-proxy/config.yaml."""
-        home_dir = tmp_path / "home"
-        home_dir.mkdir()
-        monkeypatch.setenv("HOME", str(home_dir))
-        empty_dir = tmp_path / "empty"
-        empty_dir.mkdir()
-        monkeypatch.chdir(empty_dir)
-
+    def test_load_config_does_not_create_home_yaml(self):
         cfg = load_config()
-
         assert cfg.server.port == 3392
-        created = home_dir / ".coding-proxy" / "config.yaml"
-        assert created.exists()
+        assert not legacy_home_yaml_path().exists()
+        assert not proxy_home().exists()
 
-    def test_load_config_with_explicit_path_no_auto_init(self, tmp_path: Path):
-        """指定 -c 路径时不会触发自动初始化."""
-        home_dir = tmp_path / "home"
-        home_dir.mkdir()
+    def test_resolve_config_has_no_side_effects(self):
+        resolved = resolve_config()
+        assert resolved.mode == "defaults"
+        assert resolved.config == load_config(None)
+        assert not proxy_home().exists()
 
+    def test_explicit_path_is_never_rewritten(self, tmp_path: Path):
         cfg_file = tmp_path / "my-config.yaml"
         cfg_file.write_text("server:\n  port: 9999\n")
-
+        before = cfg_file.read_bytes()
         cfg = load_config(cfg_file)
-
         assert cfg.server.port == 9999
-        assert not (home_dir / ".coding-proxy").exists()
+        assert cfg_file.read_bytes() == before
+        assert not proxy_home().exists()
 
-    def test_load_config_cwd_priority_over_auto_init(self, tmp_path: Path, monkeypatch):
-        """CWD 有 config.yaml 时优先使用，不触发 home 初始化."""
-        cwd_cfg = tmp_path / "config.yaml"
-        cwd_cfg.write_text("server:\n  port: 7777\n")
-        monkeypatch.chdir(tmp_path)
+    def test_cwd_config_still_read_by_legacy_loader(self):
+        Path("config.yaml").write_text("server:\n  port: 7777\n")
+        assert load_config().server.port == 7777
+        assert not legacy_home_yaml_path().exists()
 
-        home_dir = tmp_path / "home"
-        home_dir.mkdir()
-        monkeypatch.setenv("HOME", str(home_dir))
 
-        cfg = load_config()
+class TestHomeDerivedPaths:
+    def test_paths_follow_coding_proxy_home(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("CODING_PROXY_HOME", str(tmp_path / "profile"))
+        cfg = ProxyConfig()
+        home = (tmp_path / "profile").resolve()
+        assert cfg.db_path == home / "usage.db"
+        assert cfg.compat_state_path == home / "compat.db"
+        assert Path(cfg.auth.token_store_path) == home / "tokens.json"
+        assert TokenStoreManager()._path == home / "tokens.json"
 
-        assert cfg.server.port == 7777
-        assert not (home_dir / ".coding-proxy" / "config.yaml").exists()
+    def test_unset_home_env_matches_old_expanded_literals(self, monkeypatch):
+        monkeypatch.delenv("CODING_PROXY_HOME", raising=False)
+        cfg = ProxyConfig()
+        assert cfg.database.path == str(Path("~/.coding-proxy/usage.db").expanduser())
+        assert cfg.database.compat_state_path == str(
+            Path("~/.coding-proxy/compat.db").expanduser()
+        )
+        assert cfg.auth.token_store_path == str(
+            Path("~/.coding-proxy/tokens.json").expanduser()
+        )
+
+    def test_defaults_are_evaluated_per_instance(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("CODING_PROXY_HOME", str(tmp_path / "a"))
+        first = ProxyConfig()
+        monkeypatch.setenv("CODING_PROXY_HOME", str(tmp_path / "b"))
+        second = ProxyConfig()
+        assert first.db_path.parent.name == "a"
+        assert second.db_path.parent.name == "b"
+
+    def test_default_yaml_has_no_home_literals(self):
+        path = loader_module._get_default_config_path()
+        assert path is not None
+        text = path.read_text(encoding="utf-8")
+        assert 'path: "~/.coding-proxy' not in text
+        assert 'token_store_path: "~/.coding-proxy' not in text
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX 权限语义")
+    def test_ensure_home_is_private(self):
+        home = ensure_home()
+        assert home == proxy_home()
+        assert home.stat().st_mode & 0o777 == 0o700
+        home.chmod(0o755)
+        ensure_home()
+        assert home.stat().st_mode & 0o777 == 0o700

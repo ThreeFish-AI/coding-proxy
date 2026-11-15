@@ -28,6 +28,8 @@ def test_load_from_cwd_config(tmp_path: Path, monkeypatch):
 
 def test_fallback_to_home_config(tmp_path: Path, monkeypatch):
     """项目根目录无 config.yaml 时回退到 ~/.coding-proxy/config.yaml."""
+    # 未设置 CODING_PROXY_HOME 时 home 由 HOME 推导
+    monkeypatch.delenv("CODING_PROXY_HOME", raising=False)
     home_dir = tmp_path / "home"
     cp_dir = home_dir / ".coding-proxy"
     cp_dir.mkdir(parents=True)

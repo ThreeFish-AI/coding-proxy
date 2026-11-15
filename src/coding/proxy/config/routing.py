@@ -6,7 +6,14 @@ import logging
 import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, Field, PrivateAttr, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    model_validator,
+)
 
 from .resiliency import CircuitBreakerConfig, QuotaGuardConfig, RetryConfig
 from .vendors import ZhipuConcurrencyConfig
@@ -216,11 +223,13 @@ class VendorConfig(BaseModel):
         当 ``tiers`` 未配置时，vendors 列表顺序即为优先级；
         配置了 ``tiers`` 后，优先级由其显式指定。
 
-    无 circuit_breaker 的 Vendor 为终端层（不触发故障转移）。
+    无 circuit_breaker 的 Vendor 不启用熔断；故障转移只由其在链路中的位置决定。
 
     各供应商类型的专属字段已通过 ``Field(description=...)`` 标注适用范围，
     非当前 vendor 类型的专属字段在验证阶段会发出 warning 日志。
     """
+
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     vendor: VendorType
 
@@ -280,7 +289,7 @@ class VendorConfig(BaseModel):
     # ── 弹性配置 ──────────────────────────────────────────────
     circuit_breaker: CircuitBreakerConfig | None = Field(
         default=None,
-        description="熔断器配置；None 表示终端层（不触发故障转移）",
+        description="熔断器配置；None 表示不启用熔断（是否兜底由 tiers 中的位置决定）",
     )
     retry: RetryConfig = Field(default_factory=RetryConfig)
     quota_guard: QuotaGuardConfig = Field(default_factory=QuotaGuardConfig)
@@ -289,7 +298,7 @@ class VendorConfig(BaseModel):
     # ── Zhipu 专属：每模型并发限制 ───────────────────────────
     concurrency: ZhipuConcurrencyConfig | None = Field(
         default=None,
-        description="[zhipu] 每模型并发限制；None 表示不限并发",
+        description="[zhipu] 每模型并发限制；None 时使用内置默认（default=3）",
     )
 
     @model_validator(mode="after")

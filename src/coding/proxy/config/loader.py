@@ -1,4 +1,9 @@
-"""YAML 配置加载 + 环境变量展开 + 默认配置深度合并."""
+"""旧版 YAML 配置加载（legacy 参考实现）+ 环境变量展开 + 默认配置深度合并.
+
+运行时配置源已迁移至 ``$CODING_PROXY_HOME/config.db``（见 :mod:`.resolver`）。
+本模块保留为：一次性导入的等价基准（:mod:`.importer`）、迁移前离线命令的只读兼容读取。
+不再在首次运行时复制默认配置到用户目录。
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,7 @@ from pathlib import Path
 
 import yaml
 
+from .home import legacy_home_yaml_path
 from .schema import ProxyConfig
 
 logger = logging.getLogger(__name__)
@@ -117,40 +123,11 @@ def _get_default_config_path() -> Path | None:
     return None
 
 
-def _ensure_user_config() -> Path | None:
-    """确保 ~/.coding-proxy/config.yaml 存在（不存在则从 default 复制）.
-
-    首次运行时自动将 config.default.yaml 拷贝到用户目录，
-    作为用户可编辑的配置基础。幂等、非破坏性、优雅降级。
-
-    Returns:
-        创建/已存在的配置文件路径，失败时返回 None。
-    """
-    import shutil
-
-    _home_config = Path("~/.coding-proxy/config.yaml").expanduser()
-    _cwd_config = Path("config.yaml")
-
-    # 已有配置 → 直接返回（不覆盖）
-    if _cwd_config.exists():
-        return _cwd_config
-    if _home_config.exists():
-        return _home_config
-
-    # 无配置 → 从 default 复制
-    default_path = _get_default_config_path()
-    if default_path is None:
-        logger.warning("无法定位 config.default.yaml，跳过用户配置初始化。")
-        return None
-
-    try:
-        _home_config.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(default_path, _home_config)
-        logger.info("已初始化用户配置文件: %s", _home_config)
-        return _home_config
-    except OSError as exc:
-        logger.warning("无法创建用户配置文件 %s: %s", _home_config, exc)
-        return None
+def read_user_raw(path: Path) -> dict:
+    """读取用户 YAML 原始字典（文件为空时返回 ``{}``）."""
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    return data or {}
 
 
 def _log_merge_diagnostics(defaults: dict, user_raw: dict, merged: dict) -> None:
@@ -179,30 +156,22 @@ def load_config(path: Path | None = None) -> ProxyConfig:
 
     加载优先级（低→高）：
     1. config.default.yaml 内置完整默认值
-    2. 用户配置文件（CWD/config.yaml > ~/.coding-proxy/config.yaml > -c 指定路径）
+    2. 用户配置文件：显式 ``path``（-c）直接替换搜索链；
+       否则依次查找 ./config.yaml、$CODING_PROXY_HOME/config.yaml
 
     环境变量展开（${VAR}）在深度合并之后执行，确保用户可通过环境变量覆盖任意字段。
     """
-    # ── 第 0 步：首次运行自动初始化用户配置文件 ─────────────
-    # 仅在未指定显式路径时触发（用户通过 -c 显式指定时不干预）
-    if path is None:
-        _ensure_user_config()
-
     # ── 第 1 步：确定并加载用户配置 ─────────────────────────────
     user_raw: dict = {}
     if path is None:
-        candidates = [
-            Path("config.yaml"),
-            Path("~/.coding-proxy/config.yaml").expanduser(),
-        ]
+        candidates = [Path("config.yaml"), legacy_home_yaml_path()]
         for candidate in candidates:
             if candidate.exists():
                 path = candidate
                 break
 
     if path and path.exists():
-        with open(path) as f:
-            user_raw = yaml.safe_load(f) or {}
+        user_raw = read_user_raw(path)
 
     # ── 第 2 步：加载默认配置 ────────────────────────────────
     default_path = _get_default_config_path()

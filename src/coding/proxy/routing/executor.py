@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import time
+import traceback
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
@@ -57,6 +58,22 @@ from ..compat.canonical import (
 from ..model.compat import CanonicalMessagePart, CanonicalRequest
 
 logger = logging.getLogger(__name__)
+
+
+def _log_unexpected(scope: str, tier_name: str, exc: BaseException) -> None:
+    """记录未预期异常：类型 + 堆栈帧，不含 ``str(exc)``（I2）.
+
+    请求头构建失败等异常的消息体会携带密钥明文（如非法 header value 的
+    bytes repr），只记类型与调用栈即可定位，不落异常消息。
+    """
+    logger.error(
+        "Tier %s %s unexpected error: %s\n%s",
+        tier_name,
+        scope,
+        type(exc).__name__,
+        "".join(traceback.format_tb(exc.__traceback__)),
+    )
+
 
 _SESSION_TITLE_MAX_LEN = 600
 # 回退标题截取长度 — 工具结果等非用户直接输入的摘要上限。
@@ -1169,13 +1186,7 @@ class _RouteExecutor:
                         )
                         raise
             except Exception as exc:
-                logger.error(
-                    "Tier %s stream unexpected error: %s: %s",
-                    tier.name,
-                    type(exc).__name__,
-                    exc,
-                    exc_info=True,
-                )
+                _log_unexpected("stream", tier.name, exc)
                 tier.record_failure()
                 failed_tier_name = tier.name
                 if not is_last:
@@ -1389,13 +1400,7 @@ class _RouteExecutor:
                     raise
                 continue
             except Exception as exc:
-                logger.error(
-                    "Tier %s message unexpected error: %s: %s",
-                    tier.name,
-                    type(exc).__name__,
-                    exc,
-                    exc_info=True,
-                )
+                _log_unexpected("message", tier.name, exc)
                 tier.record_failure()
                 failed_tier_name = tier.name
                 if not is_last:

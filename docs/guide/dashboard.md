@@ -57,9 +57,20 @@ http://127.0.0.1:3392/dashboard
 - **30 天**
 - **自定义天数**（1~90 天）
 
+### Config 页（在线配置）
+
+Config 页签在线编辑配置存储（`~/.coding-proxy/config.db`）：Vendors（9 类供应商，含熔断 / 配额 / 并发等弹性参数与密钥三态控件）、Tiers、Failover、Model Mapping、Pricing（$ / ¥ 双币种）、Native API、Session Policies，以及 System（bootstrap 字段只读展示 + 迁移状态）。
+
+- **解锁**：首次进入粘贴 admin token（`coding-proxy config token` 输出），仅存于本浏览器；管理 API 只认 `X-Coding-Proxy-Admin` 请求头。
+- **保存**：单一 Save 汇总「Save N fields in K sections」，确认框列出将被重置的运行时状态与因目标地址变化被清空的密钥；保存后**进程内热切换生效，无需重启**。
+- **冲突与校验**：并发修改返回 409（只重载冲突 section）；校验错误定位到具体字段行内展示，且从不回显输入值。
+- **密钥**：只写不读，展示 Stored / Env / Empty 状态与尾 4 位（长度 ≥ 16 时）；vendor 目标地址变化时自动清空关联密钥并在确认框提示。
+
+![Config 页 — Vendors 编辑与密钥三态控件](../../assets/dashboard/config-tab.png)
+
 ### 自动刷新
 
-看板每 **10 分钟**自动刷新数据。也可点击右上角「刷新」按钮手动刷新。
+看板每 **10 分钟**自动刷新数据。也可点击右上角「刷新」按钮手动刷新。Config 页不参与定时刷新（避免覆盖编辑中的表单）。
 
 ### 图表交互
 
@@ -69,7 +80,7 @@ http://127.0.0.1:3392/dashboard
 
 ## 数据源
 
-看板数据来自以下 API 端点，详见 [API 参考 — Dashboard 端点](./api-reference.md#11-dashboard-端点)：
+看板数据来自以下 API 端点，详见 [API 参考 — Dashboard 端点](./api-reference.md#12-dashboard-端点)：
 
 | 端点                          | 说明                 |
 | ----------------------------- | -------------------- |

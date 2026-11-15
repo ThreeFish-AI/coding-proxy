@@ -254,7 +254,7 @@ flowchart TD
     style Phase2 fill:#2e4053,color:#fff
 ```
 
-**凭证合并优先级**：Token Store（持久化） > config.yaml（显式配置）。确保用户通过 CLI 认证命令获取的凭证优先于配置文件中的硬编码值。
+**凭证合并优先级**：Token Store（持久化） > 配置存储中的显式配置（config.db）。确保用户通过 CLI 认证命令获取的凭证优先于配置中的硬编码值。
 
 ---
 
