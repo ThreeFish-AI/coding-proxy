@@ -2755,6 +2755,38 @@ class TestExtractInjectedPromptTitle:
         req = self._build_request([{"role": "user", "content": raw}])
         assert _extract_session_title(req) == '[记忆压缩] Agent "t" finished'
 
+    def test_unclosed_notification_strips_id_content_and_summary_tags(self):
+        """未闭合通知块兜底：id 标签连同内文剥除、summary 剥壳保内文（F4）."""
+        raw = (
+            "You are a memory relevance compressor utility. User query: "
+            '<task-notification> <task-id>x</task-id> <summary>Agent "t" finished'
+            "</summary> 尾部残余"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == '[记忆压缩] Agent "t" finished 尾部残余'
+
+    def test_legacy_entities_not_decoded_without_escaped_notification(self):
+        """无转义通知标记的载荷不做全量解码,legacy 无分号实体保持原样（F5）;
+        带分号安全实体仍定向解码保持可读。"""
+        raw = (
+            "You are a memory relevance compressor utility. User query: "
+            "对比 HTML 中 &not 与 &copy 无分号写法"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert (
+            _extract_session_title(req)
+            == "[记忆压缩] 对比 HTML 中 &not 与 &copy 无分号写法"
+        )
+        raw2 = (
+            "You are a memory relevance compressor utility. User query: "
+            "Adversarially review the YAML-&gt;Dashboard migration"
+        )
+        req2 = self._build_request([{"role": "user", "content": raw2}])
+        assert (
+            _extract_session_title(req2)
+            == "[记忆压缩] Adversarially review the YAML->Dashboard migration"
+        )
+
     def test_summary_extraction_scoped_to_notification_block(self):
         """载荷正文自带的 <summary> 字面量不触发凝缩（须在通知块内）."""
         raw = (

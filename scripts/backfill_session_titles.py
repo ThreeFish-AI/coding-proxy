@@ -29,13 +29,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 # 复用请求路径的标题推导逻辑（单一事实源）
+from coding.proxy.config.importer import load_offline_config
 from coding.proxy.config.loader import load_config
 from coding.proxy.routing.executor import _derive_title_from_user_texts
 
 PROJECTS_DIR = Path(
     os.path.expanduser(os.environ.get("BACKFILL_CC_PROJECTS", "~/.claude/projects"))
 )
-DEFAULT_CONFIG = Path(os.path.expanduser("~/.coding-proxy/config.yaml"))
 MAX_USER_TEXTS_PER_SESSION = 30
 
 
@@ -50,13 +50,19 @@ def build_transcript_index(projects_dir: Path) -> dict[str, Path]:
     return index
 
 
-def _is_local_command_record(text: str) -> bool:
-    """CC 本地 slash 命令的三行记录（caveat / command-name / stdout）中，
-    只有 caveat 行带 isMeta 标记；command-name 与 stdout 行需在此识别丢弃
-    （运行时请求路径永远看不到这些行，回填侧必须对齐该契约）。"""
+def _is_local_command_record(text: str, *, prev_is_meta_caveat: bool) -> bool:
+    """识别 CC 本地 slash 命令记录（运行时请求路径不可见的行）。
+
+    本地三行记录（caveat / command-name / stdout）中只有 caveat 行带 isMeta
+    标记；实测转录中所有本地 command-name/command-message 行的前驱条目均为
+    isMeta 的 caveat 行，以此作判别特征。API-sent 的 slash 命令展开无此前驱，
+    须放行给 ``_sanitize_user_text`` 合成「命令 + 参数」标题，不能误丢。"""
     stripped = text.lstrip()
-    return stripped.startswith("<command-name>") or stripped.startswith(
-        "<local-command"
+    if stripped.startswith("<local-command"):
+        return True
+    return prev_is_meta_caveat and (
+        stripped.startswith("<command-name>")
+        or stripped.startswith("<command-message>")
     )
 
 
@@ -64,6 +70,7 @@ def load_user_texts(path: Path) -> list[str]:
     """依时间序抽取真实用户输入（排除 isMeta / sidechain / 本地命令记录 /
     非 text 块）；上限按有效候选计数而非原始行数。"""
     texts: list[str] = []
+    prev_is_meta_caveat = False
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -73,37 +80,55 @@ def load_user_texts(path: Path) -> list[str]:
                     entry = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                if (
-                    entry.get("type") != "user"
-                    or entry.get("isMeta")
-                    or entry.get("isSidechain")
-                ):
-                    continue
-                content = (entry.get("message") or {}).get("content")
-                candidates: list[str] = []
-                if isinstance(content, str):
-                    candidates = [content]
-                elif isinstance(content, list):
-                    candidates = [
-                        block.get("text", "")
-                        for block in content
-                        if isinstance(block, dict) and block.get("type") == "text"
-                    ]
-                texts.extend(
-                    t
-                    for t in candidates
-                    if t.strip() and not _is_local_command_record(t)
-                )
+                if entry.get("type") == "user":
+                    content = (entry.get("message") or {}).get("content")
+                    if entry.get("isMeta"):
+                        serialized = (
+                            content
+                            if isinstance(content, str)
+                            else json.dumps(content, ensure_ascii=False)
+                        )
+                        prev_is_meta_caveat = "local-command-caveat" in serialized
+                        continue
+                    if entry.get("isSidechain"):
+                        prev_is_meta_caveat = False
+                        continue
+                    candidates: list[str] = []
+                    if isinstance(content, str):
+                        candidates = [content]
+                    elif isinstance(content, list):
+                        candidates = [
+                            block.get("text", "")
+                            for block in content
+                            if isinstance(block, dict) and block.get("type") == "text"
+                        ]
+                    texts.extend(
+                        t
+                        for t in candidates
+                        if t.strip()
+                        and not _is_local_command_record(
+                            t, prev_is_meta_caveat=prev_is_meta_caveat
+                        )
+                    )
+                prev_is_meta_caveat = False
     except OSError as exc:
         print(f"  ! 读取转录失败 {path}: {exc}", file=sys.stderr)
     return texts
 
 
 def parse_session_id(session_key: str) -> str:
+    """从 session_key 解析 CC session_id。
+
+    JSON dict 形态取 ``session_id`` 字段；JSON 标量（如纯数字 user_id）与
+    非 JSON 裸 UUID 形态原样返回——裸 UUID 本身即转录文件 stem，可直接命中
+    索引（对齐 dashboard 前端 parseSessionKey 的 catch 回退契约）。"""
     try:
-        return json.loads(session_key).get("session_id", "")
+        obj = json.loads(session_key)
     except (json.JSONDecodeError, ValueError):
-        return ""
+        return session_key
+    if isinstance(obj, dict):
+        return obj.get("session_id") or ""
+    return session_key
 
 
 def backup_database(db_path: Path) -> Path:
@@ -128,15 +153,16 @@ def main() -> int:
     parser.add_argument("--projects", default=str(PROJECTS_DIR), help="CC 转录根目录")
     parser.add_argument(
         "--config",
-        default=str(DEFAULT_CONFIG),
-        help="代理运行配置路径（读取 title_exempt_prefixes 与 title_vendor_bindings）",
+        default=None,
+        help="显式指定 legacy YAML 配置覆盖（默认与运行时代理同源：config.db 优先，"
+        "未迁移实例回退 YAML，即 load_offline_config 语义）",
     )
     parser.add_argument("--apply", action="store_true", help="落库（默认干跑）")
     parser.add_argument(
         "--protect-prefix",
         action="append",
         default=[],
-        help="额外保护前缀（现有标题以此开头则跳过；config 的绑定前缀已默认并入）",
+        help="额外保护前缀（现有标题以此开头则跳过；配置的绑定前缀已默认并入）",
     )
     parser.add_argument("--sample", type=int, default=15, help="抽样 diff 展示条数")
     args = parser.parse_args()
@@ -148,19 +174,24 @@ def main() -> int:
 
     # 与请求路径同一配置语义：豁免前缀透传给推导器；绑定前缀默认并入保护集，
     # 防止改写参与 title_vendor_bindings 的现有标题（仪表盘「前缀=绑定意图」语义）。
+    # 配置源与离线命令（usage / auth）同源：load_offline_config 读 config.db
+    # （运行时权威源，Dashboard 热编辑即时生效），未迁移实例回退 legacy YAML。
     exempt_prefixes: list[str] = []
-    config_path = Path(args.config).expanduser()
-    if config_path.exists():
-        cfg = load_config(config_path)
-        exempt_prefixes = list(cfg.session_policies.title_exempt_prefixes)
-        protect = list(args.protect_prefix)
-        protect.extend(b.prefix for b in cfg.session_policies.title_vendor_bindings)
-        args.protect_prefix = protect
-        print(
-            f"配置 {config_path}: 豁免前缀 {exempt_prefixes}，保护前缀 {args.protect_prefix}"
-        )
+    if args.config:
+        cfg = load_config(Path(args.config).expanduser())
+        hint = None
     else:
-        print(f"配置不存在（{config_path}），豁免/保护前缀仅取命令行参数")
+        cfg, hint = load_offline_config(decrypt=False)
+        if hint:
+            print(f"配置提示: {hint}")
+    exempt_prefixes = list(cfg.session_policies.title_exempt_prefixes)
+    protect = list(args.protect_prefix)
+    protect.extend(b.prefix for b in cfg.session_policies.title_vendor_bindings)
+    args.protect_prefix = protect
+    print(
+        f"配置源: {'--config ' + args.config if args.config else 'config.db/YAML 离线解析'}"
+    )
+    print(f"豁免前缀 {exempt_prefixes}，保护前缀 {args.protect_prefix}")
 
     index = build_transcript_index(Path(args.projects).expanduser())
     print(f"转录索引: {len(index)} 个 session_id（{args.projects}）")

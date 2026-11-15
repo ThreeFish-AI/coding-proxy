@@ -238,9 +238,33 @@ _TASK_NOTIFICATION_BLOCK = re.compile(
 )
 # 未闭合的 <task-notification ...> 开标签兜底（块正则不生效时剥开头标签）。
 _NOTIFICATION_OPEN_TAG = re.compile(r"<task-notification\b[^>]*>", re.IGNORECASE)
+# 已知元数据标签：成对剥除时连同内文一起移除（id/路径/状态无扫读价值），
+# 避免剥壳留内文产生孤立 id 残段。
+_NOTIFICATION_ID_PAIRS = re.compile(
+    r"<(?P<tag>task-id|tool-use-id|output-file|status|event|note)\b[^>]*>"
+    r".*?</(?P=tag)>",
+    re.DOTALL | re.IGNORECASE,
+)
+# 未成对的残余元数据标签（截断形态）与 summary 外壳：剥标签本身、保留 summary 内文。
 _NOTIFICATION_ID_TAGS = re.compile(
-    r"</?(?:task-id|tool-use-id|output-file|status|event|note)\b[^>]*/?>",
+    r"</?(?:task-id|tool-use-id|output-file|status|event|note|summary)\b[^>]*/?>",
     re.IGNORECASE,
+)
+# 实体转义形态的通知标记（&lt;task-notification / &gt;task-notification）：
+# 仅命中时才对载荷做全量实体解码（legacy 无分号实体随之解码，属可接受代价），
+# 其余载荷只做下方安全五元组的定向解码，避免 &not→¬ 类改写真实业务文本。
+_ESCAPED_NOTIFICATION_MARK = re.compile(
+    r"&(?:lt|gt|quot);/?(?:task-notification)", re.IGNORECASE
+)
+_SAFE_ENTITIES_MAP = {
+    "&lt;": "<",
+    "&gt;": ">",
+    "&amp;": "&",
+    "&quot;": '"',
+    "&#39;": "'",
+}
+_SAFE_ENTITY_PATTERN = re.compile(
+    "|".join(re.escape(k) for k in _SAFE_ENTITIES_MAP), re.IGNORECASE
 )
 
 
@@ -257,8 +281,11 @@ def _condense_notification_payload(payload: str) -> str:
         m = _TASK_SUMMARY_PATTERN.search(block.group(0))
         if m and m.group(1).strip():
             return m.group(1).strip()
+    # 未闭合/无 summary 兜底：成对元数据标签连同内文剥除，summary 剥壳保内文，
+    # 使残余文本与闭合块路径口径一致（无孤立 id 残段、无残留标签）。
     stripped = _TASK_NOTIFICATION_BLOCK.sub(" ", payload)
     stripped = _NOTIFICATION_OPEN_TAG.sub(" ", stripped)
+    stripped = _NOTIFICATION_ID_PAIRS.sub(" ", stripped)
     stripped = _NOTIFICATION_ID_TAGS.sub(" ", stripped)
     return _WHITESPACE_PATTERN.sub(" ", stripped).strip()
 
@@ -284,10 +311,18 @@ def _extract_injected_prompt_title(cleaned: str) -> str | None:
             t = tail.search(payload)
             if t:
                 payload = payload[: t.start()]
-        # 实体解码先于通知凝缩：转义形态的通知 XML（&lt;task-notification&gt;）
-        # 也需被守卫识别并正常凝缩。
-        payload = html.unescape(payload)
+        # 实体解码分两档：转义形态的通知 XML 全量解码（先于凝缩守卫，转义形态
+        # 需还原为字面标签才能被识别）；其余载荷仅定向解码带分号的安全实体
+        # （&lt;/&gt;/&amp;/&quot;/&#39;），避免 html.unescape 的 HTML5 legacy
+        # 无分号规则（&not→¬ 等）改写真实业务文本。
+        has_escaped_notification = bool(_ESCAPED_NOTIFICATION_MARK.search(payload))
+        if has_escaped_notification:
+            payload = html.unescape(payload)
         payload = _condense_notification_payload(payload)
+        if not has_escaped_notification:
+            payload = _SAFE_ENTITY_PATTERN.sub(
+                lambda m: _SAFE_ENTITIES_MAP[m.group(0).lower()], payload
+            )
         payload = _WHITESPACE_PATTERN.sub(" ", payload).strip()
         if not payload:
             return ""
