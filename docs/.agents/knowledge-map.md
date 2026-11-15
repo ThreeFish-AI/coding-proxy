@@ -43,6 +43,7 @@
 | [arch/config-reference.md](../arch/config-reference.md) | 配置参数权威定义（Single Source of Truth）            |
 | [arch/design-patterns.md](../arch/design-patterns.md) | 13 种设计模式详解（熔断器、状态机、Composite 等）     |
 | [arch/routing.md](../arch/routing.md)                 | 路由引擎 12 个子模块职责                              |
+| [arch/session-model-bind.md](../arch/session-model-bind.md) | 会话级模型绑定（Model Bind）设计与实现锚点      |
 | [arch/vendors.md](../arch/vendors.md)                 | Vendor 类层次结构与 9 种实现                          |
 | [arch/convert.md](../arch/convert.md)                 | Anthropic ↔ Gemini ↔ OpenAI 三向格式转换              |
 | [arch/testing.md](../arch/testing.md)                 | 测试覆盖矩阵与工具链                                  |
