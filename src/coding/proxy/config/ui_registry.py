@@ -531,6 +531,37 @@ REGISTRY += [
         enum=list(_VENDOR_TYPES),
     ),
     _f(
+        "session_policies.policies.*.model",
+        "Model",
+        "text",
+        "会话级模型覆盖：非空时该 Session 的请求统一改写为此模型",
+    ),
+    _f(
+        "session_policies.bindable_models",
+        "Model List",
+        "list_section",
+        "可绑定模型清单，Model Bind 下拉选项的唯一来源",
+    ),
+    _f(
+        "session_policies.bindable_models.*.label",
+        "Label",
+        "text",
+        "UI 显示名，清单内唯一",
+    ),
+    _f(
+        "session_policies.bindable_models.*.model",
+        "Model",
+        "text",
+        "覆盖目标模型名，清单内唯一",
+    ),
+    _f(
+        "session_policies.bindable_models.*.tiers",
+        "Tiers",
+        "list",
+        "随绑定重排的 vendor 优先级，空则不改顺序",
+        enum=list(_VENDOR_TYPES),
+    ),
+    _f(
         "session_policies.title_vendor_bindings",
         "Title Bindings",
         "list_section",
