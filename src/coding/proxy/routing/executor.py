@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -77,6 +78,8 @@ def _log_unexpected(scope: str, tier_name: str, exc: BaseException) -> None:
 _SESSION_TITLE_MAX_LEN = 600
 # 回退标题截取长度 — 工具结果等非用户直接输入的摘要上限。
 _FALLBACK_TITLE_MAX_LEN = 80
+# 注入式载荷标题截取长度 — 家族标签 + 载荷合计上限，保持列表可扫读。
+_INJECTED_PAYLOAD_TITLE_MAX_LEN = 160
 
 # Claude Code 注入的"噪声"标签 — 系统级上下文,不应进入 Session 标题。
 # 这些标签由 CC harness 在首个 user 消息 content 中拼接,高度同质,
@@ -85,7 +88,7 @@ _NOISE_TAG_PATTERN = re.compile(
     r"<(?P<tag>system-reminder|user-preferences|"
     r"local-command-stdout|local-command-stderr|"
     r"bash-input|bash-stdout|bash-stderr|"
-    r"ide_selection|stdin|system_instruction|session|"
+    r"ide_selection|ide_opened_file|stdin|system_instruction|session|"
     r"artifactMetadata|thinking)\b[^>]*>"
     r".*?</(?P=tag)>",
     flags=re.DOTALL | re.IGNORECASE,
@@ -104,6 +107,12 @@ _CMD_ARGS_PATTERN = re.compile(r"<command-args>(.*?)</command-args>", flags=re.D
 _CMD_WRAPPER_PATTERN = re.compile(
     r"<command-[\w-]+>.*?</command-[\w-]+>", flags=re.DOTALL
 )
+
+# <pasted_content> 仅剥外壳标签保留内容 — 粘贴体本身是真实用户输入。
+_PASTED_CONTENT_WRAPPER = re.compile(r"</?pasted_content\b[^>]*>", re.IGNORECASE)
+
+# [Image #N] 粘贴图片占位符 — 剥离后保留周边真实文本。
+_IMAGE_PLACEHOLDER_PATTERN = re.compile(r"\[Image #\d+\]\s*", re.IGNORECASE)
 
 # 空白折叠
 _WHITESPACE_PATTERN = re.compile(r"\s+")
@@ -137,6 +146,8 @@ def _sanitize_user_text(raw: str) -> str:
     # 阶段二: 通用噪声剥离
     cleaned = _NOISE_TAG_PATTERN.sub("", raw)
     cleaned = _CMD_WRAPPER_PATTERN.sub("", cleaned)
+    cleaned = _PASTED_CONTENT_WRAPPER.sub("", cleaned)
+    cleaned = _IMAGE_PLACEHOLDER_PATTERN.sub("", cleaned)
     cleaned = _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
     if cleaned:
         return cleaned
@@ -165,6 +176,200 @@ def _sanitize_user_text(raw: str) -> str:
 # ─────────────────────────────────────────────────────────────────
 
 
+# ── 注入式 Prompt（agent-as-tool 模板）载荷提取 ──────────────────
+#
+# Agent harness（记忆压缩器、会话命名器等）以子会话形式调用模型，首条 user
+# 消息是固定话术模板（如 "You are a memory relevance compressor..."），
+# 模板头无区分度，真实业务载荷内嵌在 "User query:" 等分隔符之后。
+# 家族表按序匹配：(opener, 家族标签, 载荷分隔符, 尾部样板截断)；
+# 命中后剥模板头截载荷，产出 "[家族标签] 载荷" 形式标题。
+_INJECTED_PROMPT_FAMILIES: tuple[
+    tuple[re.Pattern[str], str, re.Pattern[str], re.Pattern[str] | None, bool], ...
+] = (
+    (
+        re.compile(r"(?i)^you are a memory relevance compressor\b"),
+        "[记忆压缩]",
+        re.compile(r"(?i)\bUser query\s*[:：]\s*"),
+        re.compile(r"(?i)\bRetrieved\s+\S+\s+context fragments\b"),
+        False,
+    ),
+    (
+        re.compile(r"(?i)^Name this chat\b"),
+        "[会话命名]",
+        re.compile(r"(?i)\bFirst request\s*[:：]\s*"),
+        re.compile(r"(?i)\bThis is a naming-only task\b"),
+        False,
+    ),
+    (
+        re.compile(r"(?i)^Generate a short git branch name\b"),
+        "[分支命名]",
+        re.compile(r"(?i)\bUser request\s*[:：]\s*"),
+        None,
+        False,
+    ),
+    (
+        re.compile(r"(?i)^Use the \S+ tool to run exactly this one command\b"),
+        "[单命令]",
+        re.compile(r"(?i)(?:\band nothing else|The command is)\s*[:：]\s*"),
+        None,
+        False,
+    ),
+    # 通用兜底：其余 "You are ..." 注入式模板。分隔符要求句界锚定（防止真实
+    # persona 消息中句中的 "task:"/"query:" 误截断）；无分隔符时按真实输入
+    # 处理（fallback_real_input=True），避免误伤手打 "You are ..." 的用户消息。
+    (
+        re.compile(r"(?i)^you are\b"),
+        "[注入任务]",
+        re.compile(
+            r"(?i)(?:^|(?<=[.。!?\n]))\s*(?:User query|User request|First request)\s*[:：]\s*"
+        ),
+        re.compile(r"(?i)\bRetrieved\s+\S+\s+context fragments\b"),
+        True,
+    ),
+)
+
+
+# task-notification 载荷凝缩：注入载荷常为 harness 的任务通知 XML 块，
+# 其中的 <summary> 行（如 Agent "xx" finished）才是可扫读标识；
+# 无 summary 时整块剥离后取残余文本。
+_TASK_SUMMARY_PATTERN = re.compile(r"<summary>\s*(.*?)\s*</summary>", re.DOTALL)
+_TASK_NOTIFICATION_BLOCK = re.compile(
+    r"<task-notification\b[^>]*>.*?</task-notification>", re.DOTALL | re.IGNORECASE
+)
+# 未闭合的 <task-notification ...> 开标签兜底（块正则不生效时剥开头标签）。
+_NOTIFICATION_OPEN_TAG = re.compile(r"<task-notification\b[^>]*>", re.IGNORECASE)
+# 已知元数据标签：成对剥除时连同内文一起移除（id/路径/状态无扫读价值），
+# 避免剥壳留内文产生孤立 id 残段。
+_NOTIFICATION_ID_PAIRS = re.compile(
+    r"<(?P<tag>task-id|tool-use-id|output-file|status|event|note)\b[^>]*>"
+    r".*?</(?P=tag)>",
+    re.DOTALL | re.IGNORECASE,
+)
+# 未成对的残余元数据标签（截断形态）与 summary 外壳：剥标签本身、保留 summary 内文。
+_NOTIFICATION_ID_TAGS = re.compile(
+    r"</?(?:task-id|tool-use-id|output-file|status|event|note|summary)\b[^>]*/?>",
+    re.IGNORECASE,
+)
+# 实体转义形态的通知标记（&lt;task-notification / &gt;task-notification）：
+# 仅命中时才对载荷做全量实体解码（legacy 无分号实体随之解码，属可接受代价），
+# 其余载荷只做下方安全五元组的定向解码，避免 &not→¬ 类改写真实业务文本。
+_ESCAPED_NOTIFICATION_MARK = re.compile(
+    r"&(?:lt|gt|quot);/?(?:task-notification)", re.IGNORECASE
+)
+_SAFE_ENTITIES_MAP = {
+    "&lt;": "<",
+    "&gt;": ">",
+    "&amp;": "&",
+    "&quot;": '"',
+    "&#39;": "'",
+}
+_SAFE_ENTITY_PATTERN = re.compile(
+    "|".join(re.escape(k) for k in _SAFE_ENTITIES_MAP), re.IGNORECASE
+)
+
+
+def _condense_notification_payload(payload: str) -> str:
+    """注入载荷为任务通知 XML 块时凝缩为可读文本，否则原样返回.
+
+    ``<summary>`` 提取限定在 task-notification 块内（载荷正文自身出现的
+    ``<summary>`` 字面量不触发凝缩）；块未闭合时退化为剥标签取残余文本。
+    """
+    if "<task-notification" not in payload.lower():
+        return payload
+    block = _TASK_NOTIFICATION_BLOCK.search(payload)
+    if block:
+        m = _TASK_SUMMARY_PATTERN.search(block.group(0))
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    # 未闭合/无 summary 兜底：成对元数据标签连同内文剥除，summary 剥壳保内文，
+    # 使残余文本与闭合块路径口径一致（无孤立 id 残段、无残留标签）。
+    stripped = _TASK_NOTIFICATION_BLOCK.sub(" ", payload)
+    stripped = _NOTIFICATION_OPEN_TAG.sub(" ", stripped)
+    stripped = _NOTIFICATION_ID_PAIRS.sub(" ", stripped)
+    stripped = _NOTIFICATION_ID_TAGS.sub(" ", stripped)
+    return _WHITESPACE_PATTERN.sub(" ", stripped).strip()
+
+
+def _extract_injected_prompt_title(cleaned: str) -> str | None:
+    """注入式 Prompt 载荷标题提取.
+
+    Returns:
+        ``None`` — 非注入式消息（调用方按真实用户输入处理）；
+        ``""`` — 命中注入家族但无载荷（模板全同质、无区分度，调用方应跳过该条）；
+        ``str`` — ``[家族标签] 载荷`` 形式的标题。
+    """
+    for opener, tag, delim, tail, fallback_real_input in _INJECTED_PROMPT_FAMILIES:
+        if not opener.search(cleaned):
+            continue
+        m = delim.search(cleaned)
+        if not m:
+            # 具名家族模板高度特异，无载荷即整条跳过；通用家族 opener 宽松，
+            # 无载荷时按真实输入处理以免误伤手打 "You are ..." 的用户消息。
+            return None if fallback_real_input else ""
+        payload = cleaned[m.end() :]
+        if tail:
+            t = tail.search(payload)
+            if t:
+                payload = payload[: t.start()]
+        # 实体解码分两档：转义形态的通知 XML 全量解码（先于凝缩守卫，转义形态
+        # 需还原为字面标签才能被识别）；其余载荷仅定向解码带分号的安全实体
+        # （&lt;/&gt;/&amp;/&quot;/&#39;），避免 html.unescape 的 HTML5 legacy
+        # 无分号规则（&not→¬ 等）改写真实业务文本。
+        has_escaped_notification = bool(_ESCAPED_NOTIFICATION_MARK.search(payload))
+        if has_escaped_notification:
+            payload = html.unescape(payload)
+        payload = _condense_notification_payload(payload)
+        if not has_escaped_notification:
+            payload = _SAFE_ENTITY_PATTERN.sub(
+                lambda m: _SAFE_ENTITIES_MAP[m.group(0).lower()], payload
+            )
+        payload = _WHITESPACE_PATTERN.sub(" ", payload).strip()
+        if not payload:
+            return ""
+        return f"{tag} {payload}"[:_INJECTED_PAYLOAD_TITLE_MAX_LEN]
+    return None
+
+
+def _derive_title_from_user_texts(
+    texts, exempt_prefixes: list[str] | None = None
+) -> str:
+    """从一批用户原始文本推导标题 — 供请求路径与历史回填共用.
+
+    逐条清洗 → 豁免前缀跳过 → 注入式载荷提取 → 首条真实输入。
+    豁免前缀同时作用于清洗文本与派生的注入式标题（豁免家族标签时
+    跳过该条继续查找，而非丢弃整个 Level 1）。
+    全部跳过时返回空串（调用方按无候选处理）。
+    """
+    prefixes = [p for p in (exempt_prefixes or []) if p]
+
+    def _exempt(candidate: str) -> bool:
+        if any(candidate.startswith(p) for p in prefixes):
+            logger.debug(
+                "Title candidate skipped by exempt prefix (snippet=%r)",
+                candidate[:60],
+            )
+            return True
+        return False
+
+    for raw in texts:
+        cleaned = _sanitize_user_text(raw)
+        if not cleaned:
+            continue
+        # 整条消息即 harness 固定话术：背景任务通知 / 会话续接摘要，无区分度。
+        if cleaned.startswith("<task-notification") or cleaned.startswith(
+            "This session is being continued"
+        ):
+            continue
+        if _exempt(cleaned):
+            continue
+        injected = _extract_injected_prompt_title(cleaned)
+        if injected is None:
+            return cleaned[:_SESSION_TITLE_MAX_LEN]
+        if injected and not _exempt(injected):
+            return injected
+    return ""
+
+
 def _extract_title_from_user_text(
     messages: list[CanonicalMessagePart],
     exempt_prefixes: list[str] | None = None,
@@ -174,22 +379,15 @@ def _extract_title_from_user_text(
     ``exempt_prefixes`` 非空时，清洗后文本以任一前缀开头则跳过该输入、继续向后
     查找——用于过滤注入式 Prompt，避免其被误用作 Session 标题。匹配作用于
     ``_sanitize_user_text`` 清洗后的纯文本（而非带 XML 标签的原始 raw）。
+    注入式模板消息（agent-as-tool 话术）经 ``_extract_injected_prompt_title``
+    剥离模板头、截取业务载荷；无载荷则跳过该条继续查找。
     """
-    for part in messages:
-        if part.role != "user" or part.type != CanonicalPartType.TEXT:
-            continue
-        cleaned = _sanitize_user_text(part.text)
-        if not cleaned:
-            continue
-        if exempt_prefixes and any(cleaned.startswith(p) for p in exempt_prefixes):
-            logger.debug(
-                "Title candidate skipped by exempt prefix %r (snippet=%r)",
-                next(p for p in exempt_prefixes if cleaned.startswith(p)),
-                cleaned[:60],
-            )
-            continue
-        return cleaned[:_SESSION_TITLE_MAX_LEN]
-    return ""
+    texts = [
+        part.text
+        for part in messages
+        if part.role == "user" and part.type == CanonicalPartType.TEXT
+    ]
+    return _derive_title_from_user_texts(texts, exempt_prefixes=exempt_prefixes)
 
 
 def _extract_title_from_tool_results(messages: list[CanonicalMessagePart]) -> str:
