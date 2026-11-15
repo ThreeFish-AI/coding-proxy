@@ -698,6 +698,21 @@ native_api:
 # 未配置时（默认），所有 Session 使用全局 tiers 顺序。
 session_policies:
   policies: []
+  # 可绑定模型清单 —— Dashboard「Model Bind」下拉选项与 API 校验的唯一来源。
+  # label / model 清单内唯一；tiers 为随绑定重排的 vendor 优先级（空 = 不改顺序）。
+  # 跨系列原生模型名（如 glm-5.3）需配套 identity model_mapping 规则
+  # （pattern 与 target 同名），防 ModelMapper default 静默改写。
+  bindable_models:
+    - label: "Opus 4.6"
+      model: "claude-opus-4.6"
+    - label: "Sonnet 4.6"
+      model: "claude-sonnet-4.6"
+    - label: "Haiku 4.5"
+      model: "claude-haiku-4.5"
+    # 跨系列示例：
+    # - label: "GLM 5.3"
+    #   model: "glm-5.3"
+    #   tiers: ["zhipu"]
   # 标题前缀 → 供应商自动绑定。
   # 当 Session 标题以指定前缀开头时，自动将该 Session 绑定到对应供应商。
   # 匹配规则按列表顺序求值，首次匹配生效。

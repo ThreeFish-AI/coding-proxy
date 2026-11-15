@@ -275,25 +275,44 @@ def reset(
 def session_bind(
     key: str = typer.Option(..., "--key", "-k", help="Session key"),
     vendor: str = typer.Option(
-        ..., "--vendor", "-v", help="绑定 vendor（逗号分隔多个）"
+        None, "--vendor", "-v", help="绑定 vendor（逗号分隔多个，与 --model 可组合）"
+    ),
+    model: str = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="绑定模型（须在 config 的 bindable_models 清单内，与 --vendor 可组合）",
     ),
     port: int = typer.Option(3392, "--port", "-p", help="代理服务端口"),
 ) -> None:
-    """为指定 Session 绑定 vendor 优先级."""
+    """为指定 Session 绑定 vendor 优先级与可选的会话级模型覆盖."""
     import httpx as _httpx
 
-    vendors = [v.strip() for v in vendor.split(",") if v.strip()]
+    if not vendor and not model:
+        console.print("[red]至少提供 --vendor 或 --model 之一[/red]")
+        raise typer.Exit(1)
+
+    payload: dict = {"session_key": key}
+    if vendor:
+        payload["vendors"] = [v.strip() for v in vendor.split(",") if v.strip()]
+    if model:
+        payload["model"] = model
     try:
         resp = _httpx.put(
             f"http://127.0.0.1:{port}/api/session-vendor",
-            json={"session_key": key, "vendors": vendors},
+            json=payload,
             timeout=5,
         )
         if resp.status_code == 200:
             data = resp.json()
+            parts = []
+            if data.get("model"):
+                parts.append(f"model={data['model']}")
+            if data.get("vendors"):
+                parts.append(" → ".join(data["vendors"]))
             console.print(
                 f"[green]绑定成功:[/] session [cyan]{key[:16]}…[/cyan] → "
-                + " → ".join(data.get("vendors", vendors))
+                + " ".join(parts)
             )
         else:
             try:
@@ -352,7 +371,11 @@ def session_list(
             for b in bindings:
                 key = b.get("session_key", "?")
                 vendors = b.get("vendors", [])
-                console.print(f"  [cyan]{key[:24]}…[/cyan] → " + " → ".join(vendors))
+                model = b.get("model")
+                model_part = f"model={model} " if model else ""
+                console.print(
+                    f"  [cyan]{key[:24]}…[/cyan] → {model_part}" + " → ".join(vendors)
+                )
         else:
             console.print(f"[red]查询失败: {resp.status_code} {resp.text}[/red]")
     except _httpx.ConnectError:

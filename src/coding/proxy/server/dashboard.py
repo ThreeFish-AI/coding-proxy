@@ -601,7 +601,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .session-table tbody tr[data-row]:not(.row-detail) { cursor: pointer; }
     .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.12); display: inline-block; vertical-align: middle; margin-left: 6px; }
     .success-bar-fill { height: 100%; border-radius: 2px; display: block; }
-    /* ── Vendor Bind 选择器 ── */
+    /* ── Model Bind 选择器 ── */
     .bind-select {
       padding: 3px 6px; border-radius: 6px;
       background: rgba(48,54,61,.6); border: 1px solid rgba(255,255,255,.1);
@@ -989,7 +989,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <th>Vendors</th>
             <th>Avg Latency</th>
             <th>Success</th>
-            <th>Vendor Bind</th>
+            <th>Model Bind</th>
             <th>Client</th>
           </tr>
         </thead>
@@ -2166,7 +2166,7 @@ var allSessions = [];
 var sessionPage = 0;
 var sessionPageSize = 30;
 var sessionBindMap = {};
-var sessionAvailableVendors = [];
+var sessionBindableModels = [];
 
 async function updateSessions() {
   try {
@@ -2178,11 +2178,11 @@ async function updateSessions() {
     if (results[0].status === 'rejected') throw results[0].reason;
     var data = results[0].value;
     var bindData = results[1].status === 'fulfilled' ? results[1].value : {bindings: []};
-    var statusData = results[2].status === 'fulfilled' ? results[2].value : {tiers: []};
+    var statusData = results[2].status === 'fulfilled' ? results[2].value : {tiers: [], bindable_models: []};
     allSessions = data.sessions || [];
     sessionBindMap = {};
-    (bindData.bindings || []).forEach(function(b) { sessionBindMap[b.session_key] = b.vendors; });
-    sessionAvailableVendors = (statusData.tiers || []).map(function(t) { return t.name; });
+    (bindData.bindings || []).forEach(function(b) { sessionBindMap[b.session_key] = b; });
+    sessionBindableModels = statusData.bindable_models || [];
     sessionPage = 0;
     renderSessionPage();
   } catch (e) {
@@ -2203,8 +2203,8 @@ function renderSessionPage() {
   } else {
     tbody.innerHTML = page.map(function(s) {
       var parsed = parseSessionKey(s.session_key);
-      var boundVendors = sessionBindMap[s.session_key];
-      var selectHtml = buildBindSelect(s.session_key, boundVendors, sessionAvailableVendors);
+      var binding = sessionBindMap[s.session_key];
+      var selectHtml = buildModelSelect(s.session_key, binding, sessionBindableModels);
       var modelsFull = (s.models || '').split(',').map(function(c){return c.trim();});
       var vendorsFull = (s.vendors || '').split(',').map(function(v){return formatVendorLabel(v.trim());});
       var sr = s.success_rate != null ? Math.round(s.success_rate) : null;
@@ -2267,31 +2267,32 @@ function changePage(delta) {
   renderSessionPage();
 }
 
-function buildBindSelect(sessionKey, boundVendors, availableVendors) {
-  var isBound = boundVendors && boundVendors.length > 0;
-  var multiBound = isBound && boundVendors.length > 1;
-  var selected = isBound ? boundVendors[0] : '';
-  var html = '<select class="bind-select" data-session-key="' + escapeHtml(sessionKey) + '">';
-  html += '<option value=""' + (!isBound ? ' selected' : '') + '>Default</option>';
-  availableVendors.forEach(function(v) {
-    var label = multiBound && v === selected ? escapeHtml(v) + ' (+' + (boundVendors.length - 1) + ')' : escapeHtml(v);
-    html += '<option value="' + escapeHtml(v) + '"' + (v === selected ? ' selected' : '') + '>' + label + '</option>';
+function buildModelSelect(sessionKey, binding, bindableModels) {
+  var boundModel = binding && binding.model ? binding.model : '';
+  var html = '<select class="bind-select" data-session-key="' + escapeHtml(sessionKey) + '" title="Session-level model override — applies from the next request; in-flight requests keep the old model">';
+  html += '<option value=""' + (!boundModel ? ' selected' : '') + '>Default</option>';
+  bindableModels.forEach(function(m) {
+    var v = m.model || '';
+    html += '<option value="' + escapeHtml(v) + '"' + (v === boundModel ? ' selected' : '') + '>' + escapeHtml(m.label || v) + '</option>';
   });
+  if (boundModel && !bindableModels.some(function(m) { return m.model === boundModel; })) {
+    html += '<option value="' + escapeHtml(boundModel) + '" selected>' + escapeHtml(boundModel) + ' (off-list)</option>';
+  }
   html += '</select>';
   return html;
 }
 
 async function handleBindChange(sel) {
   var sessionKey = sel.getAttribute('data-session-key');
-  var vendor = sel.value;
+  var model = sel.value;
   var previousValue = sel.getAttribute('data-previous') || '';
   try {
     var resp;
-    if (vendor) {
+    if (model) {
       resp = await fetch('/api/session-vendor', {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({session_key: sessionKey, vendors: [vendor]}),
+        body: JSON.stringify({session_key: sessionKey, model: model}),
       });
     } else {
       resp = await fetch('/api/session-vendor/' + encodeURIComponent(sessionKey), {method: 'DELETE'});

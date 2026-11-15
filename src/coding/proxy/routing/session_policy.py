@@ -66,30 +66,54 @@ class SessionPolicyResolver:
 
     # ── 运行时 session → vendor 绑定 ──────────────────────────────
 
-    def upsert(self, session_key: str, tier_names: list[str]) -> SessionPolicy:
-        """为指定 session key 创建或替换运行时 vendor 绑定.
+    def upsert(
+        self,
+        session_key: str,
+        tier_names: list[str],
+        model: str | None = None,
+    ) -> SessionPolicy:
+        """为指定 session key 创建或替换运行时绑定（vendor 优先级 + 可选模型覆盖）.
 
         运行时策略使用 ``runtime:`` 名称前缀，与配置文件驱动的策略区分。
+        tier_names 为空（仅绑模型）时继承该会话原本会命中的配置策略 tiers
+        （被遮蔽的 key 级策略优先，其次 category 级），兑现「不改 vendor 顺序」
+        语义；无配置策略时保持空 = 全局默认顺序。
         """
-        policy = SessionPolicy(
-            name=f"runtime:{session_key}",
-            match=SessionPolicyMatch(session_keys=[session_key]),
-            tiers=tier_names,
-        )
         with self._lock:
             existing = self._key_index.get(session_key)
             if existing and not existing.name.startswith("runtime:"):
                 self._config_key_backup[session_key] = existing
+            if not tier_names:
+                base = self._config_key_backup.get(session_key)
+                if base is None:
+                    base = self._category_index.get("cc")
+                if base is not None and base.tiers:
+                    tier_names = list(base.tiers)
+            policy = SessionPolicy(
+                name=f"runtime:{session_key}",
+                match=SessionPolicyMatch(session_keys=[session_key]),
+                tiers=tier_names,
+                model=model,
+            )
             self._key_index[session_key] = policy
         logger.info(
-            "Session vendor binding upserted: session_key=%s → %s",
+            "Session vendor binding upserted: session_key=%s → tiers=%s model=%s",
             session_key,
             tier_names,
+            model or "-",
         )
         return policy
 
+    def get_runtime_binding(self, session_key: str) -> SessionPolicy | None:
+        """返回指定 key 的运行时绑定（仅 API 创建的），不存在或为配置态时返回 None."""
+        with self._lock:
+            policy = self._key_index.get(session_key)
+        if policy is not None and policy.name.startswith("runtime:"):
+            return policy
+        return None
+
     def remove(self, session_key: str) -> bool:
-        """删除指定 session key 的运行时 vendor 绑定.
+        """删除指定 session key 的运行时绑定.
 
         Returns:
             True 如果找到并删除了绑定，False 如果不存在。
@@ -106,11 +130,15 @@ class SessionPolicyResolver:
         logger.info("Session vendor binding removed: session_key=%s", session_key)
         return True
 
-    def list_runtime_bindings(self) -> list[dict[str, str | list[str]]]:
+    def list_runtime_bindings(self) -> list[dict[str, str | list[str] | None]]:
         """返回所有运行时注入的绑定快照（仅 API 创建的，不含配置文件驱动的）."""
         with self._lock:
             return [
-                {"session_key": key, "vendors": policy.tiers}
+                {
+                    "session_key": key,
+                    "vendors": policy.tiers,
+                    "model": policy.model,
+                }
                 for key, policy in self._key_index.items()
                 if policy.name.startswith("runtime:")
             ]

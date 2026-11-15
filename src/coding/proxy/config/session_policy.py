@@ -44,9 +44,38 @@ class SessionPolicy(BaseModel):
         default_factory=list,
         description="覆盖全局 tier 顺序的供应商优先级列表",
     )
+    model: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "会话级模型覆盖：非空时该 Session 的后续请求体 model 字段"
+            "统一改写为此值（shadow copy，逐请求生效，在途请求不受影响）。"
+        ),
+    )
     quota: SessionQuotaConfig | None = Field(
         default=None,
         description="Per-session 资源配额（预留）",
+    )
+
+
+class BindableModel(BaseModel):
+    """可绑定模型清单条目 — Dashboard Model Bind 下拉选项的唯一来源."""
+
+    label: str = Field(
+        min_length=1,
+        description="UI 显示名（清单内唯一）",
+    )
+    model: str = Field(
+        min_length=1,
+        description="覆盖目标模型名（清单内唯一）",
+    )
+    tiers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "随绑定重排的 vendor 优先级列表（空 = 仅覆盖模型、不改 vendor 顺序）。"
+            "跨系列原生模型名（如 glm-5.3）需配套 identity model_mapping 规则，"
+            "防 ModelMapper default 静默改写。"
+        ),
     )
 
 
@@ -73,6 +102,32 @@ class SessionPoliciesConfig(BaseModel):
         default_factory=list,
         description="Session 路由策略列表，按定义顺序求值，首次匹配生效",
     )
+    bindable_models: list[BindableModel] = Field(
+        default_factory=list,
+        description=(
+            "可绑定模型清单（Model Bind 下拉选项的唯一来源）。"
+            "API 只允许绑定清单内的模型；跨系列原生模型名需配套 identity "
+            "model_mapping 规则。label 与 model 在清单内必须唯一。"
+        ),
+    )
+
+    @field_validator("bindable_models", mode="after")
+    @classmethod
+    def _validate_bindable_models(
+        cls, value: list[BindableModel]
+    ) -> list[BindableModel]:
+        """校验 label / model 清单内唯一，防 UI 选项与 API 校验歧义."""
+        seen_labels: set[str] = set()
+        seen_models: set[str] = set()
+        for item in value:
+            if item.label in seen_labels:
+                raise ValueError(f"duplicate bindable_models label: {item.label}")
+            if item.model in seen_models:
+                raise ValueError(f"duplicate bindable_models model: {item.model}")
+            seen_labels.add(item.label)
+            seen_models.add(item.model)
+        return value
+
     title_vendor_bindings: list[TitleVendorBinding] = Field(
         default_factory=list,
         description=(

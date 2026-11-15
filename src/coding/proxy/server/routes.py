@@ -226,6 +226,7 @@ def register_status_route(app: Any, router: Any) -> None:
             if diagnostics:
                 info["diagnostics"] = diagnostics
             result["tiers"].append(info)
+        result["bindable_models"] = router.get_bindable_models()
         return result
 
 
@@ -438,7 +439,7 @@ def register_session_vendor_routes(app: Any, router: Any) -> None:
 
     @app.put("/api/session-vendor")
     async def bind_session_vendor(request: Request) -> Response:
-        """为指定 session key 绑定 vendor 优先级列表."""
+        """为指定 session key 绑定 vendor 优先级列表与可选的会话级模型覆盖."""
         try:
             body = await request.json()
         except Exception:
@@ -452,20 +453,58 @@ def register_session_vendor_routes(app: Any, router: Any) -> None:
                 message="body must be a JSON object",
             )
         session_key = body.get("session_key", "").strip()
-        vendors = body.get("vendors", [])
+        vendors = body.get("vendors")
+        model = body.get("model")
         if not session_key:
             return json_error_response(
                 400,
                 error_type="invalid_request_error",
                 message="session_key is required",
             )
-        if not isinstance(vendors, list) or not vendors:
+        if model is not None and (not isinstance(model, str) or not model.strip()):
             return json_error_response(
                 400,
                 error_type="invalid_request_error",
-                message="vendors must be a non-empty list",
+                message="model must be a non-empty string",
             )
-        vendors = [str(v).strip() for v in vendors]
+        bindable = router.get_bindable_models()
+        if model is not None:
+            model = model.strip()
+            if not any(m.get("model") == model for m in bindable):
+                if not bindable:
+                    message = (
+                        "model binding is disabled: "
+                        "session_policies.bindable_models is empty or unset in config"
+                    )
+                else:
+                    message = f"unknown model: {model}; bindable: " + ", ".join(
+                        sorted(str(m.get("model", "")) for m in bindable)
+                    )
+                return json_error_response(
+                    400,
+                    error_type="invalid_request_error",
+                    message=message,
+                )
+        if vendors is None and model is not None:
+            # 仅绑模型：沿用清单 entry 的 tiers（空 = 不改 vendor 顺序）
+            vendors = next(
+                m.get("tiers", []) for m in bindable if m.get("model") == model
+            )
+        elif vendors is None:
+            vendors = []
+        if not isinstance(vendors, list):
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="vendors must be a list",
+            )
+        vendors = [str(v).strip() for v in vendors if str(v).strip()]
+        if not vendors and model is None:
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="vendors must be a non-empty list or model is required",
+            )
         available = set(router.get_vendor_names())
         unknown = [v for v in vendors if v not in available]
         if unknown:
@@ -478,10 +517,15 @@ def register_session_vendor_routes(app: Any, router: Any) -> None:
                 ),
             )
         resolver = router._executor._policy_resolver  # noqa: SLF001
-        resolver.upsert(session_key, vendors)
+        resolver.upsert(session_key, vendors, model=model)
         return Response(
             content=json.dumps(
-                {"status": "ok", "session_key": session_key, "vendors": vendors},
+                {
+                    "status": "ok",
+                    "session_key": session_key,
+                    "vendors": vendors,
+                    "model": model,
+                },
                 ensure_ascii=False,
             ).encode(),
             status_code=200,
