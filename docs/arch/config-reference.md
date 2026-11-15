@@ -365,3 +365,25 @@ env var（运行时） > 存储的显式字段（Dashboard / CLI 配置） > Pyd
 空串或纯空白视作未设置，保留上一层值（避免"未设置 env → 空串覆盖内置默认"陷阱）。
 
 > `ANTHROPIC_BASE_URL`（client → proxy，Claude Code 使用）与 `NATIVE_ANTHROPIC_BASE_URL`（proxy → upstream，原生透传使用）方向正交，勿混用。参见 [用户指引 § 4.7 native_api](../user-guide.md#47-native_api--原生-api-透传)。
+
+## 11. session_policies — Session 路由策略与会话级模型绑定
+
+> **定义位置**：[`config/session_policy.py`](../../src/coding/proxy/config/session_policy.py)
+>
+> **生效链路**：`SessionPolicyResolver` 逐请求按 session_key 解析。运行时绑定（Dashboard/CLI/API）纯内存态：重启后回落配置态；配置热切换（generation swap）经 `_migrate_bindings` 迁移保留——vendor 需仍在新链路、模型需仍在 `bindable_models` 清单，失效部分移除并在 `reset_runtime` 提示。设计详见 [session-model-bind.md](session-model-bind.md)。
+
+### 11.1 本节字段
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `policies` | `list[SessionPolicy]` | `[]` | 配置态 Session 路由策略，按序求值首次命中生效（存量键：`name`/`match.session_keys`/`tiers`，注释见 `config.default.yaml`） |
+| `policies.*.model` | `str \| null` | `null` | 会话级模型覆盖：非空时该 Session 的后续请求体 `model` 统一改写为此值（逐请求生效，在途请求不受影响） |
+| `bindable_models` | `list[BindableModel]` | claude 三档 | 可绑定模型清单，Dashboard Model Bind 下拉选项与 API 校验的唯一来源 |
+| `bindable_models.*.label` | `str` | — | UI 显示名，清单内唯一，非空 |
+| `bindable_models.*.model` | `str` | — | 覆盖目标模型名，清单内唯一，非空 |
+| `bindable_models.*.tiers` | `list[str]` | `[]` | 随绑定重排的 vendor 优先级；空 = 不改当前 tier 顺序（已有运行时 vendor 绑定 > 配置态策略 > 全局默认） |
+| `title_vendor_bindings` / `title_exempt_prefixes` | — | — | 标题前缀自动绑定与豁免（存量键，语义见 `config.default.yaml` 注释） |
+
+### 11.2 跨系列约束
+
+原生模型名（如 `glm-5.3`）入清单须配套 identity `model_mapping` 规则（pattern = target），防 `ModelMapper` default 静默改写；详见 [session-model-bind.md §6](session-model-bind.md#6-已知边界与风险)。

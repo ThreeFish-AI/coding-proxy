@@ -46,6 +46,7 @@ classDiagram
         +supports_request(caps) tuple
         +make_compatibility_decision(req) CompatibilityDecision
         +map_model(model) str
+        +map_model_with_reason(model) tuple
         +check_health() bool
         +close()
     }
@@ -140,6 +141,7 @@ class BaseVendor(ABC):
     def supports_request(self, caps: RequestCapabilities) -> tuple[bool, list[CapabilityLossReason]]
     def make_compatibility_decision(self, request: CanonicalRequest) -> CompatibilityDecision
     def map_model(self, model: str) -> str   # 默认恒等映射
+    def map_model_with_reason(self, model: str) -> tuple[str, str]   # 默认 (恒等, "vendor")；经共享 ModelMapper 解析的 vendor 覆写为 ("exact"|"pattern"|"default")，供会话模型漂移告警消费
 
     # ── 钩子方法（子类可选覆写） ──────────────────────────
     def _get_endpoint(self) -> str                       # 默认 /v1/messages

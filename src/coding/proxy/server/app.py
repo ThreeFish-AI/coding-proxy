@@ -175,6 +175,9 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         session_policy_resolver=SessionPolicyResolver(config.session_policies.policies),
         title_vendor_bindings=config.session_policies.title_vendor_bindings,
         title_exempt_prefixes=config.session_policies.title_exempt_prefixes,
+        bindable_models=[
+            b.model_dump() for b in config.session_policies.bindable_models
+        ],
     )
 
     app = FastAPI(

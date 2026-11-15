@@ -38,7 +38,7 @@ from .rate_limit import (
     parse_rate_limit_headers,
 )
 from .session_manager import RouteSessionManager
-from .session_policy import SessionPolicyResolver
+from .session_policy import SessionPolicy, SessionPolicyResolver
 from .tier import VendorTier
 from .usage_parser import (
     build_usage_evidence_records,
@@ -920,13 +920,17 @@ class _RouteExecutor:
 
     # ── 公开执行入口 ──────────────────────────────────────
 
-    def _resolve_effective_tiers(self, session_key: str) -> list[VendorTier]:
+    def _resolve_effective_tiers(
+        self, session_key: str, policy: SessionPolicy | None = None
+    ) -> list[VendorTier]:
         """根据 Session Policy 解析生效的 tier 顺序.
 
         策略指定的 vendor 按其顺序排列在头部，未提及的保持在末尾。
-        无策略时返回全局默认顺序。
+        无策略时返回全局默认顺序。policy 可由调用方预先 resolve 传入，
+        与会话级模型覆盖共用同一次解析（避免双重 resolve 的竞态窗口）。
         """
-        policy = self._policy_resolver.resolve(session_key)
+        if policy is None:
+            policy = self._policy_resolver.resolve(session_key)
         if not policy or not policy.tiers:
             return self._tiers
 
@@ -943,6 +947,44 @@ class _RouteExecutor:
                 ordered.append(tier)
                 seen.add(tier.name)
         return ordered
+
+    _MODEL_FALLBACK_REASONS = frozenset({"default"})
+
+    @classmethod
+    def _log_model_drift(
+        cls,
+        bound_model: str | None,
+        tier: VendorTier,
+        model_served: str,
+    ) -> None:
+        """会话模型覆盖生效但实际 served 模型偏离预期时告警.
+
+        两类触发：served 既非绑定名也非接单 vendor 映射预期（failover 接单 /
+        上游换名），或绑定名命中映射 default 回退被改写（缺显式规则）。
+        配置内等价映射（如 claude 档位名 → glm 档位名）属预期行为，不告警。
+        """
+        if not bound_model:
+            return
+        expected, reason = tier.vendor.map_model_with_reason(bound_model)
+        if model_served not in (bound_model, expected):
+            logger.warning(
+                "Session model drift: bound=%s but tier %s served %s "
+                "(its model mapping expected %s — failover takeover or "
+                "unexpected upstream substitution)",
+                bound_model,
+                tier.name,
+                model_served,
+                expected,
+            )
+        elif reason in cls._MODEL_FALLBACK_REASONS and model_served != bound_model:
+            logger.warning(
+                "Session model drift: bound=%s hit model_mapping default fallback "
+                "on tier %s and was rewritten to %s — add an identity mapping "
+                "rule (pattern=target) for this model",
+                bound_model,
+                tier.name,
+                model_served,
+            )
 
     def _extract_session_title(self, request: CanonicalRequest) -> str:
         """封装模块级标题提取，注入实例持有的豁免前缀名单.
@@ -964,6 +1006,10 @@ class _RouteExecutor:
         仅在新 Session 首次提取标题时调用，避免覆盖手动绑定的策略。
         """
         if not title or not self._title_vendor_bindings:
+            return
+        # 已有运行时绑定（手动 Vendor/Model Bind）时跳过，防自动绑定整条覆盖；
+        # compat TTL 过期导致长会话被重新判定为新会话时同样受此保护。
+        if self._policy_resolver.get_runtime_binding(session_key) is not None:
             return
         for binding in self._title_vendor_bindings:
             if title.startswith(binding.prefix):
@@ -1083,7 +1129,20 @@ class _RouteExecutor:
                     canonical_request.session_key, title
                 )
         incompatible_reasons: list[str] = []
-        effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
+        session_policy = self._policy_resolver.resolve(canonical_request.session_key)
+        client_model = str(body.get("model", "unknown"))
+        bound_model = session_policy.model if session_policy else None
+        if bound_model and bound_model != client_model:
+            logger.info(
+                "Session model override active: session=%s client_model=%s → bound_model=%s",
+                canonical_request.session_key[:12],
+                client_model,
+                bound_model,
+            )
+            body = {**body, "model": bound_model}
+        effective_tiers = self._resolve_effective_tiers(
+            canonical_request.session_key, policy=session_policy
+        )
         last_idx = len(effective_tiers) - 1
 
         for i, tier in enumerate(effective_tiers):
@@ -1140,6 +1199,7 @@ class _RouteExecutor:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = usage.get("model_served") or tier.vendor.map_model(model)
+                self._log_model_drift(bound_model, tier, model_served)
                 if failed_tier_name is not None:
                     logger.info(
                         "Tier %s stream succeeded (took over from failed tier: %s)",
@@ -1264,7 +1324,20 @@ class _RouteExecutor:
                     canonical_request.session_key, title
                 )
         incompatible_reasons: list[str] = []
-        effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
+        session_policy = self._policy_resolver.resolve(canonical_request.session_key)
+        client_model = str(body.get("model", "unknown"))
+        bound_model = session_policy.model if session_policy else None
+        if bound_model and bound_model != client_model:
+            logger.info(
+                "Session model override active: session=%s client_model=%s → bound_model=%s",
+                canonical_request.session_key[:12],
+                client_model,
+                bound_model,
+            )
+            body = {**body, "model": bound_model}
+        effective_tiers = self._resolve_effective_tiers(
+            canonical_request.session_key, policy=session_policy
+        )
         last_idx = len(effective_tiers) - 1
 
         for i, tier in enumerate(effective_tiers):
@@ -1294,6 +1367,7 @@ class _RouteExecutor:
                     duration = int((time.monotonic() - start) * 1000)
                     model = body.get("model", "unknown")
                     model_served = resp.model_served or tier.vendor.map_model(model)
+                    self._log_model_drift(bound_model, tier, model_served)
                     if failed_tier_name is not None:
                         logger.info(
                             "Tier %s message succeeded (took over from failed tier: %s)",

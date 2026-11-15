@@ -625,3 +625,174 @@ def test_runtime_upsert_integrates_with_executor():
         "anthropic",
         "copilot",
     ]
+
+
+# ── 8b. 运行时绑定：会话级模型覆盖语义 ─────────────────────
+
+
+def test_runtime_upsert_with_model():
+    """upsert 携带 model 时，策略同时承载 tiers 与模型覆盖."""
+    resolver = SessionPolicyResolver()
+    resolver.upsert("key-model", ["zhipu"], model="glm-5.3")
+    policy = resolver.resolve("key-model")
+    assert policy is not None
+    assert policy.tiers == ["zhipu"]
+    assert policy.model == "glm-5.3"
+
+
+def test_runtime_upsert_model_defaults_to_none():
+    """不传 model 时保持既有 vendor 绑定语义（model=None）."""
+    resolver = SessionPolicyResolver()
+    resolver.upsert("key-legacy", ["copilot"])
+    policy = resolver.resolve("key-legacy")
+    assert policy is not None
+    assert policy.model is None
+
+
+def test_get_runtime_binding():
+    """get_runtime_binding 仅返回运行时绑定，可整体读取（tiers + model）."""
+    resolver = SessionPolicyResolver()
+    assert resolver.get_runtime_binding("missing") is None
+    resolver.upsert("key-g", [], model="claude-opus-4.6")
+    got = resolver.get_runtime_binding("key-g")
+    assert got is not None
+    assert got.tiers == []
+    assert got.model == "claude-opus-4.6"
+
+
+def test_get_runtime_binding_ignores_config_policy():
+    """配置文件驱动的策略不算运行时绑定."""
+    resolver = SessionPolicyResolver(
+        [_make_policy("cfg", keys=["cfg-key"], tiers=["zhipu"])]
+    )
+    assert resolver.get_runtime_binding("cfg-key") is None
+
+
+def test_list_runtime_bindings_includes_model():
+    """list_runtime_bindings 快照含 model 字段（未覆盖时为 None）."""
+    resolver = SessionPolicyResolver()
+    resolver.upsert("k-model", ["zhipu"], model="glm-5.3")
+    resolver.upsert("k-vendor", ["copilot"])
+    by_key = {b["session_key"]: b for b in resolver.list_runtime_bindings()}
+    assert by_key["k-model"]["model"] == "glm-5.3"
+    assert by_key["k-vendor"]["model"] is None
+
+
+# ── 8c. bindable_models 配置校验 ───────────────────────────
+
+
+def test_config_bindable_models_defaults_empty():
+    """未配置时清单为空（功能关闭态）."""
+    config = SessionPoliciesConfig()
+    assert config.bindable_models == []
+
+
+def test_config_bindable_models_accepts_valid_entries():
+    """合法条目完整解析 label / model / tiers."""
+    config = SessionPoliciesConfig(
+        bindable_models=[
+            {"label": "GLM 5.3", "model": "glm-5.3", "tiers": ["zhipu"]},
+            {"label": "Opus", "model": "claude-opus-4.6"},
+        ]
+    )
+    assert config.bindable_models[0].label == "GLM 5.3"
+    assert config.bindable_models[0].tiers == ["zhipu"]
+    assert config.bindable_models[1].tiers == []
+
+
+def test_config_bindable_models_rejects_duplicate_label():
+    """重复 label 拒绝（UI 选项歧义）."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="duplicate bindable_models label"):
+        SessionPoliciesConfig(
+            bindable_models=[
+                {"label": "A", "model": "m1"},
+                {"label": "A", "model": "m2"},
+            ]
+        )
+
+
+def test_config_bindable_models_rejects_duplicate_model():
+    """重复 model 拒绝（API 校验歧义）."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="duplicate bindable_models model"):
+        SessionPoliciesConfig(
+            bindable_models=[
+                {"label": "A", "model": "m1"},
+                {"label": "B", "model": "m1"},
+            ]
+        )
+
+
+def test_config_bindable_models_rejects_empty_label_or_model():
+    """空 label / 空 model 拒绝（min_length 非空约束）."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        SessionPoliciesConfig(bindable_models=[{"label": "", "model": "m1"}])
+    with pytest.raises(ValidationError):
+        SessionPoliciesConfig(bindable_models=[{"label": "A", "model": ""}])
+
+
+# ── 8d. 仅绑模型：空 tiers 继承配置策略顺序 ────────────────
+
+
+def test_model_only_upsert_inherits_config_policy_tiers():
+    """tiers=[] 的运行时绑定继承会话原配置策略的 tiers（不改 vendor 顺序）."""
+    resolver = SessionPolicyResolver(
+        [_make_policy("cfg", keys=["key-inherit"], tiers=["anthropic", "copilot"])]
+    )
+    resolver.upsert("key-inherit", [], model="glm-5.3")
+    policy = resolver.resolve("key-inherit")
+    assert policy is not None
+    assert policy.tiers == ["anthropic", "copilot"]
+    assert policy.model == "glm-5.3"
+    # 解除后配置策略原样恢复
+    assert resolver.remove("key-inherit") is True
+    restored = resolver.resolve("key-inherit")
+    assert restored is not None
+    assert restored.tiers == ["anthropic", "copilot"]
+    assert restored.model is None
+
+
+def test_model_only_upsert_without_config_policy_keeps_empty_tiers():
+    """无配置策略时保持空 tiers（全局默认顺序）."""
+    resolver = SessionPolicyResolver()
+    resolver.upsert("key-plain", [], model="glm-5.3")
+    policy = resolver.resolve("key-plain")
+    assert policy is not None
+    assert policy.tiers == []
+
+
+def test_model_only_upsert_after_runtime_vendor_binding_keeps_tiers():
+    """先建运行时 vendor 绑定、再仅绑模型：继承运行时 tiers，vendor 绑定不丢."""
+    resolver = SessionPolicyResolver()
+    resolver.upsert("key-rt", ["zhipu", "anthropic"])
+    resolver.upsert("key-rt", [], model="glm-5.3")
+    policy = resolver.resolve("key-rt")
+    assert policy is not None
+    assert policy.tiers == ["zhipu", "anthropic"]
+    assert policy.model == "glm-5.3"
+
+
+def test_model_only_upsert_runtime_empty_tiers_falls_to_config():
+    """运行时绑定本身无 tiers 时回落配置态策略（不自我继承空值）."""
+    resolver = SessionPolicyResolver(
+        [_make_policy("cfg", keys=["key-fb"], tiers=["copilot"])]
+    )
+    resolver.upsert("key-fb", [], model="m1")  # 继承 cfg tiers=[copilot]
+    resolver.upsert("key-fb", [], model="m2")  # 再次 model-only：回落链到 backup
+    policy = resolver.resolve("key-fb")
+    assert policy is not None
+    assert policy.tiers == ["copilot"]
+    assert policy.model == "m2"
+
+
+def test_session_policy_model_empty_string_normalized_to_none():
+    """空串/纯空白 model 归一为未设置（Config 页清空输入框的保存路径）."""
+    match = SessionPolicyMatch(session_keys=["k"])
+    assert SessionPolicy(name="p", match=match, model="").model is None
+    assert SessionPolicy(name="p", match=match, model="   ").model is None
+    assert SessionPolicy(name="p", match=match, model="glm-5.3").model == "glm-5.3"

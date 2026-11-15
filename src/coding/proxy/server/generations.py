@@ -267,8 +267,10 @@ class GenerationManager:
             old = self._current
             # 已知局限：切换后瞬间在旧 generation 上完成的请求新写入的绑定会丢失
             # （窗口为毫秒级；绑定也可经 Dashboard/CLI 重新设置）
-            dropped = _migrate_bindings(_bindings(old.app), gen.app) if old else 0
-            resets = _runtime_resets(old, gen, dropped)
+            dropped, model_dropped, vendor_dropped = (
+                _migrate_bindings(_bindings(old.app), gen.app) if old else (0, 0, 0)
+            )
+            resets = _runtime_resets(old, gen, dropped, model_dropped, vendor_dropped)
             relayed = self._relay_reauth(old.app, gen.app) if old else []
         except BaseException:
             await gen.stop()
@@ -631,12 +633,13 @@ def _runtime_baseline(app: FastAPI) -> tuple[list[str], dict[str, dict[str, int]
     return router.get_vendor_names(), _concurrency_limits(router)
 
 
-def _bindings(app: FastAPI) -> dict[str, tuple[str, ...]]:
+def _bindings(app: FastAPI) -> dict[str, tuple[tuple[str, ...], str | None]]:
+    """运行时绑定快照：session → (vendor 元组, 模型覆盖或 None)."""
     resolver = _policy_resolver(app)
     if resolver is None:
         return {}
     return {
-        str(b["session_key"]): tuple(b["vendors"])
+        str(b["session_key"]): (tuple(b["vendors"]), b.get("model"))
         for b in resolver.list_runtime_bindings()
     }
 
@@ -650,23 +653,51 @@ def _available(vendors: tuple[str, ...] | None, app: FastAPI) -> tuple[str, ...]
     return tuple(v for v in vendors if v in names) or None
 
 
-def _migrate_bindings(bindings: dict[str, tuple[str, ...]], app: FastAPI) -> int:
-    """把运行时 session 绑定写入 ``app``（只保留其链路中仍存在的 vendor），返回丢弃数."""
+def _migrate_bindings(
+    bindings: dict[str, tuple[tuple[str, ...], str | None]], app: FastAPI
+) -> tuple[int, int, int]:
+    """把运行时 session 绑定写入 ``app``，返回（整条丢弃数, 模型侧降级数, vendor 侧降级数）.
+
+    vendor 只保留新链路中仍存在的，模型只保留新 ``bindable_models`` 清单内的；
+    单侧失效时降级保留另一侧并分别计数（双侧失效整条丢弃）。
+    """
     resolver = _policy_resolver(app)
+    router = _router(app)
     if resolver is None:
-        return len(bindings)
+        return (
+            len(bindings),
+            sum(1 for _, (_, m) in bindings.items() if m),
+            sum(1 for _, (v, m) in bindings.items() if v and not m),
+        )
+    catalog = {
+        str(entry.get("model"))
+        for entry in (router.get_bindable_models() if router else [])
+    }
     dropped = 0
-    for key, vendors in bindings.items():
+    model_dropped = 0
+    vendor_dropped = 0
+    for key, (vendors, model) in bindings.items():
         kept = _available(vendors, app)
-        if kept:
-            resolver.upsert(key, list(kept))
+        model_kept = model if model in catalog else None
+        if kept or model_kept:
+            # 降级计数只对存活的绑定（双侧失效的绑定整体计入 dropped，
+            # 否则「绑定保留」类提示对已移除的绑定为假）
+            if model is not None and model_kept is None:
+                model_dropped += 1
+            if kept is None and vendors:
+                vendor_dropped += 1
+            resolver.upsert(key, list(kept or ()), model=model_kept)
         else:
             dropped += 1
-    return dropped
+    return dropped, model_dropped, vendor_dropped
 
 
 def _runtime_resets(
-    old: _Generation | None, new: _Generation, dropped: int
+    old: _Generation | None,
+    new: _Generation,
+    dropped: int,
+    model_dropped: int = 0,
+    vendor_dropped: int = 0,
 ) -> list[str]:
     """切换后不再保留的旧 generation 运行时状态（中文，供 UI 展示）."""
     router = _router(old.app) if old is not None else None
@@ -703,7 +734,20 @@ def _runtime_resets(
     if order != old.order and order != new.order:
         resets.append("运行时调整的优先级顺序已恢复为配置的 tiers")
     if dropped:
-        resets.append(f"{dropped} 个 session 绑定的 vendor 不在新链路中，绑定已移除")
+        resets.append(
+            f"{dropped} 个 session 绑定的 vendor 与模型（如有）均不在新链路/清单中，"
+            "绑定已移除"
+        )
+    if vendor_dropped:
+        resets.append(
+            f"{vendor_dropped} 个 session 绑定的 vendor 不在新链路中，"
+            "vendor 绑定已移除（模型覆盖保留）"
+        )
+    if model_dropped:
+        resets.append(
+            f"{model_dropped} 个 session 绑定的模型不在新 bindable_models 清单中，"
+            "模型覆盖已移除（vendor 绑定保留）"
+        )
     return resets
 
 

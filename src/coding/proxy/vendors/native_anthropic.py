@@ -88,6 +88,10 @@ class NativeAnthropicVendor(BaseVendor):
         """将 Claude 模型名映射为供应商模型名，完全委托 ModelMapper."""
         return self._model_mapper.map(model, vendor=self._vendor_name)
 
+    def map_model_with_reason(self, model: str) -> tuple[str, str]:
+        """带命中原因的映射（exact / pattern / default），委托 ModelMapper."""
+        return self._model_mapper.map_with_reason(model, vendor=self._vendor_name)
+
     async def _prepare_request(
         self,
         request_body: dict[str, Any],

@@ -584,3 +584,19 @@ class TestDefaultConfigAvailability:
             "model_mapping 应使用 default 中的新格式（含 vendors 字段），"
             "而非 Pydantic 的旧格式默认值"
         )
+
+    def test_bindable_models_from_default_yaml(self, monkeypatch):
+        """bindable_models 默认清单来自 config.default.yaml（键名失配静默为空的守护）."""
+        import tempfile
+
+        empty_dir = tempfile.mkdtemp()
+        monkeypatch.chdir(empty_dir)
+        monkeypatch.setenv("HOME", "/nonexistent")
+
+        cfg = load_config()
+        models = [(b.label, b.model) for b in cfg.session_policies.bindable_models]
+        assert models, "bindable_models 应来自 default yaml 而非空清单"
+        models_only = [m for _, m in models]
+        assert "claude-opus-4.6" in models_only
+        assert "claude-sonnet-4.6" in models_only
+        assert "claude-haiku-4.5" in models_only
