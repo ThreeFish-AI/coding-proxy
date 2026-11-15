@@ -2418,8 +2418,13 @@ function changePage(delta) {
 
 function buildModelSelect(sessionKey, binding, bindableModels) {
   var boundModel = binding && binding.model ? binding.model : '';
+  // vendor-only 绑定（CLI --vendor / API vendors-only 建立）在 Model 列无模型可显，
+  // 通过 Default 选项标注实际钉住的 vendor，避免与未绑定态不可区分
+  var vendorOnly = binding && !binding.model && binding.vendors && binding.vendors.length
+    ? binding.vendors.join(', ') : '';
+  var defaultLabel = vendorOnly ? 'Default (vendor: ' + vendorOnly + ')' : 'Default';
   var html = '<select class="bind-select" data-session-key="' + escapeHtml(sessionKey) + '" title="Session-level model override — applies from the next request; in-flight requests keep the old model">';
-  html += '<option value=""' + (!boundModel ? ' selected' : '') + '>Default</option>';
+  html += '<option value=""' + (!boundModel ? ' selected' : '') + '>' + escapeHtml(defaultLabel) + '</option>';
   bindableModels.forEach(function(m) {
     var v = m.model || '';
     html += '<option value="' + escapeHtml(v) + '"' + (v === boundModel ? ' selected' : '') + '>' + escapeHtml(m.label || v) + '</option>';

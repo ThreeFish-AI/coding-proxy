@@ -523,14 +523,15 @@ def register_session_vendor_routes(app: Any, router: Any) -> None:
                 ),
             )
         resolver = router._executor._policy_resolver  # noqa: SLF001
-        resolver.upsert(session_key, vendors, model=model)
+        policy = resolver.upsert(session_key, vendors, model=model)
+        # 回显生效值：仅绑模型且发生 tiers 继承时，生效顺序 ≠ 请求值
         return Response(
             content=json.dumps(
                 {
                     "status": "ok",
                     "session_key": session_key,
-                    "vendors": vendors,
-                    "model": model,
+                    "vendors": policy.tiers,
+                    "model": policy.model,
                 },
                 ensure_ascii=False,
             ).encode(),

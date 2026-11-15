@@ -750,22 +750,41 @@ class _RouteExecutor:
                 seen.add(tier.name)
         return ordered
 
-    @staticmethod
-    def _log_model_drift(
-        bound_model: str | None, tier_name: str, model_served: str
-    ) -> None:
-        """会话模型覆盖生效但实际 served 模型偏离时告警.
+    _MODEL_FALLBACK_REASONS = frozenset({"default"})
 
-        触发场景：绑定 tier 被门控跳过后其他 tier 以自身映射接单（failover 漂移），
-        或目标模型名被 ModelMapper default 规则静默改写（缺 identity 映射规则）。
+    @classmethod
+    def _log_model_drift(
+        cls,
+        bound_model: str | None,
+        tier: VendorTier,
+        model_served: str,
+    ) -> None:
+        """会话模型覆盖生效但实际 served 模型偏离预期时告警.
+
+        两类触发：served 既非绑定名也非接单 vendor 映射预期（failover 接单 /
+        上游换名），或绑定名命中映射 default 回退被改写（缺显式规则）。
+        配置内等价映射（如 claude 档位名 → glm 档位名）属预期行为，不告警。
         """
-        if bound_model and model_served != bound_model:
+        if not bound_model:
+            return
+        expected, reason = tier.vendor.map_model_with_reason(bound_model)
+        if model_served not in (bound_model, expected):
             logger.warning(
                 "Session model drift: bound=%s but tier %s served %s "
-                "(failover takeover or model_mapping default rewrite — "
-                "check bindable_models identity rule)",
+                "(its model mapping expected %s — failover takeover or "
+                "unexpected upstream substitution)",
                 bound_model,
-                tier_name,
+                tier.name,
+                model_served,
+                expected,
+            )
+        elif reason in cls._MODEL_FALLBACK_REASONS and model_served != bound_model:
+            logger.warning(
+                "Session model drift: bound=%s hit model_mapping default fallback "
+                "on tier %s and was rewritten to %s — add an identity mapping "
+                "rule (pattern=target) for this model",
+                bound_model,
+                tier.name,
                 model_served,
             )
 
@@ -982,7 +1001,7 @@ class _RouteExecutor:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = usage.get("model_served") or tier.vendor.map_model(model)
-                self._log_model_drift(bound_model, tier.name, model_served)
+                self._log_model_drift(bound_model, tier, model_served)
                 if failed_tier_name is not None:
                     logger.info(
                         "Tier %s stream succeeded (took over from failed tier: %s)",
@@ -1150,7 +1169,7 @@ class _RouteExecutor:
                     duration = int((time.monotonic() - start) * 1000)
                     model = body.get("model", "unknown")
                     model_served = resp.model_served or tier.vendor.map_model(model)
-                    self._log_model_drift(bound_model, tier.name, model_served)
+                    self._log_model_drift(bound_model, tier, model_served)
                     if failed_tier_name is not None:
                         logger.info(
                             "Tier %s message succeeded (took over from failed tier: %s)",

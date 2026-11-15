@@ -88,6 +88,16 @@ class BaseVendor(ABC):
         """
         return model
 
+    def map_model_with_reason(self, model: str) -> tuple[str, str]:
+        """map_model 的带原因变体，返回 (target, reason).
+
+        默认与 map_model 恒等，reason="vendor"（供应商自有解析语义，无
+        default 回退概念）；经共享 ModelMapper 解析的供应商应覆写为真实
+        命中原因（"exact" / "pattern" / "default"），供会话级模型覆盖的
+        漂移告警区分等价映射与缺规则改写。
+        """
+        return self.map_model(model), "vendor"
+
     def get_capabilities(self) -> VendorCapabilities:
         """返回供应商能力声明.
 

@@ -958,9 +958,21 @@
         { label: 'Name', w: '--col-name', text: function (r) { return r.name; } },
         { label: 'Session Keys', w: '--col-list', mono: true, text: function (r) { return (r.match && r.match.session_keys) || []; } },
         { label: 'Tiers', w: '--col-list', text: function (r) { return r.tiers || []; } },
+        { label: 'Model', w: '--col-model', mono: true, text: function (r) { return r.model || '–'; } },
       ],
-      fields: function (i) { return itemFields(parts.concat(['policies']), i, ['name', 'match.session_keys', 'tiers']); },
-      blank: function () { return { name: '', match: { session_keys: [] }, tiers: [] }; },
+      fields: function (i) { return itemFields(parts.concat(['policies']), i, ['name', 'match.session_keys', 'tiers', 'model']); },
+      blank: function () { return { name: '', match: { session_keys: [] }, tiers: [], model: null }; },
+    }));
+    body.appendChild(listBlock({
+      key: 'bindable', parts: parts.concat(['bindable_models']), specPath: 'session_policies.bindable_models',
+      title: 'Bindable Models', ordered: true,
+      cols: [
+        { label: 'Label', w: '--col-name', text: function (r) { return r.label; } },
+        { label: 'Model', w: '--col-model', mono: true, text: function (r) { return r.model; } },
+        { label: 'Tiers', w: '--col-list', text: function (r) { return r.tiers || []; } },
+      ],
+      fields: function (i) { return itemFields(parts.concat(['bindable_models']), i, ['label', 'model', 'tiers']); },
+      blank: function () { return { label: '', model: '', tiers: [] }; },
     }));
     body.appendChild(listBlock({
       key: 'bindings', parts: parts.concat(['title_vendor_bindings']), specPath: 'session_policies.title_vendor_bindings',

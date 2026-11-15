@@ -25,8 +25,8 @@
 
 关键语义：
 
-- **failover 为 best-effort**：绑定的 tier 被熔断 / quota / 能力门控跳过时，后续 tier 按自身映射接单，实际 served 模型可能偏离绑定模型；偏离时打 WARNING 日志（tier 漂移与 map 漂移两类），dashboard Models 列展示真实 served 模型。
-- **运行时绑定纯内存态**：重启后回落默认路由（与 Vendor Bind 现状一致）；标题前缀自动绑定（`title_vendor_bindings`）与手动绑定共用同一存储。
+- **failover 为 best-effort**：绑定的 tier 被熔断 / quota / 能力门控跳过时，后续 tier 按自身映射接单，实际 served 模型可能偏离绑定模型。`_log_model_drift` 在两种情形打 WARNING：served 既非绑定名、也非接单 vendor 映射预期（failover 接单 / 上游换名），或绑定名命中映射 default 回退被改写（缺显式规则）；配置内等价映射（如 claude 档位名 → glm 档位名）属预期行为不告警。dashboard Models 列展示真实 served 模型。
+- **运行时绑定纯内存态**：重启后回落默认路由（与 Vendor Bind 现状一致）；配置热切换（generation swap）时绑定经迁移保留——vendor 需仍在新链路、模型需仍在 `bindable_models` 清单，失效部分移除并在 `reset_runtime` 提示。标题前缀自动绑定（`title_vendor_bindings`）与手动绑定共用同一存储。
 - **`count_tokens` 不同步覆盖**：透传路径非会话感知，token 估算可能与实际对话模型存在偏差（Claude Code 对其精度不敏感）。
 
 ## 3. 配置（[config-reference.md](config-reference.md) 为参数权威）
@@ -60,7 +60,8 @@ session_policies:
 | 解析引擎 | `routing/session_policy.py` | `upsert(..., model=None)`、`get_runtime_binding()`、`list_runtime_bindings()` 增返 model |
 | 执行器 | `routing/executor.py` | 两入口注入模型覆盖（shadow copy）；failover / map 漂移 WARNING；`_apply_title_based_policy` 遇已有运行时绑定即跳过 |
 | 路由 | `server/routes.py` | PUT 增 `model` 校验；GET/status 增返字段 |
-| UI | `server/dashboard.py` | Vendor Bind 列 → Model Bind；选项来自 `bindable_models`；Default = 清除整条绑定 |
+| Vendor 契约 | `vendors/base.py` + `antigravity.py`、`native_anthropic.py` | `BaseVendor.map_model_with_reason` 扩展点（默认恒等 + "vendor"），经 ModelMapper 解析的 vendor 覆写为真实 exact/pattern/default，供漂移告警区分等价映射与缺规则改写 |
+| UI | `server/dashboard.py` | Vendor Bind 列 → Model Bind；选项来自 `bindable_models`；Default = 清除整条绑定；vendor-only 绑定（CLI/旧 API 建立）以 `Default (vendor: …)` 标注可见 |
 | CLI | `cli/__init__.py` | `session bind --model`、`session list` 显示 model |
 
 ## 6. 已知边界与风险
@@ -72,12 +73,12 @@ session_policies:
 | 跨供应商 thinking signature / cache_control 残留 | `VENDOR_TRANSITIONS` 通道按方向注册；无通道方向原样透传，可能上游 400 → 走 semantic failover；跨系列放开前需补通道并实测 |
 | 跨模型切换 prompt cache 失效（成本跳变） | 预期行为：切换即重建缓存，dashboard 成本列天然反映 |
 | context window 差异无预检 | 上游报错走 failover 链，全部失败则该轮报错（会话不丢，可重试） |
-| 绑定重启丢失 | 内存态现状；持久化属独立增强 |
+| 绑定重启丢失 | 内存态现状（热切换经迁移保留，见 §2）；持久化属独立增强 |
 
 ## 7. 测试锚点
 
 - `tests/test_session_aware.py`：resolver model 语义（upsert / get_runtime_binding / list）、空 tiers 继承配置策略顺序、`bindable_models` 配置校验（唯一性 / 非空）。
-- `tests/test_router_executor.py`：模型覆盖注入（shadow copy、session_key 不变、原始客户端名留存日志）、在途请求不受绑定变更影响（流式 / 非流式）、failover 接单与映射改写的漂移告警、配置策略携带 model、标题自动绑定避让。
+- `tests/test_router_executor.py`：模型覆盖注入（shadow copy、绑定按原 session_key 命中、客户端原始模型名留存于 INFO 日志）、在途请求不受绑定变更影响（流式 / 非流式）、failover 接单与映射改写的漂移告警、配置策略携带 model、标题自动绑定避让。
 - `tests/test_app_routes.py`：`PUT/DELETE/GET /api/session-vendor` 路由级校验（含 model 分支、清单为空、vendors 非列表）与 `/api/status` 的 `bindable_models`。
 - `tests/test_config_loader.py`：默认清单来自 `config.default.yaml` 的加载守护。
 - `tests/test_cli_usage.py`：`session bind --model/--vendor` payload 与缺参退出码。

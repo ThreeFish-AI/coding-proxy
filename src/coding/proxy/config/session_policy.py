@@ -52,6 +52,15 @@ class SessionPolicy(BaseModel):
             "统一改写为此值（shadow copy，逐请求生效，在途请求不受影响）。"
         ),
     )
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _empty_model_to_none(cls, value: object) -> object:
+        """空串/纯空白归一为未设置（Config 页 text 控件清空后保存 '' 的恢复路径）."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     quota: SessionQuotaConfig | None = Field(
         default=None,
         description="Per-session 资源配额（预留）",

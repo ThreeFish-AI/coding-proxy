@@ -75,17 +75,20 @@ class SessionPolicyResolver:
         """为指定 session key 创建或替换运行时绑定（vendor 优先级 + 可选模型覆盖）.
 
         运行时策略使用 ``runtime:`` 名称前缀，与配置文件驱动的策略区分。
-        tier_names 为空（仅绑模型）时继承该会话原本会命中的配置策略 tiers
-        （被遮蔽的 key 级策略优先，其次 category 级），兑现「不改 vendor 顺序」
-        语义；无配置策略时保持空 = 全局默认顺序。
+        tier_names 为空（仅绑模型）时继承该会话当前的 tier 顺序：已有运行时
+        vendor 绑定 > 被遮蔽的 key 级配置策略 > category 级配置策略，兑现
+        「不改 vendor 顺序」语义；均无时保持空 = 全局默认顺序。
         """
         with self._lock:
             existing = self._key_index.get(session_key)
             if existing and not existing.name.startswith("runtime:"):
                 self._config_key_backup[session_key] = existing
             if not tier_names:
-                base = self._config_key_backup.get(session_key)
-                if base is None:
+                if existing is not None and existing.name.startswith("runtime:"):
+                    base = existing
+                else:
+                    base = self._config_key_backup.get(session_key)
+                if base is None or not base.tiers:
                     base = self._category_index.get("cc")
                 if base is not None and base.tiers:
                     tier_names = list(base.tiers)
