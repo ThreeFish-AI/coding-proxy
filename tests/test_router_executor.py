@@ -22,9 +22,11 @@ from coding.proxy.compat.canonical import (
 from coding.proxy.config.session_policy import TitleVendorBinding
 from coding.proxy.routing.executor import (
     _FALLBACK_TITLE_MAX_LEN,
+    _INJECTED_PAYLOAD_TITLE_MAX_LEN,
     _SESSION_TITLE_MAX_LEN,
     _VENDOR_PROTOCOL_LABEL_MAP,
     _build_semantic_rejection_diagnostic,
+    _derive_title_from_user_texts,
     _extract_session_title,
     _extract_title_from_images,
     _extract_title_from_metadata,
@@ -2571,6 +2573,262 @@ class TestExtractSessionTitle:
                     "[Session]",
                 ],
             )
+            == ""
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 注入式 Prompt 载荷提取测试
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestExtractInjectedPromptTitle:
+    """注入式模板（agent-as-tool 话术）的载荷标题提取."""
+
+    @staticmethod
+    def _build_request(messages: list[dict]):
+        return build_canonical_request({"model": "test", "messages": messages}, {})
+
+    def test_memory_compressor_extracts_payload_with_tag(self):
+        raw = (
+            "You are a memory relevance compressor utility. Do not use any tools. "
+            "Do not investigate. Only transform the given text. User query: "
+            "把这次「睡眠或重启后当天盯盘不会再拉起」的缺口登记为 I-009 "
+            "Retrieved OpenViking context fragments: <memory uri=...>无关内容</memory>"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == (
+            "[记忆压缩] 把这次「睡眠或重启后当天盯盘不会再拉起」的缺口登记为 I-009"
+        )
+
+    def test_chat_namer_extracts_first_request(self):
+        raw = (
+            "Name this chat from the user's first request. Write a short, specific "
+            "title of at most 48 characters. First request: /preening-substrate "
+            "对项目做正交分解与熵减 This is a naming-only task. Do not edit files."
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == (
+            "[会话命名] /preening-substrate 对项目做正交分解与熵减"
+        )
+
+    def test_branch_namer_extracts_user_request(self):
+        raw = (
+            "Generate a short git branch name that summarizes the coding task "
+            "described below. Output ONLY the branch name. User request: 改进 "
+            "dashboard 供应商状态卡片交互"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert (
+            _extract_session_title(req)
+            == "[分支命名] 改进 dashboard 供应商状态卡片交互"
+        )
+
+    def test_single_command_extracts_command(self):
+        raw = (
+            "Use the Bash tool to run exactly this one command and nothing else: "
+            'sqlite3 :memory: "SELECT 1;"'
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == '[单命令] sqlite3 :memory: "SELECT 1;"'
+
+    def test_generic_you_are_injection_with_delimiter(self):
+        raw = (
+            "You are an expert code reviewer for the team. User query: 审查 PR #281"
+            " 的路由层改动"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == "[注入任务] 审查 PR #281 的路由层改动"
+
+    def test_generic_you_are_without_delimiter_treated_as_real_input(self):
+        """通用家族 opener 宽松,无载荷分隔符时按真实输入整段作标题（防误伤）."""
+        req = self._build_request(
+            [
+                {
+                    "role": "user",
+                    "content": "You are generating pull request details. 请审查这个 diff",
+                }
+            ]
+        )
+        assert (
+            _extract_session_title(req)
+            == "You are generating pull request details. 请审查这个 diff"
+        )
+
+    def test_generic_delimiter_requires_sentence_boundary(self):
+        """句中 "task:"/"query:" 不构成载荷分隔符,不截断真实 persona 消息."""
+        req = self._build_request(
+            [
+                {
+                    "role": "user",
+                    "content": "You are a search assistant I am testing. my query: 为什么索引失效",
+                }
+            ]
+        )
+        assert (
+            _extract_session_title(req)
+            == "You are a search assistant I am testing. my query: 为什么索引失效"
+        )
+
+    def test_named_family_without_payload_skips_to_next_message(self):
+        """具名家族 opener 高度特异,无载荷分隔符 → 跳过该条,取后续真实输入."""
+        messages = [
+            {"role": "user", "content": "Name this chat something fun for the team."},
+            {"role": "user", "content": "真实业务问题"},
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "真实业务问题"
+
+    def test_injected_payload_truncated_to_cap(self):
+        payload = "长载荷" * 200
+        raw = f"Name this chat from the user's first request. First request: {payload}"
+        req = self._build_request([{"role": "user", "content": raw}])
+        title = _extract_session_title(req)
+        assert title.startswith("[会话命名] 长载荷")
+        assert len(title) == _INJECTED_PAYLOAD_TITLE_MAX_LEN
+
+    def test_injected_tag_subject_to_exempt_prefix(self):
+        """注入式家族标签命中豁免前缀 → L1 回退到后续层级."""
+        req = self._build_request(
+            [{"role": "user", "content": "You are a bot. User query: 某任务"}]
+        )
+        assert (
+            _extract_session_title(req, exempt_prefixes=["[注入任务]"])
+            == "[Session] test"
+        )
+
+    def test_exempt_injected_tag_falls_through_to_next_real_input(self):
+        """豁免注入标签时跳过该条继续查找,而非丢弃整个 Level 1."""
+        messages = [
+            {"role": "user", "content": "You are a bot. User query: 某注入载荷"},
+            {"role": "user", "content": "真实业务问题"},
+        ]
+        req = self._build_request(messages)
+        assert (
+            _extract_session_title(req, exempt_prefixes=["[注入任务]"])
+            == "真实业务问题"
+        )
+
+    def test_bare_task_notification_message_skipped(self):
+        """整条消息即背景任务通知 → 跳过,取后续真实输入."""
+        messages = [
+            {
+                "role": "user",
+                "content": '<task-notification> <task-id>x</task-id> <summary>Agent "t" finished</summary> </task-notification>',
+            },
+            {"role": "user", "content": "真实业务问题"},
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "真实业务问题"
+
+    def test_continuation_summary_message_skipped(self):
+        """会话续接摘要（CC resume 固定话术）无区分度 → 跳过."""
+        messages = [
+            {
+                "role": "user",
+                "content": "This session is being continued from a previous conversation that ran out of context.",
+            },
+            {"role": "user", "content": "续接后的真实问题"},
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "续接后的真实问题"
+
+    def test_escaped_notification_xml_condensed_after_unescape(self):
+        """实体转义形态的通知 XML 先解码再凝缩,不泄漏原始标签."""
+        raw = (
+            "You are a memory relevance compressor utility. User query: "
+            '&lt;task-notification&gt; &lt;summary&gt;Agent "t" finished&lt;/summary&gt; '
+            "&lt;/task-notification&gt; 尾部残余"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == '[记忆压缩] Agent "t" finished'
+
+    def test_summary_extraction_scoped_to_notification_block(self):
+        """载荷正文自带的 <summary> 字面量不触发凝缩（须在通知块内）."""
+        raw = (
+            "You are a memory relevance compressor utility. User query: "
+            "把 <summary>旧文案</summary> 替换成新文案"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert (
+            _extract_session_title(req)
+            == "[记忆压缩] 把 <summary>旧文案</summary> 替换成新文案"
+        )
+
+    def test_image_placeholder_stripped(self):
+        """[Image #N] 粘贴图片占位符剥离,保留周边真实文本."""
+        req = self._build_request(
+            [{"role": "user", "content": "[Image #1] 如图所示这个按钮错位了"}]
+        )
+        assert _extract_session_title(req) == "如图所示这个按钮错位了"
+
+    def test_noise_tags_stripped_before_injection_match(self):
+        """system-reminders 等噪声先剥离,不影响注入家族 opener 匹配."""
+        raw = (
+            "<system-reminder>MCP 指令</system-reminder>"
+            "Generate a short git branch name for it. User request: 修复流式乱码"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == "[分支命名] 修复流式乱码"
+
+    def test_task_notification_payload_condensed_to_summary(self):
+        """载荷为任务通知 XML 块时凝缩取 <summary> 行."""
+        raw = (
+            "You are a memory relevance compressor utility. Only transform the "
+            "given text. User query: <task-notification> <task-id>a2f3</task-id> "
+            '<status>completed</status> <summary>Agent "盘点 parity 对账台账" '
+            "finished</summary> </task-notification>"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert (
+            _extract_session_title(req)
+            == '[记忆压缩] Agent "盘点 parity 对账台账" finished'
+        )
+
+    def test_task_notification_without_summary_strips_block(self):
+        """无 summary 的通知块整体剥离,残余文本为载荷;全空则跳过该条."""
+        raw = (
+            "You are a memory relevance compressor utility. User query: "
+            "<task-notification> <task-id>x</task-id> </task-notification> "
+            "监控兜底计时结束"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == "[记忆压缩] 监控兜底计时结束"
+
+    def test_pasted_content_wrapper_stripped_content_kept(self):
+        """<pasted_content> 仅剥外壳,粘贴体作为真实输入进入标题."""
+        raw = (
+            '<pasted_content id="7ebf"> 帮我安装 OpenViking 记忆插件 </pasted_content>'
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == "帮我安装 OpenViking 记忆插件"
+
+
+class TestDeriveTitleFromUserTexts:
+    """``_derive_title_from_user_texts`` — 请求路径与历史回填共用的推导入口."""
+
+    def test_returns_first_real_input(self):
+        assert (
+            _derive_title_from_user_texts(["", "首个真实输入", "第二条"])
+            == "首个真实输入"
+        )
+
+    def test_skips_exempt_and_injected_without_payload(self):
+        assert (
+            _derive_title_from_user_texts(
+                [
+                    "Write the title in the language ...",
+                    "You are a memory relevance compressor utility. 纯模板无分隔符",
+                    "回填目标标题",
+                ],
+                exempt_prefixes=["Write the title in the"],
+            )
+            == "回填目标标题"
+        )
+
+    def test_returns_empty_when_all_skipped(self):
+        assert (
+            _derive_title_from_user_texts(["<system-reminder>纯噪声</system-reminder>"])
             == ""
         )
 
