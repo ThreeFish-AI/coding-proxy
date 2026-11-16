@@ -2,7 +2,7 @@
 
 - HOME / CODING_PROXY_HOME / CWD 指向每个测试独立的临时目录；
 - 清理凭证类环境变量（GITHUB_TOKEN、*_API_KEY、GOOG_*、NATIVE_*_BASE_URL、
-  CODING_PROXY_MASTER_KEY），避免宿主环境影响断言；
+  ANTIGRAVITY_GATEWAY_BASE_URL、CODING_PROXY_MASTER_KEY），避免宿主环境影响断言；
 - audit hook 守护：测试期间任何对真实 ``~/.coding-proxy`` 的文件访问都会立即失败；
 - 管理面 Host 白名单临时加入 TestClient / httpx 默认主机 ``testserver`` / ``test``
   （仅测试；安全用例经 ``strict_hosts`` fixture 还原）。
@@ -79,7 +79,9 @@ def _audit(event: str, args: tuple) -> None:
 
 sys.addaudithook(_audit)
 
-_SENSITIVE_EXACT = frozenset({"GITHUB_TOKEN", "CODING_PROXY_MASTER_KEY"})
+_SENSITIVE_EXACT = frozenset(
+    {"GITHUB_TOKEN", "CODING_PROXY_MASTER_KEY", "ANTIGRAVITY_GATEWAY_BASE_URL"}
+)
 
 
 def _is_sensitive_env(name: str) -> bool:

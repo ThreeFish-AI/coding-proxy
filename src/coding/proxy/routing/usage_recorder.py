@@ -112,8 +112,8 @@ class UsageRecorder:
         """记录用量到 TokenLogger.
 
         Args:
-            client_category: 客户端类别（``cc`` = Claude Code，``api`` = 原生 API 透传）。
-                默认 ``cc`` 保持既有调用方零改动。
+            client_category: 客户端类别（``cc`` = Claude Code，``api`` = 原生 API 透传，
+                ``antigravity`` = Antigravity IDE 客户端透传）。默认 ``cc`` 保持既有调用方零改动。
             operation: 规范化操作名（``chat`` / ``embedding`` / ``generate_content`` ...）。
             endpoint: 原始上游路径（``/v1/chat/completions`` ...），用于多维度排障。
             extra_usage: 非规范 token 字段字典（Gemini thoughts / OpenAI reasoning 等），

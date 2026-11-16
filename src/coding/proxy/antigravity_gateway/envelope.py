@@ -109,6 +109,12 @@ def parse_request_envelope(body_bytes: bytes | None) -> RequestEnvelope:
     )
 
 
+_EXTRA_KEY_MAP: dict[str, str] = {
+    "thoughtsTokenCount": "thoughts_tokens",
+    "toolUsePromptTokenCount": "tool_use_prompt_tokens",
+}
+
+
 def _set_if_nonzero(d: dict[str, Any], key: str, value: Any) -> None:
     """与 routing.usage_parser._set_if_nonzero 同语义：零值/None 不覆盖."""
     if isinstance(value, (int, float)) and value:
@@ -155,17 +161,13 @@ def extract_v1internal_usage(body: dict[str, Any]) -> ExtractionResult:
         "output_tokens": "candidatesTokenCount",
         "cache_read_tokens": "cachedContentTokenCount",
     }
-    for k in ("thoughtsTokenCount", "toolUsePromptTokenCount", "totalTokenCount"):
-        v = _as_int(um.get(k))
+    # 与流式累加器/仓内 gemini 抽取器同口径：规范 snake_case 键
+    for src_key in ("thoughtsTokenCount", "toolUsePromptTokenCount", "totalTokenCount"):
+        v = _as_int(um.get(src_key))
         if v:
-            result.extra_usage[k] = v
+            key = _EXTRA_KEY_MAP.get(src_key, "total_token_count")
+            result.extra_usage[key] = v
     return result
-
-
-_EXTRA_KEY_MAP: dict[str, str] = {
-    "thoughtsTokenCount": "thoughts_tokens",
-    "toolUsePromptTokenCount": "tool_use_prompt_tokens",
-}
 
 
 # 事件分隔 = 空行（允许行间空白符）；对字节流切分，完整事件才解码（多字节安全）

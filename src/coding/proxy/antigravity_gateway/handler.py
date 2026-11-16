@@ -198,6 +198,21 @@ class AntigravityGatewayHandler:
         # ── 非流式：读取全量 body，旁路抽取 usage ──────────────
         try:
             raw_body = await upstream_resp.aread()
+        except UPSTREAM_NETWORK_ERRORS as exc:
+            # 读体阶段断连与连接阶段同口径：502 + failure 落账（关闭交给 finally）
+            duration_ms = int((time.perf_counter() - start_ts) * 1000)
+            await self._record_failure(
+                operation=operation,
+                endpoint=endpoint,
+                duration_ms=duration_ms,
+                reason=str(exc),
+                session_key=envelope.session_key,
+            )
+            return FastAPIResponse(
+                content=build_502_response_body(str(exc)),
+                status_code=502,
+                media_type="application/json",
+            )
         finally:
             await upstream_resp.aclose()
 

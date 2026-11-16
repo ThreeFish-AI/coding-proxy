@@ -153,7 +153,7 @@ def test_extract_v1internal_usage_wrapped() -> None:
     assert r.cache_read_tokens == 3
     assert r.request_id == "resp-1"
     assert r.model_served == "gemini-3.8-flash"
-    assert r.extra_usage == {"thoughtsTokenCount": 5, "totalTokenCount": 26}
+    assert r.extra_usage == {"thoughts_tokens": 5, "total_token_count": 26}
     assert r.evidence_kind == "v1internal_usage_metadata"
 
 
@@ -570,3 +570,29 @@ async def test_usage_recorder_evidence_gate_for_antigravity() -> None:
     )
     token_logger.log.assert_awaited_once()
     token_logger.log_evidence.assert_awaited_once_with(**evidence[0])
+
+
+def test_nonstream_aread_failure_records_failure() -> None:
+    """非流式读体阶段断连：502 + failure 落账（与 send 阶段同口径）."""
+
+    class _BrokenStream(httpx.AsyncByteStream):
+        async def __aiter__(self):  # type: ignore[override]
+            yield b'{"response": {"resp'
+            raise httpx.ReadError("connection reset mid-body")
+
+    def route(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_BrokenStream())
+
+    for client, captured, recorder in _make_app(route):
+        r = client.post(
+            "/api/antigravity/v1internal:generateContent",
+            content=_envelope_body(),
+        )
+        assert r.status_code == 502
+        assert r.json()["error"]["type"] == "api_error"
+        assert len(recorder.calls) == 1
+        call = recorder.calls[0]
+        assert call["success"] is False
+        assert call["client_category"] == CLIENT_CATEGORY
+        assert call["session_key"] == "3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
+        assert "connection reset" in call["extra_usage"]["failure_reason"]

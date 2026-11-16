@@ -24,6 +24,15 @@ def _set_if_nonzero(usage: dict, key: str, value: int) -> None:
         usage[key] = value
 
 
+def _nested_cached_tokens_key(raw_usage: dict[str, Any]) -> str:
+    """探测 OpenAI details 嵌套的 cached_tokens，返回可归因的取值路径（无则空串）."""
+    for parent in ("prompt_tokens_details", "input_tokens_details"):
+        details = raw_usage.get(parent)
+        if isinstance(details, dict) and isinstance(details.get("cached_tokens"), int):
+            return f"{parent}.cached_tokens"
+    return ""
+
+
 def append_usage_evidence(
     usage: dict[str, Any],
     *,
@@ -84,7 +93,8 @@ def append_usage_evidence(
                         )
                         if key in raw_usage
                     ),
-                    "",
+                    # OpenAI 流式嵌套形态（与非流式 extractor 归因一致）
+                    _nested_cached_tokens_key(raw_usage),
                 ),
             },
             "cache_signal_present": any(
@@ -95,7 +105,8 @@ def append_usage_evidence(
                     "cached_tokens",
                     "cachedContentTokenCount",
                 )
-            ),
+            )
+            or bool(_nested_cached_tokens_key(raw_usage)),
         }
     )
 

@@ -22,6 +22,8 @@ from pydantic import BaseModel, Field, model_validator
 
 # 上游 base_url 覆写 env（与 native_api 的 NATIVE_{PROVIDER}_BASE_URL 命名并列）
 _BASE_URL_ENV = "ANTIGRAVITY_GATEWAY_BASE_URL"
+# 公开别名：config resolver 的 env 来源标注与文档共用同一事实源
+BASE_URL_ENV = _BASE_URL_ENV
 
 
 class AntigravityGatewayConfig(BaseModel):
@@ -65,4 +67,4 @@ class AntigravityGatewayConfig(BaseModel):
         return self
 
 
-__all__ = ["AntigravityGatewayConfig"]
+__all__ = ["AntigravityGatewayConfig", "BASE_URL_ENV"]
