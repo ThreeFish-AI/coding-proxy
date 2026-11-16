@@ -28,6 +28,7 @@ from coding.proxy.routing.executor import (
     _VENDOR_PROTOCOL_LABEL_MAP,
     _build_semantic_rejection_diagnostic,
     _derive_title_from_user_texts,
+    _extract_session_probe_payload,
     _extract_session_title,
     _extract_title_from_images,
     _extract_title_from_metadata,
@@ -2387,16 +2388,16 @@ class TestExtractSessionTitle:
         req = self._build_request([{"role": "user", "content": raw}])
         assert _extract_session_title(req) == "/commit feat: 新增标题清洗"
 
-    def test_returns_metadata_fallback_when_only_noise(self):
-        """纯噪声文本回退到 Level 4 元数据兜底(使用 model 名称)."""
+    def test_noise_only_returns_empty_without_model_fallback(self):
+        """纯噪声文本返回空串(模型名兜底已移除,待延迟补写回填)."""
         raw = "<system-reminder>纯噪声</system-reminder>"
         req = self._build_request([{"role": "user", "content": raw}])
-        assert _extract_session_title(req) == "[Session] test"
+        assert _extract_session_title(req) == ""
 
-    def test_returns_metadata_fallback_for_no_user_messages(self):
-        """无 user 消息时回退到 Level 4 元数据兜底."""
+    def test_no_user_messages_returns_empty(self):
+        """无 user 消息时返回空串(模型名兜底已移除)."""
         req = self._build_request([{"role": "assistant", "content": "你好"}])
-        assert _extract_session_title(req) == "[Session] test"
+        assert _extract_session_title(req) == ""
 
     def test_skips_noise_only_part_to_find_real_input(self):
         """首个 user text part 全噪声时,fallback 到下一个非空 user part."""
@@ -2462,14 +2463,16 @@ class TestExtractSessionTitle:
         assert title == "[Tool output] 文件内容摘要"
 
     def test_exempt_l1_falls_back_to_l4_metadata(self):
-        """L1 命中豁免且无 L2/L3 → 回退 Level 4 元数据兜底."""
+        """L1 命中豁免且无 L2/L3 → 回退 Level 4 工具名兜底(模型兜底已移除)."""
         messages = [{"role": "user", "content": "Write the title in the language ..."}]
-        req = self._build_request(messages)
+        req = build_canonical_request(
+            {"model": "test", "messages": messages, "tools": [{"name": "Bash"}]}, {}
+        )
         assert (
             _extract_session_title(
                 req, exempt_prefixes=["Write the title in the language"]
             )
-            == "[Session] test"
+            == "[Tool call] Bash"
         )
 
     def test_exempt_does_not_affect_l2(self):
@@ -2500,13 +2503,12 @@ class TestExtractSessionTitle:
 
     # ── 豁免前缀对合成兜底标题（Level 2/3/4）统一生效 ──
 
-    def test_exempt_l4_session_title_returns_empty(self):
-        """L4 兜底 [Session] 标题命中豁免前缀 → 回退耗尽 → 返回空串."""
+    def test_model_fallback_removed_no_exempt_needed(self):
+        """L4 模型名兜底已移除：无工具无真实输入时自然返回空串,无需豁免配置."""
         req = self._build_request(
             [{"role": "user", "content": "<system-reminder>纯噪声</system-reminder>"}]
         )
-        # L1 噪声剥离为空 → L4 产出 "[Session] test" → 命中 "[Session]" 豁免
-        assert _extract_session_title(req, exempt_prefixes=["[Session]"]) == ""
+        assert _extract_session_title(req) == ""
 
     def test_exempt_l4_tool_call_title_returns_empty(self):
         """L4 兜底 [Tool call] 标题命中豁免前缀 → 返回空串."""
@@ -2540,12 +2542,19 @@ class TestExtractSessionTitle:
                 ],
             },
         ]
-        req = self._build_request(messages)
+        req = build_canonical_request(
+            {
+                "model": "test",
+                "messages": messages,
+                "tools": [{"name": "Bash"}],
+            },
+            {},
+        )
         # L1 无 user TEXT → L2 "[Tool output] 文件内容摘要" 命中豁免 → 跳过 →
-        # L3 无图 → L4 "[Session] test"（未命中豁免，正常返回）
+        # L3 无图 → L4 "[Tool call] Bash"（未命中豁免，正常返回）
         assert (
             _extract_session_title(req, exempt_prefixes=["[Tool output]"])
-            == "[Session] test"
+            == "[Tool call] Bash"
         )
 
     def test_exempt_l3_image_falls_through_to_l4(self):
@@ -2565,16 +2574,33 @@ class TestExtractSessionTitle:
                 ],
             }
         ]
-        req = self._build_request(messages)
+        req = build_canonical_request(
+            {
+                "model": "test",
+                "messages": messages,
+                "tools": [{"name": "Read"}],
+            },
+            {},
+        )
         assert (
             _extract_session_title(req, exempt_prefixes=["[1 Image]"])
-            == "[Session] test"
+            == "[Tool call] Read"
         )
 
     def test_exempt_all_synthetic_layers_returns_empty(self):
         """四层合成标题全部进豁免名单 → 全部被拦截 → 返回空串（永久空标题可接受）."""
-        req = self._build_request(
-            [{"role": "user", "content": "<system-reminder>纯噪声</system-reminder>"}]
+        req = build_canonical_request(
+            {
+                "model": "test",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "<system-reminder>纯噪声</system-reminder>",
+                    }
+                ],
+                "tools": [{"name": "Bash"}],
+            },
+            {},
         )
         assert (
             _extract_session_title(
@@ -2583,7 +2609,6 @@ class TestExtractSessionTitle:
                     "[Tool output]",
                     "[1 Image]",
                     "[Tool call]",
-                    "[Session]",
                 ],
             )
             == ""
@@ -2705,10 +2730,7 @@ class TestExtractInjectedPromptTitle:
         req = self._build_request(
             [{"role": "user", "content": "You are a bot. User query: 某任务"}]
         )
-        assert (
-            _extract_session_title(req, exempt_prefixes=["[注入任务]"])
-            == "[Session] test"
-        )
+        assert _extract_session_title(req, exempt_prefixes=["[注入任务]"]) == ""
 
     def test_exempt_injected_tag_falls_through_to_next_real_input(self):
         """豁免注入标签时跳过该条继续查找,而非丢弃整个 Level 1."""
@@ -2849,6 +2871,106 @@ class TestExtractInjectedPromptTitle:
         assert _extract_session_title(req) == "帮我安装 OpenViking 记忆插件"
 
 
+# ═══════════════════════════════════════════════════════════════════
+# CC 会话标题探测消息（session-title probe）载荷提取测试
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestExtractSessionProbePayload:
+    """``_extract_session_probe_payload`` — CC 内部标题探测消息的载荷提取."""
+
+    def test_tag_plus_current_instruction_with_payload(self):
+        """CC 2.1.325 主形态：未闭合 <session> 壳 + 语言指令 + 真实输入."""
+        cleaned = (
+            "<session> Write the title in 简体中文. Keep technical terms and "
+            "code identifiers in their original form. 修复 dashboard 会话标题问题"
+        )
+        assert _extract_session_probe_payload(cleaned) == "修复 dashboard 会话标题问题"
+
+    def test_predominant_language_variant_with_payload(self):
+        """无语言设置变体：指令以 instructions. 收尾,载荷随其后."""
+        cleaned = (
+            "Write the title in the predominant language of the session — a stray "
+            "word or code token in another language doesn't change it, and neither "
+            "does the English of these instructions. 对 executor 做正交分解"
+        )
+        assert _extract_session_probe_payload(cleaned) == "对 executor 做正交分解"
+
+    def test_legacy_comma_variant_with_payload(self):
+        """legacy 逗号变体：指令以 wrote in, 收尾,载荷随其后."""
+        cleaned = "Write the title in the language the user wrote in, Please review the changes"
+        assert _extract_session_probe_payload(cleaned) == "Please review the changes"
+
+    def test_bare_tag_wraps_real_input(self):
+        """legacy 裸 <session> 壳形态：标签后直接是真实输入,无指令句."""
+        assert (
+            _extract_session_probe_payload("<session> Fix the failing CI job")
+            == "Fix the failing CI job"
+        )
+
+    def test_instruction_only_returns_empty(self):
+        """纯指令无载荷 → 返回空串(调用方跳过该条,靠延迟补写回填)."""
+        cleaned = (
+            "Write the title in 简体中文. Keep technical terms and code "
+            "identifiers in their original form."
+        )
+        assert _extract_session_probe_payload(cleaned) == ""
+
+    def test_unknown_instruction_variant_returns_empty(self):
+        """未知模板变体(句尾锚定未命中) → 按无载荷跳过,不产出垃圾标题."""
+        assert _extract_session_probe_payload("Write the title in a haiku style") == ""
+
+    def test_non_probe_text_returns_none(self):
+        """非探测消息 → None(按真实用户输入继续处理)."""
+        assert _extract_session_probe_payload("普通的用户业务输入") is None
+
+
+class TestProbeTitleEndToEnd:
+    """探测消息端到端：载荷内嵌时首个请求即刻产出业务标题."""
+
+    def test_probe_with_payload_becomes_title_immediately(self):
+        from coding.proxy.compat.canonical import build_canonical_request
+
+        body = {
+            "model": "claude-haiku-4-5",
+            "metadata": {"user_id": "sess-probe-payload"},
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "<session>\nWrite the title in the predominant language "
+                        "of the session — a stray word or code token in another "
+                        "language doesn't change it, and neither does the English "
+                        "of these instructions.\n修复 session title 永久缺失问题"
+                    ),
+                }
+            ],
+        }
+        req = build_canonical_request(body, {})
+        assert _extract_session_title(req) == "修复 session title 永久缺失问题"
+
+    def test_probe_instruction_only_falls_through_to_next_text(self):
+        """纯指令探测消息被跳过 → 继续取后续真实输入."""
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "Write the title in 简体中文. Keep technical terms and code "
+                    "identifiers in their original form."
+                ),
+            },
+            {"role": "user", "content": "第二条真实业务输入"},
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "第二条真实业务输入"
+
+    @staticmethod
+    def _build_request(messages: list[dict]):
+        from coding.proxy.compat.canonical import build_canonical_request
+
+        return build_canonical_request({"model": "test", "messages": messages}, {})
+
+
 class TestDeriveTitleFromUserTexts:
     """``_derive_title_from_user_texts`` — 请求路径与历史回填共用的推导入口."""
 
@@ -2952,13 +3074,15 @@ class TestExtractTitleFromUserText:
             CanonicalMessagePart(
                 type=CanonicalPartType.TEXT,
                 role="user",
-                text="Write the title in the language the user wrote in.",
+                text="Keep the session title short and specific.",
             ),
         ]
         # 前缀小写、输入首字母大写 → 不命中，正常返回
         assert (
-            _extract_title_from_user_text(msgs, exempt_prefixes=["write the title"])
-            == "Write the title in the language the user wrote in."
+            _extract_title_from_user_text(
+                msgs, exempt_prefixes=["keep the session title"]
+            )
+            == "Keep the session title short and specific."
         )
 
     def test_exempt_no_param_backward_compatible(self):
@@ -2969,11 +3093,11 @@ class TestExtractTitleFromUserText:
             CanonicalMessagePart(
                 type=CanonicalPartType.TEXT,
                 role="user",
-                text="Write the title in the language the user wrote in.",
+                text="Keep the session title short and specific.",
             ),
         ]
         assert _extract_title_from_user_text(msgs) == (
-            "Write the title in the language the user wrote in."
+            "Keep the session title short and specific."
         )
 
     def test_exempt_empty_list_no_op(self):
@@ -2984,11 +3108,11 @@ class TestExtractTitleFromUserText:
             CanonicalMessagePart(
                 type=CanonicalPartType.TEXT,
                 role="user",
-                text="Write the title in the language the user wrote in.",
+                text="Keep the session title short and specific.",
             ),
         ]
         assert _extract_title_from_user_text(msgs, exempt_prefixes=[]) == (
-            "Write the title in the language the user wrote in."
+            "Keep the session title short and specific."
         )
 
     def test_exempt_all_user_inputs_skipped_returns_empty(self):
@@ -3182,9 +3306,10 @@ class TestExtractTitleFromMetadata:
         )
         assert _extract_title_from_metadata(req) == "[Tool call] Bash, Read, Edit"
 
-    def test_uses_model_when_no_tools(self):
+    def test_model_only_returns_empty(self):
+        """模型名兜底已移除：无工具时返回空串,不再合成 [Session] <model>."""
         req = self._build_request_with_meta(tool_names=[], model="claude-sonnet-4-6")
-        assert _extract_title_from_metadata(req) == "[Session] claude-sonnet-4-6"
+        assert _extract_title_from_metadata(req) == ""
 
     def test_returns_empty_when_nothing(self):
         req = self._build_request_with_meta(tool_names=[], model="")
@@ -3259,21 +3384,21 @@ class TestExtractSessionTitleFallback:
         req = self._build_request([], tools=[{"name": "Bash"}, {"name": "Read"}])
         assert _extract_session_title(req) == "[Tool call] Bash, Read"
 
-    def test_level4_uses_model_name(self):
-        """无 tools 时,Level 4 使用 model 名称."""
+    def test_level4_model_fallback_removed(self):
+        """无 tools 时,Level 4 不再合成模型名(返回空串待延迟补写)."""
         req = self._build_request([])
-        assert _extract_session_title(req) == "[Session] test-model"
+        assert _extract_session_title(req) == ""
 
-    def test_fallback_cascade_full(self):
-        """Level 1 全噪声 → Level 2 全噪声 → Level 3 无图 → Level 4 模型名."""
+    def test_fallback_cascade_full_to_tool_names(self):
+        """Level 1 全噪声 → Level 2 全噪声 → Level 3 无图 → Level 4 工具名."""
         messages = [
             {
                 "role": "user",
                 "content": "<system-reminder>纯噪声</system-reminder>",
             },
         ]
-        req = self._build_request(messages)
-        assert _extract_session_title(req) == "[Session] test-model"
+        req = self._build_request(messages, tools=[{"name": "Bash"}])
+        assert _extract_session_title(req) == "[Tool call] Bash"
 
 
 class TestApplyTitleBasedPolicy:
@@ -3604,12 +3729,10 @@ class TestExemptPrefixInjection:
     def test_executor_without_exempt_prefixes_backward_compatible(self):
         """未配置豁免前缀 → 实例方法行为与模块级默认一致（不跳过）."""
         req = self._build_request(
-            [{"role": "user", "content": "Write the title in the language ..."}]
+            [{"role": "user", "content": "Keep the session title short."}]
         )
         executor = _executor()  # 不传 title_exempt_prefixes
-        assert executor._extract_session_title(req) == (
-            "Write the title in the language ..."
-        )
+        assert executor._extract_session_title(req) == ("Keep the session title short.")
 
     def test_executor_filters_empty_string_prefix_at_construction(self):
         """构造期过滤空串：即便传入空串/纯空白也不会豁免一切."""
@@ -3619,12 +3742,27 @@ class TestExemptPrefixInjection:
         assert executor._extract_session_title(req) == "正常标题"
 
     def test_executor_exempt_l4_returns_empty(self):
-        """executor 持有 [Session] 豁免 → L4 兜底标题被豁免 → 实例方法返回空串."""
+        """executor 持有豁免 → L4 兜底候选被豁免 → 实例方法返回空串."""
         req = self._build_request(
             [{"role": "user", "content": "<system-reminder>纯噪声</system-reminder>"}]
         )
-        executor = _executor(title_exempt_prefixes=["[Session]"])
-        # L1 噪声剥离为空 → L4 "[Session] test" 命中豁免 → 返回 ""
+        from coding.proxy.compat.canonical import build_canonical_request as _bcr
+
+        req = _bcr(
+            {
+                "model": "test",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "<system-reminder>纯噪声</system-reminder>",
+                    }
+                ],
+                "tools": [{"name": "Bash"}],
+            },
+            {},
+        )
+        executor = _executor(title_exempt_prefixes=["[Tool call]"])
+        # L1 噪声剥离为空 → L4 "[Tool call] Bash" 命中豁免 → 返回 ""
         assert executor._extract_session_title(req) == ""
 
     @pytest.mark.asyncio

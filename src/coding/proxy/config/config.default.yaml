@@ -741,12 +741,11 @@ session_policies:
     - prefix: "# 目标"
       vendor: "zhipu"
   # Session 标题豁免前缀：标题提取每一层（user 文本 / 工具结果 / 图片 / 元数据兜底）
-  # 产出的候选以任一前缀开头则跳过，继续向下一层回退。既用于过滤注入式 Prompt
-  # （如示例语言指令），也可豁免无信息量的合成兜底标题。大小写敏感 startswith。
-  # 例：添加 "[Session]" 可让 [Session] <model> 这类兜底标题不再写入，
-  #     session 标题保持空，待后续真实输入经延迟补写回填。
+  # 产出的候选以任一前缀开头则跳过，继续向下一层回退。可豁免无信息量的
+  # 合成兜底标题（如 "[Tool call]"）。大小写敏感 startswith。
+  # CC 内部标题探测消息（"Write the title in ..."）已由代码内建识别并
+  # 剥离指令取真实载荷，模型名兜底（[Session] <model>）已移除，
+  # 默认无需配置任何豁免前缀。
   # ⚠️ 自定义 yaml 中该字段为整体替换（loader 的 list 合并约定，非追加合并）；
   #    写空列表即关闭豁免。加载时会自动 strip + 去空 + 去重。
-  title_exempt_prefixes:
-    - "Write the title in the"
-    - "[Session]"
+  title_exempt_prefixes: []

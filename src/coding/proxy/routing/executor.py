@@ -171,8 +171,8 @@ def _sanitize_user_text(raw: str) -> str:
 # Level 1: user TEXT → 噪声剥离 → 首条非空文本 (原有逻辑)
 # Level 2: user TOOL_RESULT → text 截取 → "[Tool output] <snippet>"
 # Level 3: user IMAGE → 计数 → "[1 Image]" / "[N Images]"
-# Level 4: 请求元数据 → tool_names / model → "[Tool call] Bash, Read"
-#          / "[Session] claude-opus-4-8"
+# Level 4: 请求元数据 → tool_names → "[Tool call] Bash, Read"
+#          （模型名兜底已移除：合成模型名无业务语义）
 # ─────────────────────────────────────────────────────────────────
 
 
@@ -330,6 +330,48 @@ def _extract_injected_prompt_title(cleaned: str) -> str | None:
     return None
 
 
+# ── CC 会话标题探测消息（session-title probe）载荷提取 ─────────
+#
+# Claude Code 在会话早期发送内部标题探测请求（haiku，querySource=
+# generate_session_title），user 文本为固定指令模板，形态取自 CC 2.1.325
+# 取证：可选未闭合 <session> 壳 + "Write the title in ..." 指令句；
+# legacy 变体为裸 <session> 壳直接包裹真实输入。指令内嵌首条用户消息
+# 原文时剥离指令取载荷；纯指令无载荷时跳过该条，待延迟补写回填。
+# 此前靠 title_exempt_prefixes 配置豁免（且 <session> 前缀形态漏匹配，
+# 历史库残留 256 条垃圾标题），现收敛为代码内建识别，配置可清零。
+_PROBE_SESSION_TAG_PREFIX = re.compile(r"^\s*<session\b[^>]*>\s*", re.IGNORECASE)
+_PROBE_INSTRUCTION_OPEN = re.compile(r"^\s*Write the title in\b", re.IGNORECASE)
+# 指令块句尾锚定（当前两代模板 + legacy 逗号变体）；未命中的未知变体
+# 整条跳过（返回 ""），宁可延迟补写也不产出垃圾标题。
+_PROBE_INSTRUCTION_BLOCK = re.compile(
+    r"Write the title in\b.*?"
+    r"(?:in their original form\.|the English of these instructions\.|wrote in,)\s*",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _extract_session_probe_payload(cleaned: str) -> str | None:
+    """CC 标题探测消息 → 真实业务载荷.
+
+    Returns:
+        ``None`` — 非探测消息（调用方按真实用户输入/注入家族继续处理）；
+        ``""`` — 探测指令无载荷（调用方跳过该条，靠延迟补写回填）；
+        ``str`` — 剥离壳与指令后的真实载荷（首条用户消息原文）。
+    """
+    tag = _PROBE_SESSION_TAG_PREFIX.match(cleaned)
+    text = cleaned[tag.end() :] if tag else cleaned
+    if not _PROBE_INSTRUCTION_OPEN.match(text):
+        # 裸 <session> 壳包裹真实输入（legacy 形态）：标签后即载荷
+        if tag:
+            return text.strip()
+        return None
+    stripped = _PROBE_INSTRUCTION_BLOCK.sub("", text, count=1)
+    if stripped == text:
+        # 指令块句尾锚定未命中（未知模板变体）：整条按无载荷跳过
+        return ""
+    return stripped.strip()
+
+
 def _derive_title_from_user_texts(
     texts, exempt_prefixes: list[str] | None = None
 ) -> str:
@@ -361,6 +403,13 @@ def _derive_title_from_user_texts(
         ):
             continue
         if _exempt(cleaned):
+            continue
+        probe = _extract_session_probe_payload(cleaned)
+        if probe is not None:
+            # 探测家族命中：载荷即真实首条输入，直接成题；
+            # 无载荷/未知变体跳过该条，靠延迟补写回填。
+            if probe and not _exempt(probe):
+                return probe[:_SESSION_TITLE_MAX_LEN]
             continue
         injected = _extract_injected_prompt_title(cleaned)
         if injected is None:
@@ -415,12 +464,15 @@ def _extract_title_from_images(messages: list[CanonicalMessagePart]) -> str:
 
 
 def _extract_title_from_metadata(request: CanonicalRequest) -> str:
-    """Level 4: 从请求元数据 (tool_names / model) 合成兜底标题."""
+    """Level 4: 从请求元数据 (tool_names) 合成兜底标题.
+
+    模型名兜底（``[Session] <model>``）已移除：合成模型名无业务语义，
+    与「标题总具备实际识别意义的业务 message」目标冲突；无 user 输入的
+    会话保持空标题，待延迟补写经 upsert 回填真实输入。
+    """
     if request.tool_names:
         names = ", ".join(request.tool_names[:3])
         return f"[Tool call] {names}"
-    if request.model:
-        return f"[Session] {request.model}"
     return ""
 
 
@@ -437,8 +489,8 @@ def _extract_session_title(
     开头，则视为豁免、继续向下一层回退。Level 1 内部仍保留「逐条消息跳过」
     语义（清洗后文本以豁免前缀开头则跳过该条、继续查找下一条 user TEXT）；
     本函数在编排层对每层最终候选再做一次 ``_is_exempt`` 拦截，使 Level 2/3/4
-    的合成标题（如 ``[Tool output]``、``[N Image(s)]``、``[Tool call]``、
-    ``[Session]``）也能被用户显式豁免。全部层级均被豁免时返回空串，调用方
+    的合成标题（如 ``[Tool output]``、``[N Image(s)]``、``[Tool call]``）
+    也能被用户显式豁免。全部层级均被豁免时返回空串，调用方
     ``if title:`` 据此跳过写库，session 标题保持空，待后续请求经
     ``set_session_title`` 幂等 upsert 回填有意义标题。默认 ``None`` 时行为与历史一致。
     """
