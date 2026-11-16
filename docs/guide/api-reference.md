@@ -417,4 +417,4 @@ curl http://127.0.0.1:3392/api/gemini/v1beta/models/gemini-3.8-flash:generateCon
 export CLOUD_CODE_URL="http://127.0.0.1:3392/api/antigravity"   # Antigravity 侧
 ```
 
-上游默认 `https://daily-cloudcode-pa.googleapis.com`，可经 `ANTIGRAVITY_GATEWAY_BASE_URL` 覆写；未启用时端点返回 404。配置与接入指引参见 [配置字段参考 — antigravity_gateway](../arch/config-reference.md#11-antigravity_gateway--antigravity-客户端透传配置) 与 [用户指引 § 4.8](../user-guide.md#48-antigravity_gateway--antigravity-ide-客户端透传)。
+上游默认 `https://daily-cloudcode-pa.googleapis.com`，可经 `ANTIGRAVITY_GATEWAY_BASE_URL` 覆写；未启用时端点返回 404。配置与接入指引参见 [配置字段参考 — antigravity_gateway](../arch/config-reference.md#12-antigravity_gateway--antigravity-客户端透传配置) 与 [用户指引 § 4.8](../user-guide.md#48-antigravity_gateway--antigravity-ide-客户端透传)。
