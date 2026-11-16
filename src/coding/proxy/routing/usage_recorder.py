@@ -28,15 +28,27 @@ class UsageRecorder:
     def set_pricing_table(self, table: PricingTable) -> None:
         self._pricing_table = table
 
-    async def set_session_title(self, session_key: str, title: str) -> None:
-        """为新 session 设置标题（委托给 TokenLogger）."""
-        if self._token_logger:
-            await self._token_logger.set_session_title(session_key, title)
+    async def set_session_title(self, session_key: str, title: str) -> bool:
+        """为新 session 设置标题（委托给 TokenLogger）.
 
-    async def update_empty_session_title(self, session_key: str, title: str) -> None:
-        """为标题为空的 session 补写标题（委托给 TokenLogger）."""
+        返回是否实际写入（行已存在时 INSERT OR IGNORE 跳过返回 False），
+        供调用方仅在标题真正落库时触发标题联动策略。
+        """
         if self._token_logger:
-            await self._token_logger.update_empty_session_title(session_key, title)
+            return await self._token_logger.set_session_title(session_key, title)
+        return False
+
+    async def update_empty_session_title(self, session_key: str, title: str) -> bool:
+        """为标题为空的 session 补写标题（委托给 TokenLogger）.
+
+        返回是否实际写入（行缺失时 upsert 插入、空标题行更新、已有标题不动），
+        供调用方仅在标题落库时触发标题联动策略。
+        """
+        if self._token_logger:
+            return await self._token_logger.update_empty_session_title(
+                session_key, title
+            )
+        return False
 
     # ── 用量信息构建 ──────────────────────────────────────
 

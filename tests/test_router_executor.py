@@ -3413,37 +3413,57 @@ class TestApplyTitleBasedPolicy:
         assert [t.name for t in effective] == ["anthropic", "zhipu"]
 
     @pytest.mark.asyncio
-    async def test_execute_message_end_to_end_binding(self):
-        """端到端: 新 session 首请求标题命中前缀 → 创建绑定并路由到 zhipu."""
-        resolver = SessionPolicyResolver()
-        tiers = [
-            _make_tier(_mock_vendor("anthropic")),
-            _make_tier(_mock_vendor("zhipu")),
-        ]
-        executor = _executor(
-            tiers=tiers,
-            session_mgr=_stub_session_manager(is_new=True),
-            session_policy_resolver=resolver,
-            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
-        )
-        body = {
-            "model": "test",
-            "metadata": {"user_id": "session-abc"},
-            "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "# 目标 实现 X"}]}
-            ],
-        }
-        resp = await executor.execute_message(body, {})
-        assert resp.status_code == 200
-        # 从 body 解析出的 session_key 应已建立运行时绑定
-        canonical = build_canonical_request(body, {})
-        policy = resolver.resolve(canonical.session_key)
-        assert policy is not None
-        assert policy.tiers == ["zhipu"]
+    async def test_execute_message_end_to_end_binding(self, tmp_path):
+        """端到端: 新 session 首请求标题命中前缀且真实落库 → 创建绑定并路由到 zhipu."""
+        from coding.proxy.logging.db import TokenLogger
+
+        tl = TokenLogger(tmp_path / "usage.db")
+        await tl.init()
+        try:
+            resolver = SessionPolicyResolver()
+            tiers = [
+                _make_tier(_mock_vendor("anthropic")),
+                _make_tier(_mock_vendor("zhipu")),
+            ]
+            recorder = UsageRecorder(token_logger=tl)
+            executor = _executor(
+                recorder=recorder,
+                tiers=tiers,
+                session_mgr=_stub_session_manager(is_new=True),
+                session_policy_resolver=resolver,
+                title_vendor_bindings=[
+                    TitleVendorBinding(prefix="# 目标", vendor="zhipu")
+                ],
+            )
+            body = {
+                "model": "test",
+                "metadata": {"user_id": "session-abc"},
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "# 目标 实现 X"}],
+                    }
+                ],
+            }
+            with patch.object(recorder, "record", new=AsyncMock()):
+                resp = await executor.execute_message(body, {})
+            assert resp.status_code == 200
+            # 从 body 解析出的 session_key 应已建立运行时绑定
+            canonical = build_canonical_request(body, {})
+            policy = resolver.resolve(canonical.session_key)
+            assert policy is not None
+            assert policy.tiers == ["zhipu"]
+        finally:
+            await tl.close()
 
     @pytest.mark.asyncio
     async def test_execute_message_existing_session_no_binding(self):
-        """端到端: 已存在 session(is_new=False) 不触发标题绑定."""
+        """端到端: 已存在 session(is_new=False) 且标题未落库 → 不触发标题绑定.
+
+        前提: 默认 UsageRecorder 无 token_logger,update_empty 返回
+        written=False → 策略不触发。真实落库触发的正例见
+        TestDelayedTitleBackfill.test_backfill_write_triggers_title_binding。
+        """
         resolver = SessionPolicyResolver()
         tiers = [
             _make_tier(_mock_vendor("anthropic")),
@@ -3464,43 +3484,55 @@ class TestApplyTitleBasedPolicy:
         }
         await executor.execute_message(body, {})
         canonical = build_canonical_request(body, {})
-        # is_new=False → 不调用 _apply_title_based_policy,无运行时绑定
+        # 无 token_logger → written=False → 不调用 _apply_title_based_policy
         assert resolver.resolve(canonical.session_key) is None
 
     @pytest.mark.asyncio
-    async def test_execute_stream_end_to_end_binding(self):
-        """端到端(流式): 新 session 首请求标题命中前缀 → 创建绑定."""
-        resolver = SessionPolicyResolver()
-        zhipu_vendor = _mock_vendor("zhipu")
-        zhipu_vendor.send_message_stream = MagicMock(
-            return_value=_async_chunks([b'{"type":"message_stop"}'])
-        )
-        tiers = [
-            _make_tier(_mock_vendor("anthropic")),
-            _make_tier(zhipu_vendor),
-        ]
-        executor = _executor(
-            tiers=tiers,
-            session_mgr=_stub_session_manager(is_new=True),
-            session_policy_resolver=resolver,
-            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
-        )
-        body = {
-            "model": "test",
-            "metadata": {"user_id": "session-stream"},
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": "# 目标 流式任务"}],
-                }
-            ],
-        }
-        chunks = [chunk async for chunk, _ in executor.execute_stream(body, {})]
-        assert chunks  # 有数据返回
-        canonical = build_canonical_request(body, {})
-        policy = resolver.resolve(canonical.session_key)
-        assert policy is not None
-        assert policy.tiers == ["zhipu"]
+    async def test_execute_stream_end_to_end_binding(self, tmp_path):
+        """端到端(流式): 新 session 首请求标题命中前缀且真实落库 → 创建绑定."""
+        from coding.proxy.logging.db import TokenLogger
+
+        tl = TokenLogger(tmp_path / "usage.db")
+        await tl.init()
+        try:
+            resolver = SessionPolicyResolver()
+            zhipu_vendor = _mock_vendor("zhipu")
+            zhipu_vendor.send_message_stream = MagicMock(
+                return_value=_async_chunks([b'{"type":"message_stop"}'])
+            )
+            tiers = [
+                _make_tier(_mock_vendor("anthropic")),
+                _make_tier(zhipu_vendor),
+            ]
+            recorder = UsageRecorder(token_logger=tl)
+            executor = _executor(
+                recorder=recorder,
+                tiers=tiers,
+                session_mgr=_stub_session_manager(is_new=True),
+                session_policy_resolver=resolver,
+                title_vendor_bindings=[
+                    TitleVendorBinding(prefix="# 目标", vendor="zhipu")
+                ],
+            )
+            body = {
+                "model": "test",
+                "metadata": {"user_id": "session-stream"},
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "# 目标 流式任务"}],
+                    }
+                ],
+            }
+            with patch.object(recorder, "record", new=AsyncMock()):
+                chunks = [chunk async for chunk, _ in executor.execute_stream(body, {})]
+            assert chunks  # 有数据返回
+            canonical = build_canonical_request(body, {})
+            policy = resolver.resolve(canonical.session_key)
+            assert policy is not None
+            assert policy.tiers == ["zhipu"]
+        finally:
+            await tl.close()
 
     def test_empty_prefix_rejected_by_validation(self):
         """空 prefix 在模型校验阶段即被拒绝,杜绝全量误绑定."""
@@ -3614,6 +3646,173 @@ class TestExemptPrefixInjection:
         with patch.object(recorder, "set_session_title", new=AsyncMock()) as spy:
             await executor.execute_message(body, {})
             spy.assert_not_called()
+
+
+class TestDelayedTitleBackfill:
+    """延迟标题补写回归测试.
+
+    场景: CC 会话首请求为内部标题探测 prompt,全层级被豁免前缀拦截 →
+    不建 session_meta 行;第二请求携带真实业务消息,update 路径须能
+    upsert 补建行并触发标题联动策略(旧实现 UPDATE 对缺失行静默 no-op,
+    标题永远缺失,dashboard 显示 "-")。
+    """
+
+    @pytest.mark.asyncio
+    async def test_probe_then_real_message_heals_title(self, tmp_path):
+        """首请求全豁免不建行 → 第二请求真实消息补写落库(真实 TokenLogger)."""
+        from coding.proxy.logging.db import TokenLogger
+
+        tl = TokenLogger(tmp_path / "usage.db")
+        await tl.init()
+        try:
+            recorder = UsageRecorder(token_logger=tl)
+            # record 与响应解析无关路径打桩,聚焦标题写库行为
+            with patch.object(recorder, "record", new=AsyncMock()):
+                mgr = _stub_session_manager()
+                mgr.get_or_create_record = AsyncMock(
+                    side_effect=[(None, True), (None, False)]
+                )
+                executor = _executor(
+                    recorder=recorder,
+                    session_mgr=mgr,
+                    title_exempt_prefixes=[
+                        "Write the title in the",
+                        "[Session]",
+                    ],
+                )
+                probe_body = {
+                    "model": "claude-haiku-4-5",
+                    "metadata": {"user_id": "sess-heal"},
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Write the title in the user's language.",
+                        }
+                    ],
+                }
+                real_body = {
+                    "model": "claude-opus-4-8",
+                    "metadata": {"user_id": "sess-heal"},
+                    "messages": [
+                        {"role": "user", "content": "修复 dashboard 会话标题问题"}
+                    ],
+                }
+                await executor.execute_message(probe_body, {})
+                titles = await tl.get_session_titles(["sess-heal"])
+                assert titles.get("sess-heal", "") == ""  # 首请求:未建行
+                await executor.execute_message(real_body, {})
+                titles = await tl.get_session_titles(["sess-heal"])
+                assert titles.get("sess-heal") == "修复 dashboard 会话标题问题"
+        finally:
+            await tl.close()
+
+    @pytest.mark.asyncio
+    async def test_backfill_write_triggers_title_binding(self):
+        """补写真正落库(written=True) → 触发 title_vendor_bindings 自动绑定."""
+        resolver = SessionPolicyResolver()
+        recorder = UsageRecorder()
+        recorder.update_empty_session_title = AsyncMock(return_value=True)
+        executor = _executor(
+            recorder=recorder,
+            session_mgr=_stub_session_manager(is_new=False),
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        body = {
+            "model": "claude-opus-4-8",
+            "metadata": {"user_id": "sess-bind"},
+            "messages": [{"role": "user", "content": "# 目标 完成重构"}],
+        }
+        await executor.execute_message(body, {})
+        policy = resolver.resolve("sess-bind")
+        assert policy is not None
+        assert policy.tiers == ["zhipu"]
+
+    @pytest.mark.asyncio
+    async def test_backfill_noop_skips_title_binding(self):
+        """补写 no-op(written=False,标题已存在) → 不触发自动绑定."""
+        resolver = SessionPolicyResolver()
+        recorder = UsageRecorder()
+        recorder.update_empty_session_title = AsyncMock(return_value=False)
+        executor = _executor(
+            recorder=recorder,
+            session_mgr=_stub_session_manager(is_new=False),
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        body = {
+            "model": "claude-opus-4-8",
+            "metadata": {"user_id": "sess-nobind"},
+            "messages": [{"role": "user", "content": "# 目标 完成重构"}],
+        }
+        await executor.execute_message(body, {})
+        assert resolver.resolve("sess-nobind") is None
+
+    @pytest.mark.asyncio
+    async def test_ttl_renew_existing_title_no_binding_resurrection(self, tmp_path):
+        """TTL 过期重判新会话: 标题行已存在(set 静默 no-op) → 不复活自动绑定.
+
+        用户经 dashboard 删除运行时绑定后,长会话空闲超 compat TTL 再次请求时
+        被视为新会话;标题不改写(written=False),已被删除的绑定不得复活。
+        """
+        from coding.proxy.logging.db import TokenLogger
+
+        tl = TokenLogger(tmp_path / "usage.db")
+        await tl.init()
+        try:
+            await tl.set_session_title("sess-ttl", "# 目标 原始任务")
+            resolver = SessionPolicyResolver()
+            recorder = UsageRecorder(token_logger=tl)
+            with patch.object(recorder, "record", new=AsyncMock()):
+                executor = _executor(
+                    recorder=recorder,
+                    session_mgr=_stub_session_manager(is_new=True),
+                    session_policy_resolver=resolver,
+                    title_vendor_bindings=[
+                        TitleVendorBinding(prefix="# 目标", vendor="zhipu")
+                    ],
+                )
+                body = {
+                    "model": "claude-opus-4-8",
+                    "metadata": {"user_id": "sess-ttl"},
+                    "messages": [{"role": "user", "content": "# 目标 继续任务"}],
+                }
+                await executor.execute_message(body, {})
+                assert resolver.resolve("sess-ttl") is None
+        finally:
+            await tl.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_backfill_upserts_missing_row(self, tmp_path):
+        """stream 路径同样在行缺失时补建(对齐 execute_message 修复)."""
+        from coding.proxy.logging.db import TokenLogger
+
+        tl = TokenLogger(tmp_path / "usage.db")
+        await tl.init()
+        try:
+            recorder = UsageRecorder(token_logger=tl)
+            with patch.object(recorder, "record", new=AsyncMock()):
+                stream_vendor = _mock_vendor()
+                stream_vendor.send_message_stream = MagicMock(
+                    return_value=_async_chunks([b""])
+                )
+                executor = _executor(
+                    recorder=recorder,
+                    session_mgr=_stub_session_manager(is_new=False),
+                    title_exempt_prefixes=["[Session]"],
+                    tiers=[_make_tier(stream_vendor)],
+                )
+                body = {
+                    "model": "claude-opus-4-8",
+                    "metadata": {"user_id": "sess-stream"},
+                    "messages": [{"role": "user", "content": "流式会话真实标题"}],
+                }
+                async for _chunk, _label in executor.execute_stream(body, {}):
+                    pass
+                titles = await tl.get_session_titles(["sess-stream"])
+                assert titles.get("sess-stream") == "流式会话真实标题"
+        finally:
+            await tl.close()
 
 
 # ── 会话级模型覆盖（Model Bind）────────────────────────────
