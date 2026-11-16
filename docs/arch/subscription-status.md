@@ -1,0 +1,73 @@
+# 订阅状态面板（Subscription Status）
+
+> Overview 页「🎫 订阅状态」卡片：聚合 **Claude Code / GLM / Antigravity** 三家订阅的档位与用量。三家上游端点均未正式文档化，解析一律宽容式（缺字段即跳过），单家失败不影响其他家。
+
+## 数据流
+
+```
+Dashboard Overview ── GET /api/dashboard/subscriptions
+                          │
+                          ▼
+              SubscriptionStatusService（TTL 120s 缓存 + per-vendor 锁 + 错误隔离）
+              ┌─────────────┬──────────────────────┬─────────────────────────┐
+              │ claude      │ glm                  │ antigravity             │
+              │ 被动快照    │ ZhipuUsageFetcher    │ AntigravityUsageFetcher │
+              │ (内存单例)  │ (api_key 主动查询)   │ (OAuth token 主动查询)  │
+              └─────────────┴──────────────────────┴─────────────────────────┘
+                     │                 │                        │
+        透传链路 unified 头   open.bigmodel.cn       cloudcode-pa / daily-cloudcode-pa
+        旁路采集(零凭证)     /api/monitor/...        v1internal:loadCodeAssist
+                                                + retrieveUserQuotaSummary
+```
+
+## 三家获取途径与契约
+
+### Claude Code（Anthropic 订阅）— 被动采集
+
+代理对 Anthropic 官方通道纯透传、不持有 OAuth 凭证，故无主动查询通道：
+
+- 采集点：`BaseVendor._on_upstream_response` 钩子（`vendors/base.py`，流式/非流式各一处调用），`AnthropicVendor` 覆写为 `capture_anthropic_ratelimit`（`routing/subscription_signals.py`）；
+- 信号：OAuth 订阅流量专属的 `anthropic-ratelimit-unified-*` 响应头（API key 流量不返回，解析为空即跳过）；utilization 为 0.0–1.0 小数、reset 为 epoch 秒（与 `/api/oauth/usage` JSON 的 0–100/ISO8601 不同源，勿混淆）；
+- 存储：进程内单例快照，重启清零，首个订阅请求即回填；无数据时卡片显示「等待首个请求（被动采集）」；
+- 档位（Pro/Max）拿不到：响应头不含档位信息（需要凭证或读 claude.ai 网页，见「已知边界」）。
+
+### GLM（智谱 Coding Plan）— 主动查询
+
+- 端点：`GET {scheme://host(base_url)}/api/monitor/usage/quota/limit`，host 由 zhipu `base_url` 派生（默认 `open.bigmodel.cn`，国际站 `api.z.ai` 同路径）；
+- 鉴权：**裸 api_key**（`Authorization: <key>`，无 Bearer 前缀，加 Bearer 会 401）——智谱官方插件（zai-coding-plugins）生产同款；
+- 响应：`data.level`（lite/pro/max 档位）+ `data.limits[]`：`TOKENS_LIMIT` 条目按 `unit/number` 编码窗口（`3/5` → 5 小时、`6/1` → 每周），已用百分比存在 `percentage`（官方插件形态）与 `used_percent`（社区历史形态）两种字段名，重置时间 `nextResetTime`（epoch 毫秒）或 `reset_time`——全部防御式取值；
+- 到期时间任何端点不返回；按量计费余额无 API key 查询通道（仅套餐额度口径）。
+
+### Antigravity（Google）— 主动查询
+
+- 两步：`POST cloudcode-pa.../v1internal:loadCodeAssist`（取 `currentTier.name` 档位 + `cloudaicompanionProject`，结果缓存 1h）→ `POST daily-cloudcode-pa.../v1internal:retrieveUserQuotaSummary`（body `{"project": ...}`）；
+- 响应：`groups[].buckets[]`，每桶 `remainingFraction`(0–1) + `resetTime`(ISO8601) + `window`(5h/weekly)，按模型族分组（Gemini / Claude+GPT 各自双窗口）；used = 1 − remaining；
+- **UA 门控**：请求必须带 Antigravity 客户端指纹（`User-Agent: Antigravity/...` + `x-client-name: antigravity`），否则 403 或缺 Gemini 组；
+- 双 host 数据分裂：Gemini 组用量以 `daily-cloudcode-pa` 为准；
+- 凭证来源优先级：vendor 通道 token manager（reauth 热更新天然跟随）→ 回退 config + token store 合成独立 `GoogleOAuthTokenManager`（vendor 未进路由链路时，如仅用 IDE gateway 透传）。
+
+## 代码锚点
+
+| 模块 | 职责 |
+|---|---|
+| `routing/subscription_signals.py` | unified 头解析 + 进程级被动快照单例 |
+| `server/subscription_status.py` | 两家 fetcher + `SubscriptionStatusService` 聚合（TTL/锁/错误隔离） |
+| `vendors/base.py` | `_on_upstream_response` 上游响应抵达钩子（默认 no-op） |
+| `vendors/anthropic.py` | 覆写钩子 → 被动采集 |
+| `server/app.py` | `app.state.subscription_status` 装配（随 generation 整体重建） |
+| `server/dashboard.py` | `GET /api/dashboard/subscriptions` 端点 + Overview 卡片 + `updateSubscriptions` 渲染 |
+
+响应形状：`{"vendors": [{key, plan, status: ok|waiting|not_configured|error, error?, windows: [{id, label, used_percent, reset_epoch, exhausted?}], updated_at?}]}`。
+
+## 风险边界与已知缺口
+
+- **Claude 档位缺失**：完整档位需服务端接管 OAuth（新建 Provider + TokenManager + 凭证落库，样板见 antigravity/google），当前按「被动用量」交付；
+- **端点漂移**：三家均为非官方文档化接口（GLM 为官方插件所用、Antigravity 为仓内既有 v1internal 同族），字段漂移由宽容式解析兜底，表现为面板缺数据而非报错；
+- **限频**：主动查询由 Dashboard 刷新驱动、TTL 120s 缓存（错误同样入缓存，防刷新风暴）；
+- **账号口径**：Antigravity gateway 通道（IDE 自带凭证）与凭证通道账号可能不同，本面板展示凭证通道口径；
+- **泄露纪律（I2）**：上游错误收敛为短消息（`HTTP 401`/`网络异常`/`凭证失效，需重新登录`），未预期异常只记类型名，绝不携带凭证/URL 细节。
+
+## 测试锚点
+
+- `tests/test_subscription_status.py`：unified 头解析（含大小写/畸形值/钳制）、vendor 钩子旁路采集（流式+非流式）、两家 fetcher（MockTransport、双字段形态、403 门控、token 失效）、服务 TTL/错误隔离、端点集成、token store 回退构建；
+- `tests/test_dashboard_subscription_card.py`：HTML 接线、XSS 转义静态检查、内联渲染函数 Node vm 行为验证（分支 + 恶意档位名转义）。

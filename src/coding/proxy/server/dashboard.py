@@ -534,6 +534,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .vendor-name { font-weight: 600; font-size: 14px; }
     .vendor-badges { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
     .quota-group { display: flex; align-items: center; gap: 6px; }
+    .sub-reset { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
     .status-badge {
       font-size: 11px; padding: 2px 7px;
       border-radius: 10px;
@@ -1024,6 +1025,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="card model-calling-card" id="model-calling-card">
     <div class="card-title">📡 Model Calling 实时状态</div>
     <div class="model-calling-wrap" id="model-calling-wrap">
+      <div class="mc-empty">加载中…</div>
+    </div>
+  </div>
+
+  <!-- 订阅状态（Claude Code / GLM / Antigravity） -->
+  <div class="card subscription-card" id="subscription-card">
+    <div class="card-title">🎫 订阅状态</div>
+    <div class="vendor-list" id="subscription-list">
       <div class="mc-empty">加载中…</div>
     </div>
   </div>
@@ -1579,6 +1588,64 @@ function updateVendorStatus(status) {
         ${quotaHTML}
         ${rlHtml}
       </div>
+    </div>`;
+  }).join('');
+}
+
+// ── 订阅状态（Claude Code / GLM / Antigravity） ─────────────
+const SUB_META = {
+  claude: { label: 'Claude Code 订阅', initial: 'C' },
+  glm: { label: 'GLM Coding Plan', initial: 'G' },
+  antigravity: { label: 'Antigravity', initial: 'A' },
+};
+function fmtResetCountdown(resetEpoch) {
+  if (!resetEpoch) return '';
+  const diff = resetEpoch * 1000 - Date.now();
+  if (diff <= 0) return '即将重置';
+  const m = Math.round(diff / 60000);
+  if (m < 60) return m + ' 分钟后重置';
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + ' 小时后重置';
+  return Math.round(h / 24) + ' 天后重置';
+}
+function renderSubWindow(w) {
+  if (!w || w.used_percent == null) return '';
+  const pct = Math.round(w.used_percent);
+  const reset = fmtResetCountdown(w.reset_epoch);
+  return `<div class="quota-group">` +
+    `<span class="status-badge ${quotaClass(pct)}">${escapeHtml(w.label || w.id || '')} ${pct}%</span>` +
+    `<div class="quota-bar-wrap"><div class="quota-bar-bg">` +
+    `<div class="quota-bar-fill" style="width:${Math.min(pct,100)}%;background:${quotaBarColor(pct)}"></div>` +
+    `</div></div>` +
+    (reset ? `<span class="sub-reset">${reset}</span>` : '') +
+    `</div>`;
+}
+function updateSubscriptions(data) {
+  const list = document.getElementById('subscription-list');
+  if (!list) return;
+  const vendors = (data && data.vendors) || [];
+  if (!vendors.length) {
+    list.innerHTML = '<div class="empty">无订阅数据</div>';
+    return;
+  }
+  list.innerHTML = vendors.map(v => {
+    const meta = SUB_META[v.key] || { label: v.key, initial: '?' };
+    let badges = '';
+    if (v.plan) badges += `<span class="status-badge sb-ok">${escapeHtml(v.plan)}</span>`;
+    if (v.status === 'error' && v.error) {
+      badges += `<span class="status-badge sb-err" title="${escapeHtml(v.error)}">查询失败</span>`;
+    } else if (v.status === 'not_configured') {
+      badges += `<span class="status-badge sb-warn">未启用</span>`;
+    } else if (v.status === 'waiting') {
+      badges += `<span class="status-badge sb-warn">等待首个请求（被动采集）</span>`;
+    }
+    const windows = (v.windows || []).map(renderSubWindow).join('');
+    return `<div class="vendor-item">
+      <div class="vendor-info">
+        <div class="vendor-avatar">${meta.initial}</div>
+        <span class="vendor-name">${escapeHtml(meta.label)}</span>
+      </div>
+      <div class="vendor-badges">${badges}${windows}</div>
     </div>`;
   }).join('');
 }
@@ -2497,10 +2564,12 @@ sessionsTbody.addEventListener('change', function(e) {
 
 async function refreshOverview() {
   const days = currentDays > 0 ? currentDays : 7;
-  const [summary, timeline, status] = await Promise.all([
+  const [summary, timeline, status, subs] = await Promise.all([
     fetchJSON('/api/dashboard/summary?days=' + days),
     fetchJSON('/api/dashboard/timeline?days=' + days),
     fetchJSON('/api/status'),
+    // 订阅状态面板失败不拖垮整体刷新（服务端已隔离单家错误，这里兜底网络层）
+    fetchJSON('/api/dashboard/subscriptions').catch(function () { return { vendors: [] }; }),
   ]);
 
   if (summary.version) {
@@ -2510,6 +2579,7 @@ async function refreshOverview() {
   updateKPI(summary);
   updateVendorStatus(status);
   updateModelCalling(status);
+  updateSubscriptions(subs);
   updateChartTitles(days);
 
   const rows = timeline.rows || [];
@@ -2840,6 +2910,35 @@ def register_dashboard_routes(app: Any) -> None:
                 media_type="application/json",
             )
         result = {"sessions": sessions, "hours": hours}
+        return Response(
+            content=json.dumps(result, ensure_ascii=False).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    @app.get("/api/dashboard/subscriptions")
+    async def dashboard_subscriptions(request: Request) -> Response:
+        """返回三家订阅（Claude/GLM/Antigravity）档位与用量快照.
+
+        主动查询带 TTL 缓存且单家失败隔离；服务未装配（异常配置）时
+        返回空列表（200），保证 Overview 整体刷新不被该面板拖垮。
+        """
+        service = getattr(request.app.state, "subscription_status", None)
+        if service is None:
+            return Response(
+                content=b'{"vendors":[]}',
+                status_code=200,
+                media_type="application/json",
+            )
+        try:
+            result = await service.get_status()
+        except Exception as exc:
+            logger.error("dashboard_subscriptions error: %s", type(exc).__name__)
+            return Response(
+                content=b'{"vendors":[]}',
+                status_code=200,
+                media_type="application/json",
+            )
         return Response(
             content=json.dumps(result, ensure_ascii=False).encode(),
             status_code=200,
