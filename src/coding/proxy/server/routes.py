@@ -480,7 +480,9 @@ def register_session_vendor_routes(app: Any, router: Any) -> None:
                 if not bindable:
                     message = (
                         "model binding is disabled: "
-                        "session_policies.bindable_models is empty or unset in config"
+                        "session_policies.bindable_models is empty or unset in "
+                        "config (empty list disables binding incl. the builtin "
+                        "vendor catalog)"
                     )
                 else:
                     message = f"unknown model: {model}; bindable: " + ", ".join(

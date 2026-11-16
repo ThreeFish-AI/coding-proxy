@@ -597,6 +597,6 @@ class TestDefaultConfigAvailability:
         models = [(b.label, b.model) for b in cfg.session_policies.bindable_models]
         assert models, "bindable_models 应来自 default yaml 而非空清单"
         models_only = [m for _, m in models]
-        assert "claude-opus-4.6" in models_only
-        assert "claude-sonnet-4.6" in models_only
-        assert "claude-haiku-4.5" in models_only
+        assert "claude-opus-4-6" in models_only
+        assert "claude-sonnet-4-6" in models_only
+        assert "claude-haiku-4-5" in models_only

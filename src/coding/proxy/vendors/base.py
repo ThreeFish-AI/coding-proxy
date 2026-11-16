@@ -98,6 +98,25 @@ class BaseVendor(ABC):
         """
         return self.map_model(model), "vendor"
 
+    def supports_model(self, model: str) -> bool:
+        """判定本 vendor 能否服务指定模型名（会话级模型绑定的门控依据）.
+
+        默认按原生模型名前缀族判定（见 model_catalog.NATIVE_MODEL_PREFIXES）：
+        本族前缀命中 → 支持；他族原生名（命中其他 vendor 的前缀族）→ 不支持；
+        未知模型名（不在任何已知族）→ 宽容放行。默认实现只适合真透传
+        vendor（如 anthropic）；经共享 ModelMapper 解析的 vendor（native 系、
+        antigravity）必须覆写——其未知名走 default 回退静默改写而非透传，
+        应对未知名返回 False 并要求显式 model_mapping 规则。
+        """
+        from .model_catalog import ALL_NATIVE_PREFIXES, NATIVE_MODEL_PREFIXES
+
+        own = NATIVE_MODEL_PREFIXES.get(self.get_name(), ())
+        if own and model.startswith(own):
+            return True
+        if model.startswith(ALL_NATIVE_PREFIXES):
+            return False
+        return True
+
     def get_capabilities(self) -> VendorCapabilities:
         """返回供应商能力声明.
 

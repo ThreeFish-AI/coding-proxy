@@ -463,7 +463,7 @@ async def test_session_model_binding_survives_swap():
     async with serving() as (manager, client):
         resp = await client.put(
             "/api/session-vendor",
-            json={"session_key": "s-m", "model": "claude-opus-4.6"},
+            json={"session_key": "s-m", "model": "claude-opus-4-6"},
         )
         assert resp.status_code == 200, resp.text
         resp = await client.put(
@@ -471,7 +471,7 @@ async def test_session_model_binding_survives_swap():
             json={
                 "session_key": "s-vm",
                 "vendors": ["anthropic"],
-                "model": "claude-sonnet-4.6",
+                "model": "claude-sonnet-4-6",
             },
         )
         assert resp.status_code == 200, resp.text
@@ -485,9 +485,9 @@ async def test_session_model_binding_survives_swap():
             for b in (await client.get("/api/session-vendor")).json()["bindings"]
         }
         # 纯模型绑定与组合绑定的 model 均经迁移保留
-        assert bindings["s-m"]["model"] == "claude-opus-4.6"
+        assert bindings["s-m"]["model"] == "claude-opus-4-6"
         # anthropic 出链但模型仍在清单 → 降级为纯模型绑定，而非整条丢弃
-        assert bindings["s-vm"]["model"] == "claude-sonnet-4.6"
+        assert bindings["s-vm"]["model"] == "claude-sonnet-4-6"
         assert bindings["s-vm"]["vendors"] == []
         # vendor 侧降级有对称提示（模型保留），不误报整条移除
         assert any(

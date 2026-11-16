@@ -1453,10 +1453,20 @@ def test_bind_unknown_vendor_rejected_with_model():
 
 
 def test_status_returns_bindable_models():
-    """/api/status 携带 bindable_models（UI 下拉选项源）."""
+    """/api/status 携带合成 bindable_models（内置目录 ∪ config 显式条目）."""
     with _bindable_app() as client:
         models = client.get("/api/status").json()["bindable_models"]
-        assert [m["model"] for m in models] == ["glm-5.3", "claude-opus-4.6"]
+        models_only = [m["model"] for m in models]
+        # 内置 zhipu 目录随激活 vendor 进入下拉，config 条目按 model 去重合并
+        assert "glm-5.3" in models_only
+        assert "glm-5.3-flash" in models_only  # 内置目录条目
+        assert "claude-opus-4.6" in models_only  # config 纯自定义条目
+        assert models_only.count("glm-5.3") == 1  # 同名去重不重复
+        glm = next(m for m in models if m["model"] == "glm-5.3")
+        assert glm["tiers"] == ["zhipu"]
+        assert glm["vendor"] == "zhipu"
+        custom = next(m for m in models if m["model"] == "claude-opus-4.6")
+        assert custom["vendor"] == "custom"
 
 
 def test_dashboard_model_bind_column():
@@ -1472,7 +1482,7 @@ def test_dashboard_model_bind_column():
 
 
 def test_bind_model_disabled_when_catalog_empty():
-    """清单为空（功能关闭）时 PUT model 的报错指向根因配置项."""
+    """config 清单为空 = 整体关闭（含内置目录），报错指向根因配置项."""
     config = ProxyConfig(
         primary={"enabled": False},
         fallback={"enabled": True},
@@ -1488,6 +1498,8 @@ def test_bind_model_disabled_when_catalog_empty():
         message = resp.json()["error"]["message"]
         assert "disabled" in message
         assert "bindable_models" in message
+        # 空清单时 /api/status 也不携带任何内置目录条目
+        assert client.get("/api/status").json()["bindable_models"] == []
 
 
 def test_bind_vendors_not_a_list_rejected():

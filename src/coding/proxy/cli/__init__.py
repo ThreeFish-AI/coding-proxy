@@ -385,7 +385,7 @@ def session_bind(
         None,
         "--model",
         "-m",
-        help="绑定模型（须在 config 的 bindable_models 清单内，与 --vendor 可组合）",
+        help="绑定模型（须在可绑定目录内：内置 vendor 目录与 config bindable_models 的合成清单）",
     ),
     port: int = typer.Option(3392, "--port", "-p", help="代理服务端口"),
 ) -> None:

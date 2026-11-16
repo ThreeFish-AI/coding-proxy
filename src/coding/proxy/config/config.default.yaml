@@ -719,21 +719,23 @@ native_api:
 # 未配置时（默认），所有 Session 使用全局 tiers 顺序。
 session_policies:
   policies: []
-  # 可绑定模型清单 —— Dashboard「Model Bind」下拉选项与 API 校验的唯一来源。
-  # label / model 清单内唯一；tiers 为随绑定重排的 vendor 优先级（空 = 不改顺序）。
-  # 跨系列原生模型名（如 glm-5.3）需配套 identity model_mapping 规则
-  # （pattern 与 target 同名），防 ModelMapper default 静默改写。
+  # 可绑定模型显式定制层 —— 下拉选项 = 本清单 ∪ 内置 vendor 目录（按激活
+  # vendor 过滤，见 vendors/model_catalog.py）。同名条目本清单覆盖 label/tiers
+  # （tiers 留空继承内置锁定值）；exclude: true 剔除同名内置条目。
+  # 绑定语义为 vendor.model 锁定：目录内模型只发给原生归属 vendor，不做
+  # 跨系列静默降级；identity 映射规则由内置目录自动合成，无需手配。
   bindable_models:
     - label: "Opus 4.6"
-      model: "claude-opus-4.6"
+      model: "claude-opus-4-6"
     - label: "Sonnet 4.6"
-      model: "claude-sonnet-4.6"
+      model: "claude-sonnet-4-6"
     - label: "Haiku 4.5"
-      model: "claude-haiku-4.5"
-    # 跨系列示例：
-    # - label: "GLM 5.3"
+      model: "claude-haiku-4-5"
+    # 覆盖内置条目示例（重命名 + 剔除）：
+    # - label: "我的 GLM 5.3"
     #   model: "glm-5.3"
-    #   tiers: ["zhipu"]
+    # - model: "glm-4.5-air"
+    #   exclude: true
   # 标题前缀 → 供应商自动绑定。
   # 当 Session 标题以指定前缀开头时，自动将该 Session 绑定到对应供应商。
   # 匹配规则按列表顺序求值，首次匹配生效。

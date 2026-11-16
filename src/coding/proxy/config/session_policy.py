@@ -68,7 +68,12 @@ class SessionPolicy(BaseModel):
 
 
 class BindableModel(BaseModel):
-    """可绑定模型清单条目 — Dashboard Model Bind 下拉选项的唯一来源."""
+    """可绑定模型清单条目 — 用户对 Model Bind 下拉的显式定制层.
+
+    下拉选项 = 内置 vendor 目录（按激活 vendor 过滤）∪ 本清单：同名条目
+    本清单覆盖 label/tiers（tiers 留空继承内置锁定值），exclude=True 剔除
+    内置同名条目。完整合成规则见 vendors/model_catalog.py.
+    """
 
     label: str = Field(
         min_length=1,
@@ -81,10 +86,13 @@ class BindableModel(BaseModel):
     tiers: list[str] = Field(
         default_factory=list,
         description=(
-            "随绑定重排的 vendor 优先级列表（空 = 仅覆盖模型、不改 vendor 顺序）。"
-            "跨系列原生模型名（如 glm-5.3）需配套 identity model_mapping 规则，"
-            "防 ModelMapper default 静默改写。"
+            "随绑定重排的 vendor 优先级列表（空 = 继承内置目录的锁定 tiers，"
+            "纯自定义条目留空则沿用全局链路顺序）。"
         ),
+    )
+    exclude: bool = Field(
+        default=False,
+        description="从合成目录剔除同名内置条目（内置目录收缩开关）",
     )
 
 
@@ -114,9 +122,10 @@ class SessionPoliciesConfig(BaseModel):
     bindable_models: list[BindableModel] = Field(
         default_factory=list,
         description=(
-            "可绑定模型清单（Model Bind 下拉选项的唯一来源）。"
-            "API 只允许绑定清单内的模型；跨系列原生模型名需配套 identity "
-            "model_mapping 规则。label 与 model 在清单内必须唯一。"
+            "可绑定模型的显式定制层：非空时下拉选项为其与内置 vendor 目录"
+            "（按激活 vendor 过滤）的合成结果，API 只允许绑定合成清单内的模型；"
+            "空清单 = 整体关闭模型绑定（含内置目录）。"
+            "label 与 model 在清单内必须唯一。"
         ),
     )
 

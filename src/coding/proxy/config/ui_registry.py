@@ -540,7 +540,7 @@ REGISTRY += [
         "session_policies.bindable_models",
         "Model List",
         "list_section",
-        "可绑定模型清单，Model Bind 下拉选项的唯一来源",
+        "可绑定模型的显式定制层；下拉选项为其与内置 vendor 目录的合成结果",
     ),
     _f(
         "session_policies.bindable_models.*.label",
@@ -558,8 +558,14 @@ REGISTRY += [
         "session_policies.bindable_models.*.tiers",
         "Tiers",
         "list",
-        "随绑定重排的 vendor 优先级，空则不改顺序",
+        "随绑定重排的 vendor 优先级，留空继承内置目录锁定值",
         enum=list(_VENDOR_TYPES),
+    ),
+    _f(
+        "session_policies.bindable_models.*.exclude",
+        "Exclude",
+        "bool",
+        "剔除同名内置目录条目（下拉收缩开关）",
     ),
     _f(
         "session_policies.title_vendor_bindings",

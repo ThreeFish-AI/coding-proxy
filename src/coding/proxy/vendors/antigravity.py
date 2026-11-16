@@ -344,6 +344,17 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
             model, vendor="antigravity", default=self._default_model
         )
 
+    def supports_model(self, model: str) -> bool:
+        """ModelMapper 显式映射命中（exact/pattern）或 claude- 家族视为支持.
+
+        未知名不放行：本 vendor 对未知名按 default 回退到端点默认模型
+        （静默改写），绑定此类模型需配套显式 model_mapping 规则。
+        """
+        _, reason = self.map_model_with_reason(model)
+        if reason in ("exact", "pattern"):
+            return True
+        return model.startswith("claude-")
+
     async def _prepare_request(
         self,
         request_body: dict[str, Any],
