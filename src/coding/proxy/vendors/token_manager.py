@@ -71,7 +71,8 @@ class BaseTokenManager(ABC):
                 self._record_error(exc)
                 raise
             except Exception as exc:
-                wrapped = TokenAcquireError(f"Token 获取异常: {exc}")
+                # _acquire 的异常消息可能携带凭证（请求头构建失败等）；只暴露类型（I2）
+                wrapped = TokenAcquireError(f"Token 获取异常: {type(exc).__name__}")
                 self._record_error(wrapped)
                 raise wrapped from exc
             self._access_token = token

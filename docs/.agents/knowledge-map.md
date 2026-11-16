@@ -27,8 +27,8 @@
 | ------------------------------------------------- | --------------------------------------------------- |
 | [guide/quickstart.md](../guide/quickstart.md)     | 环境要求、安装、最小配置、启动、Claude Code 集成    |
 | [guide/vendors.md](../guide/vendors.md)           | 全部 9 种供应商配置详情、模型映射、定价表           |
-| [guide/cli-reference.md](../guide/cli-reference.md) | start / status / usage / reset / auth 全部命令      |
-| [guide/api-reference.md](../guide/api-reference.md) | /v1/messages、health、status、reset、dashboard 等   |
+| [guide/cli-reference.md](../guide/cli-reference.md) | start / status / usage / reset / auth / config 全部命令 |
+| [guide/api-reference.md](../guide/api-reference.md) | /v1/messages、status、reset、config 管理、dashboard 等 |
 | [guide/dashboard.md](../guide/dashboard.md)       | Web 可视化看板功能与交互                            |
 | [guide/monitoring.md](../guide/monitoring.md)     | 日志、用量统计、性能调优、常见场景、故障排查        |
 
@@ -43,6 +43,7 @@
 | [arch/config-reference.md](../arch/config-reference.md) | 配置参数权威定义（Single Source of Truth）            |
 | [arch/design-patterns.md](../arch/design-patterns.md) | 13 种设计模式详解（熔断器、状态机、Composite 等）     |
 | [arch/routing.md](../arch/routing.md)                 | 路由引擎 12 个子模块职责                              |
+| [arch/session-model-bind.md](../arch/session-model-bind.md) | 会话级模型绑定（Model Bind）设计与实现锚点      |
 | [arch/vendors.md](../arch/vendors.md)                 | Vendor 类层次结构与 9 种实现                          |
 | [arch/convert.md](../arch/convert.md)                 | Anthropic ↔ Gemini ↔ OpenAI 三向格式转换              |
 | [arch/testing.md](../arch/testing.md)                 | 测试覆盖矩阵与工具链                                  |

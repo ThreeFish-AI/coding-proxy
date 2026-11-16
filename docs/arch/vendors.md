@@ -46,6 +46,7 @@ classDiagram
         +supports_request(caps) tuple
         +make_compatibility_decision(req) CompatibilityDecision
         +map_model(model) str
+        +map_model_with_reason(model) tuple
         +check_health() bool
         +close()
     }
@@ -140,6 +141,7 @@ class BaseVendor(ABC):
     def supports_request(self, caps: RequestCapabilities) -> tuple[bool, list[CapabilityLossReason]]
     def make_compatibility_decision(self, request: CanonicalRequest) -> CompatibilityDecision
     def map_model(self, model: str) -> str   # 默认恒等映射
+    def map_model_with_reason(self, model: str) -> tuple[str, str]   # 默认 (恒等, "vendor")；经共享 ModelMapper 解析的 vendor 覆写为 ("exact"|"pattern"|"default")，供会话模型漂移告警消费
 
     # ── 钩子方法（子类可选覆写） ──────────────────────────
     def _get_endpoint(self) -> str                       # 默认 /v1/messages
@@ -391,7 +393,7 @@ class ExampleVendor(NativeAnthropicVendor):
 2. **添加 `VendorType` 枚举值** — 在 [config/routing.py](../../src/coding/proxy/config/routing.py) 的 `VendorType` Literal 中追加 `"example"`
 3. **添加供应商配置类** — 在 [config/schema.py](../../src/coding/proxy/config/schema.py) 或 [config/vendors.py](../../src/coding/proxy/config/vendors.py) 中定义 `ExampleConfig`（或复用已有的 `api_key` 字段）
 4. **添加工厂分支** — 在 [server/factory.py](../../src/coding/proxy/server/factory.py) 的 `_create_vendor_from_config()` 中添加 `case "example":` 分支
-5. **添加配置条目** — 在 `config.yaml` 的 `vendors` 列表中添加对应条目
+5. **添加配置条目** — 在配置存储的 `vendors` 列表中添加对应条目（Dashboard → Config 或 `coding-proxy config set vendors`）
 
 ### Path B: 自定义协议供应商（适用于需要协议转换的场景）
 

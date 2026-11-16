@@ -78,7 +78,7 @@ Claude Code 基线五层：透明接入、会话识别与标题、会话级供�
 
 用户命题的三件事在通道①②上**零代码即成立**（实测背书）；通道③补齐「默认 agent + 订阅账号」场景，以持续维护成本为代价。
 
-**实施决策（2026-11-15，已批准并落地）**：按 P0 + P1 + P2 全量实施——新增 `antigravity_gateway` 通道（`/api/antigravity/**`，`client_category='antigravity'`，session 维度取自请求信封 `Conversation ID`）、共享透传内核 `passthrough_kernel`、OpenAI 面 `inject_include_usage` opt-in 开关、流式 details 字段映射、gemini 现行模型定价条目、四处文档。实现细节见 [配置字段参考 — antigravity_gateway](../arch/config-reference.md#11-antigravity_gateway--antigravity-客户端透传配置) 与 [用户指引 § 4.8](../user-guide.md#48-antigravity_gateway--antigravity-ide-客户端透传)；P3（native 链路 failover/会话标题等）未实施，另行立项。待办：真机验证（用户侧 `export CLOUD_CODE_URL` 后跑一轮对话核对 dashboard 落账）。
+**实施决策（2026-11-15，已批准并落地）**：按 P0 + P1 + P2 全量实施——新增 `antigravity_gateway` 通道（`/api/antigravity/**`，`client_category='antigravity'`，session 维度取自请求信封 `Conversation ID`）、共享透传内核 `passthrough_kernel`、OpenAI 面 `inject_include_usage` opt-in 开关、流式 details 字段映射、gemini 现行模型定价条目、四处文档。实现细节见 [配置字段参考 — antigravity_gateway](../arch/config-reference.md#12-antigravity_gateway--antigravity-客户端透传配置) 与 [用户指引 § 4.8](../user-guide.md#48-antigravity_gateway--antigravity-ide-客户端透传)；P3（native 链路 failover/会话标题等）未实施，另行立项。待办：真机验证（用户侧 `export CLOUD_CODE_URL` 后跑一轮对话核对 dashboard 落账）。
 
 ## 7. 参考文献
 

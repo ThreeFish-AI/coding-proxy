@@ -2,6 +2,34 @@
 
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.1](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.1) - 2026-11-16
+
+> 本周期主轴：Dashboard Sessions 页「Vendor Bind」升级为「Model Bind」，支持对运行中的 Claude Code 会话在不打断任务执行的前提下切换实际所用模型（含跨系列）。经 7 轮独立 Review-Fix 循环收敛（16 项缺陷修复）。
+
+- feat(session-model-bind): 新增**会话级模型绑定**——`SessionPolicy` 增可选 `model` 字段，绑定后该 Session 的后续请求体 `model` 统一改写（shadow copy，逐请求生效），在途请求按旧捕获值完成、下一请求即时按新值路由，任务执行零打断（隔离实例 + mock 上游实验 15/15 断言实证）；Dashboard「Vendor Bind」列整体替换为「Model Bind」（选项来自新配置 `session_policies.bindable_models` 清单，默认 claude 三档零额外配置；Default = 清除整条绑定，vendor-only 绑定以 `Default (vendor: …)` 标注可见）；跨系列原生模型名（如 `glm-5.3`）入清单需配套 identity `model_mapping` 规则，防 `ModelMapper` default 静默改写；CLI `session bind` 增 `--model`（与 `--vendor` 可组合）；`PUT /api/session-vendor` 增可选 `model`（清单外 400，清单为空时报错指向根因配置项），`GET` 回显 model、`/api/status` 增返 `bindable_models`；
+- fix(session-policy): 修复**标题前缀自动绑定覆盖手动绑定**的既有缺陷——`_apply_title_based_policy` 遇已有运行时绑定即跳过（compat TTL 24h 过期导致长会话被重新判定为新会话时同样受保护）；仅绑模型（tiers 为空）时 resolver 继承链按「现有运行时绑定 > key 级配置备份 > category 配置」兑现「不改 vendor 顺序」承诺，PUT 响应回显继承后的生效 tiers/model；
+- feat(model-mapper): `ModelMapper` 增 `map_with_reason`（exact / pattern / default），`BaseVendor` 新增 `map_model_with_reason` 扩展点（native 系与 antigravity 覆写真实命中原因）——会话模型漂移告警据此区分「配置内等价映射」（如 claude 档位名 → glm 档位名，不告警）与「default 回退改写 / 上游换名」（WARNING，缺规则场景附 identity 规则修复指引），默认配置主路径零告警噪声；
+- fix(generations): **配置热切换（generation swap）迁移保留模型绑定**——`_migrate_bindings` 由只搬 vendors 扩为三元迁移（vendor 需仍在新链路、模型需仍在 `bindable_models` 清单，单侧失效降级保留另一侧），`reset_runtime` 对称提示整条移除 / vendor 侧降级 / 模型侧降级，文案不再预设绑定含模型；
+- feat(config-ui): Config 页 Session Policies 分区交付 `bindable_models` 清单编辑（Label/Model/Tiers 三列 listBlock）与策略条目的 `Model` 覆盖字段（`policies.*.model` 空串清空归一为未设置，不再 422 卡死）；config ui_registry 覆盖门同步登记 5 个新叶子；
+- docs: 新增 `arch/session-model-bind.md` 设计与实现锚点（数据流、配置、API/CLI、UI、风险边界、测试锚点）；`arch/config-reference.md` 补 §11 session_policies 节（含生命周期口径：重启回落配置态、热切换迁移保留）；`arch/vendors.md` 补 `map_model_with_reason` 方法契约；
+- test: 补齐 30+ 守护用例——resolver 继承链与 model 语义、在途请求隔离（流式 / 非流式）、漂移告警三分支与负向控制、路由级 PUT/DELETE/GET 全分支、默认清单加载守护、CLI payload、热切换迁移计数、Config 页渲染契约；
+
+## [v0.6.0](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.0) - 2026-11-14
+
+> 本周期主轴：配置系统由 YAML 迁移至 `config.db` + Dashboard Config 页（含管理面安全加固）。以下条目按重要程度排列。
+
+- feat(config): 运行时配置源迁移至 **`$CODING_PROXY_HOME/config.db`**（默认 `~/.coding-proxy/config.db`；sqlite3、0600、密钥 Fernet 加密、主密钥 `master.key`），`config.default.yaml` 退化为随包发布的默认值基线；新增 `config/{home,defaults,normalize,store,secrets,resolver,importer,service,ui_registry}.py` 核心层与 `coding-proxy config`（`path` / `export` / `import` / `set` / `reset` / `set-secret` / `token`）子命令；写入走 per-section revision 乐观并发（冲突 409），旧 `config/loader.py` 搜索链保留为导入参考实现与等价基准、运行时不再读取；
+  - **升级迁移（一次性导入）**：首次 `start` 自动导入 `~/.coding-proxy/config.yaml`（或 `start -c FILE` 指定源），导入前跑旧 loader 等价校验（`ProxyConfig` 全等，不通过则以旧 YAML 只读运行、Config 页禁写）；源文件不改名不改写，marker 记 sha256；此后的拒启（strict）仅限 `start -c` 显式文件、旧搜索链候选（`./config.yaml` / `~/.coding-proxy/config.yaml`，含其中即导入源的情形）、或无导入源时的上述候选与已导入版本不一致，其余来源（如另行 `config import` 的自定义路径）仅提示；
+  - **Breaking**：`./config.yaml` 不再被自动导入（防止第三方仓库目录下的文件被误当全局配置，首启存在时以专门话术拒启并指引 `start -c` / `config import`）；「`cp config.default.yaml config.yaml` 后编辑」的旧流程整体废弃；`-c` 语义由「常规启动配置源」变为「一次性迁移导入源」；
+  - **密钥只写不读**：GET 仅返回 `{kind(stored/env/empty/default), env_var?, resolved, hint(尾 4 位), default_env?, recorded}`；写入用 op（`set` / `clear` / `default_env` / `env`，任意 env 绑定仅 CLI）；vendor 的 `base_url` / `token_url` 变化时自动清空未显式保留的密钥（防密钥发往新目标，仅限有存储记录且新目标非包内默认端点的密钥）；bootstrap 字段（`server` / `logging` / `database` / `auth` 路径类）HTTP 只读，仅 CLI `config set` 可改、需重启生效；
+- feat(dashboard): 新增 **Config 页**在线编辑全部配置（Vendors / Tiers / Failover / Model Mapping / Pricing / Native API / Session Policies / System 分区，密钥三态控件，保存确认框列出将被重置的运行态与被清空的密钥，409 只重载冲突 section、422 行内定位且从不回显输入值）；保存经进程内 **generation swap** 热切换生效（新配置先 preflight 构建再原子切指针，旧 generation 等待 in-flight 请求排空后关闭，上限 600s，长流式请求不受影响），无需重启；存储的配置无效时以 degraded 模式启动（仅 Dashboard 与管理 API 可用，代理接口 503 并指引修复）；
+- feat(security): 管理面安全加固——`/api/config*` 需 `X-Coding-Proxy-Admin` 请求头（token 存于 0600 `admin_token` 文件，`config token` 查看，常量时间比较，不接受 cookie/query）；新增纯 ASGI 安全中间件：L1 全局拒绝跨站浏览器请求（`Sec-Fetch-Site` / `Origin` 校验，同时堵住既有 `POST /api/reset`、`/api/reauth/*` 的 CSRF），L2 管理面 Host 白名单（回环地址 + 新 bootstrap 字段 `server.allowed_hosts`，防 DNS rebinding）；关闭 `/docs` / `/redoc`；非 dashboard 响应统一加 `CSP: sandbox` + `nosniff`；`uvicorn` 设 `proxy_headers=False`；修复 Dashboard 图表 tooltip 与 vendor name 的既有 XSS 汇点；
+- security(config): 密钥泄露路径加固（I2：密钥明文不经 HTTP 响应 / 日志 / 异常离开进程）——`set` 写入边界拒绝含控制字符或非 Latin-1 字符的密钥值（422「密钥包含非法控制字符」，此类值会成为非法 HTTP header 并被异常消息携带）；`/v1/messages` 流式与非流式路径的未预期异常响应改为只含异常类型名（原 `f"{type}: {exc}"` 会把 httpx 拒绝的非法 header value（内嵌密钥明文）回显给未认证客户端）；executor / routes / TokenManager 的未预期异常日志改为「类型 + 堆栈帧」，不再记录 `str(exc)`；
+- fix(config): `config_section` 行内数据不是有效 JSON（外部改动 / 文件损坏）时，`start` 映射为 `StoreCorruptError` 一行提示 + 退出码 2（原为裸 `JSONDecodeError` traceback）；`usage --db` 正确覆盖用量数据库路径（原被当作配置文件路径传入 `load_config`）；
+- fix(dashboard): `/api/status` 的 `in_flight` 扣除发起查询的请求自身，空闲代理的保存确认框不再显示「进行中的请求：1 个」；离开 Config 页签时清除 URL 残留的 `section` 查询参数（避免复制分享的链接把他人带偏定位）；
+- refactor(auth): `RuntimeReauthCoordinator` 类文档显式标注与 `server/generations.py` 的私有属性交接契约（`_providers` / `_states` / `_locks` 等 7 个属性，重命名 / 加 `__slots__` 需同步 `_relay_reauth` / `_finish_relay` / `_forward_tokens`）；
+- docs: 用户文档面整体切换到 config.db 口径——重写 `arch/config-reference.md` 为「解析管线 + 存储 + 一次性导入」SSOT 口径（默认 ⊕ 覆盖 ⊕ 密钥注入 → `$tmpl` 展开），同步 `guide/{quickstart,cli-reference,dashboard,api-reference,monitoring}`（cli-reference 新增 `config` 子命令、api-reference 新增「配置管理端点」）、`user-guide`、`README` 与 `zh-CN` 镜像；修正 `circuit_breaker: None` 的语义描述（不启用熔断，兜底由 tiers 位置决定，而非「终端层」）；`GET /api/config` 的 secrets 状态补充 `default_env` / `recorded` 字段与 `kind=default` 态的描述；
+
 ## [v0.5.2](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.5.2) - 2026-09-10
 
 - fix(quota-guard): `coding-proxy reset` / `POST /api/reset` 不再清空配额守卫的滑动窗口用量——根因是 `QuotaGuard.reset()` 把「状态机复位」与「用量计数清零」耦合在一个方法里（`_entries.clear()` + `_total = 0`），而窗口基线 `load_baseline()` 的唯一调用点在进程启动的 lifespan 钩子中、运行期不再回填，导致 Dashboard 的 `1d配额 45%` 徽章复位后永久停在 0%；现 `reset()` 只保留 `_transition_to(WITHIN_QUOTA)`（该方法本身已清 `_cap_error_active` 并还原探测间隔），CLI / API / Dashboard 三条路径经单一事实源同时修复。语义取舍为**如实**：用量确已超过 `token_budget × threshold_percent` 时守卫保持 `QUOTA_EXCEEDED`（不伪造用量数字），但仍清除上游 cap 错误卡死标志并把被 `Retry-After` 拉长的探测间隔还原为默认值——刻意不走 WITHIN_QUOTA → QUOTA_EXCEEDED 回环，因为 `_transition_to(EXCEEDED)` 会把 `_last_probe` 刷成当前时刻，令探测恢复凭空推迟一个 probe_interval，反复复位即可饿死探测（PR 评审发现的回归，补 2 条用例锁定）；文档口径（`cli-reference.md` / `api-reference.md`）同步补明「仅复位状态、不清用量」；

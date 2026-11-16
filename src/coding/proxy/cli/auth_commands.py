@@ -6,22 +6,57 @@ import asyncio
 import inspect
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
 
+from ..config.importer import StoredConfigInvalidError, load_offline_config
 from ..config.loader import load_config
+from ..config.secrets import MasterKeyError
+from ..config.store import ConfigStoreError
 
-app = typer.Typer(name="auth", help="管理 OAuth 登录凭证")
+if TYPE_CHECKING:
+    from ..config.schema import ProxyConfig
+
+app = typer.Typer(
+    name="auth", help="管理 OAuth 登录凭证", pretty_exceptions_show_locals=False
+)
 console = Console()
+err_console = Console(stderr=True)
 logger = logging.getLogger(__name__)
 
 
-def _build_token_store(cfg_path: Path | None = None):
-    """按配置解析 Token Store 路径并完成加载."""
+def _offline_config(*, decrypt: bool) -> ProxyConfig:
+    """离线读取配置：已迁移读 config.db，否则只读读取旧 YAML 并提示迁移."""
+    try:
+        cfg, hint = load_offline_config(decrypt=decrypt)
+    except (ConfigStoreError, MasterKeyError, StoredConfigInvalidError) as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from None
+    if hint:
+        err_console.print(f"[dim]{hint}[/dim]")
+    return cfg
+
+
+def _build_token_store(
+    cfg_path: Path | None = None,
+    *,
+    cfg: ProxyConfig | None = None,
+    decrypt: bool = True,
+):
+    """按配置解析 Token Store 路径并完成加载.
+
+    ``cfg`` 优先；其次显式 YAML 路径（legacy 只读）；否则读取运行时配置。
+    """
     from ..auth.store import TokenStoreManager
 
-    cfg = load_config(cfg_path)
+    if cfg is None:
+        cfg = (
+            load_config(cfg_path)
+            if cfg_path is not None
+            else _offline_config(decrypt=decrypt)
+        )
     store = TokenStoreManager(
         store_path=Path(cfg.auth.token_store_path)
         if cfg.auth.token_store_path
@@ -96,7 +131,7 @@ async def _run_auth_login(provider: str | None) -> None:
 @app.command("status")
 def auth_status() -> None:
     """查看已登录的 OAuth 凭证状态."""
-    _, store = _build_token_store()
+    _, store = _build_token_store(decrypt=False)
 
     providers = store.list_providers()
     if not providers:
@@ -140,7 +175,7 @@ def auth_logout(
     ),
 ) -> None:
     """清除已存储的 OAuth 凭证."""
-    _, store = _build_token_store()
+    _, store = _build_token_store(decrypt=False)
 
     if provider:
         store.remove(provider)
@@ -152,7 +187,9 @@ def auth_logout(
 
 
 # ── 自动登录辅助 ─────────────────────────────────────────────
-async def auto_login_if_needed(cfg_path: Path | None) -> None:
+async def auto_login_if_needed(
+    cfg_path: Path | None = None, *, cfg: ProxyConfig | None = None
+) -> None:
     """检查各 Provider 是否缺少凭证，自动触发浏览器登录.
 
     仅对已启用、且未在 config 中显式提供凭证的 Tier 做检查。
@@ -163,11 +200,13 @@ async def auto_login_if_needed(cfg_path: Path | None) -> None:
     1. needs_login() — 快速本地判断（无凭证或已过期且无 refresh_token）
     2. refresh()    — Google access_token 过期且存在 refresh_token 时静默刷新
     3. validate()   — 网络验证已有凭证是否仍有效（仅在有凭证且未刷新时触发）
+
+    仍读取 legacy ``cfg.copilot`` / ``cfg.antigravity``（行为不变）。
     """
     from ..auth.providers.github import GitHubDeviceFlowProvider
     from ..auth.providers.google import GoogleOAuthProvider
 
-    cfg, store = _build_token_store(cfg_path)
+    cfg, store = _build_token_store(cfg_path, cfg=cfg)
 
     async def _resolve_needs_login(provider, tokens) -> bool:
         result = provider.needs_login(tokens)

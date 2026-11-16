@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
 import time
+import traceback
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
@@ -36,7 +38,7 @@ from .rate_limit import (
     parse_rate_limit_headers,
 )
 from .session_manager import RouteSessionManager
-from .session_policy import SessionPolicyResolver
+from .session_policy import SessionPolicy, SessionPolicyResolver
 from .tier import VendorTier
 from .usage_parser import (
     build_usage_evidence_records,
@@ -57,9 +59,27 @@ from ..model.compat import CanonicalMessagePart, CanonicalRequest
 
 logger = logging.getLogger(__name__)
 
+
+def _log_unexpected(scope: str, tier_name: str, exc: BaseException) -> None:
+    """记录未预期异常：类型 + 堆栈帧，不含 ``str(exc)``（I2）.
+
+    请求头构建失败等异常的消息体会携带密钥明文（如非法 header value 的
+    bytes repr），只记类型与调用栈即可定位，不落异常消息。
+    """
+    logger.error(
+        "Tier %s %s unexpected error: %s\n%s",
+        tier_name,
+        scope,
+        type(exc).__name__,
+        "".join(traceback.format_tb(exc.__traceback__)),
+    )
+
+
 _SESSION_TITLE_MAX_LEN = 600
 # 回退标题截取长度 — 工具结果等非用户直接输入的摘要上限。
 _FALLBACK_TITLE_MAX_LEN = 80
+# 注入式载荷标题截取长度 — 家族标签 + 载荷合计上限，保持列表可扫读。
+_INJECTED_PAYLOAD_TITLE_MAX_LEN = 160
 
 # Claude Code 注入的"噪声"标签 — 系统级上下文,不应进入 Session 标题。
 # 这些标签由 CC harness 在首个 user 消息 content 中拼接,高度同质,
@@ -68,7 +88,7 @@ _NOISE_TAG_PATTERN = re.compile(
     r"<(?P<tag>system-reminder|user-preferences|"
     r"local-command-stdout|local-command-stderr|"
     r"bash-input|bash-stdout|bash-stderr|"
-    r"ide_selection|stdin|system_instruction|session|"
+    r"ide_selection|ide_opened_file|stdin|system_instruction|session|"
     r"artifactMetadata|thinking)\b[^>]*>"
     r".*?</(?P=tag)>",
     flags=re.DOTALL | re.IGNORECASE,
@@ -87,6 +107,12 @@ _CMD_ARGS_PATTERN = re.compile(r"<command-args>(.*?)</command-args>", flags=re.D
 _CMD_WRAPPER_PATTERN = re.compile(
     r"<command-[\w-]+>.*?</command-[\w-]+>", flags=re.DOTALL
 )
+
+# <pasted_content> 仅剥外壳标签保留内容 — 粘贴体本身是真实用户输入。
+_PASTED_CONTENT_WRAPPER = re.compile(r"</?pasted_content\b[^>]*>", re.IGNORECASE)
+
+# [Image #N] 粘贴图片占位符 — 剥离后保留周边真实文本。
+_IMAGE_PLACEHOLDER_PATTERN = re.compile(r"\[Image #\d+\]\s*", re.IGNORECASE)
 
 # 空白折叠
 _WHITESPACE_PATTERN = re.compile(r"\s+")
@@ -120,6 +146,8 @@ def _sanitize_user_text(raw: str) -> str:
     # 阶段二: 通用噪声剥离
     cleaned = _NOISE_TAG_PATTERN.sub("", raw)
     cleaned = _CMD_WRAPPER_PATTERN.sub("", cleaned)
+    cleaned = _PASTED_CONTENT_WRAPPER.sub("", cleaned)
+    cleaned = _IMAGE_PLACEHOLDER_PATTERN.sub("", cleaned)
     cleaned = _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
     if cleaned:
         return cleaned
@@ -148,6 +176,200 @@ def _sanitize_user_text(raw: str) -> str:
 # ─────────────────────────────────────────────────────────────────
 
 
+# ── 注入式 Prompt（agent-as-tool 模板）载荷提取 ──────────────────
+#
+# Agent harness（记忆压缩器、会话命名器等）以子会话形式调用模型，首条 user
+# 消息是固定话术模板（如 "You are a memory relevance compressor..."），
+# 模板头无区分度，真实业务载荷内嵌在 "User query:" 等分隔符之后。
+# 家族表按序匹配：(opener, 家族标签, 载荷分隔符, 尾部样板截断)；
+# 命中后剥模板头截载荷，产出 "[家族标签] 载荷" 形式标题。
+_INJECTED_PROMPT_FAMILIES: tuple[
+    tuple[re.Pattern[str], str, re.Pattern[str], re.Pattern[str] | None, bool], ...
+] = (
+    (
+        re.compile(r"(?i)^you are a memory relevance compressor\b"),
+        "[记忆压缩]",
+        re.compile(r"(?i)\bUser query\s*[:：]\s*"),
+        re.compile(r"(?i)\bRetrieved\s+\S+\s+context fragments\b"),
+        False,
+    ),
+    (
+        re.compile(r"(?i)^Name this chat\b"),
+        "[会话命名]",
+        re.compile(r"(?i)\bFirst request\s*[:：]\s*"),
+        re.compile(r"(?i)\bThis is a naming-only task\b"),
+        False,
+    ),
+    (
+        re.compile(r"(?i)^Generate a short git branch name\b"),
+        "[分支命名]",
+        re.compile(r"(?i)\bUser request\s*[:：]\s*"),
+        None,
+        False,
+    ),
+    (
+        re.compile(r"(?i)^Use the \S+ tool to run exactly this one command\b"),
+        "[单命令]",
+        re.compile(r"(?i)(?:\band nothing else|The command is)\s*[:：]\s*"),
+        None,
+        False,
+    ),
+    # 通用兜底：其余 "You are ..." 注入式模板。分隔符要求句界锚定（防止真实
+    # persona 消息中句中的 "task:"/"query:" 误截断）；无分隔符时按真实输入
+    # 处理（fallback_real_input=True），避免误伤手打 "You are ..." 的用户消息。
+    (
+        re.compile(r"(?i)^you are\b"),
+        "[注入任务]",
+        re.compile(
+            r"(?i)(?:^|(?<=[.。!?\n]))\s*(?:User query|User request|First request)\s*[:：]\s*"
+        ),
+        re.compile(r"(?i)\bRetrieved\s+\S+\s+context fragments\b"),
+        True,
+    ),
+)
+
+
+# task-notification 载荷凝缩：注入载荷常为 harness 的任务通知 XML 块，
+# 其中的 <summary> 行（如 Agent "xx" finished）才是可扫读标识；
+# 无 summary 时整块剥离后取残余文本。
+_TASK_SUMMARY_PATTERN = re.compile(r"<summary>\s*(.*?)\s*</summary>", re.DOTALL)
+_TASK_NOTIFICATION_BLOCK = re.compile(
+    r"<task-notification\b[^>]*>.*?</task-notification>", re.DOTALL | re.IGNORECASE
+)
+# 未闭合的 <task-notification ...> 开标签兜底（块正则不生效时剥开头标签）。
+_NOTIFICATION_OPEN_TAG = re.compile(r"<task-notification\b[^>]*>", re.IGNORECASE)
+# 已知元数据标签：成对剥除时连同内文一起移除（id/路径/状态无扫读价值），
+# 避免剥壳留内文产生孤立 id 残段。
+_NOTIFICATION_ID_PAIRS = re.compile(
+    r"<(?P<tag>task-id|tool-use-id|output-file|status|event|note)\b[^>]*>"
+    r".*?</(?P=tag)>",
+    re.DOTALL | re.IGNORECASE,
+)
+# 未成对的残余元数据标签（截断形态）与 summary 外壳：剥标签本身、保留 summary 内文。
+_NOTIFICATION_ID_TAGS = re.compile(
+    r"</?(?:task-id|tool-use-id|output-file|status|event|note|summary)\b[^>]*/?>",
+    re.IGNORECASE,
+)
+# 实体转义形态的通知标记（&lt;task-notification / &gt;task-notification）：
+# 仅命中时才对载荷做全量实体解码（legacy 无分号实体随之解码，属可接受代价），
+# 其余载荷只做下方安全五元组的定向解码，避免 &not→¬ 类改写真实业务文本。
+_ESCAPED_NOTIFICATION_MARK = re.compile(
+    r"&(?:lt|gt|quot);/?(?:task-notification)", re.IGNORECASE
+)
+_SAFE_ENTITIES_MAP = {
+    "&lt;": "<",
+    "&gt;": ">",
+    "&amp;": "&",
+    "&quot;": '"',
+    "&#39;": "'",
+}
+_SAFE_ENTITY_PATTERN = re.compile(
+    "|".join(re.escape(k) for k in _SAFE_ENTITIES_MAP), re.IGNORECASE
+)
+
+
+def _condense_notification_payload(payload: str) -> str:
+    """注入载荷为任务通知 XML 块时凝缩为可读文本，否则原样返回.
+
+    ``<summary>`` 提取限定在 task-notification 块内（载荷正文自身出现的
+    ``<summary>`` 字面量不触发凝缩）；块未闭合时退化为剥标签取残余文本。
+    """
+    if "<task-notification" not in payload.lower():
+        return payload
+    block = _TASK_NOTIFICATION_BLOCK.search(payload)
+    if block:
+        m = _TASK_SUMMARY_PATTERN.search(block.group(0))
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    # 未闭合/无 summary 兜底：成对元数据标签连同内文剥除，summary 剥壳保内文，
+    # 使残余文本与闭合块路径口径一致（无孤立 id 残段、无残留标签）。
+    stripped = _TASK_NOTIFICATION_BLOCK.sub(" ", payload)
+    stripped = _NOTIFICATION_OPEN_TAG.sub(" ", stripped)
+    stripped = _NOTIFICATION_ID_PAIRS.sub(" ", stripped)
+    stripped = _NOTIFICATION_ID_TAGS.sub(" ", stripped)
+    return _WHITESPACE_PATTERN.sub(" ", stripped).strip()
+
+
+def _extract_injected_prompt_title(cleaned: str) -> str | None:
+    """注入式 Prompt 载荷标题提取.
+
+    Returns:
+        ``None`` — 非注入式消息（调用方按真实用户输入处理）；
+        ``""`` — 命中注入家族但无载荷（模板全同质、无区分度，调用方应跳过该条）；
+        ``str`` — ``[家族标签] 载荷`` 形式的标题。
+    """
+    for opener, tag, delim, tail, fallback_real_input in _INJECTED_PROMPT_FAMILIES:
+        if not opener.search(cleaned):
+            continue
+        m = delim.search(cleaned)
+        if not m:
+            # 具名家族模板高度特异，无载荷即整条跳过；通用家族 opener 宽松，
+            # 无载荷时按真实输入处理以免误伤手打 "You are ..." 的用户消息。
+            return None if fallback_real_input else ""
+        payload = cleaned[m.end() :]
+        if tail:
+            t = tail.search(payload)
+            if t:
+                payload = payload[: t.start()]
+        # 实体解码分两档：转义形态的通知 XML 全量解码（先于凝缩守卫，转义形态
+        # 需还原为字面标签才能被识别）；其余载荷仅定向解码带分号的安全实体
+        # （&lt;/&gt;/&amp;/&quot;/&#39;），避免 html.unescape 的 HTML5 legacy
+        # 无分号规则（&not→¬ 等）改写真实业务文本。
+        has_escaped_notification = bool(_ESCAPED_NOTIFICATION_MARK.search(payload))
+        if has_escaped_notification:
+            payload = html.unescape(payload)
+        payload = _condense_notification_payload(payload)
+        if not has_escaped_notification:
+            payload = _SAFE_ENTITY_PATTERN.sub(
+                lambda m: _SAFE_ENTITIES_MAP[m.group(0).lower()], payload
+            )
+        payload = _WHITESPACE_PATTERN.sub(" ", payload).strip()
+        if not payload:
+            return ""
+        return f"{tag} {payload}"[:_INJECTED_PAYLOAD_TITLE_MAX_LEN]
+    return None
+
+
+def _derive_title_from_user_texts(
+    texts, exempt_prefixes: list[str] | None = None
+) -> str:
+    """从一批用户原始文本推导标题 — 供请求路径与历史回填共用.
+
+    逐条清洗 → 豁免前缀跳过 → 注入式载荷提取 → 首条真实输入。
+    豁免前缀同时作用于清洗文本与派生的注入式标题（豁免家族标签时
+    跳过该条继续查找，而非丢弃整个 Level 1）。
+    全部跳过时返回空串（调用方按无候选处理）。
+    """
+    prefixes = [p for p in (exempt_prefixes or []) if p]
+
+    def _exempt(candidate: str) -> bool:
+        if any(candidate.startswith(p) for p in prefixes):
+            logger.debug(
+                "Title candidate skipped by exempt prefix (snippet=%r)",
+                candidate[:60],
+            )
+            return True
+        return False
+
+    for raw in texts:
+        cleaned = _sanitize_user_text(raw)
+        if not cleaned:
+            continue
+        # 整条消息即 harness 固定话术：背景任务通知 / 会话续接摘要，无区分度。
+        if cleaned.startswith("<task-notification") or cleaned.startswith(
+            "This session is being continued"
+        ):
+            continue
+        if _exempt(cleaned):
+            continue
+        injected = _extract_injected_prompt_title(cleaned)
+        if injected is None:
+            return cleaned[:_SESSION_TITLE_MAX_LEN]
+        if injected and not _exempt(injected):
+            return injected
+    return ""
+
+
 def _extract_title_from_user_text(
     messages: list[CanonicalMessagePart],
     exempt_prefixes: list[str] | None = None,
@@ -157,22 +379,15 @@ def _extract_title_from_user_text(
     ``exempt_prefixes`` 非空时，清洗后文本以任一前缀开头则跳过该输入、继续向后
     查找——用于过滤注入式 Prompt，避免其被误用作 Session 标题。匹配作用于
     ``_sanitize_user_text`` 清洗后的纯文本（而非带 XML 标签的原始 raw）。
+    注入式模板消息（agent-as-tool 话术）经 ``_extract_injected_prompt_title``
+    剥离模板头、截取业务载荷；无载荷则跳过该条继续查找。
     """
-    for part in messages:
-        if part.role != "user" or part.type != CanonicalPartType.TEXT:
-            continue
-        cleaned = _sanitize_user_text(part.text)
-        if not cleaned:
-            continue
-        if exempt_prefixes and any(cleaned.startswith(p) for p in exempt_prefixes):
-            logger.debug(
-                "Title candidate skipped by exempt prefix %r (snippet=%r)",
-                next(p for p in exempt_prefixes if cleaned.startswith(p)),
-                cleaned[:60],
-            )
-            continue
-        return cleaned[:_SESSION_TITLE_MAX_LEN]
-    return ""
+    texts = [
+        part.text
+        for part in messages
+        if part.role == "user" and part.type == CanonicalPartType.TEXT
+    ]
+    return _derive_title_from_user_texts(texts, exempt_prefixes=exempt_prefixes)
 
 
 def _extract_title_from_tool_results(messages: list[CanonicalMessagePart]) -> str:
@@ -705,13 +920,17 @@ class _RouteExecutor:
 
     # ── 公开执行入口 ──────────────────────────────────────
 
-    def _resolve_effective_tiers(self, session_key: str) -> list[VendorTier]:
+    def _resolve_effective_tiers(
+        self, session_key: str, policy: SessionPolicy | None = None
+    ) -> list[VendorTier]:
         """根据 Session Policy 解析生效的 tier 顺序.
 
         策略指定的 vendor 按其顺序排列在头部，未提及的保持在末尾。
-        无策略时返回全局默认顺序。
+        无策略时返回全局默认顺序。policy 可由调用方预先 resolve 传入，
+        与会话级模型覆盖共用同一次解析（避免双重 resolve 的竞态窗口）。
         """
-        policy = self._policy_resolver.resolve(session_key)
+        if policy is None:
+            policy = self._policy_resolver.resolve(session_key)
         if not policy or not policy.tiers:
             return self._tiers
 
@@ -728,6 +947,44 @@ class _RouteExecutor:
                 ordered.append(tier)
                 seen.add(tier.name)
         return ordered
+
+    _MODEL_FALLBACK_REASONS = frozenset({"default"})
+
+    @classmethod
+    def _log_model_drift(
+        cls,
+        bound_model: str | None,
+        tier: VendorTier,
+        model_served: str,
+    ) -> None:
+        """会话模型覆盖生效但实际 served 模型偏离预期时告警.
+
+        两类触发：served 既非绑定名也非接单 vendor 映射预期（failover 接单 /
+        上游换名），或绑定名命中映射 default 回退被改写（缺显式规则）。
+        配置内等价映射（如 claude 档位名 → glm 档位名）属预期行为，不告警。
+        """
+        if not bound_model:
+            return
+        expected, reason = tier.vendor.map_model_with_reason(bound_model)
+        if model_served not in (bound_model, expected):
+            logger.warning(
+                "Session model drift: bound=%s but tier %s served %s "
+                "(its model mapping expected %s — failover takeover or "
+                "unexpected upstream substitution)",
+                bound_model,
+                tier.name,
+                model_served,
+                expected,
+            )
+        elif reason in cls._MODEL_FALLBACK_REASONS and model_served != bound_model:
+            logger.warning(
+                "Session model drift: bound=%s hit model_mapping default fallback "
+                "on tier %s and was rewritten to %s — add an identity mapping "
+                "rule (pattern=target) for this model",
+                bound_model,
+                tier.name,
+                model_served,
+            )
 
     def _extract_session_title(self, request: CanonicalRequest) -> str:
         """封装模块级标题提取，注入实例持有的豁免前缀名单.
@@ -749,6 +1006,10 @@ class _RouteExecutor:
         仅在新 Session 首次提取标题时调用，避免覆盖手动绑定的策略。
         """
         if not title or not self._title_vendor_bindings:
+            return
+        # 已有运行时绑定（手动 Vendor/Model Bind）时跳过，防自动绑定整条覆盖；
+        # compat TTL 过期导致长会话被重新判定为新会话时同样受此保护。
+        if self._policy_resolver.get_runtime_binding(session_key) is not None:
             return
         for binding in self._title_vendor_bindings:
             if title.startswith(binding.prefix):
@@ -868,7 +1129,20 @@ class _RouteExecutor:
                     canonical_request.session_key, title
                 )
         incompatible_reasons: list[str] = []
-        effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
+        session_policy = self._policy_resolver.resolve(canonical_request.session_key)
+        client_model = str(body.get("model", "unknown"))
+        bound_model = session_policy.model if session_policy else None
+        if bound_model and bound_model != client_model:
+            logger.info(
+                "Session model override active: session=%s client_model=%s → bound_model=%s",
+                canonical_request.session_key[:12],
+                client_model,
+                bound_model,
+            )
+            body = {**body, "model": bound_model}
+        effective_tiers = self._resolve_effective_tiers(
+            canonical_request.session_key, policy=session_policy
+        )
         last_idx = len(effective_tiers) - 1
 
         for i, tier in enumerate(effective_tiers):
@@ -925,6 +1199,7 @@ class _RouteExecutor:
                 duration = int((time.monotonic() - start) * 1000)
                 model = body.get("model", "unknown")
                 model_served = usage.get("model_served") or tier.vendor.map_model(model)
+                self._log_model_drift(bound_model, tier, model_served)
                 if failed_tier_name is not None:
                     logger.info(
                         "Tier %s stream succeeded (took over from failed tier: %s)",
@@ -1006,13 +1281,7 @@ class _RouteExecutor:
                         )
                         raise
             except Exception as exc:
-                logger.error(
-                    "Tier %s stream unexpected error: %s: %s",
-                    tier.name,
-                    type(exc).__name__,
-                    exc,
-                    exc_info=True,
-                )
+                _log_unexpected("stream", tier.name, exc)
                 tier.record_failure()
                 failed_tier_name = tier.name
                 if not is_last:
@@ -1055,7 +1324,20 @@ class _RouteExecutor:
                     canonical_request.session_key, title
                 )
         incompatible_reasons: list[str] = []
-        effective_tiers = self._resolve_effective_tiers(canonical_request.session_key)
+        session_policy = self._policy_resolver.resolve(canonical_request.session_key)
+        client_model = str(body.get("model", "unknown"))
+        bound_model = session_policy.model if session_policy else None
+        if bound_model and bound_model != client_model:
+            logger.info(
+                "Session model override active: session=%s client_model=%s → bound_model=%s",
+                canonical_request.session_key[:12],
+                client_model,
+                bound_model,
+            )
+            body = {**body, "model": bound_model}
+        effective_tiers = self._resolve_effective_tiers(
+            canonical_request.session_key, policy=session_policy
+        )
         last_idx = len(effective_tiers) - 1
 
         for i, tier in enumerate(effective_tiers):
@@ -1085,6 +1367,7 @@ class _RouteExecutor:
                     duration = int((time.monotonic() - start) * 1000)
                     model = body.get("model", "unknown")
                     model_served = resp.model_served or tier.vendor.map_model(model)
+                    self._log_model_drift(bound_model, tier, model_served)
                     if failed_tier_name is not None:
                         logger.info(
                             "Tier %s message succeeded (took over from failed tier: %s)",
@@ -1226,13 +1509,7 @@ class _RouteExecutor:
                     raise
                 continue
             except Exception as exc:
-                logger.error(
-                    "Tier %s message unexpected error: %s: %s",
-                    tier.name,
-                    type(exc).__name__,
-                    exc,
-                    exc_info=True,
-                )
+                _log_unexpected("message", tier.name, exc)
                 tier.record_failure()
                 failed_tier_name = tier.name
                 if not is_last:

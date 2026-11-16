@@ -41,10 +41,12 @@ class RequestRouter:
         session_policy_resolver: SessionPolicyResolver | None = None,
         title_vendor_bindings: list[TitleVendorBinding] | None = None,
         title_exempt_prefixes: list[str] | None = None,
+        bindable_models: list[dict[str, Any]] | None = None,
     ) -> None:
         if not tiers:
             raise ValueError("至少需要一个供应商层级")
         self._tiers = tiers
+        self._bindable_models = bindable_models or []
         self._active_vendor_name: str | None = (
             None  # 当前活跃供应商名称（由 Executor 成功时写入）
         )
@@ -81,6 +83,10 @@ class RequestRouter:
     def get_vendor_names(self) -> list[str]:
         """返回当前 tiers 的供应商名称列表（按优先级顺序）."""
         return [t.name for t in self._tiers]
+
+    def get_bindable_models(self) -> list[dict[str, Any]]:
+        """返回可绑定模型清单（Model Bind 下拉选项与 API 校验的来源）."""
+        return self._bindable_models
 
     def reorder_tiers(self, vendor_names: list[str]) -> None:
         """原地重排序 N-tier 链路.

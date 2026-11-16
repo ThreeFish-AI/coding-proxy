@@ -154,7 +154,9 @@ lsof -i :3392
 coding-proxy start --port 8080
 ```
 
-**配置文件语法错误**：检查 YAML 缩进、冒号后空格。
+**配置校验错误**：`coding-proxy start` 会以一行错误 + 退出码 2 拒绝启动（config.db 损坏 / 主密钥不匹配 / 旧 YAML 与已导入版本不一致）；存储的配置无效时进入 degraded 模式（仅 Dashboard 与管理 API 可用），在 Dashboard → Config 页按字段路径修复。
+
+**导入 YAML 语法错误**：`config import` 前检查 YAML 缩进、冒号后空格。
 
 **Python 版本**：`python --version`（需要 >= 3.12）
 
