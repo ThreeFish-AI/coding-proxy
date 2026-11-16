@@ -520,12 +520,13 @@ def test_antigravity_fallback_builder_from_token_store():
         "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
     )
 
-    # 显式禁用的 antigravity vendor：即使 token store 有凭证也不查（与 zhipu 同口径）
+    # 回退路径按凭证可得性判定，不看 entry.enabled（resolver 会为未配置用户合成
+    # enabled=False 默认条目，若按 enabled 门控，gateway 用户永远「未启用」）
     disabled = SimpleNamespace(**{**vars(entry), "enabled": False})
-    assert (
-        _build_antigravity_fetcher(None, SimpleNamespace(vendors=[disabled]), store)
-        is None
+    disabled_fetcher = _build_antigravity_fetcher(
+        None, SimpleNamespace(vendors=[disabled]), store
     )
+    assert isinstance(disabled_fetcher, AntigravityUsageFetcher)
     # config.antigravity_gateway.base_url 覆写被尊重
     override_cfg = SimpleNamespace(
         vendors=[entry],

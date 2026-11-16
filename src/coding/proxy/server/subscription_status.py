@@ -382,10 +382,12 @@ def _build_antigravity_fetcher(
         ),
         None,
     )
-    if entry is not None and not getattr(entry, "enabled", False):
-        # 显式禁用即不查（与 zhipu 判定同口径）；无 entry 时仍回退 token store
-        # （Antigravity vendor 从未配置、仅用 IDE gateway 透传的场景）
-        return None
+    # 回退路径按「凭证可得性」判定，不看 entry.enabled：vendor 的 enabled 只管
+    # 路由参与，不管订阅展示；且 config resolver 会为未配置的用户合成
+    # enabled=False 的默认 antigravity 条目，若按 enabled 门控，仅用 IDE
+    # gateway 透传（vendor 未启用）的用户即使 token store 有 google 凭证
+    # 也会永远显示「未启用」。zhipu 不存在此问题：其凭证只存在于 vendor
+    # 条目本身，disabled 即无可用凭证。
     cfg = AntigravityConfig(
         client_id=getattr(entry, "client_id", "") or "",
         client_secret=getattr(entry, "client_secret", "") or "",
