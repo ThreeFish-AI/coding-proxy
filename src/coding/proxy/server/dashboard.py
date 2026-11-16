@@ -1207,18 +1207,22 @@ function now() {
 }
 
 // ── Vendor 展示名映射 ─────────────────────────────────────
-// 规则：以 cc/api 前缀区分代理形态，屏蔽后端 -native 消歧后缀。
-// _API_VENDORS 需与后端 native_api/handler.py::_VENDOR_LABEL 对齐，
-// 新增无 -native 后缀的 native vendor 时同步更新本集合。
-const _API_VENDORS = new Set(['anthropic-native', 'openai', 'gemini']);
+// 规则：以 cc/api/agy 前缀区分代理形态，屏蔽后端 -native 消歧后缀。
+// _API_VENDORS 需与后端 native_api/handler.py::_VENDOR_LABEL 及
+// antigravity_gateway/handler.py::VENDOR_LABEL 对齐，新增透传 vendor 时同步更新。
+const _API_VENDORS = new Set(['anthropic-native', 'openai', 'gemini', 'antigravity-gateway']);
 function isApiVendor(v) { return _API_VENDORS.has(v); }
 function vendorShortName(v) {
   if (!isValidLabel(v)) return v;
-  if (isApiVendor(v)) return v.endsWith('-native') ? v.slice(0, -'-native'.length) : v;
+  if (isApiVendor(v)) {
+    if (v === 'antigravity-gateway') return 'antigravity';
+    return v.endsWith('-native') ? v.slice(0, -'-native'.length) : v;
+  }
   return v;
 }
 function formatVendorLabel(v) {
   if (!isValidLabel(v)) return v;
+  if (v === 'antigravity-gateway') return 'agy | antigravity';
   if (isApiVendor(v)) return 'api | ' + vendorShortName(v);
   return 'cc | ' + v;
 }
@@ -2285,7 +2289,7 @@ function formatSessionTags(str, max) {
   }
   return html;
 }
-function categoryLabel(t) { return t === 'cc' ? 'Claude Code' : (t === 'api' ? 'API' : t); }
+function categoryLabel(t) { return t === 'cc' ? 'Claude Code' : (t === 'api' ? 'API' : (t === 'antigravity' ? 'Antigravity' : t)); }
 function formatCategories(cats) {
   if (!cats) return '–';
   return cats.split(',').map(function(c) {

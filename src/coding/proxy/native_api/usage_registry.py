@@ -17,47 +17,15 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from typing import Any
 
+from ..passthrough_kernel import ExtractionResult
 from ..routing.usage_parser import (
     build_usage_evidence_records,
     parse_usage_from_chunk,
 )
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ExtractionResult:
-    """单次响应用量抽取结果.
-
-    ``input_tokens`` / ``output_tokens`` 等可为 ``None`` 表示「未提取到该字段」，
-    以便上游区分「确实是 0」与「端点不提供」。``extra_usage`` 承载非规范字段。
-    """
-
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_creation_tokens: int = 0
-    cache_read_tokens: int = 0
-    request_id: str = ""
-    model_served: str = ""
-    extra_usage: dict[str, Any] = field(default_factory=dict)
-    # 原始上游 usage 字段块（写入 usage_evidence.raw_usage_json）
-    raw_usage: dict[str, Any] = field(default_factory=dict)
-    # 规范字段到上游字段名的映射（写入 usage_evidence.source_field_map_json）
-    source_field_map: dict[str, str] = field(default_factory=dict)
-    evidence_kind: str = ""
-
-    def has_tokens(self) -> bool:
-        return any(
-            (
-                self.input_tokens > 0,
-                self.output_tokens > 0,
-                self.cache_creation_tokens > 0,
-                self.cache_read_tokens > 0,
-            )
-        )
 
 
 ExtractorFn = Callable[[dict[str, Any], int, dict[str, str]], ExtractionResult]

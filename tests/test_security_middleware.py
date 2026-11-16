@@ -33,6 +33,9 @@ def _config(**extra) -> ProxyConfig:
     )
 
 
+AGY_PATH = "/api/antigravity/v1internal:generateContent"
+
+
 @pytest.fixture
 def app() -> FastAPI:
     app = create_app(_config())
@@ -42,6 +45,14 @@ def app() -> FastAPI:
         return Response(b'{"ok":true}', media_type="application/json")
 
     native.dispatch = _dispatch
+
+    agy = getattr(app.state, "antigravity_handler", None)
+    if agy is not None:
+
+        async def _agy_dispatch(rest_path, request):
+            return Response(b'{"ok":true}', media_type="application/json")
+
+        agy.dispatch = _agy_dispatch
 
     async def _route_message(body, headers):
         raise RuntimeError("not reached in guard tests")
@@ -440,3 +451,16 @@ def test_sse_messages_stream_through_create_app(app, strict_hosts):
     assert resp.headers["content-type"].startswith("text/event-stream")
     assert resp.headers["x-content-type-options"] == "nosniff"
     assert body.count("event: ping") == 3
+
+
+def test_antigravity_passthrough_not_host_checked(client):
+    """L2 安全检查对 /api/antigravity 与兄弟透传前缀同口径豁免."""
+    resp = client.post(AGY_PATH, headers={"Host": "evil.example"}, json={})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+
+def test_antigravity_cross_site_rejected(client):
+    """豁免 host 检查不豁免 cross-site 防护（与 native passthrough 一致）."""
+    resp = client.post(AGY_PATH, headers={"Sec-Fetch-Site": "cross-site"}, json={})
+    assert resp.status_code == 403

@@ -37,6 +37,7 @@ NATIVE_PASSTHROUGH_PREFIXES: tuple[str, ...] = (
     "/api/openai",
     "/api/gemini",
     "/api/anthropic",
+    "/api/antigravity",
 )
 ADMIN_TOKEN_HEADER = "X-Coding-Proxy-Admin"
 SANDBOX_CSP = "sandbox; default-src 'none'; frame-ancestors 'none'"

@@ -26,6 +26,8 @@
     - [12.1 GET /dashboard](#121-get-dashboard)
     - [12.2 GET /api/dashboard/summary](#122-get-apidashboardsummary)
     - [12.3 GET /api/dashboard/timeline](#123-get-apidashboardtimeline)
+  - [13. 原生 API 透传端点](#13-原生-api-透传端点)
+  - [14. Antigravity 客户端透传端点](#14-antigravity-客户端透传端点)
 
 </details>
 
@@ -394,3 +396,25 @@ curl "http://127.0.0.1:3392/api/dashboard/timeline?days=30"
 | `days` | int  | `7`    | 统计天数（1~90） |
 
 **返回结构**：`period`（`"day"`）、`count`（天数）、`rows`（按天分组的用量数组）。
+
+## 13. 原生 API 透传端点
+
+`/api/{openai,gemini,anthropic}/{rest:path}` 三条 catch-all 透传通道（支持 GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS），供直接调用 OpenAI / Gemini / Anthropic 官方 API 的客户端复用 proxy。请求体、query、认证头（`Authorization` / `x-api-key` / `?key=`）字节级透传至对应上游（默认官方域名，可经 `NATIVE_{PROVIDER}_BASE_URL` 或 YAML 覆写），proxy 不保管凭据；响应状态码与错误体原样返回，SSE 流式逐 chunk 中继，全程旁路抽取 usage 落账（`client_category='api'`）。
+
+```bash
+export OPENAI_BASE_URL="http://127.0.0.1:3392/api/openai/v1"   # OpenAI SDK
+curl http://127.0.0.1:3392/api/gemini/v1beta/models/gemini-3.8-flash:generateContent \
+  -H "x-goog-api-key: $GEMINI_API_KEY" -d '{...}'
+```
+
+未启用对应 provider 时端点返回 404；上游不可达返回 `502 {"error":{"type":"api_error"}}`。配置参见 [配置字段参考 — native_api](../arch/config-reference.md#10-native_api--原生-api-透传配置)。
+
+## 14. Antigravity 客户端透传端点
+
+`/api/antigravity/{rest:path}` catch-all 透传通道。Antigravity IDE（默认 Gemini agent）经 `CLOUD_CODE_URL=http://127.0.0.1:3392/api/antigravity` 接入后，其 Cloud Code `v1internal` 协议流量（模型面 `:generateContent` / `:streamGenerateContent` / `:countTokens` 与控制面端点）字节级透传至 Google Antigravity 服务端；代理旁路解析 v1internal 信封落账用量（`client_category='antigravity'`，vendor 标签 `antigravity-gateway`，会话粒度取自信封内 `Conversation ID`），不转换协议、不保管凭据。
+
+```bash
+export CLOUD_CODE_URL="http://127.0.0.1:3392/api/antigravity"   # Antigravity 侧
+```
+
+上游默认 `https://daily-cloudcode-pa.googleapis.com`，可经 `ANTIGRAVITY_GATEWAY_BASE_URL` 覆写；未启用时端点返回 404。配置与接入指引参见 [配置字段参考 — antigravity_gateway](../arch/config-reference.md#12-antigravity_gateway--antigravity-客户端透传配置) 与 [用户指引 § 4.8](../user-guide.md#48-antigravity_gateway--antigravity-ide-客户端透传)。

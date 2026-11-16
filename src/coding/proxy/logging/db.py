@@ -485,7 +485,7 @@ class TokenLogger:
                    ``TOTAL`` 维度下忽略此参数。
             vendor: 过滤供应商，支持单个字符串或字符串列表（多 vendor 过滤）。
             model: 过滤实际服务模型（model_served），支持单个字符串或字符串列表。
-            client_category: 过滤客户端类别（``'cc'`` / ``'api'``）。
+            client_category: 过滤客户端类别（``'cc'`` / ``'api'`` / ``'antigravity'``）。
             operation: 过滤规范化操作名（``'chat'`` / ``'embedding'`` ...）。
             endpoint: 过滤原始上游路径（``'/v1/chat/completions'`` ...）。
         """

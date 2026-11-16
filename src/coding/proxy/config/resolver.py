@@ -15,6 +15,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from ..antigravity_gateway.config import BASE_URL_ENV as _AGY_BASE_URL_ENV
 from ..native_api.config import _ENV_BASE_URL_MAP
 from .auth_schema import AuthConfig
 from .defaults import packaged_defaults_raw
@@ -305,11 +306,13 @@ def compute_secret_states(
 
 
 def env_sources() -> dict[str, str]:
-    """NATIVE_*_BASE_URL 覆写的字段来源（校验器读取的是 os.environ）."""
+    """透传通道 base_url 覆写的字段来源（校验器读取的是 os.environ）."""
     sources: dict[str, str] = {}
     for provider, env_name in _ENV_BASE_URL_MAP.items():
         if os.environ.get(env_name, "").strip():
             sources[f"native_api.{provider}.base_url"] = "env"
+    if os.environ.get(_AGY_BASE_URL_ENV, "").strip():
+        sources["antigravity_gateway.base_url"] = "env"
     return sources
 
 

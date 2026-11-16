@@ -93,6 +93,7 @@ EDITABLE_SECTIONS: tuple[str, ...] = (
     "pricing",
     "native_api",
     "session_policies",
+    "antigravity_gateway",
 )
 BOOTSTRAP_SECTIONS: tuple[str, ...] = ("server", "logging", "database", "auth")
 ALL_SECTIONS: frozenset[str] = frozenset(ProxyConfig.model_fields) | ALIAS_KEYS
@@ -371,6 +372,14 @@ def boundary_errors(section: str, value: Any, current: Any = _MISSING) -> list[d
                         rules,
                         allow_empty=True,
                     )
+        if section == "antigravity_gateway" and isinstance(value, dict):
+            if "base_url" in value:
+                _check_url(
+                    value["base_url"],
+                    ["antigravity_gateway", "base_url"],
+                    rules,
+                    allow_empty=True,
+                )
         info = ProxyConfig.model_fields.get(section)
         if info is not None:
             annotation = _unwrap(info.annotation)

@@ -50,6 +50,14 @@ class NativeProviderConfig(BaseModel):
         ge=500,
         description="连接建立超时（毫秒）。",
     )
+    inject_include_usage: bool = Field(
+        default=False,
+        description=(
+            "（仅 openai provider 生效）为 chat/completions 流式请求注入 "
+            "stream_options.include_usage=true，使上游在末尾回发 usage chunk，"
+            "否则流式 tokens 记 0。注入会改写请求体，故默认关闭保持严格字节级透传。"
+        ),
+    )
 
     model_config = {"extra": "allow"}
 

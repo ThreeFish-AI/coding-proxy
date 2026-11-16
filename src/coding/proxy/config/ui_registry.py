@@ -506,7 +506,51 @@ for _provider in ("openai", "gemini", "anthropic"):
             min=500,
             group=_provider,
         ),
+        _f(
+            f"native_api.{_provider}.inject_include_usage",
+            "Include Usage",
+            "bool",
+            "（仅 openai 生效）为 chat 流式请求注入 stream_options.include_usage，"
+            "让上游回发 usage chunk（默认关）",
+            group=_provider,
+        ),
     ]
+
+REGISTRY += [
+    _f(
+        "antigravity_gateway.enabled",
+        "Enabled",
+        "bool",
+        "是否暴露 /api/antigravity/** 透传端点（默认启用）",
+        group="antigravity",
+    ),
+    _f(
+        "antigravity_gateway.base_url",
+        "Base URL",
+        "text",
+        "Antigravity 后端（Cloud Code v1internal）；域名随版本漂移过，"
+        "可被 ANTIGRAVITY_GATEWAY_BASE_URL 覆盖",
+        group="antigravity",
+    ),
+    _f(
+        "antigravity_gateway.timeout_ms",
+        "Timeout",
+        "number",
+        "单次请求超时",
+        unit="ms",
+        min=1000,
+        group="antigravity",
+    ),
+    _f(
+        "antigravity_gateway.connect_timeout_ms",
+        "Conn. Timeout",
+        "number",
+        "连接建立超时",
+        unit="ms",
+        min=500,
+        group="antigravity",
+    ),
+]
 
 REGISTRY += [
     # ── Session Policies ──

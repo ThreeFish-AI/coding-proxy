@@ -8,7 +8,7 @@
   'use strict';
 
   // ── 纯函数 ────────────────────────────────────────────────
-  var EDITABLE = ['vendors', 'tiers', 'failover', 'model_mapping', 'pricing', 'native_api', 'session_policies'];
+  var EDITABLE = ['vendors', 'tiers', 'failover', 'model_mapping', 'pricing', 'native_api', 'session_policies', 'antigravity_gateway'];
   var PRICE_FIELDS = ['input_cost_per_mtok', 'output_cost_per_mtok', 'cache_write_cost_per_mtok', 'cache_read_cost_per_mtok'];
   var PRICE_RE = /^([$¥])\s*(.+)$/;
   var TOKEN_RE = /^[A-Za-z0-9_-]{32,}$/;
@@ -219,7 +219,7 @@
   var TOKEN_KEY = 'coding-proxy.admin-token';
   var PILLS = [
     ['vendors', 'Vendors'], ['tiers', 'Tiers'], ['failover', 'Failover'], ['model_mapping', 'Model Mapping'],
-    ['pricing', 'Pricing'], ['native_api', 'Native API'], ['session_policies', 'Session Policies'], ['system', 'System'],
+    ['pricing', 'Pricing'], ['native_api', 'Native API'], ['session_policies', 'Session Policies'], ['antigravity_gateway', 'Antigravity'], ['system', 'System'],
   ];
   var MODE_TEXT = {
     store: '配置存储正常（config.db）',
@@ -947,6 +947,16 @@
       byGroup[g].push(field(sp, bindRoot(sp.path.split('.'))));
     });
     order.forEach(function (g) { body.appendChild(group(g, byGroup[g])); });
+  };
+
+  RENDER.antigravity_gateway = function (body) {
+    body.appendChild(sectionHead('Antigravity Gateway', null, [resetBtn('antigravity_gateway')]));
+    var fields = [];
+    S.specs.forEach(function (sp) {
+      if (sp.path.indexOf('antigravity_gateway.') !== 0) return;
+      fields.push(field(sp, bindRoot(sp.path.split('.'))));
+    });
+    body.appendChild(group('antigravity', fields));
   };
 
   RENDER.session_policies = function (body) {
