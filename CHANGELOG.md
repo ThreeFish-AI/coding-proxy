@@ -2,6 +2,12 @@
 
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.4](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.4) - 2026-11-16
+
+> 热修复：订阅状态面板 Antigravity 行回归。
+
+- fix(subscription-status): 修复 **Antigravity 订阅状态永远显示「未启用」**——config resolver 会为未显式配置的用户合成 `enabled=False` 的默认 antigravity 条目，v0.6.3 的「显式禁用即不查」门把该合成条目误判为用户显式禁用，token store 有 google 凭证也被挡死（仅用 IDE gateway 透传、vendor 未启用的主场景全部命中）；回退路径改按凭证可得性判定（token store google refresh_token 或 config 显式凭证即查），`entry.enabled` 只管路由参与不管订阅展示，zhipu 判定不受影响；真机复测 Antigravity 恢复 ok（Gemini weekly 25.6% / 5h 0.2%）（#304）；
+
 ## [v0.6.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.3) - 2026-11-16
 
 > 本周期主轴：Dashboard Overview 新增「订阅状态」面板，聚合展示 Claude Code / GLM / Antigravity 三家订阅的档位与真实配额用量。
