@@ -2425,9 +2425,25 @@ function buildModelSelect(sessionKey, binding, bindableModels) {
   var defaultLabel = vendorOnly ? 'Default (vendor: ' + vendorOnly + ')' : 'Default';
   var html = '<select class="bind-select" data-session-key="' + escapeHtml(sessionKey) + '" title="Session-level model override — applies from the next request; in-flight requests keep the old model">';
   html += '<option value=""' + (!boundModel ? ' selected' : '') + '>' + escapeHtml(defaultLabel) + '</option>';
+  // 按 vendor 分组渲染（内置目录条目带 vendor 字段；custom/无 vendor 条目落 Custom 组）
+  var groups = {};
+  var groupOrder = [];
   bindableModels.forEach(function(m) {
-    var v = m.model || '';
-    html += '<option value="' + escapeHtml(v) + '"' + (v === boundModel ? ' selected' : '') + '>' + escapeHtml(m.label || v) + '</option>';
+    var g = m.vendor || 'custom';
+    if (!groups[g]) { groups[g] = []; groupOrder.push(g); }
+    groups[g].push(m);
+  });
+  groupOrder.forEach(function(g) {
+    if (groupOrder.length > 1) {
+      html += '<optgroup label="' + escapeHtml(g.charAt(0).toUpperCase() + g.slice(1)) + '">';
+    }
+    groups[g].forEach(function(m) {
+      var v = m.model || '';
+      html += '<option value="' + escapeHtml(v) + '"' + (v === boundModel ? ' selected' : '') + '>' + escapeHtml(m.label || v) + '</option>';
+    });
+    if (groupOrder.length > 1) {
+      html += '</optgroup>';
+    }
   });
   if (boundModel && !bindableModels.some(function(m) { return m.model === boundModel; })) {
     html += '<option value="' + escapeHtml(boundModel) + '" selected>' + escapeHtml(boundModel) + ' (off-list)</option>';

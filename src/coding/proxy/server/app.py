@@ -112,8 +112,29 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         ttl_seconds=config.database.compat_state_ttl_seconds,
     )
     from ..routing.model_mapper import ModelMapper  # noqa: E402
+    from ..vendors.model_catalog import (  # noqa: E402
+        builtin_identity_rules,
+        compose_bindable_catalog,
+    )
 
-    mapper = ModelMapper(config.model_mapping)
+    # 阶段二之前先推导激活链（enabled 过滤 + tiers 排序），供目录合成与
+    # ModelMapper identity 规则使用（与下方 tiers 组装同一判定口径）
+    _enabled_vendor_names = {v.vendor for v in config.vendors if v.enabled}
+    if config.tiers is not None:
+        _active_vendor_names = [
+            name for name in config.tiers if name in _enabled_vendor_names
+        ]
+    else:
+        _active_vendor_names = [v.vendor for v in config.vendors if v.enabled]
+    _bindable_catalog = compose_bindable_catalog(
+        _active_vendor_names, config.session_policies.bindable_models
+    )
+    mapper = ModelMapper(
+        [
+            *config.model_mapping,
+            *builtin_identity_rules(_bindable_catalog, config.model_mapping),
+        ]
+    )
 
     # 加载 Token Store 用于凭证合并
     token_store = TokenStoreManager(
@@ -175,9 +196,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         session_policy_resolver=SessionPolicyResolver(config.session_policies.policies),
         title_vendor_bindings=config.session_policies.title_vendor_bindings,
         title_exempt_prefixes=config.session_policies.title_exempt_prefixes,
-        bindable_models=[
-            b.model_dump() for b in config.session_policies.bindable_models
-        ],
+        bindable_models=_bindable_catalog,
     )
 
     app = FastAPI(

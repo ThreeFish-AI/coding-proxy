@@ -370,7 +370,7 @@ env var（运行时） > 存储的显式字段（Dashboard / CLI 配置） > Pyd
 
 > **定义位置**：[`config/session_policy.py`](../../src/coding/proxy/config/session_policy.py)
 >
-> **生效链路**：`SessionPolicyResolver` 逐请求按 session_key 解析。运行时绑定（Dashboard/CLI/API）纯内存态：重启后回落配置态；配置热切换（generation swap）经 `_migrate_bindings` 迁移保留——vendor 需仍在新链路、模型需仍在 `bindable_models` 清单，失效部分移除并在 `reset_runtime` 提示。设计详见 [session-model-bind.md](session-model-bind.md)。
+> **生效链路**：`SessionPolicyResolver` 逐请求按 session_key 解析。运行时绑定（Dashboard/CLI/API）纯内存态：重启后回落配置态；配置热切换（generation swap）经 `_migrate_bindings` 迁移保留——vendor 需仍在新链路、模型需仍在合成可绑定目录，失效部分移除并在 `reset_runtime` 提示。设计详见 [session-model-bind.md](session-model-bind.md)。
 
 ### 11.1 本节字段
 
@@ -378,12 +378,13 @@ env var（运行时） > 存储的显式字段（Dashboard / CLI 配置） > Pyd
 | --- | --- | --- | --- |
 | `policies` | `list[SessionPolicy]` | `[]` | 配置态 Session 路由策略，按序求值首次命中生效（存量键：`name`/`match.session_keys`/`tiers`，注释见 `config.default.yaml`） |
 | `policies.*.model` | `str \| null` | `null` | 会话级模型覆盖：非空时该 Session 的后续请求体 `model` 统一改写为此值（逐请求生效，在途请求不受影响） |
-| `bindable_models` | `list[BindableModel]` | claude 三档 | 可绑定模型清单，Dashboard Model Bind 下拉选项与 API 校验的唯一来源 |
+| `bindable_models` | `list[BindableModel]` | claude 三档 | 可绑定模型显式定制层：下拉选项为其与内置 vendor 目录（按激活 vendor 过滤）的合成结果；空清单 = 整体关闭模型绑定（含内置目录） |
 | `bindable_models.*.label` | `str` | — | UI 显示名，清单内唯一，非空 |
 | `bindable_models.*.model` | `str` | — | 覆盖目标模型名，清单内唯一，非空 |
-| `bindable_models.*.tiers` | `list[str]` | `[]` | 随绑定重排的 vendor 优先级；空 = 不改当前 tier 顺序（已有运行时 vendor 绑定 > 配置态策略 > 全局默认） |
+| `bindable_models.*.tiers` | `list[str]` | `[]` | 随绑定重排的 vendor 优先级；同名覆盖内置条目时留空继承内置锁定值，纯自定义条目留空 = 不改当前 tier 顺序 |
+| `bindable_models.*.exclude` | `bool` | `false` | 剔除同名内置目录条目（下拉收缩开关） |
 | `title_vendor_bindings` / `title_exempt_prefixes` | — | — | 标题前缀自动绑定与豁免（存量键，语义见 `config.default.yaml` 注释） |
 
-### 11.2 跨系列约束
+### 11.2 目录合成与 identity 规则
 
-原生模型名（如 `glm-5.3`）入清单须配套 identity `model_mapping` 规则（pattern = target），防 `ModelMapper` default 静默改写；详见 [session-model-bind.md §6](session-model-bind.md#6-已知边界与风险)。
+下拉选项在 app 构建时合成（内置目录 ∪ 本清单，按 `model` 去重、config 覆盖 label/tiers、`exclude` 剔除）；合成目录中 native 系 vendor 的模型自动获得 identity `model_mapping` 规则（pattern = target，custom 条目按锁定 tiers 或原生前缀族归属），无需手工配置，防 `ModelMapper` default 静默改写。绑定语义为 vendor.model 锁定（严格链，不做跨系列静默降级）；详见 [session-model-bind.md](session-model-bind.md)。

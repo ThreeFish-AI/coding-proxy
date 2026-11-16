@@ -60,6 +60,22 @@ from ..model.compat import CanonicalMessagePart, CanonicalRequest
 logger = logging.getLogger(__name__)
 
 
+def _no_compatible_message(reasons: list[str], bound_model: str | None) -> str:
+    """无兼容供应商终态的报错文案（流式 / 非流式同型）.
+
+    reasons 非空 → 能力/模型门控拒绝（历史文案）；为空 → 锁定链为空
+    （绑定模型的 vendor 不在激活链）或全部 tier 健康跳过，文案指向真实病因。
+    """
+    if reasons:
+        return "当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商"
+    if bound_model:
+        return (
+            f"绑定模型 {bound_model} 的锁定 vendor 链无可用层级"
+            "（锁定 vendor 不在激活链路或暂时不可用）"
+        )
+    return "无可用供应商层级"
+
+
 def _log_unexpected(scope: str, tier_name: str, exc: BaseException) -> None:
     """记录未预期异常：类型 + 堆栈帧，不含 ``str(exc)``（I2）.
 
@@ -972,6 +988,22 @@ class _RouteExecutor:
 
     # ── 公开执行入口 ──────────────────────────────────────
 
+    def _pinned_tier_names(self, model: str | None) -> list[str] | None:
+        """返回绑定模型的锁定 tier 名单（合成目录中该条目 tiers 非空时）.
+
+        vendor.model 锁定语义：内置目录条目（及 config 覆盖 tiers 的条目）
+        声明了原生归属 vendor 时，绑定即钉死到该 vendor 链，不做跨系列
+        静默降级；tiers 为空（纯自定义透传条目）返回 None = 沿用链路顺序
+        （仍受 _try_gate_tier 的模型门控保护）。
+        """
+        if not model or not self._router:
+            return None
+        for entry in self._router.get_bindable_models():
+            if str(entry.get("model", "")) == model:
+                tiers = [str(t) for t in entry.get("tiers", []) if t]
+                return tiers or None
+        return None
+
     def _resolve_effective_tiers(
         self, session_key: str, policy: SessionPolicy | None = None
     ) -> list[VendorTier]:
@@ -980,13 +1012,33 @@ class _RouteExecutor:
         策略指定的 vendor 按其顺序排列在头部，未提及的保持在末尾。
         无策略时返回全局默认顺序。policy 可由调用方预先 resolve 传入，
         与会话级模型覆盖共用同一次解析（避免双重 resolve 的竞态窗口）。
+        绑定模型带锁定 tiers（pinned）时为严格链：恰为 policy.tiers 的
+        有效子序列，不再尾部追加未提及 vendor。
         """
         if policy is None:
             policy = self._policy_resolver.resolve(session_key)
+        pinned = (
+            self._pinned_tier_names(policy.model) if policy and policy.model else None
+        )
+        name_to_tier = {t.name: t for t in self._tiers}
+        if pinned is not None:
+            # 严格链：绑定模型锁定归属 vendor 时不尾部追加未提及 vendor；
+            # policy.tiers（用户显式点名）优先于目录默认锁定值
+            names = policy.tiers or pinned
+            ordered = [
+                name_to_tier[n] for n in dict.fromkeys(names) if n in name_to_tier
+            ]
+            if not ordered:
+                logger.warning(
+                    "Pinned model %s has no eligible tier (locked vendors %s "
+                    "not in active chain) — request will fail explicitly",
+                    policy.model,
+                    names,
+                )
+            return ordered
         if not policy or not policy.tiers:
             return self._tiers
 
-        name_to_tier = {t.name: t for t in self._tiers}
         ordered: list[VendorTier] = []
         seen: set[str] = set()
         for name in policy.tiers:
@@ -1211,6 +1263,7 @@ class _RouteExecutor:
                 canonical_request,
                 session_record,
                 incompatible_reasons,
+                bound_model=bound_model,
             )
             if gate == "skip":
                 continue
@@ -1347,7 +1400,7 @@ class _RouteExecutor:
         if last_exc:
             raise last_exc
         raise NoCompatibleVendorError(
-            "当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商",
+            _no_compatible_message(incompatible_reasons, bound_model),
             reasons=incompatible_reasons,
         )
 
@@ -1393,6 +1446,7 @@ class _RouteExecutor:
                 canonical_request,
                 session_record,
                 incompatible_reasons,
+                bound_model=bound_model,
             )
             if gate == "skip":
                 continue
@@ -1561,10 +1615,13 @@ class _RouteExecutor:
 
         if incompatible_reasons:
             raise NoCompatibleVendorError(
-                "当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商",
+                _no_compatible_message(incompatible_reasons, bound_model),
                 reasons=incompatible_reasons,
             )
-        raise RuntimeError("无可用供应商层级")
+        raise NoCompatibleVendorError(
+            _no_compatible_message([], bound_model),
+            reasons=[],
+        )
 
     # ── 门控与错误处理 ──────────────────────────────────────
 
@@ -1576,6 +1633,7 @@ class _RouteExecutor:
         canonical_request: Any,
         session_record: Any,
         incompatible_reasons: list[str],
+        bound_model: str | None = None,
     ) -> str:
         """对单个 tier 执行能力门控和兼容性检查.
 
@@ -1583,6 +1641,14 @@ class _RouteExecutor:
             "eligible" — 通过所有门控，可执行请求
             "skip" — 未通过门控，跳过此 tier
         """
+        if bound_model and not tier.vendor.supports_model(bound_model):
+            incompatible_reasons.append(f"{tier.name}:model_not_supported")
+            logger.info(
+                "Tier %s skipped: bound model %s not supported by vendor",
+                tier.name,
+                bound_model,
+            )
+            return "skip"
         supported, reasons = tier.vendor.supports_request(request_caps)
         if not supported:
             reason_text = ",".join(sorted({r.value for r in reasons}))
