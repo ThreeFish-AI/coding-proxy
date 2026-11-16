@@ -261,7 +261,7 @@ curl http://127.0.0.1:3392/api/openai/v1/chat/completions \
 
 ### 4.8 antigravity_gateway — Antigravity IDE 客户端透传
 
-让本地 **Antigravity IDE**（默认 Gemini agent，订阅账号登录态）的模型流经 `coding-proxy` 再字节级透传至 Google Antigravity 服务端，获得本地代理与用量统计（dashboard 以 `Antigravity` 客户端类别区分，会话粒度取自请求信封内的 `Conversation ID`）：
+让本地 **Antigravity**（订阅账号登录态）经 `coding-proxy` 字节级透传至 Google Antigravity 服务端，获得本地代理与用量统计（dashboard 以 `Antigravity` 客户端类别区分，会话粒度取自请求信封内的 `Conversation ID`）：
 
 ```yaml
 antigravity_gateway:
@@ -269,17 +269,18 @@ antigravity_gateway:
   base_url: "https://daily-cloudcode-pa.googleapis.com"  # 上游随版本漂移过，可覆写
 ```
 
-**接入（Antigravity 侧，二选一）**：
+**接入（Antigravity 侧，按需选择）**：
 
 ```bash
-# 方式 A：从带 env 的终端启动 Antigravity（桌面端与 agy CLI 均生效）
+# 方式 A：CLOUD_CODE_URL hook（控制面透传；2026-11-16 桌面 2.32.1 真机实测仅接管控制面，
+#         模型调用流走硬编码 generativelanguage 直连、不经 proxy，控制面落账 unknown/0 token 属预期）
 export CLOUD_CODE_URL="http://127.0.0.1:3392/api/antigravity"
 
-# 方式 B：agy CLI + Gemini API key（走 native_api 的 gemini 面，非本通道）
+# 方式 B：agy CLI + Gemini API key（走 native_api 的 gemini 面，模型级用量统计的推荐通道）
 export GEMINI_API_KEY="..." GOOGLE_GEMINI_BASE_URL="http://127.0.0.1:3392/api/gemini"
 ```
 
-注意事项：`CLOUD_CODE_URL` 为 Antigravity 未文档化 hook（由社区二进制逆向发现并真机验证），Google 随时可能移除；上游域名随版本漂移（`cloudcode-pa` ↔ `daily-cloudcode-pa`），若 IDE 报 404/400 可设 `ANTIGRAVITY_GATEWAY_BASE_URL` 切换；Antigravity 订阅按 Premium Requests 配额计费而非 token 单价，dashboard 成本列默认为空属预期。完整字段定义参见 [配置字段参考 — antigravity_gateway](./arch/config-reference.md#12-antigravity_gateway--antigravity-客户端透传配置)；三条接入通道的完整对比参见 [Antigravity 客户端接入可行性调研](./research/antigravity-client-feasibility.md)。
+注意事项：`CLOUD_CODE_URL` 为 Antigravity 未文档化 hook（由社区二进制逆向发现），Google 随时可能移除，且桌面端模型流不经该 hook（详见 [配置字段参考 — antigravity_gateway 覆盖范围](./arch/config-reference.md#12-antigravity_gateway--antigravity-客户端透传配置)），需要模型与 token 级统计请用方式 B；上游域名随版本漂移（`cloudcode-pa` ↔ `daily-cloudcode-pa`），若 IDE 报 404/400 可设 `ANTIGRAVITY_GATEWAY_BASE_URL` 切换；Antigravity 订阅按 Premium Requests 配额计费而非 token 单价，dashboard 成本列默认为空属预期。完整字段定义参见 [配置字段参考 — antigravity_gateway](./arch/config-reference.md#12-antigravity_gateway--antigravity-客户端透传配置)；三条接入通道的完整对比参见 [Antigravity 客户端接入可行性调研](./research/antigravity-client-feasibility.md)。
 
 ---
 

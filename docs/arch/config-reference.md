@@ -394,7 +394,9 @@ env var（运行时） > 存储的显式字段（Dashboard / CLI 配置） > Pyd
 
 > **定义位置**：[`antigravity_gateway/config.py`](../../src/coding/proxy/antigravity_gateway/config.py)
 >
-> **端点**：`/api/antigravity/**` catch-all 透传通道。Antigravity IDE（默认 Gemini agent）经 `CLOUD_CODE_URL` 环境变量将模型流指向本 proxy，proxy 字节级透传至 Google Cloud Code `v1internal` 后端并旁路解析信封完成用量统计（`client_category='antigravity'`，vendor 标签 `antigravity-gateway`）。认证由 IDE 自带，proxy 不保管凭据。
+> **端点**：`/api/antigravity/**` catch-all 透传通道。Antigravity 客户端经 `CLOUD_CODE_URL` 环境变量将 Cloud Code `v1internal` 流量指向本 proxy，proxy 字节级透传至 Google 后端并旁路解析信封完成用量统计（`client_category='antigravity'`，vendor 标签 `antigravity-gateway`）。认证由客户端自带，proxy 不保管凭据。
+>
+> **覆盖范围（2026-11-16 桌面 2.32.1 真机实测）**：该 hook 实际只接管**控制面**流量（`loadCodeAssist` / `fetchUserInfo` / `fetchAvailableModels` / `cascadeNuxes` 等，无模型与用量语义，落账为 `unknown` / 0 token 属预期）。桌面端的**模型调用流不经此通道**——Electron 主进程以硬编码常量 `LS_API_SERVER_URL` 将 `--api_server_url=https://generativelanguage.googleapis.com` 注入 language_server（`app.asar` 内 `baseLsArgs()`，无 env / settings 覆写点），模型请求以 `/v1beta/models/{model}:generateContent` 直连 Google；Orca 托管的 `agy_acp_server` runtime 不读取 `CLOUD_CODE_URL`（二进制 0 引用），模型流走云沙箱 `:streamProxyCommand`。需要模型级用量统计时改走 [通道②：agy CLI `GOOGLE_GEMINI_BASE_URL` → `/api/gemini`](../user-guide.md#47-native_api--原生-api-透传)。
 
 ### 12.1 AntigravityGatewayConfig 字段
 
@@ -408,7 +410,7 @@ env var（运行时） > 存储的显式字段（Dashboard / CLI 配置） > Pyd
 ### 12.2 接入方式与上游覆写
 
 ```bash
-# Antigravity 侧（未文档化 env hook，桌面端与 agy CLI 均生效）：
+# Antigravity 侧（未文档化 env hook；真机实测仅控制面流量经此通道，见上方覆盖范围说明）：
 export CLOUD_CODE_URL="http://127.0.0.1:3392/api/antigravity"
 ```
 
