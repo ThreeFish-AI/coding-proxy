@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import textwrap
 
@@ -10,6 +11,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from coding.proxy.server.dashboard import register_dashboard_routes
+
+# 与 test_dashboard_config_tab.py 同款 node 可用性守卫
+_NODE = shutil.which("node")
 
 
 @pytest.fixture
@@ -49,7 +53,10 @@ def test_subscription_card_escapes_upstream_strings(client: TestClient):
 def test_subscription_card_no_inline_handlers(client: TestClient):
     """订阅卡片为纯展示面板，无 onclick 等内联事件处理器."""
     html = client.get("/dashboard").text
-    card = html[html.index('id="subscription-card"') : html.index("charts-grid")]
+    start = html.index('id="subscription-card"')
+    # 从卡片起点向后找边界（html.index("charts-grid") 会先命中前面的 CSS 规则，
+    # 起点大于终点时切片为空串，断言恒真）
+    card = html[start : html.index("charts-grid", start)]
     assert "onclick" not in card
 
 
@@ -134,6 +141,7 @@ _SUB_HARNESS = textwrap.dedent(
 )
 
 
+@pytest.mark.skipif(_NODE is None, reason="node 不可用")
 def test_subscription_render_behavior(client: TestClient, tmp_path):
     """提取内联渲染函数在 Node vm 中执行，验证分支与 XSS 转义."""
     html = client.get("/dashboard").text
@@ -170,7 +178,7 @@ def test_subscription_render_behavior(client: TestClient, tmp_path):
         encoding="utf-8",
     )
     result = subprocess.run(
-        ["node", str(harness)], capture_output=True, text=True, timeout=30
+        [_NODE, str(harness)], capture_output=True, text=True, timeout=30
     )
     assert result.returncode == 0, f"node harness failed:\n{result.stderr}"
     assert "subscription render harness OK" in result.stdout

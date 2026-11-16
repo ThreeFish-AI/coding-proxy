@@ -432,6 +432,63 @@ def test_subscriptions_endpoint_reflects_passive_snapshot():
         assert claude["windows"][0]["reset_epoch"] == 1731750000
 
 
+# ── 畸形数值边界（NaN/Infinity） ────────────────────────────
+
+
+def test_epoch_seconds_malformed_values():
+    """NaN/Infinity/1e400 等畸形 reset 值不得抛异常，回落 None（窗口跳过倒计时）."""
+    from coding.proxy.server.subscription_status import _epoch_seconds
+
+    for bad in ("NaN", "Infinity", "-Infinity", "1e400", "nan", "inf", None, "", "x"):
+        assert _epoch_seconds(bad) is None, bad
+
+
+def test_unified_reset_malformed_values_tolerated():
+    """被动链路 reset 头为 inf/nan 时解析为 None，不拖垮快照."""
+    snap = parse_unified_ratelimit(
+        {
+            "anthropic-ratelimit-unified-5h-utilization": "0.5",
+            "anthropic-ratelimit-unified-5h-reset": "Infinity",
+        }
+    )
+    assert snap is not None
+    assert snap.five_hour_percent == pytest.approx(50.0)
+    assert snap.five_hour_reset_epoch is None
+    # utilization 为 NaN 时窗口百分比解析为 None
+    snap2 = parse_unified_ratelimit(
+        {"anthropic-ratelimit-unified-7d-utilization": "NaN"}
+    )
+    assert snap2.seven_day_percent is None
+
+
+async def test_zhipu_fetcher_malformed_reset_keeps_window():
+    """GLM 畸形 reset 值只丢弃倒计时，不拖垮整家条目."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "level": "pro",
+                    "limits": [
+                        {
+                            "type": "TOKENS_LIMIT",
+                            "percentage": 40,
+                            "unit": 3,
+                            "number": 5,
+                            "nextResetTime": "NaN",
+                        }
+                    ],
+                }
+            },
+        )
+
+    result = await _zhipu_fetcher(handler).fetch()
+    assert result["plan"] == "Pro"
+    assert result["windows"][0]["used_percent"] == pytest.approx(40.0)
+    assert result["windows"][0]["reset_epoch"] is None
+
+
 # ── Antigravity fetcher 回退构建 ─────────────────────────────
 
 
@@ -442,7 +499,11 @@ def test_antigravity_fallback_builder_from_token_store():
     from coding.proxy.server.subscription_status import _build_antigravity_fetcher
 
     entry = SimpleNamespace(
-        vendor="antigravity", client_id="", client_secret="", refresh_token=""
+        vendor="antigravity",
+        enabled=True,
+        client_id="",
+        client_secret="",
+        refresh_token="",
     )
     config = SimpleNamespace(vendors=[entry])
     store = SimpleNamespace(
@@ -454,6 +515,28 @@ def test_antigravity_fallback_builder_from_token_store():
     )
     fetcher = _build_antigravity_fetcher(None, config, store)
     assert isinstance(fetcher, AntigravityUsageFetcher)
+    # 配额查询 host 默认对齐 gateway 漂移敏感默认值
+    assert fetcher._quota_summary_url.startswith(
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+    )
+
+    # 显式禁用的 antigravity vendor：即使 token store 有凭证也不查（与 zhipu 同口径）
+    disabled = SimpleNamespace(**{**vars(entry), "enabled": False})
+    assert (
+        _build_antigravity_fetcher(None, SimpleNamespace(vendors=[disabled]), store)
+        is None
+    )
+    # config.antigravity_gateway.base_url 覆写被尊重
+    override_cfg = SimpleNamespace(
+        vendors=[entry],
+        antigravity_gateway=SimpleNamespace(
+            base_url="https://cloudcode-pa.googleapis.com"
+        ),
+    )
+    fetcher2 = _build_antigravity_fetcher(None, override_cfg, store)
+    assert fetcher2._quota_summary_url.startswith(
+        "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+    )
 
     # token store 无凭证 → None
     empty_store = SimpleNamespace(
@@ -462,3 +545,36 @@ def test_antigravity_fallback_builder_from_token_store():
     assert _build_antigravity_fetcher(None, config, empty_store) is None
     # 缺 config/store 也 → None（仅 vendor 通道）
     assert _build_antigravity_fetcher(None, None, None) is None
+
+
+def test_clamp_percent_nan_rejected_at_fetchers():
+    """NaN/Infinity 百分比不进窗口（min/max 位置效应会伪造 100%，取值处拒绝）."""
+    from coding.proxy.server.subscription_status import _is_finite_number
+
+    assert not _is_finite_number(float("nan"))
+    assert not _is_finite_number(float("inf"))
+    assert _is_finite_number(0)
+    assert _is_finite_number(100.5)
+    assert not _is_finite_number("40")
+    assert not _is_finite_number(None)
+
+
+async def test_zhipu_nan_percentage_window_skipped():
+    """GLM percentage=NaN 的窗口整体跳过，不显示伪造的 100%."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # 上游真实形态是 JSON 文本里的 NaN 字面量（json.loads 宽容解析为 nan；
+        # httpx 的 json= 序列化拒绝 NaN，故用原始 content 模拟）
+        return httpx.Response(
+            200,
+            content=(
+                b'{"data": {"level": "pro", "limits": ['
+                b'{"type": "TOKENS_LIMIT", "percentage": NaN, "unit": 3, "number": 5}'
+                b"]}}"
+            ),
+            headers={"content-type": "application/json"},
+        )
+
+    result = await _zhipu_fetcher(handler).fetch()
+    assert result["plan"] == "Pro"
+    assert result["windows"] == []

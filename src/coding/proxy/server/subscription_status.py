@@ -23,16 +23,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
+import traceback
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
+from ..antigravity_gateway.config import _DEFAULT_UPSTREAM_BASE_URL
 from ..config.schema import AntigravityConfig
+from ..config.vendors import ZHIPU_DEFAULT_BASE_URL
 from ..routing.subscription_signals import get_anthropic_snapshot
-from ..vendors.antigravity import AntigravityVendor, GoogleOAuthTokenManager
+from ..vendors.antigravity import (
+    _V1INTERNAL_BASE_URL,
+    _V1INTERNAL_CLIENT_NAME,
+    _V1INTERNAL_CLIENT_VERSION,
+    _V1INTERNAL_USER_AGENT,
+    AntigravityVendor,
+    GoogleOAuthTokenManager,
+)
 from ..vendors.token_manager import TokenAcquireError, TokenErrorKind
 from .factory import _resolve_antigravity_credentials
 
@@ -43,27 +54,14 @@ logger = logging.getLogger(__name__)
 # 智谱监控端点路径（挂在 base_url 的 host 根下，非 /api/anthropic 路径）
 _ZHIPU_QUOTA_PATH = "/api/monitor/usage/quota/limit"
 
-# Antigravity v1internal：loadCodeAssist 在 cloudcode-pa，配额汇总在
-# daily-cloudcode-pa（Gemini 组口径以此为准，域名漂移史见 antigravity_gateway/config.py）
-_AG_LOAD_CODE_ASSIST_URL = (
-    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
-)
-_AG_QUOTA_SUMMARY_URL = (
-    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
-)
-
-# Antigravity 客户端指纹（与 vendors/antigravity.py:36-40 对齐；UA 门控必需）
-_AG_USER_AGENT = (
-    "Antigravity/4.1.31 (Macintosh; Intel Mac OS X 10_15_7) "
-    "Chrome/132.0.6834.160 Electron/39.2.3"
-)
-_AG_CLIENT_NAME = "antigravity"
-_AG_CLIENT_VERSION = "4.1.31"
+# Antigravity v1internal：loadCodeAssist 在 cloudcode-pa（复用 vendors/antigravity
+# 权威常量）；配额汇总 host 复用 antigravity_gateway 的漂移敏感默认值（可经
+# config.antigravity_gateway.base_url 覆写）
+_AG_LOAD_CODE_ASSIST_URL = f"{_V1INTERNAL_BASE_URL}:loadCodeAssist"
+_AG_QUOTA_SUMMARY_PATH = "/v1internal:retrieveUserQuotaSummary"
 
 # loadCodeAssist 结果（档位 + project）缓存时长：账号级事实，低频变化
 _AG_PROJECT_CACHE_TTL = 3600.0
-
-_ZHIPU_DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/anthropic"
 
 _WINDOW_LABELS = {"5h": "5 小时", "weekly": "每周"}
 
@@ -79,17 +77,25 @@ def _clamp_percent(value: float) -> float:
     return max(0.0, min(100.0, float(value)))
 
 
+def _is_finite_number(value: Any) -> bool:
+    """数值守门：排除 NaN/Infinity（min/max 对 NaN 的位置效应会伪造 100%）."""
+    return isinstance(value, (int, float)) and math.isfinite(value)
+
+
 def _epoch_seconds(value: Any) -> int | None:
-    """epoch 自适应：毫秒（>1e11）转秒，其余按秒."""
+    """epoch 自适应：毫秒（>1e11）转秒，其余按秒；NaN/Infinity 等畸形值返回 None."""
     if value is None:
         return None
     try:
         v = float(value)
     except (TypeError, ValueError):
         return None
-    if v <= 0:
+    if not math.isfinite(v) or v <= 0:
         return None
-    return int(v / 1000) if v > 1e11 else int(v)
+    try:
+        return int(v / 1000) if v > 1e11 else int(v)
+    except (ValueError, OverflowError):
+        return None
 
 
 def _iso_to_epoch(value: Any) -> int | None:
@@ -142,7 +148,7 @@ class ZhipuUsageFetcher:
         timeout: float = 10.0,
     ) -> None:
         self._api_key = api_key
-        parsed = httpx.URL(base_url or _ZHIPU_DEFAULT_BASE_URL)
+        parsed = httpx.URL(base_url or ZHIPU_DEFAULT_BASE_URL)
         # httpx.URL.netloc 返回 bytes（f-string 会拼出 b'host' 非法值），用 host/port
         root = f"{parsed.scheme}://{parsed.host}"
         if parsed.port is not None:
@@ -188,7 +194,7 @@ class ZhipuUsageFetcher:
                 continue
             kind = _zhipu_window_kind(item)
             percent = _pick(item, "percentage", "used_percent")
-            if kind is None or not isinstance(percent, (int, float)):
+            if kind is None or not _is_finite_number(percent):
                 continue
             windows.append(
                 {
@@ -213,10 +219,15 @@ class AntigravityUsageFetcher:
         self,
         token_getter: Callable[[], Awaitable[str]],
         *,
+        quota_summary_base_url: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = 15.0,
     ) -> None:
         self._token_getter = token_getter
+        self._quota_summary_url = (
+            f"{(quota_summary_base_url or _DEFAULT_UPSTREAM_BASE_URL).rstrip('/')}"
+            f"{_AG_QUOTA_SUMMARY_PATH}"
+        )
         self._transport = transport
         self._timeout = timeout
         # loadCodeAssist 缓存：(tier_name, project, expires_at_monotonic)
@@ -229,9 +240,9 @@ class AntigravityUsageFetcher:
         return {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
-            "User-Agent": _AG_USER_AGENT,
-            "x-client-name": _AG_CLIENT_NAME,
-            "x-client-version": _AG_CLIENT_VERSION,
+            "User-Agent": _V1INTERNAL_USER_AGENT,
+            "x-client-name": _V1INTERNAL_CLIENT_NAME,
+            "x-client-version": _V1INTERNAL_CLIENT_VERSION,
         }
 
     async def _post_json(
@@ -300,7 +311,7 @@ class AntigravityUsageFetcher:
         async with self._get_client() as client:
             plan, project = await self._ensure_tier(client, token)
             data = await self._post_json(
-                client, _AG_QUOTA_SUMMARY_URL, token, {"project": project}
+                client, self._quota_summary_url, token, {"project": project}
             )
 
         windows: list[dict[str, Any]] = []
@@ -312,7 +323,7 @@ class AntigravityUsageFetcher:
                 if not isinstance(bucket, dict):
                     continue
                 remaining = bucket.get("remainingFraction")
-                if not isinstance(remaining, (int, float)):
+                if not _is_finite_number(remaining):
                     continue
                 window = str(bucket.get("window") or "").strip()
                 label = " ".join(x for x in (group_name, window) if x) or str(
@@ -358,7 +369,9 @@ def _build_antigravity_fetcher(
         vendor = getattr(tier, "vendor", None)
         if isinstance(vendor, AntigravityVendor):
             token_manager = vendor._token_manager  # noqa: SLF001 — 与 app.py reauth 装配同款访问
-            return AntigravityUsageFetcher(token_manager.get_token)
+            return AntigravityUsageFetcher(
+                token_manager.get_token, **_ag_quota_kwargs(config)
+            )
     if config is None or token_store is None:
         return None
     entry = next(
@@ -369,6 +382,10 @@ def _build_antigravity_fetcher(
         ),
         None,
     )
+    if entry is not None and not getattr(entry, "enabled", False):
+        # 显式禁用即不查（与 zhipu 判定同口径）；无 entry 时仍回退 token store
+        # （Antigravity vendor 从未配置、仅用 IDE gateway 透传的场景）
+        return None
     cfg = AntigravityConfig(
         client_id=getattr(entry, "client_id", "") or "",
         client_secret=getattr(entry, "client_secret", "") or "",
@@ -380,7 +397,14 @@ def _build_antigravity_fetcher(
     manager = GoogleOAuthTokenManager(
         cfg.client_id, cfg.client_secret, cfg.refresh_token
     )
-    return AntigravityUsageFetcher(manager.get_token)
+    return AntigravityUsageFetcher(manager.get_token, **_ag_quota_kwargs(config))
+
+
+def _ag_quota_kwargs(config: Any) -> dict[str, Any]:
+    """从 config.antigravity_gateway.base_url 派生配额查询 host（尊重用户覆写）."""
+    gw = getattr(config, "antigravity_gateway", None)
+    base = getattr(gw, "base_url", "") or ""
+    return {"quota_summary_base_url": base} if base else {}
 
 
 class SubscriptionStatusService:
@@ -478,11 +502,13 @@ class SubscriptionStatusService:
                         "windows": [],
                     }
                 except Exception as exc:
-                    # I2 泄露纪律：未预期异常只暴露类型名
-                    logger.warning(
-                        "subscription fetch %s failed: %s",
+                    # I2 泄露纪律（对齐 executor._log_unexpected canon）：
+                    # 类型 + 堆栈帧，不落 str(exc)（异常消息可能携带敏感细节）
+                    logger.error(
+                        "subscription fetch %s unexpected error: %s\n%s",
                         key,
                         type(exc).__name__,
+                        "".join(traceback.format_tb(exc.__traceback__)),
                     )
                     entry = {
                         "key": key,

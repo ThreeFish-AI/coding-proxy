@@ -42,22 +42,22 @@ Dashboard Overview ── GET /api/dashboard/subscriptions
 
 - 两步：`POST cloudcode-pa.../v1internal:loadCodeAssist`（取 `currentTier.name` 档位 + `cloudaicompanionProject`，结果缓存 1h）→ `POST daily-cloudcode-pa.../v1internal:retrieveUserQuotaSummary`（body `{"project": ...}`）；
 - 响应：`groups[].buckets[]`，每桶 `remainingFraction`(0–1) + `resetTime`(ISO8601) + `window`(5h/weekly)，按模型族分组（Gemini / Claude+GPT 各自双窗口）；used = 1 − remaining；
-- **UA 门控**：请求必须带 Antigravity 客户端指纹（`User-Agent: Antigravity/...` + `x-client-name: antigravity`），否则 403 或缺 Gemini 组；
-- 双 host 数据分裂：Gemini 组用量以 `daily-cloudcode-pa` 为准；
+- **UA 门控**：请求必须带 Antigravity 客户端指纹（`User-Agent: Antigravity/...` + `x-client-name: antigravity`，常量复用 `vendors/antigravity.py` 权威定义），否则 403 或缺 Gemini 组；
+- 双 host 数据分裂：Gemini 组用量以 `daily-cloudcode-pa` 为准（配额查询 host 默认取 `antigravity_gateway` 的漂移敏感默认值，可经其 `base_url` 配置覆写）；
 - 凭证来源优先级：vendor 通道 token manager（reauth 热更新天然跟随）→ 回退 config + token store 合成独立 `GoogleOAuthTokenManager`（vendor 未进路由链路时，如仅用 IDE gateway 透传）。
 
 ## 代码锚点
 
 | 模块 | 职责 |
 |---|---|
-| `routing/subscription_signals.py` | unified 头解析 + 进程级被动快照单例 |
-| `server/subscription_status.py` | 两家 fetcher + `SubscriptionStatusService` 聚合（TTL/锁/错误隔离） |
-| `vendors/base.py` | `_on_upstream_response` 上游响应抵达钩子（默认 no-op） |
-| `vendors/anthropic.py` | 覆写钩子 → 被动采集 |
-| `server/app.py` | `app.state.subscription_status` 装配（随 generation 整体重建） |
-| `server/dashboard.py` | `GET /api/dashboard/subscriptions` 端点 + Overview 卡片 + `updateSubscriptions` 渲染 |
+| [routing/subscription_signals.py](../../src/coding/proxy/routing/subscription_signals.py) | unified 头解析 + 进程级被动快照单例（取头复用 [rate_limit.py](../../src/coding/proxy/routing/rate_limit.py) 的 `_get_header`） |
+| [server/subscription_status.py](../../src/coding/proxy/server/subscription_status.py) | 两家 fetcher + `SubscriptionStatusService` 聚合（TTL/锁/错误隔离）；客户端指纹与上游 host 复用 [vendors/antigravity.py](../../src/coding/proxy/vendors/antigravity.py) / [antigravity_gateway/config.py](../../src/coding/proxy/antigravity_gateway/config.py) 权威常量，zhipu 默认端点复用 [config/vendors.py](../../src/coding/proxy/config/vendors.py) 的 `ZHIPU_DEFAULT_BASE_URL` |
+| [vendors/base.py](../../src/coding/proxy/vendors/base.py) | `_on_upstream_response` 上游响应抵达钩子（默认 no-op） |
+| [vendors/anthropic.py](../../src/coding/proxy/vendors/anthropic.py) | 覆写钩子 → 被动采集 |
+| [server/app.py](../../src/coding/proxy/server/app.py) | `app.state.subscription_status` 装配（随 generation 整体重建） |
+| [server/dashboard.py](../../src/coding/proxy/server/dashboard.py) | `GET /api/dashboard/subscriptions` 端点 + Overview 卡片 + `updateSubscriptions` 渲染 |
 
-响应形状：`{"vendors": [{key, plan, status: ok|waiting|not_configured|error, error?, windows: [{id, label, used_percent, reset_epoch, exhausted?}], updated_at?}]}`。
+响应形状：`{"vendors": [{key, plan?, status, error?, windows: [{id, label, used_percent, reset_epoch, exhausted?}], updated_at?}]}`。`status` 为 `ok | waiting | not_configured | error`；例外：claude 条目在被动快照存在时透传 `anthropic-ratelimit-unified-status` 头原值（如 `allowed`，缺省 `ok`），前端仅按 error/not_configured/waiting 三态渲染徽章、其余值不显示状态徽章。`plan` 为可选字段（claude 恒为 null；error/not_configured 条目缺省）。
 
 ## 风险边界与已知缺口
 
@@ -69,5 +69,5 @@ Dashboard Overview ── GET /api/dashboard/subscriptions
 
 ## 测试锚点
 
-- `tests/test_subscription_status.py`：unified 头解析（含大小写/畸形值/钳制）、vendor 钩子旁路采集（流式+非流式）、两家 fetcher（MockTransport、双字段形态、403 门控、token 失效）、服务 TTL/错误隔离、端点集成、token store 回退构建；
-- `tests/test_dashboard_subscription_card.py`：HTML 接线、XSS 转义静态检查、内联渲染函数 Node vm 行为验证（分支 + 恶意档位名转义）。
+- [tests/test_subscription_status.py](../../tests/test_subscription_status.py)：unified 头解析（含大小写/畸形值/NaN/Infinity/钳制）、vendor 钩子旁路采集（流式+非流式）、两家 fetcher（MockTransport、双字段形态、403 门控、token 失效）、服务 TTL/错误隔离、端点集成、token store 回退构建（含 enabled 口径与 gateway host 覆写）；
+- [tests/test_dashboard_subscription_card.py](../../tests/test_dashboard_subscription_card.py)：HTML 接线、XSS 转义静态检查、内联渲染函数 Node vm 行为验证（分支 + 恶意档位名转义）。

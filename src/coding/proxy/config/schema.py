@@ -47,6 +47,7 @@ from .routing import (  # noqa: F401
 from .server import DatabaseConfig, LoggingConfig, ServerConfig  # noqa: F401
 from .session_policy import SessionPoliciesConfig, TitleVendorBinding  # noqa: F401
 from .vendors import (  # noqa: F401
+    ZHIPU_DEFAULT_BASE_URL,
     AlibabaConfig,
     AnthropicConfig,
     AntigravityConfig,

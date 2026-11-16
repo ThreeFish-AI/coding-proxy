@@ -22,6 +22,10 @@ from pydantic import BaseModel, Field, model_validator
 
 # 上游 base_url 覆写 env（与 native_api 的 NATIVE_{PROVIDER}_BASE_URL 命名并列）
 _BASE_URL_ENV = "ANTIGRAVITY_GATEWAY_BASE_URL"
+
+# 默认上游（漂移敏感：cloudcode-pa → daily-cloudcode-pa 已漂移过一次）。
+# 作为唯一事实源供 Field 默认值与订阅状态查询（server/subscription_status.py）共用。
+_DEFAULT_UPSTREAM_BASE_URL = "https://daily-cloudcode-pa.googleapis.com"
 # 公开别名：config resolver 的 env 来源标注与文档共用同一事实源
 BASE_URL_ENV = _BASE_URL_ENV
 
@@ -34,7 +38,7 @@ class AntigravityGatewayConfig(BaseModel):
         description="是否启用 /api/antigravity/** 透传端点。默认启用（开箱即用）。",
     )
     base_url: str = Field(
-        default="https://daily-cloudcode-pa.googleapis.com",
+        default=_DEFAULT_UPSTREAM_BASE_URL,
         description=(
             "Antigravity 后端（Cloud Code v1internal）base_url。"
             "该域名随 Antigravity 版本漂移过（cloudcode-pa → daily-cloudcode-pa），"

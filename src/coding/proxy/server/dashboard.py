@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import traceback
 from pathlib import Path
 from typing import Any, get_args
 
@@ -816,7 +817,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .tab-pane.active { display: block; }
 
     /* ── Model Calling 实时状态 ────────────────────────── */
-    .model-calling-card {
+    .model-calling-card,
+    .subscription-card {
       margin-bottom: var(--gap-section);
     }
     .model-token-card {
@@ -2933,7 +2935,12 @@ def register_dashboard_routes(app: Any) -> None:
         try:
             result = await service.get_status()
         except Exception as exc:
-            logger.error("dashboard_subscriptions error: %s", type(exc).__name__)
+            # I2 泄露纪律（对齐 executor._log_unexpected canon）：类型 + 堆栈帧，不落 str(exc)
+            logger.error(
+                "dashboard_subscriptions unexpected error: %s\n%s",
+                type(exc).__name__,
+                "".join(traceback.format_tb(exc.__traceback__)),
+            )
             return Response(
                 content=b'{"vendors":[]}',
                 status_code=200,

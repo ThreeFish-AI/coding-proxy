@@ -38,6 +38,8 @@ _V1INTERNAL_USER_AGENT = (
     "Antigravity/4.1.31 (Macintosh; Intel Mac OS X 10_15_7) "
     "Chrome/132.0.6834.160 Electron/39.2.3"
 )
+_V1INTERNAL_CLIENT_NAME = "antigravity"
+_V1INTERNAL_CLIENT_VERSION = "4.1.31"
 # Cloud Resource Manager API（用于自动发现 GCP project_id）
 _CRM_PROJECTS_URL = "https://cloudresourcemanager.googleapis.com/v1/projects"
 _V1INTERNAL_BASE_URL = "https://cloudcode-pa.googleapis.com/v1internal"
@@ -434,8 +436,8 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
             "content-type": "application/json",
             "authorization": f"Bearer {token}",
             "user-agent": _V1INTERNAL_USER_AGENT,
-            "x-client-name": "antigravity",
-            "x-client-version": "4.1.31",
+            "x-client-name": _V1INTERNAL_CLIENT_NAME,
+            "x-client-version": _V1INTERNAL_CLIENT_VERSION,
         }
         logger.debug(
             "_prepare_v1internal_request: model=%s -> %s, project=%s, requestId=%s",

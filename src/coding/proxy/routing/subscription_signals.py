@@ -14,12 +14,15 @@ Anthropic 官方通道是纯透传（代理不持有 OAuth 凭证），Claude Co
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+
+from .rate_limit import _get_header
 
 _UNIFIED_PREFIX = "anthropic-ratelimit-unified-"
 
@@ -36,16 +39,6 @@ class AnthropicUsageSnapshot:
     captured_at_epoch: float
 
 
-def _get_header(headers: Mapping[str, Any] | httpx.Headers, name: str) -> str | None:
-    """大小写无关取头（httpx.Headers 原生支持；测试可能传普通 dict）."""
-    if isinstance(headers, httpx.Headers):
-        value = headers.get(name)
-    else:
-        lowered = name.lower()
-        value = next((v for k, v in headers.items() if str(k).lower() == lowered), None)
-    return str(value) if value is not None else None
-
-
 def _parse_percent(raw: str | None) -> float | None:
     """0.0–1.0 小数 → 0–100 百分比（钳制），解析失败返回 None."""
     if raw is None:
@@ -54,6 +47,8 @@ def _parse_percent(raw: str | None) -> float | None:
         value = float(raw)
     except ValueError:
         return None
+    if not math.isfinite(value):
+        return None
     return max(0.0, min(100.0, value * 100.0))
 
 
@@ -61,15 +56,23 @@ def _parse_epoch(raw: str | None) -> int | None:
     if raw is None:
         return None
     try:
-        return int(float(raw))
+        value = float(raw)
     except ValueError:
         return None
+    if not math.isfinite(value):
+        return None
+    return int(value)
 
 
 def parse_unified_ratelimit(
     headers: Mapping[str, Any] | httpx.Headers,
 ) -> AnthropicUsageSnapshot | None:
-    """解析 unified ratelimit 头；无任何 unified 头（API key 流量）返回 None."""
+    """解析 unified ratelimit 头；无任何 unified 头（API key 流量）返回 None.
+
+    取头复用 ``rate_limit._get_header``：大小写无关仅对 httpx.Headers
+    保证；普通 dict 混合大小写键会走大小写敏感的 dict.get（生产路径
+    只传 httpx.Headers，不受影响）。
+    """
     five_hour_raw = _get_header(headers, f"{_UNIFIED_PREFIX}5h-utilization")
     seven_day_raw = _get_header(headers, f"{_UNIFIED_PREFIX}7d-utilization")
     if five_hour_raw is None and seven_day_raw is None:
