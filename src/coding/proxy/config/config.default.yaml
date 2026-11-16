@@ -1,6 +1,5 @@
-# coding-proxy 默认配置（模板）
-# 复制到 ./config.yaml（项目根目录）或 ~/.coding-proxy/config.yaml 并修改自定义设置
-# 优先级：./config.yaml > ~/.coding-proxy/config.yaml
+# coding-proxy 默认配置
+# 随包默认值基线；运行时配置请在 Dashboard → Config 或 `coding-proxy config` 中修改
 
 server:
   host: "127.0.0.1"
@@ -8,7 +7,7 @@ server:
 
 logging:
   level: "INFO"
-  # file: ".logs/coding-proxy.log"    # 文件日志路径；设为 null 或空字符串禁用
+  # file: ".logs/coding-proxy.log"    # 文件日志路径；未设置时默认 .logs/coding-proxy.log，设为空字符串禁用
   # max_bytes: 5242880                # 单文件上限（5 MB），触发轮转
   # backup_count: 5                   # 保留 gzip 压缩备份文件数
 
@@ -39,7 +38,7 @@ tiers: ["zhipu", "anthropic", "copilot", "antigravity"]
 # 优先级规则：
 #   - 若配置了 tiers，以其指定的顺序为准
 #   - 否则 vendors 列表顺序即优先级（index 越小越优先）
-#   - 无 circuit_breaker 的 vendor 自动成为终端层（不再向下故障转移）
+#   - circuit_breaker 为 null 仅表示不启用熔断；兜底（终端层）由链路位置决定
 
 vendors:
   # Vendor 0: Claude Plans（最高优先级）
@@ -102,20 +101,20 @@ vendors:
       threshold_percent: 95.0
       probe_interval_seconds: 300
 
-  # Vendor 3: 智谱 GLM（终端兜底，无 circuit_breaker）
+  # Vendor 3: 智谱 GLM（tiers 链路末位兜底；熔断器独立配置生效）
   - vendor: zhipu
     enabled: true
     base_url: "https://open.bigmodel.cn/api/anthropic"
     api_key: "${ZHIPU_API_KEY}"
     timeout_ms: 3000000
-    # 不配置 circuit_breaker → 自动成为终端层，不触发向下故障转移
+    # 兜底与否由 tiers 位置决定；熔断器只控制「跳过该层」，两者相互独立
     circuit_breaker:
       failure_threshold: 3
       recovery_timeout_seconds: 30
       success_threshold: 2
     quota_guard:
       enabled: true # 启用后按 Premium Requests 配额管理
-      token_budget: 1000000000 # 一天 token 预算（根据订阅计划调整）
+      token_budget: 3000000000 # 一天 token 预算（根据订阅计划调整）
       window_hours: 24.0
       threshold_percent: 95.0
       probe_interval_seconds: 300
@@ -340,6 +339,30 @@ model_mapping:
 pricing:
   # ── Anthropic Claude ──
   - vendor: anthropic
+    model: claude-sonnet-5-5
+    input_cost_per_mtok: $2.0
+    output_cost_per_mtok: $10.0
+    cache_write_cost_per_mtok: $2.50
+    cache_read_cost_per_mtok: $0.2
+  - vendor: anthropic
+    model: claude-opus-5-5
+    input_cost_per_mtok: $4.0
+    output_cost_per_mtok: $20.0
+    cache_write_cost_per_mtok: $5.0
+    cache_read_cost_per_mtok: $0.2
+  - vendor: anthropic
+    model: claude-fable-5-1
+    input_cost_per_mtok: $10.0
+    output_cost_per_mtok: $50.0
+    cache_write_cost_per_mtok: $12.50
+    cache_read_cost_per_mtok: $0.25
+  - vendor: anthropic
+    model: claude-sonnet-5
+    input_cost_per_mtok: $2.0
+    output_cost_per_mtok: $10.0
+    cache_write_cost_per_mtok: $2.50
+    cache_read_cost_per_mtok: $0.2
+  - vendor: anthropic
     model: claude-fable-5
     input_cost_per_mtok: $10.0
     output_cost_per_mtok: $50.0
@@ -484,6 +507,38 @@ pricing:
     cache_write_cost_per_mtok: $1.25
     cache_read_cost_per_mtok: $0.10
   # -- Gemini --
+  # ── Google Gemini（AI Studio API key，价格源 aistudio.google.com/docs/pricing，2026-11-15）──
+  # 注：gemini-4-carbon / argon 为限时定价（2026-11-30 前 $2/$10，2026-12-01 起 $4/$20）
+  - vendor: gemini
+    model: gemini-4-carbon
+    input_cost_per_mtok: $2.00
+    output_cost_per_mtok: $10.00
+    cache_read_cost_per_mtok: $0.10
+  - vendor: gemini
+    model: gemini-4-argon
+    input_cost_per_mtok: $2.00
+    output_cost_per_mtok: $10.00
+    cache_read_cost_per_mtok: $0.10
+  - vendor: gemini
+    model: gemini-4-hydrogen
+    input_cost_per_mtok: $1.50
+    output_cost_per_mtok: $7.50
+    cache_read_cost_per_mtok: $0.075
+  - vendor: gemini
+    model: gemini-3.8-flash
+    input_cost_per_mtok: $0.75
+    output_cost_per_mtok: $3.75
+    cache_read_cost_per_mtok: $0.075
+  - vendor: gemini
+    model: gemini-3.6-flash
+    input_cost_per_mtok: $0.75
+    output_cost_per_mtok: $3.75
+    cache_read_cost_per_mtok: $0.075
+  - vendor: gemini
+    model: gemini-3.5-flash-lite
+    input_cost_per_mtok: $0.30
+    output_cost_per_mtok: $2.50
+    cache_read_cost_per_mtok: $0.03
   - vendor: gemini
     model: gemini-3.1-pro-preview
     input_cost_per_mtok: $2.00
@@ -626,17 +681,15 @@ pricing:
     cache_write_cost_per_mtok: ¥0.12
     cache_read_cost_per_mtok: ¥0.017
 
-database:
-  path: "~/.coding-proxy/usage.db"
-
-# === OAuth 登录配置 ===
-auth:
-  # GitHub Device Flow client_id（默认使用 Copilot VS Code 扩展公开 ID）
-  # github_client_id: "Iv1.b507a08c87ecfe98"
-  # Google OAuth 凭据（默认使用 Antigravity Enterprise 公开凭据，无需手动配置）
-  # google_client_id: ""
-  # google_client_secret: ""
-  token_store_path: "~/.coding-proxy/tokens.json"
+# === 数据库与 OAuth 登录配置 ===
+# database.path / database.compat_state_path / auth.token_store_path 默认由
+# $CODING_PROXY_HOME（默认 ~/.coding-proxy）推导为 usage.db / compat.db / tokens.json。
+# auth:
+#   # GitHub Device Flow client_id（默认使用 Copilot VS Code 扩展公开 ID）
+#   github_client_id: "Iv1.b507a08c87ecfe98"
+#   # Google OAuth 凭据（默认使用 Antigravity Enterprise 公开凭据，无需手动配置）
+#   google_client_id: ""
+#   google_client_secret: ""
 
 # === 原生 API 透传（/api/{openai,gemini,anthropic}/**）===
 #
@@ -659,6 +712,11 @@ native_api:
     base_url: "https://api.openai.com"
     timeout_ms: 300000
     connect_timeout_ms: 15000
+    # opt-in：为 chat/completions 流式请求注入 stream_options.include_usage=true，
+    # 让上游末尾回发 usage chunk（否则流式 tokens 记 0）。注入会改写请求体，
+    # 故默认关闭保持严格字节级透传；接入 Antigravity enterprise gateway 等
+    # 不主动发送该字段的客户端时建议开启。
+    inject_include_usage: false
   gemini:
     enabled: true
     base_url: "https://generativelanguage.googleapis.com"
@@ -669,6 +727,25 @@ native_api:
     base_url: "https://api.anthropic.com"
     timeout_ms: 300000
     connect_timeout_ms: 15000
+
+# === Antigravity IDE 客户端透传（/api/antigravity/**）===
+#
+# 让本地 Antigravity IDE（默认 Gemini agent）的模型流经本代理再透传至
+# Google Cloud Code v1internal 后端，获得本地代理 + 用量统计
+#（client_category='antigravity'，dashboard 可区分）。
+#
+# 接入方式（Antigravity 侧，未文档化 env hook）：
+#   export CLOUD_CODE_URL="http://127.0.0.1:3392/api/antigravity"
+# 随后正常启动 Antigravity；认证由 IDE 自带（proxy 不保管凭据）。
+#
+# 上游域名随 Antigravity 版本漂移过（cloudcode-pa → daily-cloudcode-pa）；
+# 若 IDE 报 404/400，可设环境变量 ANTIGRAVITY_GATEWAY_BASE_URL 切换回
+# https://cloudcode-pa.googleapis.com（优先级：env > yaml > 内置默认）。
+antigravity_gateway:
+  enabled: true
+  base_url: "https://daily-cloudcode-pa.googleapis.com"
+  timeout_ms: 300000
+  connect_timeout_ms: 15000
 
 # === Session 级别路由策略（可选）===
 #
@@ -698,6 +775,23 @@ native_api:
 # 未配置时（默认），所有 Session 使用全局 tiers 顺序。
 session_policies:
   policies: []
+  # 可绑定模型显式定制层 —— 下拉选项 = 本清单 ∪ 内置 vendor 目录（按激活
+  # vendor 过滤，见 vendors/model_catalog.py）。同名条目本清单覆盖 label/tiers
+  # （tiers 留空继承内置锁定值）；exclude: true 剔除同名内置条目。
+  # 绑定语义为 vendor.model 锁定：目录内模型只发给原生归属 vendor，不做
+  # 跨系列静默降级；identity 映射规则由内置目录自动合成，无需手配。
+  bindable_models:
+    - label: "Opus 4.6"
+      model: "claude-opus-4-6"
+    - label: "Sonnet 4.6"
+      model: "claude-sonnet-4-6"
+    - label: "Haiku 4.5"
+      model: "claude-haiku-4-5"
+    # 覆盖内置条目示例（重命名 + 剔除）：
+    # - label: "我的 GLM 5.3"
+    #   model: "glm-5.3"
+    # - model: "glm-4.5-air"
+    #   exclude: true
   # 标题前缀 → 供应商自动绑定。
   # 当 Session 标题以指定前缀开头时，自动将该 Session 绑定到对应供应商。
   # 匹配规则按列表顺序求值，首次匹配生效。
@@ -705,12 +799,11 @@ session_policies:
     - prefix: "# 目标"
       vendor: "zhipu"
   # Session 标题豁免前缀：标题提取每一层（user 文本 / 工具结果 / 图片 / 元数据兜底）
-  # 产出的候选以任一前缀开头则跳过，继续向下一层回退。既用于过滤注入式 Prompt
-  # （如示例语言指令），也可豁免无信息量的合成兜底标题。大小写敏感 startswith。
-  # 例：添加 "[Session]" 可让 [Session] <model> 这类兜底标题不再写入，
-  #     session 标题保持空，待后续真实输入经延迟补写回填。
+  # 产出的候选以任一前缀开头则跳过，继续向下一层回退。可豁免无信息量的
+  # 合成兜底标题（如 "[Tool call]"）。大小写敏感 startswith。
+  # CC 内部标题探测消息（"Write the title in ..."）已由代码内建识别并
+  # 剥离指令取真实载荷，模型名兜底（[Session] <model>）已移除，
+  # 默认无需配置任何豁免前缀。
   # ⚠️ 自定义 yaml 中该字段为整体替换（loader 的 list 合并约定，非追加合并）；
   #    写空列表即关闭豁免。加载时会自动 strip + 去空 + 去重。
-  title_exempt_prefixes:
-    - "Write the title in the"
-    - "[Session]"
+  title_exempt_prefixes: []

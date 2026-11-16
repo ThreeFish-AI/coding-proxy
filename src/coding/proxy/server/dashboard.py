@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
-from typing import Any
+from pathlib import Path
+from typing import Any, get_args
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse, Response
+from pydantic import BaseModel
+from pydantic_core import PydanticUndefined, to_jsonable_python
+from starlette.staticfiles import StaticFiles
 
+from ..config.routing import VendorConfig
+from ..config.schema import ProxyConfig
+from ..config.ui_registry import REGISTRY
 from ..logging.db import TimePeriod
 
 # ── 品牌图标：Tabler prompt 核心笔划（> 与 _）+ 通透青绿圆环 ──────────────
@@ -137,6 +145,83 @@ _FAVICON_SVG: str = _build_favicon_svg()
 
 logger = logging.getLogger(__name__)
 
+# ── 静态资源与安全头 ───────────────────────────────────────────────────────
+
+_STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _asset_url(rel: str) -> str:
+    """``/static/<rel>?v=<sha256[:8]>``：内容变化即换 URL（含 editable 安装）."""
+    digest = hashlib.sha256((_STATIC_DIR / rel).read_bytes()).hexdigest()[:8]
+    return f"/static/{rel}?v={digest}"
+
+
+# 精确版本 + SRI：哈希取自 npm registry tarball（dist.integrity 校验通过）中的
+# dist/chart.umd.js，jsDelivr 同路径文件逐字节一致（.min.js 为 CDN 动态生成，不可用 SRI）
+_CHART_JS_URL = "https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.js"
+_CHART_JS_SRI = (
+    "sha384-tgbB5AKnszdcfwcZtTfuhR3Ko1XZdlDfsLtkxiiAZiVkkXCkFmp+FQFh+V/UTo54"
+)
+_DASHBOARD_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; "
+    "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
+)
+
+
+def _inner_model(annotation: Any) -> type[BaseModel] | None:
+    """``M`` / ``M | None`` / ``list[M]`` → ``M``."""
+    for arg in (annotation, *get_args(annotation)):
+        if isinstance(arg, type) and issubclass(arg, BaseModel):
+            return arg
+    return None
+
+
+def _schema_field(path: str) -> Any:
+    """registry 路径（``*`` 为 vendor 类型 / 列表下标）→ Pydantic FieldInfo."""
+    parts = path.split(".")
+    model: type[BaseModel] | None = ProxyConfig
+    if parts[0] == "vendors":
+        model, parts = VendorConfig, parts[2:]
+    info = None
+    for part in (p for p in parts if p != "*"):
+        info = model.model_fields.get(part) if model is not None else None
+        if info is None:
+            return None
+        model = _inner_model(info.annotation)
+    return info
+
+
+def _schema_defaults_json() -> str:
+    """可编辑字段的 schema 缺省值（前端据此补齐未显式设置的键）；转义 ``<`` 以嵌入 script."""
+    fields: dict[str, Any] = {}
+    groups: dict[str, Any] = {}
+    for spec in REGISTRY:
+        info = _schema_field(spec.path)
+        if spec.readonly or spec.widget in ("secret", "list_section") or info is None:
+            continue
+        if spec.widget == "optional_group":
+            groups[spec.path] = _inner_model(info.annotation)().model_dump(mode="json")
+        elif not info.is_required():
+            value = info.get_default(call_default_factory=True)
+            if value is not PydanticUndefined:
+                fields[spec.path] = to_jsonable_python(value)
+    payload = json.dumps({"fields": fields, "groups": groups}, ensure_ascii=False)
+    return payload.replace("<", "\\u003c")
+
+
+class _StaticAssets(StaticFiles):
+    """静态资源：URL 带内容哈希，响应 ``no-cache``（ETag 协商，304 无 body）."""
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
 # ── HTML 模板 ──────────────────────────────────────────────────────────────
 
 _DASHBOARD_HTML = """<!DOCTYPE html>
@@ -150,7 +235,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="{{CHART_JS_URL}}" integrity="{{CHART_JS_SRI}}" crossorigin="anonymous"></script>
   <style>
     :root {
       --bg: #0a0e14;
@@ -177,6 +262,30 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       --glow-blue: 0 0 0 1px rgba(88,166,255,.1), 0 8px 32px rgba(88,166,255,.04);
       --gradient-primary: linear-gradient(135deg, #667eea, #764ba2);
       --gap-section: 12px;
+      /* 表格固定列宽 token（Sessions 与 Config 共用：同一属性同一宽度；
+         宽度 ≥ 大写表头实测宽 + 左右 padding，并容纳典型内容；超长内容省略号 + tooltip；
+         Sessions 合计 1328px = main 内容区） */
+      --col-session: 136px;
+      --col-title: 152px;
+      --col-time: 112px;
+      --col-count: 100px;
+      --col-models: 144px;
+      --col-vendors: 96px;
+      --col-latency: 120px;
+      --col-success: 120px;
+      --col-client: 128px;
+      --col-order: 88px;
+      --col-vendor: 120px;
+      --col-name: 160px;
+      --col-model: 240px;
+      --col-pattern: 240px;
+      --col-target: 200px;
+      --col-list: 200px;
+      --col-state: 128px;
+      --col-currency: 104px;
+      --col-price: 96px;
+      --col-bool: 88px;
+      --col-actions: 128px;
     }
     @keyframes fadeInUp {
       from { opacity: 0; transform: translateY(10px); }
@@ -523,7 +632,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: .5; }
     /* ── Sessions Panel ── */
     .sessions-card { grid-column: 1 / -1; animation-delay: .1s; }
-    .session-table-wrap { overflow: hidden; }
+    .session-table-wrap { overflow-x: auto; }
+    .session-table { min-width: max-content; }
+    .session-table th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .session-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
     .session-table th {
       position: sticky; top: 0; z-index: 1;
@@ -601,7 +712,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .session-table tbody tr[data-row]:not(.row-detail) { cursor: pointer; }
     .success-bar { width: 56px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.12); display: inline-block; vertical-align: middle; margin-left: 6px; }
     .success-bar-fill { height: 100%; border-radius: 2px; display: block; }
-    /* ── Vendor Bind 选择器 ── */
+    /* ── Model Bind 选择器 ── */
     .bind-select {
       padding: 3px 6px; border-radius: 6px;
       background: rgba(48,54,61,.6); border: 1px solid rgba(255,255,255,.1);
@@ -609,7 +720,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       font-family: 'JetBrains Mono', monospace;
       cursor: pointer; outline: none;
       transition: all .2s ease;
-      max-width: 120px;
+      max-width: 100%;
     }
     .bind-select:hover { border-color: rgba(88,166,255,.4); color: var(--text-primary); }
     .bind-select:focus { border-color: rgba(88,166,255,.6); box-shadow: 0 0 0 2px rgba(88,166,255,.1); }
@@ -839,6 +950,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
   </style>
+  <link rel="stylesheet" href="{{CONFIG_CSS}}" />
 </head>
 <body>
 <header>
@@ -851,6 +963,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <nav class="tabs" role="tablist" aria-label="Dashboard sections">
       <button type="button" class="tab-btn active" id="tab-btn-overview" role="tab" aria-controls="tab-pane-overview" aria-selected="true" data-tab="overview" onclick="switchTab('overview')">Overview</button>
       <button type="button" class="tab-btn" id="tab-btn-sessions" role="tab" aria-controls="tab-pane-sessions" aria-selected="false" data-tab="sessions" onclick="switchTab('sessions')">Sessions</button>
+      <button type="button" class="tab-btn" id="tab-btn-config" role="tab" aria-controls="tab-pane-config" aria-selected="false" data-tab="config" onclick="switchTab('config')">Config</button>
     </nav>
     <span class="refresh-time" id="refresh-time">正在加载…</span>
     <button class="btn-refresh" onclick="refresh()">⟳ 刷新</button>
@@ -966,17 +1079,17 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="session-table-wrap" id="sessions-table-wrap">
       <table class="session-table">
         <colgroup>
-          <col style="width:10%">
-          <col style="width:15%">
-          <col style="width:6%">
-          <col style="width:5%">
-          <col style="width:5%">
-          <col style="width:15%">
-          <col style="width:10%">
-          <col style="width:6%">
-          <col style="width:8%">
-          <col style="width:10%">
-          <col style="width:10%">
+          <col style="width:var(--col-session)">
+          <col style="width:var(--col-title)">
+          <col style="width:var(--col-time)">
+          <col style="width:var(--col-count)">
+          <col style="width:var(--col-count)">
+          <col style="width:var(--col-models)">
+          <col style="width:var(--col-vendors)">
+          <col style="width:var(--col-latency)">
+          <col style="width:var(--col-success)">
+          <col style="width:var(--col-vendor)">
+          <col style="width:var(--col-client)">
         </colgroup>
         <thead>
           <tr>
@@ -989,7 +1102,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <th>Vendors</th>
             <th>Avg Latency</th>
             <th>Success</th>
-            <th>Vendor Bind</th>
+            <th>Model Bind</th>
             <th>Client</th>
           </tr>
         </thead>
@@ -1009,11 +1122,26 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
   </section>
 
+  <!-- Config 页签（static/config/config.js 渲染；不参与定时刷新） -->
+  <section class="tab-pane" id="tab-pane-config" role="tabpanel" aria-labelledby="tab-btn-config" data-tab="config">
+    <div id="config-root"><div class="card empty">Config 页脚本未加载，请刷新页面重试</div></div>
+  </section>
+
 </main>
 
 <div id="chart-tooltip"></div>
 
+<!-- Config 页：先于内联脚本加载，?tab=config 启动时 window.ConfigTab 已就绪 -->
+<script type="application/json" id="config-schema-defaults">{{CONFIG_SCHEMA_DEFAULTS}}</script>
+<script src="{{CONFIG_JS}}"></script>
 <script>
+// ── 页签状态（置于脚本最前：后续任何顶层语句抛错都不影响页签切换） ──
+const TABS = ['overview', 'sessions', 'config'];
+const TAB_LABELS = { overview: 'Overview', sessions: 'Sessions', config: 'Config' };
+const tabLoaded = { overview: false, sessions: false, config: false };
+let currentTab = 'overview';
+let refreshing = false;
+
 // ── 颜色配置 ──────────────────────────────────────────────
 // 调色盘参考 Tailwind CSS 400-level，深色背景高区分度最佳实践
 const VENDOR_COLORS = [
@@ -1079,18 +1207,22 @@ function now() {
 }
 
 // ── Vendor 展示名映射 ─────────────────────────────────────
-// 规则：以 cc/api 前缀区分代理形态，屏蔽后端 -native 消歧后缀。
-// _API_VENDORS 需与后端 native_api/handler.py::_VENDOR_LABEL 对齐，
-// 新增无 -native 后缀的 native vendor 时同步更新本集合。
-const _API_VENDORS = new Set(['anthropic-native', 'openai', 'gemini']);
+// 规则：以 cc/api/agy 前缀区分代理形态，屏蔽后端 -native 消歧后缀。
+// _API_VENDORS 需与后端 native_api/handler.py::_VENDOR_LABEL 及
+// antigravity_gateway/handler.py::VENDOR_LABEL 对齐，新增透传 vendor 时同步更新。
+const _API_VENDORS = new Set(['anthropic-native', 'openai', 'gemini', 'antigravity-gateway']);
 function isApiVendor(v) { return _API_VENDORS.has(v); }
 function vendorShortName(v) {
   if (!isValidLabel(v)) return v;
-  if (isApiVendor(v)) return v.endsWith('-native') ? v.slice(0, -'-native'.length) : v;
+  if (isApiVendor(v)) {
+    if (v === 'antigravity-gateway') return 'antigravity';
+    return v.endsWith('-native') ? v.slice(0, -'-native'.length) : v;
+  }
   return v;
 }
 function formatVendorLabel(v) {
   if (!isValidLabel(v)) return v;
+  if (v === 'antigravity-gateway') return 'agy | antigravity';
   if (isApiVendor(v)) return 'api | ' + vendorShortName(v);
   return 'cc | ' + v;
 }
@@ -1104,13 +1236,15 @@ function makeGradient(ctx, color) {
   return grad;
 }
 
-// ── Chart.js 全局默认 ─────────────────────────────────────
-Chart.defaults.color = '#8b949e';
-Chart.defaults.borderColor = 'rgba(255,255,255,.03)';
-Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
-Chart.defaults.font.size = 13;
-Chart.defaults.plugins.tooltip.usePointStyle = true;
-Chart.defaults.devicePixelRatio = window.devicePixelRatio || 1;
+// ── Chart.js 全局默认（CDN 不可达时 window.Chart 缺失，图表降级为空态） ──
+if (window.Chart) {
+  Chart.defaults.color = '#8b949e';
+  Chart.defaults.borderColor = 'rgba(255,255,255,.03)';
+  Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
+  Chart.defaults.font.size = 13;
+  Chart.defaults.plugins.tooltip.usePointStyle = true;
+  Chart.defaults.devicePixelRatio = window.devicePixelRatio || 1;
+}
 
 const COMMON_SCALE_X = { grid: { display: false }, ticks: { maxTicksLimit: 10, font: { size: 12 } } };
 const COMMON_SCALE_Y = { grid: { color: 'rgba(255,255,255,.03)' }, beginAtZero: true, ticks: { font: { size: 12 } } };
@@ -1197,35 +1331,52 @@ function makeExternalTooltipHandler(opts = {}) {
     const dataPoints = tooltip.dataPoints || [];
     const visiblePoints = dataPoints.filter(dp => dp.raw);
 
-    let html = '';
+    // DOM 构建（label 含 vendor / 模型名，禁止拼接 HTML）
+    const div = (id, cls, text) => {
+      const d = document.createElement('div');
+      if (id) d.id = id;
+      if (cls) d.className = cls;
+      if (text != null) d.textContent = text;
+      return d;
+    };
+    el.replaceChildren();
     if (titleLines.length) {
-      html += '<div id="chart-tooltip-title">' + titleLines.join('<br>') + '</div>';
+      const title = div('chart-tooltip-title');
+      titleLines.forEach((line, i) => {
+        if (i) title.appendChild(document.createElement('br'));
+        title.appendChild(document.createTextNode(String(line)));
+      });
+      el.appendChild(title);
     }
     if (visiblePoints.length) {
-      html += '<div id="chart-tooltip-items">';
+      const items = div('chart-tooltip-items');
       visiblePoints.forEach(dp => {
         // 折线图: borderColor 为字符串；甜甜圈图: backgroundColor 为数组
         const bg = dp.dataset.backgroundColor;
         const color = dp.dataset.borderColor
           || (Array.isArray(bg) ? bg[dp.dataIndex] : bg)
           || '#8b949e';
-        const label = dp.dataset.label || dp.label || '';
-        const value = fmtValue(dp.raw);
-        html += '<div class="tt-item">' +
-          '<span class="tt-color" style="background:' + color + '"></span>' +
-          '<span class="tt-label">' + label + '</span>' +
-          '<span class="tt-value">' + value + '</span>' +
-          '</div>';
+        const row = div(null, 'tt-item');
+        const swatch = document.createElement('span');
+        swatch.className = 'tt-color';
+        swatch.style.background = String(color);
+        const label = document.createElement('span');
+        label.className = 'tt-label';
+        label.textContent = dp.dataset.label || dp.label || '';
+        const value = document.createElement('span');
+        value.className = 'tt-value';
+        value.textContent = fmtValue(dp.raw);
+        row.append(swatch, label, value);
+        items.appendChild(row);
       });
-      html += '</div>';
+      el.appendChild(items);
     }
     if (showTotal && visiblePoints.length > 1) {
       const total = visiblePoints.reduce((s, dp) => s + (dp.raw || 0), 0);
       if (total > 0) {
-        html += '<div id="chart-tooltip-footer">合计: ' + fmtTotalFn(total) + '</div>';
+        el.appendChild(div('chart-tooltip-footer', null, '合计: ' + fmtTotalFn(total)));
       }
     }
-    el.innerHTML = html;
 
     // 定位（fixed，基于 canvas 视口坐标）
     const canvasRect = chart.canvas.getBoundingClientRect();
@@ -1403,7 +1554,8 @@ function updateVendorStatus(status) {
     const cb = tier.circuit_breaker || {};
     const cbClass = cbStateClass(cb.state);
     const cbLabel = cbStateLabel(cb.state);
-    const initial = (tier.name || '?').charAt(0).toUpperCase();
+    const initial = escapeHtml((tier.name || '?').charAt(0).toUpperCase());
+    const safeName = escapeHtml(tier.name || '');
 
     let quotaHTML = '';
     if (tier.quota_guard) quotaHTML += renderQuotaBar(tier.quota_guard);
@@ -1413,14 +1565,14 @@ function updateVendorStatus(status) {
     const rlHtml = rlInfo.is_rate_limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
 
     // Pointer Events 重排：仅需 data-vendor 定位；手柄作为拖拽发起点（无原生 draggable）
-    const dragAttrs = ` data-vendor="${tier.name}"`;
+    const dragAttrs = ` data-vendor="${safeName}"`;
     const handle = reorderable ? `<div class="drag-handle" title="拖拽调整优先级">⠿</div>` : '';
 
     return `<div class="vendor-item"${dragAttrs}>
       <div class="vendor-info">
         ${handle}
         <div class="vendor-avatar">${initial}</div>
-        <span class="vendor-name">${tier.name}</span>
+        <span class="vendor-name">${safeName}</span>
       </div>
       <div class="vendor-badges">
         <span class="status-badge ${cbClass}">${cbLabel}${cb.failure_count ? ' ×'+cb.failure_count : ''}</span>
@@ -2053,7 +2205,8 @@ function setTimeRange(days, btn) {
   currentDays = days;
   if (days === 7) currentRangeLabel = '本周';
   else if (days === 30) currentRangeLabel = '本月';
-  document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+  // 仅限时间区间栏：Config 页的 section pills 复用 .range-btn
+  document.querySelectorAll('.time-range-bar .range-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   const customEl = document.getElementById('range-custom');
   if (days === 0) {
@@ -2136,12 +2289,11 @@ function formatSessionTags(str, max) {
   }
   return html;
 }
+function categoryLabel(t) { return t === 'cc' ? 'Claude Code' : (t === 'api' ? 'API' : (t === 'antigravity' ? 'Antigravity' : t)); }
 function formatCategories(cats) {
   if (!cats) return '–';
   return cats.split(',').map(function(c) {
-    var t = c.trim();
-    var label = t === 'cc' ? 'Claude Code' : (t === 'api' ? 'API' : escapeHtml(t));
-    return '<span class="session-tag">' + label + '</span>';
+    return '<span class="session-tag">' + escapeHtml(categoryLabel(c.trim())) + '</span>';
   }).join('');
 }
 function formatVendorTags(vendors) {
@@ -2166,7 +2318,7 @@ var allSessions = [];
 var sessionPage = 0;
 var sessionPageSize = 30;
 var sessionBindMap = {};
-var sessionAvailableVendors = [];
+var sessionBindableModels = [];
 
 async function updateSessions() {
   try {
@@ -2178,11 +2330,11 @@ async function updateSessions() {
     if (results[0].status === 'rejected') throw results[0].reason;
     var data = results[0].value;
     var bindData = results[1].status === 'fulfilled' ? results[1].value : {bindings: []};
-    var statusData = results[2].status === 'fulfilled' ? results[2].value : {tiers: []};
+    var statusData = results[2].status === 'fulfilled' ? results[2].value : {tiers: [], bindable_models: []};
     allSessions = data.sessions || [];
     sessionBindMap = {};
-    (bindData.bindings || []).forEach(function(b) { sessionBindMap[b.session_key] = b.vendors; });
-    sessionAvailableVendors = (statusData.tiers || []).map(function(t) { return t.name; });
+    (bindData.bindings || []).forEach(function(b) { sessionBindMap[b.session_key] = b; });
+    sessionBindableModels = statusData.bindable_models || [];
     sessionPage = 0;
     renderSessionPage();
   } catch (e) {
@@ -2203,12 +2355,13 @@ function renderSessionPage() {
   } else {
     tbody.innerHTML = page.map(function(s) {
       var parsed = parseSessionKey(s.session_key);
-      var boundVendors = sessionBindMap[s.session_key];
-      var selectHtml = buildBindSelect(s.session_key, boundVendors, sessionAvailableVendors);
+      var binding = sessionBindMap[s.session_key];
+      var selectHtml = buildModelSelect(s.session_key, binding, sessionBindableModels);
       var modelsFull = (s.models || '').split(',').map(function(c){return c.trim();});
       var vendorsFull = (s.vendors || '').split(',').map(function(v){return formatVendorLabel(v.trim());});
       var sr = s.success_rate != null ? Math.round(s.success_rate) : null;
       var sessionTitle = s.title || '';
+      var clientsFull = (s.client_categories || '').split(',').filter(Boolean).map(function(c){return categoryLabel(c.trim());});
       return '<tr data-row onclick="toggleRow(this)">' +
         '<td class="session-key" onclick="event.stopPropagation()">' +
           '<div class="session-id" data-key="' + escapeHtml(s.session_key) + '" title="' + escapeHtml(s.session_key) + '">' +
@@ -2227,8 +2380,8 @@ function renderSessionPage() {
         '<td title="' + escapeHtml(vendorsFull.join(', ')) + '">' + formatVendorTags(s.vendors) + '</td>' +
         '<td style="font-family:JetBrains Mono,monospace">' + fmtDuration(s.avg_duration_ms) + '</td>' +
         '<td class="cell-success">' + successBarHtml(s.success_rate) + '</td>' +
-        '<td onclick="event.stopPropagation()">' + selectHtml + '</td>' +
-        '<td>' + formatCategories(s.client_categories) + '</td>' +
+        '<td class="cell-bind" onclick="event.stopPropagation()">' + selectHtml + '</td>' +
+        '<td title="' + escapeHtml(clientsFull.join(', ')) + '">' + formatCategories(s.client_categories) + '</td>' +
         '</tr>' +
         '<tr class="row-detail"><td colspan="11"><div class="detail-card">' +
           '<div class="detail-title-row">' +
@@ -2267,31 +2420,53 @@ function changePage(delta) {
   renderSessionPage();
 }
 
-function buildBindSelect(sessionKey, boundVendors, availableVendors) {
-  var isBound = boundVendors && boundVendors.length > 0;
-  var multiBound = isBound && boundVendors.length > 1;
-  var selected = isBound ? boundVendors[0] : '';
-  var html = '<select class="bind-select" data-session-key="' + escapeHtml(sessionKey) + '">';
-  html += '<option value=""' + (!isBound ? ' selected' : '') + '>Default</option>';
-  availableVendors.forEach(function(v) {
-    var label = multiBound && v === selected ? escapeHtml(v) + ' (+' + (boundVendors.length - 1) + ')' : escapeHtml(v);
-    html += '<option value="' + escapeHtml(v) + '"' + (v === selected ? ' selected' : '') + '>' + label + '</option>';
+function buildModelSelect(sessionKey, binding, bindableModels) {
+  var boundModel = binding && binding.model ? binding.model : '';
+  // vendor-only 绑定（CLI --vendor / API vendors-only 建立）在 Model 列无模型可显，
+  // 通过 Default 选项标注实际钉住的 vendor，避免与未绑定态不可区分
+  var vendorOnly = binding && !binding.model && binding.vendors && binding.vendors.length
+    ? binding.vendors.join(', ') : '';
+  var defaultLabel = vendorOnly ? 'Default (vendor: ' + vendorOnly + ')' : 'Default';
+  var html = '<select class="bind-select" data-session-key="' + escapeHtml(sessionKey) + '" title="Session-level model override — applies from the next request; in-flight requests keep the old model">';
+  html += '<option value=""' + (!boundModel ? ' selected' : '') + '>' + escapeHtml(defaultLabel) + '</option>';
+  // 按 vendor 分组渲染（内置目录条目带 vendor 字段；custom/无 vendor 条目落 Custom 组）
+  var groups = {};
+  var groupOrder = [];
+  bindableModels.forEach(function(m) {
+    var g = m.vendor || 'custom';
+    if (!groups[g]) { groups[g] = []; groupOrder.push(g); }
+    groups[g].push(m);
   });
+  groupOrder.forEach(function(g) {
+    if (groupOrder.length > 1) {
+      html += '<optgroup label="' + escapeHtml(g.charAt(0).toUpperCase() + g.slice(1)) + '">';
+    }
+    groups[g].forEach(function(m) {
+      var v = m.model || '';
+      html += '<option value="' + escapeHtml(v) + '"' + (v === boundModel ? ' selected' : '') + '>' + escapeHtml(m.label || v) + '</option>';
+    });
+    if (groupOrder.length > 1) {
+      html += '</optgroup>';
+    }
+  });
+  if (boundModel && !bindableModels.some(function(m) { return m.model === boundModel; })) {
+    html += '<option value="' + escapeHtml(boundModel) + '" selected>' + escapeHtml(boundModel) + ' (off-list)</option>';
+  }
   html += '</select>';
   return html;
 }
 
 async function handleBindChange(sel) {
   var sessionKey = sel.getAttribute('data-session-key');
-  var vendor = sel.value;
+  var model = sel.value;
   var previousValue = sel.getAttribute('data-previous') || '';
   try {
     var resp;
-    if (vendor) {
+    if (model) {
       resp = await fetch('/api/session-vendor', {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({session_key: sessionKey, vendors: [vendor]}),
+        body: JSON.stringify({session_key: sessionKey, model: model}),
       });
     } else {
       resp = await fetch('/api/session-vendor/' + encodeURIComponent(sessionKey), {method: 'DELETE'});
@@ -2319,10 +2494,6 @@ sessionsTbody.addEventListener('change', function(e) {
 });
 
 // ── 主刷新逻辑（按 Tab 分发） ──────────────────────────────
-let refreshing = false;
-let currentTab = 'overview';
-const tabLoaded = { overview: false, sessions: false };
-const TAB_LABELS = { overview: 'Overview', sessions: 'Sessions' };
 
 async function refreshOverview() {
   const days = currentDays > 0 ? currentDays : 7;
@@ -2343,6 +2514,7 @@ async function refreshOverview() {
 
   const rows = timeline.rows || [];
   const tierOrder = (status.tiers || []).map(t => t.name);
+  if (!window.Chart) return;  // Chart.js 未加载：跳过图表，其余面板照常
   buildTimeline(rows, tierOrder);
   buildVendorDist(rows, tierOrder);
   buildTokenTimeline(rows, tierOrder);
@@ -2362,7 +2534,9 @@ async function refresh() {
       const tab = currentTab;
       document.getElementById('refresh-time').textContent = '刷新中…';
       try {
-        if (tab === 'sessions') {
+        if (tab === 'config') {
+          if (window.ConfigTab) await window.ConfigTab.refresh(false);
+        } else if (tab === 'sessions') {
           await refreshSessions();
         } else {
           await refreshOverview();
@@ -2388,8 +2562,10 @@ async function refresh() {
 function syncTabUrl(name) {
   try {
     const url = new URL(window.location.href);
-    if (url.searchParams.get('tab') === name) return;
     url.searchParams.set('tab', name);
+    // section 是 Config 页内部定位参数，离开该页时清除，避免残留进其它页签的 URL
+    if (name !== 'config') url.searchParams.delete('section');
+    if (url.href === window.location.href) return;
     window.history.replaceState({}, '', url);
   } catch (e) { /* no-op */ }
 }
@@ -2406,7 +2582,7 @@ function applyTabState(name) {
 }
 
 function switchTab(name) {
-  if (name !== 'overview' && name !== 'sessions') name = 'overview';
+  if (TABS.indexOf(name) < 0) name = 'overview';
   if (name === currentTab) {
     syncTabUrl(name);
     return;
@@ -2416,6 +2592,8 @@ function switchTab(name) {
   syncTabUrl(name);
   // Model Calling 轮询随页签切换启停
   if (name === 'overview') { startModelCallingPoll(); } else { stopModelCallingPoll(); }
+  // Config 页只在首次进入时加载；之后仅手动 ⟳ 或保存后重载，避免覆盖编辑中的表单
+  if (name === 'config' && tabLoaded.config) return;
   refresh();
 }
 
@@ -2424,7 +2602,7 @@ function switchTab(name) {
   let initial = 'overview';
   try {
     const t = new URL(window.location.href).searchParams.get('tab');
-    if (t === 'sessions') initial = 'sessions';
+    if (TABS.indexOf(t) >= 0) initial = t;
   } catch (e) { /* no-op */ }
   currentTab = initial;
   applyTabState(initial);
@@ -2435,13 +2613,23 @@ function switchTab(name) {
   }).catch(function(){});
   initTierDrag();                // 绑定供应商列表拖拽（事件委托，幂等）
   refresh();                     // 仅加载初始页签的数据
-  setInterval(refresh, 600000);  // 每 10 分钟刷新当前页签
+  setInterval(function () { if (currentTab !== 'config') refresh(); }, 600000);  // 每 10 分钟刷新当前页签（Config 除外）
   if (initial === 'overview') startModelCallingPoll();
 })();
 </script>
 </body>
 </html>
-""".replace("{{PROMPT}}", _PROMPT_PATHS).replace("{{LOGO_DEFS}}", _LOGO_DEFS)
+"""
+for _key, _value in (
+    ("{{PROMPT}}", _PROMPT_PATHS),
+    ("{{LOGO_DEFS}}", _LOGO_DEFS),
+    ("{{CHART_JS_URL}}", _CHART_JS_URL),
+    ("{{CHART_JS_SRI}}", _CHART_JS_SRI),
+    ("{{CONFIG_CSS}}", _asset_url("config/config.css")),
+    ("{{CONFIG_JS}}", _asset_url("config/config.js")),
+    ("{{CONFIG_SCHEMA_DEFAULTS}}", _schema_defaults_json()),
+):
+    _DASHBOARD_HTML = _DASHBOARD_HTML.replace(_key, _value)
 
 
 # ── 数据计算工具 ──────────────────────────────────────────────────────────
@@ -2510,8 +2698,12 @@ def _compute_cost_str(rows: list[dict], pricing_table: Any) -> str:
 
 
 def register_dashboard_routes(app: Any) -> None:
-    """注册 Dashboard 相关路由."""
+    """注册 Dashboard 相关路由与 ``/static`` 静态资源（重复调用幂等）."""
     from .. import __version__
+
+    if any(getattr(route, "path", None) == "/static" for route in app.routes):
+        return
+    app.mount("/static", _StaticAssets(directory=_STATIC_DIR), name="static")
 
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> Response:
@@ -2530,7 +2722,11 @@ def register_dashboard_routes(app: Any) -> None:
         内联 JS/CSS 随版本变化，禁用缓存以免浏览器留存旧内联脚本掩盖前端修复。
         """
         return HTMLResponse(
-            content=_DASHBOARD_HTML, headers={"Cache-Control": "no-cache"}
+            content=_DASHBOARD_HTML,
+            headers={
+                "Cache-Control": "no-cache",
+                "Content-Security-Policy": _DASHBOARD_CSP,
+            },
         )
 
     @app.get("/api/dashboard/summary")

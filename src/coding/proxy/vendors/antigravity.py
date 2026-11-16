@@ -334,6 +334,27 @@ class AntigravityVendor(TokenBackendMixin, BaseVendor):
         )
         return resolved
 
+    def map_model_with_reason(self, model: str) -> tuple[str, str]:
+        """带命中原因的映射，直接取 ModelMapper 真实命中原因.
+
+        不复用 ``_last_model_resolution_reason``（按值比较推断，无法区分
+        「显式规则命中且 target 恰为 model_endpoint」与「未命中回退」）。
+        """
+        return self._model_mapper.map_with_reason(
+            model, vendor="antigravity", default=self._default_model
+        )
+
+    def supports_model(self, model: str) -> bool:
+        """ModelMapper 显式映射命中（exact/pattern）或 claude- 家族视为支持.
+
+        未知名不放行：本 vendor 对未知名按 default 回退到端点默认模型
+        （静默改写），绑定此类模型需配套显式 model_mapping 规则。
+        """
+        _, reason = self.map_model_with_reason(model)
+        if reason in ("exact", "pattern"):
+            return True
+        return model.startswith("claude-")
+
     async def _prepare_request(
         self,
         request_body: dict[str, Any],

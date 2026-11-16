@@ -17,8 +17,9 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..antigravity_gateway.config import AntigravityGatewayConfig  # noqa: F401
 from ..native_api.config import NativeApiConfig  # noqa: F401
 from .auth_schema import AuthConfig  # noqa: F401
 from .resiliency import (  # noqa: F401
@@ -73,6 +74,9 @@ class ProxyConfig(BaseModel):
         新配置应使用 ``vendors`` 列表格式（参见 config.default.yaml）。
         旧格式会在 ``_migrate_legacy_fields`` 中自动转换为 vendors。
     """
+
+    # 校验错误不回显输入（防止密钥经异常/日志外泄）
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     server: ServerConfig = ServerConfig()
 
@@ -130,8 +134,9 @@ class ProxyConfig(BaseModel):
         default=QuotaGuardConfig(),
         description="[legacy] Antigravity 配额守卫；新格式请使用 vendors[vendor=antigravity].quota_guard",
     )
-    auth: AuthConfig = AuthConfig()
-    database: DatabaseConfig = DatabaseConfig()
+    # 路径默认值由 $CODING_PROXY_HOME 推导，必须按实例惰性构造
+    auth: AuthConfig = Field(default_factory=AuthConfig)
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = LoggingConfig()
     # 模型定价（USD / 1M tokens），按 (vendor, model) 匹配
     pricing: list[ModelPricingEntry] = Field(default_factory=list)
@@ -151,7 +156,15 @@ class ProxyConfig(BaseModel):
         default_factory=NativeApiConfig,
         description=(
             "OpenAI / Gemini / Anthropic 原生 API 透传配置。"
-            "三个 provider 默认 enabled=False，显式启用才暴露 /api/{provider}/* 端点。"
+            "三个 provider 默认 enabled=True，暴露 /api/{provider}/* 端点；设为 false 可关闭。"
+        ),
+    )
+    # Antigravity IDE 客户端透传通道 — 与 native_api 并列（共享 passthrough 内核）
+    antigravity_gateway: AntigravityGatewayConfig = Field(
+        default_factory=AntigravityGatewayConfig,
+        description=(
+            "Antigravity IDE 客户端透传配置（/api/antigravity/**，"
+            "CLOUD_CODE_URL 接入 → Cloud Code v1internal 后端透传 + 用量统计）。"
         ),
     )
     # Session 级别路由策略

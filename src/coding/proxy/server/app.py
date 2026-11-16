@@ -1,6 +1,7 @@
 """FastAPI 应用工厂与生命周期管理.
 
-路由端点注册已正交分解至 :mod:`.routes`.
+路由端点注册已正交分解至 :mod:`.routes`，管理 API 与安全边界见
+:mod:`.config_routes` / :mod:`.security`.
 """
 
 from __future__ import annotations
@@ -18,7 +19,8 @@ from ..auth.providers.google import GoogleOAuthProvider
 from ..auth.runtime import RuntimeReauthCoordinator
 from ..auth.store import TokenStoreManager
 from ..compat.session_store import CompatSessionStore
-from ..config.loader import load_config
+from ..config.importer import StoredConfigInvalidError
+from ..config.resolver import resolve_config
 from ..config.schema import ProxyConfig
 from ..logging.db import TokenLogger
 from ..native_api import NativeProxyHandler
@@ -28,12 +30,14 @@ from ..routing.tier import VendorTier
 from ..routing.usage_recorder import UsageRecorder
 from ..vendors.antigravity import AntigravityVendor
 from ..vendors.copilot import CopilotVendor
+from .config_routes import install_admin_surface
 from .factory import (  # noqa: F401
     _build_circuit_breaker,
     _build_quota_guard,
     _create_vendor_from_config,
 )
 from .routes import register_all_routes
+from .security import install_security
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +69,13 @@ async def lifespan(app: FastAPI):
         if native_handler._usage_recorder is not None:  # noqa: SLF001
             native_handler._usage_recorder.set_pricing_table(pricing_table)  # noqa: SLF001
 
+    # Antigravity 客户端透传 handler：同上运行时注入
+    antigravity_handler = getattr(app.state, "antigravity_handler", None)
+    if antigravity_handler is not None:
+        antigravity_handler._pricing_table = pricing_table  # noqa: SLF001
+        if antigravity_handler._usage_recorder is not None:  # noqa: SLF001
+            antigravity_handler._usage_recorder.set_pricing_table(pricing_table)  # noqa: SLF001
+
     # 为每个有 QuotaGuard 的 tier 加载基线
     for tier in router.tiers:
         if tier.quota_guard and tier.quota_guard.enabled:
@@ -84,15 +95,25 @@ async def lifespan(app: FastAPI):
     await router.close()
     if native_handler is not None:
         await native_handler.aclose()
+    if antigravity_handler is not None:
+        await antigravity_handler.aclose()
     await compat_session_store.close()
     await token_logger.close()
     logger.info("coding-proxy stopped")
 
 
 def create_app(config: ProxyConfig | None = None) -> FastAPI:
-    """创建 FastAPI 应用实例."""
+    """创建 FastAPI 应用实例.
+
+    ``config`` 缺省时经 :func:`resolve_config` 读取 config.db（不再回退旧 YAML 搜索链）；
+    存储的配置无效时抛 :class:`StoredConfigInvalidError`。
+    """
     if config is None:
-        config = load_config()
+        resolved = resolve_config()
+        if resolved.config is None:
+            locs = ", ".join(".".join(map(str, e["loc"])) for e in resolved.errors)
+            raise StoredConfigInvalidError(f"存储的配置无效: {locs}")
+        config = resolved.config
 
     token_logger = TokenLogger(config.db_path)
     compat_session_store = CompatSessionStore(
@@ -100,8 +121,29 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         ttl_seconds=config.database.compat_state_ttl_seconds,
     )
     from ..routing.model_mapper import ModelMapper  # noqa: E402
+    from ..vendors.model_catalog import (  # noqa: E402
+        builtin_identity_rules,
+        compose_bindable_catalog,
+    )
 
-    mapper = ModelMapper(config.model_mapping)
+    # 阶段二之前先推导激活链（enabled 过滤 + tiers 排序），供目录合成与
+    # ModelMapper identity 规则使用（与下方 tiers 组装同一判定口径）
+    _enabled_vendor_names = {v.vendor for v in config.vendors if v.enabled}
+    if config.tiers is not None:
+        _active_vendor_names = [
+            name for name in config.tiers if name in _enabled_vendor_names
+        ]
+    else:
+        _active_vendor_names = [v.vendor for v in config.vendors if v.enabled]
+    _bindable_catalog = compose_bindable_catalog(
+        _active_vendor_names, config.session_policies.bindable_models
+    )
+    mapper = ModelMapper(
+        [
+            *config.model_mapping,
+            *builtin_identity_rules(_bindable_catalog, config.model_mapping),
+        ]
+    )
 
     # 加载 Token Store 用于凭证合并
     token_store = TokenStoreManager(
@@ -163,9 +205,18 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         session_policy_resolver=SessionPolicyResolver(config.session_policies.policies),
         title_vendor_bindings=config.session_policies.title_vendor_bindings,
         title_exempt_prefixes=config.session_policies.title_exempt_prefixes,
+        bindable_models=_bindable_catalog,
     )
 
-    app = FastAPI(title="coding-proxy", version=__version__, lifespan=lifespan)
+    app = FastAPI(
+        title="coding-proxy",
+        version=__version__,
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    install_security(app, allowed_hosts=config.server.allowed_hosts)
     app.state.router = router
     app.state.token_logger = token_logger
     app.state.compat_session_store = compat_session_store
@@ -185,7 +236,23 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         )
         app.state.native_handler = native_handler
 
-    # 注册所有路由端点
+    # Antigravity IDE 客户端透传 handler — 独立于 native_api 的并列通道
+    if config.antigravity_gateway.enabled:
+        from ..antigravity_gateway.handler import AntigravityGatewayHandler
+
+        antigravity_usage_recorder = UsageRecorder(
+            token_logger=token_logger, pricing_table=None
+        )
+        antigravity_handler = AntigravityGatewayHandler(
+            config.antigravity_gateway,
+            token_logger=token_logger,
+            pricing_table=None,
+            usage_recorder=antigravity_usage_recorder,
+        )
+        app.state.antigravity_handler = antigravity_handler
+
+    # 注册所有路由端点（管理 API 先于原生透传 catch-all）
+    install_admin_surface(app)
     register_all_routes(app, router, reauth_coordinator)
 
     return app

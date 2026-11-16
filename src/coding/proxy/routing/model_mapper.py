@@ -50,9 +50,18 @@ class ModelMapper:
     def map(
         self, model: str, vendor: str = "fallback", default: str | None = None
     ) -> str:
-        """将源模型名映射为目标模型名.
+        """将源模型名映射为目标模型名（见 map_with_reason）."""
+        return self.map_with_reason(model, vendor, default)[0]
+
+    def map_with_reason(
+        self, model: str, vendor: str = "fallback", default: str | None = None
+    ) -> tuple[str, str]:
+        """将源模型名映射为目标模型名并返回命中原因.
 
         优先级：精确匹配 > 通配符/正则匹配 > default/_DEFAULT_TARGET。
+        返回 (target, reason)，reason ∈ {"exact", "pattern", "default"}；
+        "default" 表示未命中任何显式规则、走了回退目标（会话级模型覆盖的
+        漂移告警据此区分「配置内等价映射」与「缺规则被静默改写」）。
         """
         display_name = vendor.strip().lower()
         match_key = self._normalize_vendor(vendor)
@@ -62,7 +71,7 @@ class ModelMapper:
                 continue
             if not rule.is_regex and "*" not in rule.pattern:
                 if rule.pattern == model:
-                    return rule.target
+                    return rule.target, "exact"
 
         # 2. 通配符/正则匹配
         for rule in self._rules:
@@ -71,10 +80,10 @@ class ModelMapper:
             if rule.is_regex:
                 compiled = self._compiled[rule.pattern]
                 if compiled.fullmatch(model):
-                    return rule.target
+                    return rule.target, "pattern"
             elif "*" in rule.pattern:
                 if fnmatch.fnmatch(model, rule.pattern):
-                    return rule.target
+                    return rule.target, "pattern"
 
         # 3. 默认值
         fallback_target = default or _DEFAULT_TARGET
@@ -84,4 +93,4 @@ class ModelMapper:
             fallback_target,
             display_name,
         )
-        return fallback_target
+        return fallback_target, "default"

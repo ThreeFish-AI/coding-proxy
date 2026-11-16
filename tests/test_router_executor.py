@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -22,9 +23,12 @@ from coding.proxy.compat.canonical import (
 from coding.proxy.config.session_policy import TitleVendorBinding
 from coding.proxy.routing.executor import (
     _FALLBACK_TITLE_MAX_LEN,
+    _INJECTED_PAYLOAD_TITLE_MAX_LEN,
     _SESSION_TITLE_MAX_LEN,
     _VENDOR_PROTOCOL_LABEL_MAP,
     _build_semantic_rejection_diagnostic,
+    _derive_title_from_user_texts,
+    _extract_session_probe_payload,
     _extract_session_title,
     _extract_title_from_images,
     _extract_title_from_metadata,
@@ -62,6 +66,7 @@ def _mock_vendor(name: str = "test", **caps_kwargs) -> BaseVendor:
     vendor = MagicMock(spec=BaseVendor)
     vendor.get_name.return_value = name
     vendor.map_model.return_value = name + "-model"
+    vendor.map_model_with_reason.return_value = (name + "-model", "pattern")
     caps = VendorCapabilities(**caps_kwargs)
     vendor.get_capabilities.return_value = caps
     vendor.get_compatibility_profile.return_value = MagicMock()
@@ -539,7 +544,7 @@ class TestExecuteStream:
         assert name == "good"
 
     @pytest.mark.asyncio
-    async def test_stream_unexpected_exception_on_last_tier_propagates(self):
+    async def test_stream_unexpected_exception_on_last_tier_propagates(self, caplog):
         """最后一层流式未预期异常应向上传播（由 _stream_proxy 接管）."""
         vendor = _mock_vendor()
 
@@ -550,9 +555,20 @@ class TestExecuteStream:
         vendor.send_message_stream = _raise_unexpected
         exec_inst = _executor([_make_tier(vendor)])
 
-        with pytest.raises(RuntimeError, match="stream corrupted"):
+        with (
+            caplog.at_level(logging.ERROR, logger="coding.proxy.routing.executor"),
+            pytest.raises(RuntimeError, match="stream corrupted"),
+        ):
             async for _ in exec_inst.execute_stream({"model": "test"}, {}):
                 pass  # noqa: PLC0107
+
+        # I2：未预期异常日志只含类型与堆栈帧，不渲染 str(exc)（可能携带密钥明文）
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert errors and "RuntimeError" in errors[0].getMessage()
+        assert all(
+            "RuntimeError: stream corrupted" not in r.getMessage()
+            for r in caplog.records
+        )
 
 
 # ── 错误处理测试 ─────────────────────────────────────────
@@ -2372,16 +2388,16 @@ class TestExtractSessionTitle:
         req = self._build_request([{"role": "user", "content": raw}])
         assert _extract_session_title(req) == "/commit feat: 新增标题清洗"
 
-    def test_returns_metadata_fallback_when_only_noise(self):
-        """纯噪声文本回退到 Level 4 元数据兜底(使用 model 名称)."""
+    def test_noise_only_returns_empty_without_model_fallback(self):
+        """纯噪声文本返回空串(模型名兜底已移除,待延迟补写回填)."""
         raw = "<system-reminder>纯噪声</system-reminder>"
         req = self._build_request([{"role": "user", "content": raw}])
-        assert _extract_session_title(req) == "[Session] test"
+        assert _extract_session_title(req) == ""
 
-    def test_returns_metadata_fallback_for_no_user_messages(self):
-        """无 user 消息时回退到 Level 4 元数据兜底."""
+    def test_no_user_messages_returns_empty(self):
+        """无 user 消息时返回空串(模型名兜底已移除)."""
         req = self._build_request([{"role": "assistant", "content": "你好"}])
-        assert _extract_session_title(req) == "[Session] test"
+        assert _extract_session_title(req) == ""
 
     def test_skips_noise_only_part_to_find_real_input(self):
         """首个 user text part 全噪声时,fallback 到下一个非空 user part."""
@@ -2447,14 +2463,16 @@ class TestExtractSessionTitle:
         assert title == "[Tool output] 文件内容摘要"
 
     def test_exempt_l1_falls_back_to_l4_metadata(self):
-        """L1 命中豁免且无 L2/L3 → 回退 Level 4 元数据兜底."""
+        """L1 命中豁免且无 L2/L3 → 回退 Level 4 工具名兜底(模型兜底已移除)."""
         messages = [{"role": "user", "content": "Write the title in the language ..."}]
-        req = self._build_request(messages)
+        req = build_canonical_request(
+            {"model": "test", "messages": messages, "tools": [{"name": "Bash"}]}, {}
+        )
         assert (
             _extract_session_title(
                 req, exempt_prefixes=["Write the title in the language"]
             )
-            == "[Session] test"
+            == "[Tool call] Bash"
         )
 
     def test_exempt_does_not_affect_l2(self):
@@ -2485,13 +2503,12 @@ class TestExtractSessionTitle:
 
     # ── 豁免前缀对合成兜底标题（Level 2/3/4）统一生效 ──
 
-    def test_exempt_l4_session_title_returns_empty(self):
-        """L4 兜底 [Session] 标题命中豁免前缀 → 回退耗尽 → 返回空串."""
+    def test_model_fallback_removed_no_exempt_needed(self):
+        """L4 模型名兜底已移除：无工具无真实输入时自然返回空串,无需豁免配置."""
         req = self._build_request(
             [{"role": "user", "content": "<system-reminder>纯噪声</system-reminder>"}]
         )
-        # L1 噪声剥离为空 → L4 产出 "[Session] test" → 命中 "[Session]" 豁免
-        assert _extract_session_title(req, exempt_prefixes=["[Session]"]) == ""
+        assert _extract_session_title(req) == ""
 
     def test_exempt_l4_tool_call_title_returns_empty(self):
         """L4 兜底 [Tool call] 标题命中豁免前缀 → 返回空串."""
@@ -2525,12 +2542,19 @@ class TestExtractSessionTitle:
                 ],
             },
         ]
-        req = self._build_request(messages)
+        req = build_canonical_request(
+            {
+                "model": "test",
+                "messages": messages,
+                "tools": [{"name": "Bash"}],
+            },
+            {},
+        )
         # L1 无 user TEXT → L2 "[Tool output] 文件内容摘要" 命中豁免 → 跳过 →
-        # L3 无图 → L4 "[Session] test"（未命中豁免，正常返回）
+        # L3 无图 → L4 "[Tool call] Bash"（未命中豁免，正常返回）
         assert (
             _extract_session_title(req, exempt_prefixes=["[Tool output]"])
-            == "[Session] test"
+            == "[Tool call] Bash"
         )
 
     def test_exempt_l3_image_falls_through_to_l4(self):
@@ -2550,16 +2574,33 @@ class TestExtractSessionTitle:
                 ],
             }
         ]
-        req = self._build_request(messages)
+        req = build_canonical_request(
+            {
+                "model": "test",
+                "messages": messages,
+                "tools": [{"name": "Read"}],
+            },
+            {},
+        )
         assert (
             _extract_session_title(req, exempt_prefixes=["[1 Image]"])
-            == "[Session] test"
+            == "[Tool call] Read"
         )
 
     def test_exempt_all_synthetic_layers_returns_empty(self):
         """四层合成标题全部进豁免名单 → 全部被拦截 → 返回空串（永久空标题可接受）."""
-        req = self._build_request(
-            [{"role": "user", "content": "<system-reminder>纯噪声</system-reminder>"}]
+        req = build_canonical_request(
+            {
+                "model": "test",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "<system-reminder>纯噪声</system-reminder>",
+                    }
+                ],
+                "tools": [{"name": "Bash"}],
+            },
+            {},
         )
         assert (
             _extract_session_title(
@@ -2568,9 +2609,393 @@ class TestExtractSessionTitle:
                     "[Tool output]",
                     "[1 Image]",
                     "[Tool call]",
-                    "[Session]",
                 ],
             )
+            == ""
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 注入式 Prompt 载荷提取测试
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestExtractInjectedPromptTitle:
+    """注入式模板（agent-as-tool 话术）的载荷标题提取."""
+
+    @staticmethod
+    def _build_request(messages: list[dict]):
+        return build_canonical_request({"model": "test", "messages": messages}, {})
+
+    def test_memory_compressor_extracts_payload_with_tag(self):
+        raw = (
+            "You are a memory relevance compressor utility. Do not use any tools. "
+            "Do not investigate. Only transform the given text. User query: "
+            "把这次「睡眠或重启后当天盯盘不会再拉起」的缺口登记为 I-009 "
+            "Retrieved OpenViking context fragments: <memory uri=...>无关内容</memory>"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == (
+            "[记忆压缩] 把这次「睡眠或重启后当天盯盘不会再拉起」的缺口登记为 I-009"
+        )
+
+    def test_chat_namer_extracts_first_request(self):
+        raw = (
+            "Name this chat from the user's first request. Write a short, specific "
+            "title of at most 48 characters. First request: /preening-substrate "
+            "对项目做正交分解与熵减 This is a naming-only task. Do not edit files."
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == (
+            "[会话命名] /preening-substrate 对项目做正交分解与熵减"
+        )
+
+    def test_branch_namer_extracts_user_request(self):
+        raw = (
+            "Generate a short git branch name that summarizes the coding task "
+            "described below. Output ONLY the branch name. User request: 改进 "
+            "dashboard 供应商状态卡片交互"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert (
+            _extract_session_title(req)
+            == "[分支命名] 改进 dashboard 供应商状态卡片交互"
+        )
+
+    def test_single_command_extracts_command(self):
+        raw = (
+            "Use the Bash tool to run exactly this one command and nothing else: "
+            'sqlite3 :memory: "SELECT 1;"'
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == '[单命令] sqlite3 :memory: "SELECT 1;"'
+
+    def test_generic_you_are_injection_with_delimiter(self):
+        raw = (
+            "You are an expert code reviewer for the team. User query: 审查 PR #281"
+            " 的路由层改动"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == "[注入任务] 审查 PR #281 的路由层改动"
+
+    def test_generic_you_are_without_delimiter_treated_as_real_input(self):
+        """通用家族 opener 宽松,无载荷分隔符时按真实输入整段作标题（防误伤）."""
+        req = self._build_request(
+            [
+                {
+                    "role": "user",
+                    "content": "You are generating pull request details. 请审查这个 diff",
+                }
+            ]
+        )
+        assert (
+            _extract_session_title(req)
+            == "You are generating pull request details. 请审查这个 diff"
+        )
+
+    def test_generic_delimiter_requires_sentence_boundary(self):
+        """句中 "task:"/"query:" 不构成载荷分隔符,不截断真实 persona 消息."""
+        req = self._build_request(
+            [
+                {
+                    "role": "user",
+                    "content": "You are a search assistant I am testing. my query: 为什么索引失效",
+                }
+            ]
+        )
+        assert (
+            _extract_session_title(req)
+            == "You are a search assistant I am testing. my query: 为什么索引失效"
+        )
+
+    def test_named_family_without_payload_skips_to_next_message(self):
+        """具名家族 opener 高度特异,无载荷分隔符 → 跳过该条,取后续真实输入."""
+        messages = [
+            {"role": "user", "content": "Name this chat something fun for the team."},
+            {"role": "user", "content": "真实业务问题"},
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "真实业务问题"
+
+    def test_injected_payload_truncated_to_cap(self):
+        payload = "长载荷" * 200
+        raw = f"Name this chat from the user's first request. First request: {payload}"
+        req = self._build_request([{"role": "user", "content": raw}])
+        title = _extract_session_title(req)
+        assert title.startswith("[会话命名] 长载荷")
+        assert len(title) == _INJECTED_PAYLOAD_TITLE_MAX_LEN
+
+    def test_injected_tag_subject_to_exempt_prefix(self):
+        """注入式家族标签命中豁免前缀 → L1 回退到后续层级."""
+        req = self._build_request(
+            [{"role": "user", "content": "You are a bot. User query: 某任务"}]
+        )
+        assert _extract_session_title(req, exempt_prefixes=["[注入任务]"]) == ""
+
+    def test_exempt_injected_tag_falls_through_to_next_real_input(self):
+        """豁免注入标签时跳过该条继续查找,而非丢弃整个 Level 1."""
+        messages = [
+            {"role": "user", "content": "You are a bot. User query: 某注入载荷"},
+            {"role": "user", "content": "真实业务问题"},
+        ]
+        req = self._build_request(messages)
+        assert (
+            _extract_session_title(req, exempt_prefixes=["[注入任务]"])
+            == "真实业务问题"
+        )
+
+    def test_bare_task_notification_message_skipped(self):
+        """整条消息即背景任务通知 → 跳过,取后续真实输入."""
+        messages = [
+            {
+                "role": "user",
+                "content": '<task-notification> <task-id>x</task-id> <summary>Agent "t" finished</summary> </task-notification>',
+            },
+            {"role": "user", "content": "真实业务问题"},
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "真实业务问题"
+
+    def test_continuation_summary_message_skipped(self):
+        """会话续接摘要（CC resume 固定话术）无区分度 → 跳过."""
+        messages = [
+            {
+                "role": "user",
+                "content": "This session is being continued from a previous conversation that ran out of context.",
+            },
+            {"role": "user", "content": "续接后的真实问题"},
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "续接后的真实问题"
+
+    def test_escaped_notification_xml_condensed_after_unescape(self):
+        """实体转义形态的通知 XML 先解码再凝缩,不泄漏原始标签."""
+        raw = (
+            "You are a memory relevance compressor utility. User query: "
+            '&lt;task-notification&gt; &lt;summary&gt;Agent "t" finished&lt;/summary&gt; '
+            "&lt;/task-notification&gt; 尾部残余"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == '[记忆压缩] Agent "t" finished'
+
+    def test_unclosed_notification_strips_id_content_and_summary_tags(self):
+        """未闭合通知块兜底：id 标签连同内文剥除、summary 剥壳保内文（F4）."""
+        raw = (
+            "You are a memory relevance compressor utility. User query: "
+            '<task-notification> <task-id>x</task-id> <summary>Agent "t" finished'
+            "</summary> 尾部残余"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == '[记忆压缩] Agent "t" finished 尾部残余'
+
+    def test_legacy_entities_not_decoded_without_escaped_notification(self):
+        """无转义通知标记的载荷不做全量解码,legacy 无分号实体保持原样（F5）;
+        带分号安全实体仍定向解码保持可读。"""
+        raw = (
+            "You are a memory relevance compressor utility. User query: "
+            "对比 HTML 中 &not 与 &copy 无分号写法"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert (
+            _extract_session_title(req)
+            == "[记忆压缩] 对比 HTML 中 &not 与 &copy 无分号写法"
+        )
+        raw2 = (
+            "You are a memory relevance compressor utility. User query: "
+            "Adversarially review the YAML-&gt;Dashboard migration"
+        )
+        req2 = self._build_request([{"role": "user", "content": raw2}])
+        assert (
+            _extract_session_title(req2)
+            == "[记忆压缩] Adversarially review the YAML->Dashboard migration"
+        )
+
+    def test_summary_extraction_scoped_to_notification_block(self):
+        """载荷正文自带的 <summary> 字面量不触发凝缩（须在通知块内）."""
+        raw = (
+            "You are a memory relevance compressor utility. User query: "
+            "把 <summary>旧文案</summary> 替换成新文案"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert (
+            _extract_session_title(req)
+            == "[记忆压缩] 把 <summary>旧文案</summary> 替换成新文案"
+        )
+
+    def test_image_placeholder_stripped(self):
+        """[Image #N] 粘贴图片占位符剥离,保留周边真实文本."""
+        req = self._build_request(
+            [{"role": "user", "content": "[Image #1] 如图所示这个按钮错位了"}]
+        )
+        assert _extract_session_title(req) == "如图所示这个按钮错位了"
+
+    def test_noise_tags_stripped_before_injection_match(self):
+        """system-reminders 等噪声先剥离,不影响注入家族 opener 匹配."""
+        raw = (
+            "<system-reminder>MCP 指令</system-reminder>"
+            "Generate a short git branch name for it. User request: 修复流式乱码"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == "[分支命名] 修复流式乱码"
+
+    def test_task_notification_payload_condensed_to_summary(self):
+        """载荷为任务通知 XML 块时凝缩取 <summary> 行."""
+        raw = (
+            "You are a memory relevance compressor utility. Only transform the "
+            "given text. User query: <task-notification> <task-id>a2f3</task-id> "
+            '<status>completed</status> <summary>Agent "盘点 parity 对账台账" '
+            "finished</summary> </task-notification>"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert (
+            _extract_session_title(req)
+            == '[记忆压缩] Agent "盘点 parity 对账台账" finished'
+        )
+
+    def test_task_notification_without_summary_strips_block(self):
+        """无 summary 的通知块整体剥离,残余文本为载荷;全空则跳过该条."""
+        raw = (
+            "You are a memory relevance compressor utility. User query: "
+            "<task-notification> <task-id>x</task-id> </task-notification> "
+            "监控兜底计时结束"
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == "[记忆压缩] 监控兜底计时结束"
+
+    def test_pasted_content_wrapper_stripped_content_kept(self):
+        """<pasted_content> 仅剥外壳,粘贴体作为真实输入进入标题."""
+        raw = (
+            '<pasted_content id="7ebf"> 帮我安装 OpenViking 记忆插件 </pasted_content>'
+        )
+        req = self._build_request([{"role": "user", "content": raw}])
+        assert _extract_session_title(req) == "帮我安装 OpenViking 记忆插件"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CC 会话标题探测消息（session-title probe）载荷提取测试
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestExtractSessionProbePayload:
+    """``_extract_session_probe_payload`` — CC 内部标题探测消息的载荷提取."""
+
+    def test_tag_plus_current_instruction_with_payload(self):
+        """CC 2.1.325 主形态：未闭合 <session> 壳 + 语言指令 + 真实输入."""
+        cleaned = (
+            "<session> Write the title in 简体中文. Keep technical terms and "
+            "code identifiers in their original form. 修复 dashboard 会话标题问题"
+        )
+        assert _extract_session_probe_payload(cleaned) == "修复 dashboard 会话标题问题"
+
+    def test_predominant_language_variant_with_payload(self):
+        """无语言设置变体：指令以 instructions. 收尾,载荷随其后."""
+        cleaned = (
+            "Write the title in the predominant language of the session — a stray "
+            "word or code token in another language doesn't change it, and neither "
+            "does the English of these instructions. 对 executor 做正交分解"
+        )
+        assert _extract_session_probe_payload(cleaned) == "对 executor 做正交分解"
+
+    def test_legacy_comma_variant_with_payload(self):
+        """legacy 逗号变体：指令以 wrote in, 收尾,载荷随其后."""
+        cleaned = "Write the title in the language the user wrote in, Please review the changes"
+        assert _extract_session_probe_payload(cleaned) == "Please review the changes"
+
+    def test_bare_tag_wraps_real_input(self):
+        """legacy 裸 <session> 壳形态：标签后直接是真实输入,无指令句."""
+        assert (
+            _extract_session_probe_payload("<session> Fix the failing CI job")
+            == "Fix the failing CI job"
+        )
+
+    def test_instruction_only_returns_empty(self):
+        """纯指令无载荷 → 返回空串(调用方跳过该条,靠延迟补写回填)."""
+        cleaned = (
+            "Write the title in 简体中文. Keep technical terms and code "
+            "identifiers in their original form."
+        )
+        assert _extract_session_probe_payload(cleaned) == ""
+
+    def test_unknown_instruction_variant_returns_empty(self):
+        """未知模板变体(句尾锚定未命中) → 按无载荷跳过,不产出垃圾标题."""
+        assert _extract_session_probe_payload("Write the title in a haiku style") == ""
+
+    def test_non_probe_text_returns_none(self):
+        """非探测消息 → None(按真实用户输入继续处理)."""
+        assert _extract_session_probe_payload("普通的用户业务输入") is None
+
+
+class TestProbeTitleEndToEnd:
+    """探测消息端到端：载荷内嵌时首个请求即刻产出业务标题."""
+
+    def test_probe_with_payload_becomes_title_immediately(self):
+        from coding.proxy.compat.canonical import build_canonical_request
+
+        body = {
+            "model": "claude-haiku-4-5",
+            "metadata": {"user_id": "sess-probe-payload"},
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "<session>\nWrite the title in the predominant language "
+                        "of the session — a stray word or code token in another "
+                        "language doesn't change it, and neither does the English "
+                        "of these instructions.\n修复 session title 永久缺失问题"
+                    ),
+                }
+            ],
+        }
+        req = build_canonical_request(body, {})
+        assert _extract_session_title(req) == "修复 session title 永久缺失问题"
+
+    def test_probe_instruction_only_falls_through_to_next_text(self):
+        """纯指令探测消息被跳过 → 继续取后续真实输入."""
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "Write the title in 简体中文. Keep technical terms and code "
+                    "identifiers in their original form."
+                ),
+            },
+            {"role": "user", "content": "第二条真实业务输入"},
+        ]
+        req = self._build_request(messages)
+        assert _extract_session_title(req) == "第二条真实业务输入"
+
+    @staticmethod
+    def _build_request(messages: list[dict]):
+        from coding.proxy.compat.canonical import build_canonical_request
+
+        return build_canonical_request({"model": "test", "messages": messages}, {})
+
+
+class TestDeriveTitleFromUserTexts:
+    """``_derive_title_from_user_texts`` — 请求路径与历史回填共用的推导入口."""
+
+    def test_returns_first_real_input(self):
+        assert (
+            _derive_title_from_user_texts(["", "首个真实输入", "第二条"])
+            == "首个真实输入"
+        )
+
+    def test_skips_exempt_and_injected_without_payload(self):
+        assert (
+            _derive_title_from_user_texts(
+                [
+                    "Write the title in the language ...",
+                    "You are a memory relevance compressor utility. 纯模板无分隔符",
+                    "回填目标标题",
+                ],
+                exempt_prefixes=["Write the title in the"],
+            )
+            == "回填目标标题"
+        )
+
+    def test_returns_empty_when_all_skipped(self):
+        assert (
+            _derive_title_from_user_texts(["<system-reminder>纯噪声</system-reminder>"])
             == ""
         )
 
@@ -2649,13 +3074,15 @@ class TestExtractTitleFromUserText:
             CanonicalMessagePart(
                 type=CanonicalPartType.TEXT,
                 role="user",
-                text="Write the title in the language the user wrote in.",
+                text="Keep the session title short and specific.",
             ),
         ]
         # 前缀小写、输入首字母大写 → 不命中，正常返回
         assert (
-            _extract_title_from_user_text(msgs, exempt_prefixes=["write the title"])
-            == "Write the title in the language the user wrote in."
+            _extract_title_from_user_text(
+                msgs, exempt_prefixes=["keep the session title"]
+            )
+            == "Keep the session title short and specific."
         )
 
     def test_exempt_no_param_backward_compatible(self):
@@ -2666,11 +3093,11 @@ class TestExtractTitleFromUserText:
             CanonicalMessagePart(
                 type=CanonicalPartType.TEXT,
                 role="user",
-                text="Write the title in the language the user wrote in.",
+                text="Keep the session title short and specific.",
             ),
         ]
         assert _extract_title_from_user_text(msgs) == (
-            "Write the title in the language the user wrote in."
+            "Keep the session title short and specific."
         )
 
     def test_exempt_empty_list_no_op(self):
@@ -2681,11 +3108,11 @@ class TestExtractTitleFromUserText:
             CanonicalMessagePart(
                 type=CanonicalPartType.TEXT,
                 role="user",
-                text="Write the title in the language the user wrote in.",
+                text="Keep the session title short and specific.",
             ),
         ]
         assert _extract_title_from_user_text(msgs, exempt_prefixes=[]) == (
-            "Write the title in the language the user wrote in."
+            "Keep the session title short and specific."
         )
 
     def test_exempt_all_user_inputs_skipped_returns_empty(self):
@@ -2879,9 +3306,10 @@ class TestExtractTitleFromMetadata:
         )
         assert _extract_title_from_metadata(req) == "[Tool call] Bash, Read, Edit"
 
-    def test_uses_model_when_no_tools(self):
+    def test_model_only_returns_empty(self):
+        """模型名兜底已移除：无工具时返回空串,不再合成 [Session] <model>."""
         req = self._build_request_with_meta(tool_names=[], model="claude-sonnet-4-6")
-        assert _extract_title_from_metadata(req) == "[Session] claude-sonnet-4-6"
+        assert _extract_title_from_metadata(req) == ""
 
     def test_returns_empty_when_nothing(self):
         req = self._build_request_with_meta(tool_names=[], model="")
@@ -2956,21 +3384,21 @@ class TestExtractSessionTitleFallback:
         req = self._build_request([], tools=[{"name": "Bash"}, {"name": "Read"}])
         assert _extract_session_title(req) == "[Tool call] Bash, Read"
 
-    def test_level4_uses_model_name(self):
-        """无 tools 时,Level 4 使用 model 名称."""
+    def test_level4_model_fallback_removed(self):
+        """无 tools 时,Level 4 不再合成模型名(返回空串待延迟补写)."""
         req = self._build_request([])
-        assert _extract_session_title(req) == "[Session] test-model"
+        assert _extract_session_title(req) == ""
 
-    def test_fallback_cascade_full(self):
-        """Level 1 全噪声 → Level 2 全噪声 → Level 3 无图 → Level 4 模型名."""
+    def test_fallback_cascade_full_to_tool_names(self):
+        """Level 1 全噪声 → Level 2 全噪声 → Level 3 无图 → Level 4 工具名."""
         messages = [
             {
                 "role": "user",
                 "content": "<system-reminder>纯噪声</system-reminder>",
             },
         ]
-        req = self._build_request(messages)
-        assert _extract_session_title(req) == "[Session] test-model"
+        req = self._build_request(messages, tools=[{"name": "Bash"}])
+        assert _extract_session_title(req) == "[Tool call] Bash"
 
 
 class TestApplyTitleBasedPolicy:
@@ -3110,37 +3538,57 @@ class TestApplyTitleBasedPolicy:
         assert [t.name for t in effective] == ["anthropic", "zhipu"]
 
     @pytest.mark.asyncio
-    async def test_execute_message_end_to_end_binding(self):
-        """端到端: 新 session 首请求标题命中前缀 → 创建绑定并路由到 zhipu."""
-        resolver = SessionPolicyResolver()
-        tiers = [
-            _make_tier(_mock_vendor("anthropic")),
-            _make_tier(_mock_vendor("zhipu")),
-        ]
-        executor = _executor(
-            tiers=tiers,
-            session_mgr=_stub_session_manager(is_new=True),
-            session_policy_resolver=resolver,
-            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
-        )
-        body = {
-            "model": "test",
-            "metadata": {"user_id": "session-abc"},
-            "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "# 目标 实现 X"}]}
-            ],
-        }
-        resp = await executor.execute_message(body, {})
-        assert resp.status_code == 200
-        # 从 body 解析出的 session_key 应已建立运行时绑定
-        canonical = build_canonical_request(body, {})
-        policy = resolver.resolve(canonical.session_key)
-        assert policy is not None
-        assert policy.tiers == ["zhipu"]
+    async def test_execute_message_end_to_end_binding(self, tmp_path):
+        """端到端: 新 session 首请求标题命中前缀且真实落库 → 创建绑定并路由到 zhipu."""
+        from coding.proxy.logging.db import TokenLogger
+
+        tl = TokenLogger(tmp_path / "usage.db")
+        await tl.init()
+        try:
+            resolver = SessionPolicyResolver()
+            tiers = [
+                _make_tier(_mock_vendor("anthropic")),
+                _make_tier(_mock_vendor("zhipu")),
+            ]
+            recorder = UsageRecorder(token_logger=tl)
+            executor = _executor(
+                recorder=recorder,
+                tiers=tiers,
+                session_mgr=_stub_session_manager(is_new=True),
+                session_policy_resolver=resolver,
+                title_vendor_bindings=[
+                    TitleVendorBinding(prefix="# 目标", vendor="zhipu")
+                ],
+            )
+            body = {
+                "model": "test",
+                "metadata": {"user_id": "session-abc"},
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "# 目标 实现 X"}],
+                    }
+                ],
+            }
+            with patch.object(recorder, "record", new=AsyncMock()):
+                resp = await executor.execute_message(body, {})
+            assert resp.status_code == 200
+            # 从 body 解析出的 session_key 应已建立运行时绑定
+            canonical = build_canonical_request(body, {})
+            policy = resolver.resolve(canonical.session_key)
+            assert policy is not None
+            assert policy.tiers == ["zhipu"]
+        finally:
+            await tl.close()
 
     @pytest.mark.asyncio
     async def test_execute_message_existing_session_no_binding(self):
-        """端到端: 已存在 session(is_new=False) 不触发标题绑定."""
+        """端到端: 已存在 session(is_new=False) 且标题未落库 → 不触发标题绑定.
+
+        前提: 默认 UsageRecorder 无 token_logger,set_session_title 返回
+        written=False → 策略不触发。真实落库触发的正例见
+        TestDelayedTitleBackfill.test_backfill_write_triggers_title_binding。
+        """
         resolver = SessionPolicyResolver()
         tiers = [
             _make_tier(_mock_vendor("anthropic")),
@@ -3161,43 +3609,55 @@ class TestApplyTitleBasedPolicy:
         }
         await executor.execute_message(body, {})
         canonical = build_canonical_request(body, {})
-        # is_new=False → 不调用 _apply_title_based_policy,无运行时绑定
+        # 无 token_logger → written=False → 不调用 _apply_title_based_policy
         assert resolver.resolve(canonical.session_key) is None
 
     @pytest.mark.asyncio
-    async def test_execute_stream_end_to_end_binding(self):
-        """端到端(流式): 新 session 首请求标题命中前缀 → 创建绑定."""
-        resolver = SessionPolicyResolver()
-        zhipu_vendor = _mock_vendor("zhipu")
-        zhipu_vendor.send_message_stream = MagicMock(
-            return_value=_async_chunks([b'{"type":"message_stop"}'])
-        )
-        tiers = [
-            _make_tier(_mock_vendor("anthropic")),
-            _make_tier(zhipu_vendor),
-        ]
-        executor = _executor(
-            tiers=tiers,
-            session_mgr=_stub_session_manager(is_new=True),
-            session_policy_resolver=resolver,
-            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
-        )
-        body = {
-            "model": "test",
-            "metadata": {"user_id": "session-stream"},
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": "# 目标 流式任务"}],
-                }
-            ],
-        }
-        chunks = [chunk async for chunk, _ in executor.execute_stream(body, {})]
-        assert chunks  # 有数据返回
-        canonical = build_canonical_request(body, {})
-        policy = resolver.resolve(canonical.session_key)
-        assert policy is not None
-        assert policy.tiers == ["zhipu"]
+    async def test_execute_stream_end_to_end_binding(self, tmp_path):
+        """端到端(流式): 新 session 首请求标题命中前缀且真实落库 → 创建绑定."""
+        from coding.proxy.logging.db import TokenLogger
+
+        tl = TokenLogger(tmp_path / "usage.db")
+        await tl.init()
+        try:
+            resolver = SessionPolicyResolver()
+            zhipu_vendor = _mock_vendor("zhipu")
+            zhipu_vendor.send_message_stream = MagicMock(
+                return_value=_async_chunks([b'{"type":"message_stop"}'])
+            )
+            tiers = [
+                _make_tier(_mock_vendor("anthropic")),
+                _make_tier(zhipu_vendor),
+            ]
+            recorder = UsageRecorder(token_logger=tl)
+            executor = _executor(
+                recorder=recorder,
+                tiers=tiers,
+                session_mgr=_stub_session_manager(is_new=True),
+                session_policy_resolver=resolver,
+                title_vendor_bindings=[
+                    TitleVendorBinding(prefix="# 目标", vendor="zhipu")
+                ],
+            )
+            body = {
+                "model": "test",
+                "metadata": {"user_id": "session-stream"},
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "# 目标 流式任务"}],
+                    }
+                ],
+            }
+            with patch.object(recorder, "record", new=AsyncMock()):
+                chunks = [chunk async for chunk, _ in executor.execute_stream(body, {})]
+            assert chunks  # 有数据返回
+            canonical = build_canonical_request(body, {})
+            policy = resolver.resolve(canonical.session_key)
+            assert policy is not None
+            assert policy.tiers == ["zhipu"]
+        finally:
+            await tl.close()
 
     def test_empty_prefix_rejected_by_validation(self):
         """空 prefix 在模型校验阶段即被拒绝,杜绝全量误绑定."""
@@ -3269,12 +3729,10 @@ class TestExemptPrefixInjection:
     def test_executor_without_exempt_prefixes_backward_compatible(self):
         """未配置豁免前缀 → 实例方法行为与模块级默认一致（不跳过）."""
         req = self._build_request(
-            [{"role": "user", "content": "Write the title in the language ..."}]
+            [{"role": "user", "content": "Keep the session title short."}]
         )
         executor = _executor()  # 不传 title_exempt_prefixes
-        assert executor._extract_session_title(req) == (
-            "Write the title in the language ..."
-        )
+        assert executor._extract_session_title(req) == ("Keep the session title short.")
 
     def test_executor_filters_empty_string_prefix_at_construction(self):
         """构造期过滤空串：即便传入空串/纯空白也不会豁免一切."""
@@ -3284,12 +3742,27 @@ class TestExemptPrefixInjection:
         assert executor._extract_session_title(req) == "正常标题"
 
     def test_executor_exempt_l4_returns_empty(self):
-        """executor 持有 [Session] 豁免 → L4 兜底标题被豁免 → 实例方法返回空串."""
+        """executor 持有豁免 → L4 兜底候选被豁免 → 实例方法返回空串."""
         req = self._build_request(
             [{"role": "user", "content": "<system-reminder>纯噪声</system-reminder>"}]
         )
-        executor = _executor(title_exempt_prefixes=["[Session]"])
-        # L1 噪声剥离为空 → L4 "[Session] test" 命中豁免 → 返回 ""
+        from coding.proxy.compat.canonical import build_canonical_request as _bcr
+
+        req = _bcr(
+            {
+                "model": "test",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "<system-reminder>纯噪声</system-reminder>",
+                    }
+                ],
+                "tools": [{"name": "Bash"}],
+            },
+            {},
+        )
+        executor = _executor(title_exempt_prefixes=["[Tool call]"])
+        # L1 噪声剥离为空 → L4 "[Tool call] Bash" 命中豁免 → 返回 ""
         assert executor._extract_session_title(req) == ""
 
     @pytest.mark.asyncio
@@ -3311,3 +3784,470 @@ class TestExemptPrefixInjection:
         with patch.object(recorder, "set_session_title", new=AsyncMock()) as spy:
             await executor.execute_message(body, {})
             spy.assert_not_called()
+
+
+class TestDelayedTitleBackfill:
+    """延迟标题补写回归测试.
+
+    场景: CC 会话首请求为内部标题探测 prompt,全层级被豁免前缀拦截 →
+    不建 session_meta 行;第二请求携带真实业务消息,update 路径须能
+    upsert 补建行并触发标题联动策略(旧实现 UPDATE 对缺失行静默 no-op,
+    标题永远缺失,dashboard 显示 "-")。
+    """
+
+    @pytest.mark.asyncio
+    async def test_probe_then_real_message_heals_title(self, tmp_path):
+        """首请求全豁免不建行 → 第二请求真实消息补写落库(真实 TokenLogger)."""
+        from coding.proxy.logging.db import TokenLogger
+
+        tl = TokenLogger(tmp_path / "usage.db")
+        await tl.init()
+        try:
+            recorder = UsageRecorder(token_logger=tl)
+            # record 与响应解析无关路径打桩,聚焦标题写库行为
+            with patch.object(recorder, "record", new=AsyncMock()):
+                mgr = _stub_session_manager()
+                mgr.get_or_create_record = AsyncMock(
+                    side_effect=[(None, True), (None, False)]
+                )
+                executor = _executor(
+                    recorder=recorder,
+                    session_mgr=mgr,
+                    title_exempt_prefixes=[
+                        "Write the title in the",
+                        "[Session]",
+                    ],
+                )
+                probe_body = {
+                    "model": "claude-haiku-4-5",
+                    "metadata": {"user_id": "sess-heal"},
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Write the title in the user's language.",
+                        }
+                    ],
+                }
+                real_body = {
+                    "model": "claude-opus-4-8",
+                    "metadata": {"user_id": "sess-heal"},
+                    "messages": [
+                        {"role": "user", "content": "修复 dashboard 会话标题问题"}
+                    ],
+                }
+                await executor.execute_message(probe_body, {})
+                titles = await tl.get_session_titles(["sess-heal"])
+                assert titles.get("sess-heal", "") == ""  # 首请求:未建行
+                await executor.execute_message(real_body, {})
+                titles = await tl.get_session_titles(["sess-heal"])
+                assert titles.get("sess-heal") == "修复 dashboard 会话标题问题"
+        finally:
+            await tl.close()
+
+    @pytest.mark.asyncio
+    async def test_backfill_write_triggers_title_binding(self):
+        """补写真正落库(written=True) → 触发 title_vendor_bindings 自动绑定."""
+        resolver = SessionPolicyResolver()
+        recorder = UsageRecorder()
+        recorder.set_session_title = AsyncMock(return_value=True)
+        executor = _executor(
+            recorder=recorder,
+            session_mgr=_stub_session_manager(is_new=False),
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        body = {
+            "model": "claude-opus-4-8",
+            "metadata": {"user_id": "sess-bind"},
+            "messages": [{"role": "user", "content": "# 目标 完成重构"}],
+        }
+        await executor.execute_message(body, {})
+        policy = resolver.resolve("sess-bind")
+        assert policy is not None
+        assert policy.tiers == ["zhipu"]
+
+    @pytest.mark.asyncio
+    async def test_backfill_noop_skips_title_binding(self):
+        """补写 no-op(written=False,标题已存在) → 不触发自动绑定."""
+        resolver = SessionPolicyResolver()
+        recorder = UsageRecorder()
+        recorder.set_session_title = AsyncMock(return_value=False)
+        executor = _executor(
+            recorder=recorder,
+            session_mgr=_stub_session_manager(is_new=False),
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        body = {
+            "model": "claude-opus-4-8",
+            "metadata": {"user_id": "sess-nobind"},
+            "messages": [{"role": "user", "content": "# 目标 完成重构"}],
+        }
+        await executor.execute_message(body, {})
+        assert resolver.resolve("sess-nobind") is None
+
+    @pytest.mark.asyncio
+    async def test_ttl_renew_existing_title_no_binding_resurrection(self, tmp_path):
+        """TTL 过期重判新会话: 标题行已存在(set 静默 no-op) → 不复活自动绑定.
+
+        用户经 dashboard 删除运行时绑定后,长会话空闲超 compat TTL 再次请求时
+        被视为新会话;标题不改写(written=False),已被删除的绑定不得复活。
+        """
+        from coding.proxy.logging.db import TokenLogger
+
+        tl = TokenLogger(tmp_path / "usage.db")
+        await tl.init()
+        try:
+            await tl.set_session_title("sess-ttl", "# 目标 原始任务")
+            resolver = SessionPolicyResolver()
+            recorder = UsageRecorder(token_logger=tl)
+            with patch.object(recorder, "record", new=AsyncMock()):
+                executor = _executor(
+                    recorder=recorder,
+                    session_mgr=_stub_session_manager(is_new=True),
+                    session_policy_resolver=resolver,
+                    title_vendor_bindings=[
+                        TitleVendorBinding(prefix="# 目标", vendor="zhipu")
+                    ],
+                )
+                body = {
+                    "model": "claude-opus-4-8",
+                    "metadata": {"user_id": "sess-ttl"},
+                    "messages": [{"role": "user", "content": "# 目标 继续任务"}],
+                }
+                await executor.execute_message(body, {})
+                assert resolver.resolve("sess-ttl") is None
+        finally:
+            await tl.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_backfill_upserts_missing_row(self, tmp_path):
+        """stream 路径同样在行缺失时补建(对齐 execute_message 修复)."""
+        from coding.proxy.logging.db import TokenLogger
+
+        tl = TokenLogger(tmp_path / "usage.db")
+        await tl.init()
+        try:
+            recorder = UsageRecorder(token_logger=tl)
+            with patch.object(recorder, "record", new=AsyncMock()):
+                stream_vendor = _mock_vendor()
+                stream_vendor.send_message_stream = MagicMock(
+                    return_value=_async_chunks([b""])
+                )
+                executor = _executor(
+                    recorder=recorder,
+                    session_mgr=_stub_session_manager(is_new=False),
+                    title_exempt_prefixes=["[Session]"],
+                    tiers=[_make_tier(stream_vendor)],
+                )
+                body = {
+                    "model": "claude-opus-4-8",
+                    "metadata": {"user_id": "sess-stream"},
+                    "messages": [{"role": "user", "content": "流式会话真实标题"}],
+                }
+                async for _chunk, _label in executor.execute_stream(body, {}):
+                    pass
+                titles = await tl.get_session_titles(["sess-stream"])
+                assert titles.get("sess-stream") == "流式会话真实标题"
+        finally:
+            await tl.close()
+
+
+# ── 会话级模型覆盖（Model Bind）────────────────────────────
+
+
+class TestSessionModelOverride:
+    """Session 级 model override 注入、shadow copy 与漂移告警测试."""
+
+    @staticmethod
+    def _bound_executor(model: str, tiers: list[str] | None = None):
+        resolver = SessionPolicyResolver()
+        resolver.upsert("sess-model", tiers or [], model=model)
+        vendor = _mock_vendor("zhipu")
+        exec_inst = _executor([_make_tier(vendor)], session_policy_resolver=resolver)
+        return exec_inst, vendor
+
+    @pytest.mark.asyncio
+    async def test_override_rewrites_body_model(self, caplog):
+        """绑定后同会话请求体 model 被改写；原 dict 不被污染（shadow copy）.
+
+        改写命中本身即证明 session_key 稳定（绑定按原始 body 派生的 key 命中）；
+        INFO 日志留存客户端原始模型名供审计。
+        """
+        exec_inst, vendor = self._bound_executor("glm-5.3")
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-model"}}
+        with caplog.at_level("INFO"):
+            resp = await exec_inst.execute_message(body, {})
+        assert resp.status_code == 200
+        sent = vendor.send_message.call_args[0][0]
+        assert sent["model"] == "glm-5.3"
+        assert body["model"] == "claude-sonnet-4.6"
+        infos = [
+            r.message
+            for r in caplog.records
+            if "Session model override active" in r.message
+        ]
+        assert infos and "claude-sonnet-4.6" in infos[0] and "glm-5.3" in infos[0]
+
+    @pytest.mark.asyncio
+    async def test_override_same_model_no_rewrite(self):
+        """绑定模型与客户端模型一致时原样透传."""
+        exec_inst, vendor = self._bound_executor("claude-sonnet-4.6")
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-model"}}
+        resp = await exec_inst.execute_message(body, {})
+        assert resp.status_code == 200
+        assert vendor.send_message.call_args[0][0]["model"] == "claude-sonnet-4.6"
+
+    @pytest.mark.asyncio
+    async def test_no_policy_passes_body_through(self):
+        """无绑定时请求体原样到达 vendor（默认行为不变）."""
+        vendor = _mock_vendor("zhipu")
+        exec_inst = _executor(
+            [_make_tier(vendor)], session_policy_resolver=SessionPolicyResolver()
+        )
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-other"}}
+        await exec_inst.execute_message(body, {})
+        assert vendor.send_message.call_args[0][0]["model"] == "claude-sonnet-4.6"
+
+    @pytest.mark.asyncio
+    async def test_override_applies_to_stream(self):
+        """流式路径同语义：下一请求改写 served model."""
+        exec_inst, vendor = self._bound_executor("glm-5.3")
+        captured: dict = {}
+
+        async def _stream(b, h):
+            captured["model"] = b.get("model")
+            yield b"chunk"
+
+        vendor.send_message_stream = _stream
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-model"}}
+        chunks = [c async for c, _ in exec_inst.execute_stream(body, {})]
+        assert chunks == [b"chunk"]
+        assert captured["model"] == "glm-5.3"
+
+    def test_title_auto_bind_skips_existing_runtime_binding(self):
+        """已有运行时绑定（含 model override）时，标题自动绑定不得覆盖."""
+        resolver = SessionPolicyResolver()
+        resolver.upsert("sess-t", ["copilot"], model="glm-5.3")
+        executor = _executor(
+            session_policy_resolver=resolver,
+            title_vendor_bindings=[TitleVendorBinding(prefix="# 目标", vendor="zhipu")],
+        )
+        executor._apply_title_based_policy("sess-t", "# 目标 实现 X")
+        policy = resolver.get_runtime_binding("sess-t")
+        assert policy is not None
+        assert policy.tiers == ["copilot"]
+        assert policy.model == "glm-5.3"
+
+    @pytest.mark.asyncio
+    async def test_inflight_message_unaffected_by_binding_change(self):
+        """在途请求不受绑定变更影响：请求开始后 upsert，本轮仍走原 tier."""
+        import asyncio
+
+        resolver = SessionPolicyResolver()
+        vendor_a = _mock_vendor("zhipu")
+        vendor_b = _mock_vendor("anthropic")
+        exec_inst = _executor(
+            [_make_tier(vendor_a), _make_tier(vendor_b)],
+            session_policy_resolver=resolver,
+        )
+        entered = asyncio.Event()
+
+        async def _slow_send(body, headers):
+            entered.set()
+            await asyncio.sleep(0.02)
+            return VendorResponse(
+                status_code=200,
+                raw_body=b"{}",
+                usage=UsageInfo(input_tokens=1, output_tokens=1),
+            )
+
+        vendor_a.send_message = AsyncMock(side_effect=_slow_send)
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-ift-m"}}
+
+        task = asyncio.ensure_future(exec_inst.execute_message(body, {}))
+        await entered.wait()
+        # 在途期间改绑：本请求已捕获旧 tier 顺序
+        resolver.upsert("sess-ift-m", ["anthropic"], model="glm-5.3")
+        resp = await task
+        assert resp.status_code == 200
+        vendor_a.send_message.assert_called()
+        vendor_b.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_inflight_stream_unaffected_by_binding_change(self):
+        """流式在途请求同理：首 chunk 后 upsert，余下 chunk 仍来自原 vendor."""
+        resolver = SessionPolicyResolver()
+        vendor_a = _mock_vendor("zhipu")
+        vendor_b = _mock_vendor("anthropic")
+        exec_inst = _executor(
+            [_make_tier(vendor_a), _make_tier(vendor_b)],
+            session_policy_resolver=resolver,
+        )
+
+        async def _stream_a(b, h):
+            yield b"chunk-a1"
+            yield b"chunk-a2"
+
+        vendor_a.send_message_stream = _stream_a
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-ift-s"}}
+
+        gen = exec_inst.execute_stream(body, {})
+        chunk1, tier1 = await gen.__anext__()
+        assert chunk1 == b"chunk-a1"
+        assert tier1 == "zhipu"
+        resolver.upsert("sess-ift-s", ["anthropic"], model="glm-5.3")
+        chunk2, tier2 = await gen.__anext__()
+        assert chunk2 == b"chunk-a2"
+        assert tier2 == "zhipu"
+        with pytest.raises(StopAsyncIteration):
+            await gen.__anext__()
+        vendor_b.send_message_stream.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_drift_warning_when_served_differs_from_mapping(self, caplog):
+        """served 偏离接单 vendor 映射预期（上游换名）时 WARNING 含双方模型名."""
+        resolver = SessionPolicyResolver()
+        resolver.upsert("sess-drift", [], model="glm-5.3")
+        vendor_a = _mock_vendor("zhipu")
+        vendor_a.send_message = AsyncMock(side_effect=TokenAcquireError("expired"))
+        vendor_b = _mock_vendor("anthropic")
+        vendor_b.map_model = MagicMock(side_effect=lambda m: "claude-opus-x")
+        vendor_b.map_model_with_reason = MagicMock(
+            return_value=("claude-opus-x", "pattern")
+        )
+        vendor_b.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b"{}",
+                usage=UsageInfo(input_tokens=10, output_tokens=5),
+                model_served="gemini-flash",  # ≠ 绑定名 ≠ 映射预期
+            )
+        )
+        exec_inst = _executor(
+            [_make_tier(vendor_a), _make_tier(vendor_b)],
+            session_policy_resolver=resolver,
+        )
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-drift"}}
+        with caplog.at_level("WARNING"):
+            resp = await exec_inst.execute_message(body, {})
+        assert resp.status_code == 200
+        vendor_b.send_message.assert_called_once()
+        drifts = [
+            r.message for r in caplog.records if "Session model drift" in r.message
+        ]
+        assert drifts, "served 偏离绑定与映射预期时必须告警"
+        assert "glm-5.3" in drifts[0] and "gemini-flash" in drifts[0]
+
+    @pytest.mark.asyncio
+    async def test_no_drift_warning_on_configured_equivalent_mapping(self, caplog):
+        """配置内等价映射（如 claude 档位 → glm 档位）属预期，不告警."""
+        resolver = SessionPolicyResolver()
+        resolver.upsert("sess-equiv", [], model="claude-opus-4.6")
+        vendor = _mock_vendor("zhipu")
+        vendor.map_model = MagicMock(side_effect=lambda m: "glm-5.2")
+        vendor.map_model_with_reason = MagicMock(return_value=("glm-5.2", "pattern"))
+        vendor.send_message = AsyncMock(
+            return_value=VendorResponse(
+                status_code=200,
+                raw_body=b"{}",
+                usage=UsageInfo(input_tokens=10, output_tokens=5),
+                model_served="glm-5.2",
+            )
+        )
+        exec_inst = _executor([_make_tier(vendor)], session_policy_resolver=resolver)
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-equiv"}}
+        with caplog.at_level("WARNING"):
+            resp = await exec_inst.execute_message(body, {})
+        assert resp.status_code == 200
+        assert not any("Session model drift" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_drift_warning_on_default_fallback_rewrite(self, caplog):
+        """绑定名命中映射 default 回退被改写（缺 identity 规则）时 WARNING."""
+        resolver = SessionPolicyResolver()
+        resolver.upsert("sess-fb", [], model="glm-5.3")
+        vendor = _mock_vendor("zhipu")
+        vendor.map_model = MagicMock(side_effect=lambda m: "glm-5.1")  # default 目标
+        vendor.map_model_with_reason = MagicMock(return_value=("glm-5.1", "default"))
+        exec_inst = _executor([_make_tier(vendor)], session_policy_resolver=resolver)
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-fb"}}
+        with caplog.at_level("WARNING"):
+            resp = await exec_inst.execute_message(body, {})
+        assert resp.status_code == 200
+        drifts = [
+            r.message for r in caplog.records if "Session model drift" in r.message
+        ]
+        assert drifts, "default 回退改写绑定模型必须告警"
+        assert "identity mapping" in drifts[0]
+
+    @pytest.mark.asyncio
+    async def test_no_drift_warning_when_bound_model_served(self, caplog):
+        """绑定模型被精确 served 时无漂移告警（负向控制）."""
+        resolver = SessionPolicyResolver()
+        resolver.upsert("sess-exact", [], model="glm-5.3")
+        vendor = _mock_vendor("zhipu")
+        vendor.map_model = MagicMock(side_effect=lambda m: m)  # identity
+        vendor.map_model_with_reason = MagicMock(side_effect=lambda m: (m, "exact"))
+        exec_inst = _executor([_make_tier(vendor)], session_policy_resolver=resolver)
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-exact"}}
+        with caplog.at_level("WARNING"):
+            resp = await exec_inst.execute_message(body, {})
+        assert resp.status_code == 200
+        assert not any("Session model drift" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_config_policy_with_model_rewrites_body(self):
+        """配置文件驱动策略（非 runtime 前缀）携带 model 同样生效."""
+        from coding.proxy.config.session_policy import (
+            SessionPolicy,
+            SessionPolicyMatch,
+        )
+
+        resolver = SessionPolicyResolver(
+            [
+                SessionPolicy(
+                    name="cfg-model",
+                    match=SessionPolicyMatch(session_keys=["sess-cfg"]),
+                    tiers=[],
+                    model="claude-opus-4.6",
+                )
+            ]
+        )
+        vendor = _mock_vendor("zhipu")
+        exec_inst = _executor([_make_tier(vendor)], session_policy_resolver=resolver)
+        body = {"model": "claude-sonnet-4.6", "metadata": {"user_id": "sess-cfg"}}
+        resp = await exec_inst.execute_message(body, {})
+        assert resp.status_code == 200
+        assert vendor.send_message.call_args[0][0]["model"] == "claude-opus-4.6"
+
+    def test_model_only_binding_keeps_config_policy_tier_order(self):
+        """仅绑模型不改配置策略管辖会话的 tier 顺序（executor 侧语义）."""
+        from coding.proxy.config.session_policy import (
+            SessionPolicy,
+            SessionPolicyMatch,
+        )
+
+        resolver = SessionPolicyResolver(
+            [
+                SessionPolicy(
+                    name="cfg",
+                    match=SessionPolicyMatch(session_keys=["sess-ord"]),
+                    tiers=["anthropic"],
+                )
+            ]
+        )
+        tiers = [
+            _make_tier(_mock_vendor("zhipu")),
+            _make_tier(_mock_vendor("anthropic")),
+        ]
+        exec_inst = _executor(tiers, session_policy_resolver=resolver)
+        assert [t.name for t in exec_inst._resolve_effective_tiers("sess-ord")] == [
+            "anthropic",
+            "zhipu",
+        ]
+        resolver.upsert("sess-ord", [], model="glm-5.3")
+        assert [t.name for t in exec_inst._resolve_effective_tiers("sess-ord")] == [
+            "anthropic",
+            "zhipu",
+        ]

@@ -23,7 +23,7 @@ def _isolate_cli_deps():
     tl_mock = AsyncMock()
 
     with (
-        patch("coding.proxy.cli.load_config", return_value=cfg_mock),
+        patch("coding.proxy.cli._offline_config", return_value=cfg_mock),
         patch("coding.proxy.cli.TokenLogger", return_value=tl_mock),
         patch("coding.proxy.cli.show_usage", new_callable=AsyncMock) as mock_show,
     ):
@@ -336,3 +336,98 @@ class TestMultiModelFilter:
         result = runner.invoke(app, ["usage"])
         assert result.exit_code == 0
         assert _kwargs(mock_show)["model"] is None
+
+
+# ── session bind 命令（Model Bind）─────────────────────────
+
+
+class TestSessionBindCommand:
+    """session bind --model / --vendor 参数与 payload 测试."""
+
+    def test_bind_model_sends_model_payload(self):
+        """--model 单独使用：payload 仅含 model（vendors 由服务端取清单 tiers）."""
+        with patch("httpx.put") as mock_put:
+            mock_put.return_value = MagicMock(
+                status_code=200,
+                json=MagicMock(
+                    return_value={
+                        "status": "ok",
+                        "session_key": "k",
+                        "vendors": ["zhipu"],
+                        "model": "glm-5.3",
+                    }
+                ),
+            )
+            result = runner.invoke(
+                app, ["session", "bind", "--key", "k", "--model", "glm-5.3"]
+            )
+        assert result.exit_code == 0
+        _, kwargs = mock_put.call_args
+        assert kwargs["json"] == {"session_key": "k", "model": "glm-5.3"}
+        assert "glm-5.3" in result.output
+
+    def test_bind_vendor_and_model_combined(self):
+        """--vendor 与 --model 组合：payload 同时携带."""
+        with patch("httpx.put") as mock_put:
+            mock_put.return_value = MagicMock(
+                status_code=200,
+                json=MagicMock(
+                    return_value={
+                        "status": "ok",
+                        "session_key": "k",
+                        "vendors": ["anthropic"],
+                        "model": "glm-5.3",
+                    }
+                ),
+            )
+            result = runner.invoke(
+                app,
+                [
+                    "session",
+                    "bind",
+                    "--key",
+                    "k",
+                    "--vendor",
+                    "anthropic",
+                    "--model",
+                    "glm-5.3",
+                ],
+            )
+        assert result.exit_code == 0
+        _, kwargs = mock_put.call_args
+        assert kwargs["json"] == {
+            "session_key": "k",
+            "vendors": ["anthropic"],
+            "model": "glm-5.3",
+        }
+
+    def test_bind_requires_vendor_or_model(self):
+        """两者均缺省：退出码 1 且不发起请求."""
+        with patch("httpx.put") as mock_put:
+            result = runner.invoke(app, ["session", "bind", "--key", "k"])
+        assert result.exit_code == 1
+        mock_put.assert_not_called()
+
+    def test_bind_vendor_only_legacy_payload(self):
+        """--vendor 单独使用：旧语义 payload 不变."""
+        with patch("httpx.put") as mock_put:
+            mock_put.return_value = MagicMock(
+                status_code=200,
+                json=MagicMock(
+                    return_value={
+                        "status": "ok",
+                        "session_key": "k",
+                        "vendors": ["zhipu"],
+                        "model": None,
+                    }
+                ),
+            )
+            result = runner.invoke(
+                app, ["session", "bind", "--key", "k", "--vendor", "zhipu,copilot"]
+            )
+        assert result.exit_code == 0
+        _, kwargs = mock_put.call_args
+        assert kwargs["json"] == {
+            "session_key": "k",
+            "vendors": ["zhipu", "copilot"],
+        }

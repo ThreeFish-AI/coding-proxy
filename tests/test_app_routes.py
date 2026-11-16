@@ -581,11 +581,12 @@ def test_message_read_error_returns_502():
     assert "socket closed" in data["error"]["message"]
 
 
-def test_stream_unexpected_exception_returns_sse_error_not_500():
+def test_stream_unexpected_exception_returns_sse_error_not_500(caplog):
     """流式路径的未预期异常应返回 SSE error event（HTTP 200 + event: error），而非框架级 500.
 
     验证 catch-all Exception 处理器将未知异常转换为结构化 SSE 错误事件，
-    客户端可正常解析错误信息而非收到裸 HTTP 500。
+    客户端可正常解析错误信息而非收到裸 HTTP 500；异常消息（可能携带密钥，
+    如非法 header value）不回显客户端、也不落日志（I2）。
     """
     app = create_app(
         ProxyConfig(
@@ -603,6 +604,7 @@ def test_stream_unexpected_exception_returns_sse_error_not_500():
 
     with (
         TestClient(app) as client,
+        caplog.at_level("ERROR", logger="coding.proxy.server.routes"),
         client.stream(
             "POST",
             "/v1/messages",
@@ -620,7 +622,13 @@ def test_stream_unexpected_exception_returns_sse_error_not_500():
     assert "event: error" in body
     assert '"type": "api_error"' in body
     # 确认包含异常类型信息，便于调试定位
-    assert "ValueError" in body or "unexpected" in body.lower()
+    assert "ValueError" in body
+    # I2：异常消息不回显客户端，也不落日志（日志只含类型与堆栈帧）
+    assert "unexpected parsing error" not in body
+    assert all(
+        "ValueError: unexpected parsing error" not in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_non_stream_unexpected_exception_returns_500_json_not_raw_500():
@@ -1310,3 +1318,240 @@ def test_dashboard_rate_limit_badge_reads_correct_key():
         html = client.get("/dashboard").text
         assert "rlInfo.is_rate_limited" in html
         assert "rlInfo.limited " not in html
+
+
+# ── Session Vendor/Model Bind 路由 ──────────────────────────
+
+
+def _bindable_app() -> TestClient:
+    """创建带 bindable_models 清单的测试应用（Model Bind 校验路径）."""
+    config = ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+        session_policies={
+            "bindable_models": [
+                {"label": "GLM 5.3", "model": "glm-5.3", "tiers": ["zhipu"]},
+                {"label": "Opus", "model": "claude-opus-4.6"},
+            ]
+        },
+    )
+    app = create_app(config)
+    return TestClient(app)
+
+
+def _first_vendor_name(client: TestClient) -> str:
+    return client.get("/api/status").json()["tiers"][0]["name"]
+
+
+def test_bind_vendor_only_roundtrip():
+    """仅 vendors 的旧语义保持：PUT → GET 可见 → DELETE 移除."""
+    with _bindable_app() as client:
+        vendor = _first_vendor_name(client)
+        resp = client.put(
+            "/api/session-vendor",
+            json={"session_key": "s-vendor", "vendors": [vendor]},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["model"] is None
+        bindings = client.get("/api/session-vendor").json()["bindings"]
+        target = next(b for b in bindings if b["session_key"] == "s-vendor")
+        assert target["vendors"] == [vendor]
+        assert target["model"] is None
+        assert client.delete("/api/session-vendor/s-vendor").status_code == 200
+        assert client.delete("/api/session-vendor/s-vendor").status_code == 404
+
+
+def test_bind_model_only_uses_catalog_tiers():
+    """仅 model：vendors 沿用清单 entry 的 tiers."""
+    with _bindable_app() as client:
+        resp = client.put(
+            "/api/session-vendor",
+            json={"session_key": "s-model", "model": "glm-5.3"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["model"] == "glm-5.3"
+        assert data["vendors"] == ["zhipu"]
+
+
+def test_bind_model_without_tiers_keeps_default_order():
+    """清单 entry 无 tiers 时仅覆盖模型，不改 vendor 顺序（vendors=[]）."""
+    with _bindable_app() as client:
+        resp = client.put(
+            "/api/session-vendor",
+            json={"session_key": "s-model2", "model": "claude-opus-4.6"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["vendors"] == []
+
+
+def test_bind_model_and_vendors_combined():
+    """model + vendors 组合绑定."""
+    with _bindable_app() as client:
+        vendor = _first_vendor_name(client)
+        resp = client.put(
+            "/api/session-vendor",
+            json={
+                "session_key": "s-both",
+                "vendors": [vendor],
+                "model": "glm-5.3",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["vendors"] == [vendor]
+        binding = next(
+            b
+            for b in client.get("/api/session-vendor").json()["bindings"]
+            if b["session_key"] == "s-both"
+        )
+        assert binding["model"] == "glm-5.3"
+
+
+def test_bind_unknown_model_rejected():
+    """清单外模型 400，并回显可绑定清单."""
+    with _bindable_app() as client:
+        resp = client.put(
+            "/api/session-vendor",
+            json={"session_key": "s-bad", "model": "not-in-catalog"},
+        )
+        assert resp.status_code == 400
+        assert "bindable" in resp.json()["error"]["message"]
+
+
+def test_bind_requires_vendors_or_model():
+    """vendors 与 model 均缺省时 400."""
+    with _bindable_app() as client:
+        resp = client.put("/api/session-vendor", json={"session_key": "s-empty"})
+        assert resp.status_code == 400
+
+
+def test_bind_invalid_model_type_rejected():
+    """model 非字符串 / 空串 400."""
+    with _bindable_app() as client:
+        for bad in ("", "   ", 123):
+            resp = client.put(
+                "/api/session-vendor",
+                json={"session_key": "s-badtype", "model": bad},
+            )
+            assert resp.status_code == 400, bad
+
+
+def test_bind_unknown_vendor_rejected_with_model():
+    """组合绑定中未知 vendor 400（model 合法也不放行）."""
+    with _bindable_app() as client:
+        resp = client.put(
+            "/api/session-vendor",
+            json={
+                "session_key": "s-badvendor",
+                "vendors": ["no-such-vendor"],
+                "model": "glm-5.3",
+            },
+        )
+        assert resp.status_code == 400
+        assert "unknown vendor" in resp.json()["error"]["message"]
+
+
+def test_status_returns_bindable_models():
+    """/api/status 携带合成 bindable_models（内置目录 ∪ config 显式条目）."""
+    with _bindable_app() as client:
+        models = client.get("/api/status").json()["bindable_models"]
+        models_only = [m["model"] for m in models]
+        # 内置 zhipu 目录随激活 vendor 进入下拉，config 条目按 model 去重合并
+        assert "glm-5.3" in models_only
+        assert "glm-5.3-flash" in models_only  # 内置目录条目
+        assert "claude-opus-4.6" in models_only  # config 纯自定义条目
+        assert models_only.count("glm-5.3") == 1  # 同名去重不重复
+        glm = next(m for m in models if m["model"] == "glm-5.3")
+        assert glm["tiers"] == ["zhipu"]
+        assert glm["vendor"] == "zhipu"
+        custom = next(m for m in models if m["model"] == "claude-opus-4.6")
+        assert custom["vendor"] == "custom"
+
+
+def test_dashboard_model_bind_column():
+    """Sessions 页交付 Model Bind 列（替换 Vendor Bind），PUT 走 model 字段."""
+    with _bindable_app() as client:
+        html = client.get("/dashboard").text
+        assert "<th>Model Bind</th>" in html
+        assert "Vendor Bind" not in html
+        assert "function buildModelSelect" in html
+        assert "buildBindSelect" not in html
+        assert "sessionBindableModels" in html
+        assert "JSON.stringify({session_key: sessionKey, model: model})" in html
+
+
+def test_bind_model_disabled_when_catalog_empty():
+    """config 清单为空 = 整体关闭（含内置目录），报错指向根因配置项."""
+    config = ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+        session_policies={"bindable_models": []},
+    )
+    with TestClient(create_app(config)) as client:
+        resp = client.put(
+            "/api/session-vendor",
+            json={"session_key": "s-off", "model": "glm-5.3"},
+        )
+        assert resp.status_code == 400
+        message = resp.json()["error"]["message"]
+        assert "disabled" in message
+        assert "bindable_models" in message
+        # 空清单时 /api/status 也不携带任何内置目录条目
+        assert client.get("/api/status").json()["bindable_models"] == []
+
+
+def test_bind_vendors_not_a_list_rejected():
+    """vendors 非列表（字符串/数字）→ 400 且不被逐字符迭代成垃圾清单."""
+    with _bindable_app() as client:
+        for bad in ("zhipu", 123, {"a": 1}):
+            resp = client.put(
+                "/api/session-vendor",
+                json={"session_key": "s-notlist", "vendors": bad},
+            )
+            assert resp.status_code == 400, bad
+            assert resp.json()["error"]["message"] == "vendors must be a list"
+
+
+def test_bind_model_after_vendor_binding_inherits_runtime_tiers():
+    """先绑 vendor 再仅绑模型（清单 entry 无 tiers）：继承原绑定，响应回显生效值."""
+    with _bindable_app() as client:
+        vendor = _first_vendor_name(client)
+        first = client.put(
+            "/api/session-vendor",
+            json={"session_key": "s-seq", "vendors": [vendor]},
+        )
+        assert first.status_code == 200
+        # 用无 tiers 的清单条目，使 vendors 解析为 []、真正触发 upsert 继承分支
+        second = client.put(
+            "/api/session-vendor",
+            json={"session_key": "s-seq", "model": "claude-opus-4.6"},
+        )
+        assert second.status_code == 200
+        data = second.json()
+        assert data["model"] == "claude-opus-4.6"
+        assert data["vendors"] == [vendor]  # 继承的运行时 tiers，而非请求空值
+        binding = next(
+            b
+            for b in client.get("/api/session-vendor").json()["bindings"]
+            if b["session_key"] == "s-seq"
+        )
+        assert binding["vendors"] == [vendor]
+        assert binding["model"] == "claude-opus-4.6"
+
+
+def test_dashboard_marks_vendor_only_binding_on_default_option():
+    """vendor-only 绑定（无模型覆盖）在 Model Bind 列以 Default (vendor: …) 标注可见."""
+    with _bindable_app() as client:
+        vendor = _first_vendor_name(client)
+        assert (
+            client.put(
+                "/api/session-vendor",
+                json={"session_key": "s-vonly", "vendors": [vendor]},
+            ).status_code
+            == 200
+        )
+        html = client.get("/dashboard").text
+        assert "var vendorOnly" in html
+        assert "Default (vendor: ' + vendorOnly + ')'" in html

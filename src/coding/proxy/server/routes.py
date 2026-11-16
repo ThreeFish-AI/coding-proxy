@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import traceback
 from typing import Any
 
 import httpx
@@ -15,6 +16,7 @@ from ..vendors.base import NoCompatibleVendorError
 # 向后兼容别名
 NoCompatibleBackendError = NoCompatibleVendorError  # noqa: F401  (deprecated)
 from ..vendors.token_manager import TokenAcquireError
+from .config_routes import in_flight
 from .responses import (
     extract_stream_http_error,
     json_error_response,
@@ -22,6 +24,20 @@ from .responses import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _log_unexpected(scope: str, exc: BaseException) -> None:
+    """记录未预期异常：类型 + 堆栈帧，不含 ``str(exc)``（I2）.
+
+    供应商请求头构建失败等异常的消息体会携带密钥明文（如非法 header value 的
+    bytes repr），只记类型与调用栈即可定位，不落异常消息。
+    """
+    logger.error(
+        "%s 未预期异常: %s\n%s",
+        scope,
+        type(exc).__name__,
+        "".join(traceback.format_tb(exc.__traceback__)),
+    )
 
 
 async def _stream_proxy(router: Any, body: dict, headers: dict) -> Any:
@@ -45,15 +61,10 @@ async def _stream_proxy(router: Any, body: dict, headers: dict) -> Any:
         error_type, message = extract_stream_http_error(exc)
         yield stream_error_event(error_type, message)
     except Exception as exc:
-        logger.error(
-            "_stream_proxy 未预期异常: %s: %s",
-            type(exc).__name__,
-            exc,
-            exc_info=True,
-        )
+        _log_unexpected("_stream_proxy", exc)
         yield stream_error_event(
             "api_error",
-            f"内部错误: {type(exc).__name__}: {exc}",
+            f"内部错误: {type(exc).__name__}",
         )
 
 
@@ -92,12 +103,7 @@ def register_core_routes(app: Any, router: Any) -> None:
                 502, error_type="api_error", message=f"上游不可达: {exc}"
             )
         except Exception as exc:
-            logger.error(
-                "messages() 非流式路径未预期异常: %s: %s",
-                type(exc).__name__,
-                exc,
-                exc_info=True,
-            )
+            _log_unexpected("messages() 非流式路径", exc)
             return json_error_response(
                 500, error_type="api_error", message=f"内部错误: {type(exc).__name__}"
             )
@@ -211,8 +217,8 @@ def register_status_route(app: Any, router: Any) -> None:
     """注册状态查询路由."""
 
     @app.get("/api/status")
-    async def status() -> dict:
-        result: dict[str, Any] = {"tiers": []}
+    async def status(request: Request) -> dict:
+        result: dict[str, Any] = {"tiers": [], "in_flight": in_flight(request.app)}
         for tier in router.tiers:
             info: dict[str, Any] = {"name": tier.name}
             if tier.circuit_breaker:
@@ -226,6 +232,7 @@ def register_status_route(app: Any, router: Any) -> None:
             if diagnostics:
                 info["diagnostics"] = diagnostics
             result["tiers"].append(info)
+        result["bindable_models"] = router.get_bindable_models()
         return result
 
 
@@ -438,7 +445,7 @@ def register_session_vendor_routes(app: Any, router: Any) -> None:
 
     @app.put("/api/session-vendor")
     async def bind_session_vendor(request: Request) -> Response:
-        """为指定 session key 绑定 vendor 优先级列表."""
+        """为指定 session key 绑定 vendor 优先级列表与可选的会话级模型覆盖."""
         try:
             body = await request.json()
         except Exception:
@@ -452,20 +459,60 @@ def register_session_vendor_routes(app: Any, router: Any) -> None:
                 message="body must be a JSON object",
             )
         session_key = body.get("session_key", "").strip()
-        vendors = body.get("vendors", [])
+        vendors = body.get("vendors")
+        model = body.get("model")
         if not session_key:
             return json_error_response(
                 400,
                 error_type="invalid_request_error",
                 message="session_key is required",
             )
-        if not isinstance(vendors, list) or not vendors:
+        if model is not None and (not isinstance(model, str) or not model.strip()):
             return json_error_response(
                 400,
                 error_type="invalid_request_error",
-                message="vendors must be a non-empty list",
+                message="model must be a non-empty string",
             )
-        vendors = [str(v).strip() for v in vendors]
+        bindable = router.get_bindable_models()
+        if model is not None:
+            model = model.strip()
+            if not any(m.get("model") == model for m in bindable):
+                if not bindable:
+                    message = (
+                        "model binding is disabled: "
+                        "session_policies.bindable_models is empty or unset in "
+                        "config (empty list disables binding incl. the builtin "
+                        "vendor catalog)"
+                    )
+                else:
+                    message = f"unknown model: {model}; bindable: " + ", ".join(
+                        sorted(str(m.get("model", "")) for m in bindable)
+                    )
+                return json_error_response(
+                    400,
+                    error_type="invalid_request_error",
+                    message=message,
+                )
+        if vendors is None and model is not None:
+            # 仅绑模型：沿用清单 entry 的 tiers（空 = 不改 vendor 顺序）
+            vendors = next(
+                m.get("tiers", []) for m in bindable if m.get("model") == model
+            )
+        elif vendors is None:
+            vendors = []
+        if not isinstance(vendors, list):
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="vendors must be a list",
+            )
+        vendors = [str(v).strip() for v in vendors if str(v).strip()]
+        if not vendors and model is None:
+            return json_error_response(
+                400,
+                error_type="invalid_request_error",
+                message="vendors must be a non-empty list or model is required",
+            )
         available = set(router.get_vendor_names())
         unknown = [v for v in vendors if v not in available]
         if unknown:
@@ -478,10 +525,16 @@ def register_session_vendor_routes(app: Any, router: Any) -> None:
                 ),
             )
         resolver = router._executor._policy_resolver  # noqa: SLF001
-        resolver.upsert(session_key, vendors)
+        policy = resolver.upsert(session_key, vendors, model=model)
+        # 回显生效值：仅绑模型且发生 tiers 继承时，生效顺序 ≠ 请求值
         return Response(
             content=json.dumps(
-                {"status": "ok", "session_key": session_key, "vendors": vendors},
+                {
+                    "status": "ok",
+                    "session_key": session_key,
+                    "vendors": policy.tiers,
+                    "model": policy.model,
+                },
                 ensure_ascii=False,
             ).encode(),
             status_code=200,
@@ -580,3 +633,10 @@ def register_all_routes(
         from ..native_api import register_native_api_routes
 
         register_native_api_routes(app, native_handler)
+
+    # Antigravity 客户端透传 catch-all — 同样最后注册
+    antigravity_handler = getattr(app.state, "antigravity_handler", None)
+    if antigravity_handler is not None:
+        from ..antigravity_gateway.routes import register_antigravity_gateway_routes
+
+        register_antigravity_gateway_routes(app, antigravity_handler)

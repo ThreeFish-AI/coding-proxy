@@ -88,6 +88,26 @@ class NativeAnthropicVendor(BaseVendor):
         """将 Claude 模型名映射为供应商模型名，完全委托 ModelMapper."""
         return self._model_mapper.map(model, vendor=self._vendor_name)
 
+    def map_model_with_reason(self, model: str) -> tuple[str, str]:
+        """带命中原因的映射（exact / pattern / default），委托 ModelMapper."""
+        return self._model_mapper.map_with_reason(model, vendor=self._vendor_name)
+
+    def supports_model(self, model: str) -> bool:
+        """ModelMapper 显式映射命中（exact/pattern）或本族前缀视为支持.
+
+        未命中显式规则的本族前缀名（如 glm-9.9）也放行（identity 规则由
+        目录合成兜底）；未知模型名（不在任何前缀族）不放行——本 vendor 对
+        未知名的「宽容」实际是 ModelMapper default 回退的静默改写而非
+        透传，绑定此类模型需配套显式 model_mapping 规则。
+        """
+        _, reason = self.map_model_with_reason(model)
+        if reason in ("exact", "pattern"):
+            return True
+        from .model_catalog import NATIVE_MODEL_PREFIXES
+
+        own = NATIVE_MODEL_PREFIXES.get(self.get_name(), ())
+        return bool(own) and model.startswith(own)
+
     async def _prepare_request(
         self,
         request_body: dict[str, Any],

@@ -44,9 +44,55 @@ class SessionPolicy(BaseModel):
         default_factory=list,
         description="覆盖全局 tier 顺序的供应商优先级列表",
     )
+    model: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "会话级模型覆盖：非空时该 Session 的后续请求体 model 字段"
+            "统一改写为此值（shadow copy，逐请求生效，在途请求不受影响）。"
+        ),
+    )
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _empty_model_to_none(cls, value: object) -> object:
+        """空串/纯空白归一为未设置（Config 页 text 控件清空后保存 '' 的恢复路径）."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     quota: SessionQuotaConfig | None = Field(
         default=None,
         description="Per-session 资源配额（预留）",
+    )
+
+
+class BindableModel(BaseModel):
+    """可绑定模型清单条目 — 用户对 Model Bind 下拉的显式定制层.
+
+    下拉选项 = 内置 vendor 目录（按激活 vendor 过滤）∪ 本清单：同名条目
+    本清单覆盖 label/tiers（tiers 留空继承内置锁定值），exclude=True 剔除
+    内置同名条目。完整合成规则见 vendors/model_catalog.py.
+    """
+
+    label: str = Field(
+        min_length=1,
+        description="UI 显示名（清单内唯一）",
+    )
+    model: str = Field(
+        min_length=1,
+        description="覆盖目标模型名（清单内唯一）",
+    )
+    tiers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "随绑定重排的 vendor 优先级列表（空 = 继承内置目录的锁定 tiers，"
+            "纯自定义条目留空则沿用全局链路顺序）。"
+        ),
+    )
+    exclude: bool = Field(
+        default=False,
+        description="从合成目录剔除同名内置条目（内置目录收缩开关）",
     )
 
 
@@ -73,6 +119,33 @@ class SessionPoliciesConfig(BaseModel):
         default_factory=list,
         description="Session 路由策略列表，按定义顺序求值，首次匹配生效",
     )
+    bindable_models: list[BindableModel] = Field(
+        default_factory=list,
+        description=(
+            "可绑定模型的显式定制层：非空时下拉选项为其与内置 vendor 目录"
+            "（按激活 vendor 过滤）的合成结果，API 只允许绑定合成清单内的模型；"
+            "空清单 = 整体关闭模型绑定（含内置目录）。"
+            "label 与 model 在清单内必须唯一。"
+        ),
+    )
+
+    @field_validator("bindable_models", mode="after")
+    @classmethod
+    def _validate_bindable_models(
+        cls, value: list[BindableModel]
+    ) -> list[BindableModel]:
+        """校验 label / model 清单内唯一，防 UI 选项与 API 校验歧义."""
+        seen_labels: set[str] = set()
+        seen_models: set[str] = set()
+        for item in value:
+            if item.label in seen_labels:
+                raise ValueError(f"duplicate bindable_models label: {item.label}")
+            if item.model in seen_models:
+                raise ValueError(f"duplicate bindable_models model: {item.model}")
+            seen_labels.add(item.label)
+            seen_models.add(item.model)
+        return value
+
     title_vendor_bindings: list[TitleVendorBinding] = Field(
         default_factory=list,
         description=(

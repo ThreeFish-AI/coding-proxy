@@ -338,3 +338,33 @@ def test_null_usage_does_not_break_subsequent_valid_chunks():
     )
     assert usage["input_tokens"] == 12
     assert usage["output_tokens"] == 3
+
+
+def test_parse_usage_from_chunk_openai_details_fields() -> None:
+    """流式 data.usage 的 details 子字段与非流式 extractor 口径对齐（P1）."""
+    from coding.proxy.routing.usage_parser import parse_usage_from_chunk
+
+    usage: dict = {}
+    chunk = (
+        b'data: {"id": "chatcmpl-x", "model": "gpt-4o", "usage": {'
+        b'"prompt_tokens": 17, "completion_tokens": 23, "total_tokens": 40,'
+        b'"prompt_tokens_details": {"cached_tokens": 3},'
+        b'"completion_tokens_details": {"reasoning_tokens": 5}}}\n\n'
+    )
+    parse_usage_from_chunk(chunk, usage)
+    assert usage["input_tokens"] == 17
+    assert usage["output_tokens"] == 23
+    assert usage["cache_read_tokens"] == 3
+    assert usage["extra_usage"]["reasoning_tokens"] == 5
+
+
+def test_parse_usage_from_chunk_openai_details_zero_noop() -> None:
+    from coding.proxy.routing.usage_parser import parse_usage_from_chunk
+
+    usage: dict = {"cache_read_tokens": 7}
+    chunk = (
+        b'data: {"usage": {"prompt_tokens": 1, "completion_tokens": 2,'
+        b'"prompt_tokens_details": {"cached_tokens": 0}}}\n\n'
+    )
+    parse_usage_from_chunk(chunk, usage)
+    assert usage["cache_read_tokens"] == 7  # 零值不覆盖
