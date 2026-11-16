@@ -2,7 +2,14 @@
 
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [v0.6.1](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.1) - 2026-11-16
+## [v0.6.2](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.2) - 2026-11-16
+
+> 本周期主轴：新增 Antigravity IDE 客户端透传通道；Model Bind 下拉升级为内置 vendor 目录合成 + vendor.model 锁定；修复新会话标题永久缺失。
+
+- feat(antigravity-gateway): 新增 **Antigravity IDE 客户端透传通道**——`/api/antigravity/**` catch-all 端点（默认启用，开箱即用），Antigravity 桌面端与 `agy` CLI 经未文档化 env hook `CLOUD_CODE_URL` 将模型流指向本 proxy，字节级透传至 Google Cloud Code `v1internal` 后端并旁路解析信封完成用量统计（`client_category='antigravity'`，vendor 标签 `antigravity-gateway`），认证由 IDE 自带、proxy 不保管凭据；新增 `AntigravityGatewayConfig`（`enabled` / `base_url` / `timeout_ms` / `connect_timeout_ms`，上游域名漂移可经 `ANTIGRAVITY_GATEWAY_BASE_URL` 覆写，优先级 env > YAML > 内置默认，空串视作未设置）；三条接入通道裁决矩阵与调研背景见 `docs/research/antigravity-client-feasibility.md`（#294）；
+- feat(model-catalog): Model Bind 下拉从静态 `bindable_models` 清单升级为**内置 vendor 目录合成 + vendor.model 锁定**——新增 `vendors/model_catalog.py` 内置目录（anthropic claude 家族 10 档 / zhipu glm 家族 9 档 / minimax、kimi、doubao、xiaomi、alibaba 各家），app 构建时按激活 vendor 过滤后与 config 显式条目合成（按 model 去重、config 覆盖 label/tiers、`exclude` 剔除内置条目、空清单 = 整体关闭）；目录内 native 系模型自动合成 `pattern=target` identity 映射规则（用户显式规则已覆盖的模型跳过），免疫 default 静默改写与跨 vendor 透传 400；绑定语义为 vendor.model 直接锁定（executor 严格链 `_pinned_tier_names` + `_try_gate_tier` 模型门控），锁定 vendor 全体不可用时请求显式失败；前端下拉按 vendor optgroup 分组，Config 页 bindable 编辑器加 Exclude 列（#296）；
+- fix(session-title): 修复新会话标题永久缺失（Dashboard 显示「-」）——根因为 CC 会话首请求常为内部标题探测 prompt，被 `title_exempt_prefixes` 全层级豁免后提取为空、`session_meta` 行从未创建，纯 UPDATE 对缺失行静默 no-op；标题写者统一为单一 `set_session_title` 幂等 upsert（行缺失补建/空标题更新/已有标题不动），executor 以 written 门控 `_apply_title_based_policy`；内建 CC 标题探测识别（剥 `<session>` 壳与指令取内嵌真实首条输入，首个请求即刻产出业务标题），`title_exempt_prefixes` 默认清零（机制保留作逃生门）；顺带修复延迟补写从不触发 title_vendor_bindings、compat TTL 过期重判新会话时已删运行时绑定被复活（#295）；
+
 
 > 本周期主轴：Dashboard Sessions 页「Vendor Bind」升级为「Model Bind」，支持对运行中的 Claude Code 会话在不打断任务执行的前提下切换实际所用模型（含跨系列）。经 7 轮独立 Review-Fix 循环收敛（16 项缺陷修复）。
 
