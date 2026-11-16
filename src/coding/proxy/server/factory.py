@@ -19,6 +19,7 @@ from ..auth.providers.google import (
 )
 from ..auth.store import TokenStoreManager
 from ..config.schema import (
+    ZHIPU_DEFAULT_BASE_URL,
     AlibabaConfig,
     AnthropicConfig,
     AntigravityConfig,
@@ -158,8 +159,7 @@ def _create_vendor_from_config(
         case "zhipu":
             zhipu_kwargs: dict[str, Any] = {
                 "enabled": vendor_cfg.enabled,
-                "base_url": vendor_cfg.base_url
-                or "https://open.bigmodel.cn/api/anthropic",
+                "base_url": vendor_cfg.base_url or ZHIPU_DEFAULT_BASE_URL,
                 "api_key": vendor_cfg.api_key,
                 "timeout_ms": vendor_cfg.timeout_ms,
             }

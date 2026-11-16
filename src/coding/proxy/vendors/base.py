@@ -271,6 +271,13 @@ class BaseVendor(ABC):
 
     # ── 生命周期钩子 ─────────────────────────────────────
 
+    def _on_upstream_response(self, status_code: int, headers: Any) -> None:
+        """上游响应抵达钩子（含错误状态码，流式在首 chunk 前触发）.
+
+        子类可覆写做旁路信号采集（如 Anthropic 订阅用量 unified 头），
+        实现必须自吞异常，绝不影响转发链路。
+        """
+
     def _on_error_status(self, status_code: int) -> None:
         """响应错误状态码时的钩子（如 token 失效标记）."""
 
@@ -351,6 +358,7 @@ class BaseVendor(ABC):
             json=body,
             headers=prepared_headers,
         ) as response:
+            self._on_upstream_response(response.status_code, response.headers)
             if response.status_code >= 400:
                 self._on_error_status(response.status_code)
                 error_body = await response.aread()
@@ -391,6 +399,7 @@ class BaseVendor(ABC):
             json=body,
             headers=prepared_headers,
         )
+        self._on_upstream_response(response.status_code, response.headers)
 
         raw_content = response.content
         resp_body = _decode_json_body(response)
