@@ -20,6 +20,7 @@
 | I-008 | Gemini embedding 透传至 Vertex AI 上游返回 `request body doesn't contain valid prompts` | ✅ 已完成 | 2026-05-13 | [详情](#I-008) |
 | I-009 | Dashboard Sessions 页 `Tokens` 列漏算缓存 Token | ✅ 已完成 | 2026-05-16 | [详情](#I-009) |
 | I-010 | Zhipu vendor 间歇性 `[1210][API 调用参数有误]` 拒绝（诊断阶段） | ✅ 已完成 | 2026-05-26 | [详情](#I-010) |
+| I-011 | Antigravity 桌面 2.32.1 模型流绕过 `CLOUD_CODE_URL` 通道（前端只见控制面调用次数，无模型/Token 指标） | ✅ 已完成 | 2026-11-16 | [详情](#I-011) |
 
 ---
 
@@ -461,5 +462,30 @@ PR #247 (Step 1 v2) 部署后，2026-05-26 16:30–16:31 的诊断日志显示 8
 - 其他薄透传 vendor（minimax / kimi / doubao / alibaba / xiaomi）共用 `NativeAnthropicVendor._prepare_request`，若它们也开始报「参数错误」类语义拒绝，可复用本次扩展的诊断函数定位差异。
 - 若证据指向 `tools` 字段（如工具 schema 不兼容）、`metadata` 字段（如自定义键被 zhipu 拒收）等具体路径，修复时应优先复用 `convert/vendor_channels.py` 中已有的 `normalize_for_zhipu` / `strip_thinking_blocks` 工具，避免在 vendor 内部重复实现剥离逻辑。
 - 部署 Step 1 v2 后，建议观察至少 48 小时收集足够样本（>20 次失败），通过失败/成功请求形态对比统计找出**唯一差异维度**，再进入 Step 2。
+
+---
+
+<a id="I-011"></a>
+## I-011：Antigravity 桌面 2.32.1 模型流绕过 `CLOUD_CODE_URL` 通道（前端只见控制面调用次数，无模型/Token 指标）
+
+**问题描述**
+
+v0.6.2 用户报障：Antigravity 经 `CLOUD_CODE_URL=http://127.0.0.1:3392/api/antigravity` 接入后发测试消息，Dashboard Overview / Sessions 只见 Antigravity 调用次数，模型与 Token 指标全空（`unknown` / 0）。
+
+**表因根因**
+
+表因：proxy 落账的 antigravity 行全部为控制面端点（`loadCodeAssist` / `fetchUserInfo` / `fetchAvailableModels` / `cascadeNuxes` 等），零条 `generateContent`；控制面请求无模型与用量语义，`unknown` / 0 属如实记账。根因（上游架构漂移）：桌面 2.32.1 的 Electron 主进程以硬编码常量 `LS_API_SERVER_URL='https://generativelanguage.googleapis.com'` 构造 `--api_server_url` 注入 language_server（`app.asar` 内 `baseLsArgs()`，无 env / settings 覆写点），模型请求以 `/v1beta/models/{model}:generateContent` 直连 Google（lsof 实证 LS 与 Google 443 的活跃直连）；`CLOUD_CODE_URL` 仅被 LS 的 CLIAuthProvider `UpdateEndpointURL` 用于 code-assist 控制面。另证：Orca 托管 `agy_acp_server` runtime（1.4.1）二进制 0 处 `CLOUD_CODE_URL` 引用，模型流走云沙箱 `/v1internal/projects/.../instances/{id}:streamProxyCommand`。调研报告通道③「覆盖默认 agent 全部模型流」基于社区 Windows 旧版逆向样本，对当前版本不成立。
+
+**处理方式**
+
+三层验证排除己方缺陷：① 隔离实例（`CODING_PROXY_HOME` + mock v1internal 上游，真实信封 / SSE 多行 `data:` / CRLF 形态）e2e 实测 model / tokens / session_key 全部落账，`/api/dashboard/{summary,timeline,sessions}` 数据齐全，chrome-devtools 实机渲染 Overview（请求 / Token / 输出 / 图例 `agy | antigravity`）与 Sessions（MODELS / TOKENS / CLIENT）正常；② 生产库取证 antigravity 行全为控制面；③ 二进制 + asar 取证定位模型流硬编码去向。修复 = 文档纠偏（`config-reference.md` §12 覆盖范围、`api-reference.md` §14、`user-guide.md` §4.8、调研报告文首修正块与矩阵③行）+ 指引模型级统计走通道②（agy CLI `GOOGLE_GEMINI_BASE_URL` → `/api/gemini`）。
+
+**后续防范**
+
+对外部逆向结论（尤其未文档化 hook / 私有协议）标注信源版本与时效，接入类文档随客户端大版本升级做真机回归；「指标全空」类报障先分层取证（proxy 落账 → 前端 API → 客户端实际外连），勿先入为主改己方记账代码。
+
+**同类问题影响与处理注意事项**
+
+Antigravity 模型级用量统计当前唯一可用通道为②（agy CLI + `GEMINI_API_KEY`）；桌面模型流捕获只剩 MITM（自签 CA）或改 `app.asar`（升级即失效），属产品级投入未见授权不做。若未来 Antigravity 版本恢复 v1internal 模型面经 `CLOUD_CODE_URL`，gateway 与记账链路无需改动即可承接。
 
 ---

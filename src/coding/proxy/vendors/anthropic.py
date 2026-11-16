@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from ..config.schema import AnthropicConfig, FailoverConfig
+from ..routing.subscription_signals import capture_anthropic_ratelimit
 from .base import PROXY_SKIP_HEADERS, BaseVendor
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,14 @@ class AnthropicVendor(BaseVendor):
         才允许使用下一个真实客户端请求作为探针。
         """
         return True
+
+    def _on_upstream_response(self, status_code: int, headers: Any) -> None:
+        """旁路采集订阅用量信号（unified ratelimit 头，仅 OAuth 订阅流量返回）.
+
+        代理不持有 OAuth 凭证，Claude Code 订阅的 5h/7d 用量只能被动采集；
+        采集入口自吞异常，对透传链路零影响。
+        """
+        capture_anthropic_ratelimit(headers)
 
     async def _prepare_request(
         self,

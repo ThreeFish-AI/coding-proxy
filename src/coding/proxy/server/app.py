@@ -38,6 +38,7 @@ from .factory import (  # noqa: F401
 )
 from .routes import register_all_routes
 from .security import install_security
+from .subscription_status import SubscriptionStatusService
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +223,11 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     app.state.compat_session_store = compat_session_store
     app.state.config = config
     app.state.reauth_coordinator = reauth_coordinator
+    # 订阅状态聚合（GLM/Antigravity 主动查询 + Claude 被动信号）：
+    # 随 generation 整体重建，天然持有当前 config/router 的凭证引用
+    app.state.subscription_status = SubscriptionStatusService(
+        config, router, token_store=token_store
+    )
 
     # 原生 API 透传 handler — 仅在配置中至少启用一个 provider 时实例化
     if any(config.native_api.is_enabled(p) for p in ("openai", "gemini", "anthropic")):

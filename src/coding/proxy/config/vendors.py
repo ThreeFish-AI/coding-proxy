@@ -51,6 +51,10 @@ class AntigravityConfig(BaseModel):
     project_id: str = ""  # GCP Project ID（v1internal 协议必填）
 
 
+# zhipu 默认端点（唯一事实源：本类 Field、factory 构建回退、订阅状态查询三处共用）
+ZHIPU_DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/anthropic"
+
+
 class ZhipuConfig(BaseModel):
     """智谱 GLM 供应商配置（原生 Anthropic 兼容端点）.
 
@@ -59,7 +63,7 @@ class ZhipuConfig(BaseModel):
     """
 
     enabled: bool = True
-    base_url: str = "https://open.bigmodel.cn/api/anthropic"
+    base_url: str = ZHIPU_DEFAULT_BASE_URL
     api_key: str = ""
     timeout_ms: int = 3000000
     concurrency: ZhipuConcurrencyConfig = Field(default_factory=ZhipuConcurrencyConfig)

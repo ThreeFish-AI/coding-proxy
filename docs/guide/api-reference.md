@@ -411,7 +411,7 @@ curl http://127.0.0.1:3392/api/gemini/v1beta/models/gemini-3.8-flash:generateCon
 
 ## 14. Antigravity 客户端透传端点
 
-`/api/antigravity/{rest:path}` catch-all 透传通道。Antigravity IDE（默认 Gemini agent）经 `CLOUD_CODE_URL=http://127.0.0.1:3392/api/antigravity` 接入后，其 Cloud Code `v1internal` 协议流量（模型面 `:generateContent` / `:streamGenerateContent` / `:countTokens` 与控制面端点）字节级透传至 Google Antigravity 服务端；代理旁路解析 v1internal 信封落账用量（`client_category='antigravity'`，vendor 标签 `antigravity-gateway`，会话粒度取自信封内 `Conversation ID`），不转换协议、不保管凭据。
+`/api/antigravity/{rest:path}` catch-all 透传通道。Antigravity 客户端经 `CLOUD_CODE_URL=http://127.0.0.1:3392/api/antigravity` 接入后，经此抵达的 Cloud Code `v1internal` 协议流量（模型面 `:generateContent` / `:streamGenerateContent` / `:countTokens` 与控制面端点）字节级透传至 Google Antigravity 服务端；代理旁路解析 v1internal 信封落账用量（`client_category='antigravity'`，vendor 标签 `antigravity-gateway`，会话粒度取自信封内 `Conversation ID`），不转换协议、不保管凭据。覆盖范围注意（2026-11-16 桌面 2.32.1 真机实测）：`CLOUD_CODE_URL` 实际只接管控制面端点，桌面端模型调用流走硬编码的 `generativelanguage.googleapis.com` 直连、不经本端点，控制面流量落账 `unknown` / 0 token 属预期，详见 [配置字段参考 — antigravity_gateway](../arch/config-reference.md#12-antigravity_gateway--antigravity-客户端透传配置)。
 
 ```bash
 export CLOUD_CODE_URL="http://127.0.0.1:3392/api/antigravity"   # Antigravity 侧
