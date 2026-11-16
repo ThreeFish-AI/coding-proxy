@@ -980,9 +980,10 @@
         { label: 'Label', w: '--col-name', text: function (r) { return r.label; } },
         { label: 'Model', w: '--col-model', mono: true, text: function (r) { return r.model; } },
         { label: 'Tiers', w: '--col-list', text: function (r) { return r.tiers || []; } },
+        { label: 'Excl', w: '--col-bool', text: function (r) { return r.exclude ? 'Yes' : 'No'; } },
       ],
-      fields: function (i) { return itemFields(parts.concat(['bindable_models']), i, ['label', 'model', 'tiers']); },
-      blank: function () { return { label: '', model: '', tiers: [] }; },
+      fields: function (i) { return itemFields(parts.concat(['bindable_models']), i, ['label', 'model', 'tiers', 'exclude']); },
+      blank: function () { return { label: '', model: '', tiers: [], exclude: false }; },
     }));
     body.appendChild(listBlock({
       key: 'bindings', parts: parts.concat(['title_vendor_bindings']), specPath: 'session_policies.title_vendor_bindings',

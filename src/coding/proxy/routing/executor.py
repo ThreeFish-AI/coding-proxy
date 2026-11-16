@@ -60,6 +60,22 @@ from ..model.compat import CanonicalMessagePart, CanonicalRequest
 logger = logging.getLogger(__name__)
 
 
+def _no_compatible_message(reasons: list[str], bound_model: str | None) -> str:
+    """无兼容供应商终态的报错文案（流式 / 非流式同型）.
+
+    reasons 非空 → 能力/模型门控拒绝（历史文案）；为空 → 锁定链为空
+    （绑定模型的 vendor 不在激活链）或全部 tier 健康跳过，文案指向真实病因。
+    """
+    if reasons:
+        return "当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商"
+    if bound_model:
+        return (
+            f"绑定模型 {bound_model} 的锁定 vendor 链无可用层级"
+            "（锁定 vendor 不在激活链路或暂时不可用）"
+        )
+    return "无可用供应商层级"
+
+
 def _log_unexpected(scope: str, tier_name: str, exc: BaseException) -> None:
     """记录未预期异常：类型 + 堆栈帧，不含 ``str(exc)``（I2）.
 
@@ -171,8 +187,8 @@ def _sanitize_user_text(raw: str) -> str:
 # Level 1: user TEXT → 噪声剥离 → 首条非空文本 (原有逻辑)
 # Level 2: user TOOL_RESULT → text 截取 → "[Tool output] <snippet>"
 # Level 3: user IMAGE → 计数 → "[1 Image]" / "[N Images]"
-# Level 4: 请求元数据 → tool_names / model → "[Tool call] Bash, Read"
-#          / "[Session] claude-opus-4-8"
+# Level 4: 请求元数据 → tool_names → "[Tool call] Bash, Read"
+#          （模型名兜底已移除：合成模型名无业务语义）
 # ─────────────────────────────────────────────────────────────────
 
 
@@ -330,6 +346,48 @@ def _extract_injected_prompt_title(cleaned: str) -> str | None:
     return None
 
 
+# ── CC 会话标题探测消息（session-title probe）载荷提取 ─────────
+#
+# Claude Code 在会话早期发送内部标题探测请求（haiku，querySource=
+# generate_session_title），user 文本为固定指令模板，形态取自 CC 2.1.325
+# 取证：可选未闭合 <session> 壳 + "Write the title in ..." 指令句；
+# legacy 变体为裸 <session> 壳直接包裹真实输入。指令内嵌首条用户消息
+# 原文时剥离指令取载荷；纯指令无载荷时跳过该条，待延迟补写回填。
+# 此前靠 title_exempt_prefixes 配置豁免（且 <session> 前缀形态漏匹配，
+# 历史库残留 256 条垃圾标题），现收敛为代码内建识别，配置可清零。
+_PROBE_SESSION_TAG_PREFIX = re.compile(r"^\s*<session\b[^>]*>\s*", re.IGNORECASE)
+_PROBE_INSTRUCTION_OPEN = re.compile(r"^\s*Write the title in\b", re.IGNORECASE)
+# 指令块句尾锚定（当前两代模板 + legacy 逗号变体）；未命中的未知变体
+# 整条跳过（返回 ""），宁可延迟补写也不产出垃圾标题。
+_PROBE_INSTRUCTION_BLOCK = re.compile(
+    r"Write the title in\b.*?"
+    r"(?:in their original form\.|the English of these instructions\.|wrote in,)\s*",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _extract_session_probe_payload(cleaned: str) -> str | None:
+    """CC 标题探测消息 → 真实业务载荷.
+
+    Returns:
+        ``None`` — 非探测消息（调用方按真实用户输入/注入家族继续处理）；
+        ``""`` — 探测指令无载荷（调用方跳过该条，靠延迟补写回填）；
+        ``str`` — 剥离壳与指令后的真实载荷（首条用户消息原文）。
+    """
+    tag = _PROBE_SESSION_TAG_PREFIX.match(cleaned)
+    text = cleaned[tag.end() :] if tag else cleaned
+    if not _PROBE_INSTRUCTION_OPEN.match(text):
+        # 裸 <session> 壳包裹真实输入（legacy 形态）：标签后即载荷
+        if tag:
+            return text.strip()
+        return None
+    stripped = _PROBE_INSTRUCTION_BLOCK.sub("", text, count=1)
+    if stripped == text:
+        # 指令块句尾锚定未命中（未知模板变体）：整条按无载荷跳过
+        return ""
+    return stripped.strip()
+
+
 def _derive_title_from_user_texts(
     texts, exempt_prefixes: list[str] | None = None
 ) -> str:
@@ -361,6 +419,13 @@ def _derive_title_from_user_texts(
         ):
             continue
         if _exempt(cleaned):
+            continue
+        probe = _extract_session_probe_payload(cleaned)
+        if probe is not None:
+            # 探测家族命中：载荷即真实首条输入，直接成题；
+            # 无载荷/未知变体跳过该条，靠延迟补写回填。
+            if probe and not _exempt(probe):
+                return probe[:_SESSION_TITLE_MAX_LEN]
             continue
         injected = _extract_injected_prompt_title(cleaned)
         if injected is None:
@@ -415,12 +480,15 @@ def _extract_title_from_images(messages: list[CanonicalMessagePart]) -> str:
 
 
 def _extract_title_from_metadata(request: CanonicalRequest) -> str:
-    """Level 4: 从请求元数据 (tool_names / model) 合成兜底标题."""
+    """Level 4: 从请求元数据 (tool_names) 合成兜底标题.
+
+    模型名兜底（``[Session] <model>``）已移除：合成模型名无业务语义，
+    与「标题总具备实际识别意义的业务 message」目标冲突；无 user 输入的
+    会话保持空标题，待延迟补写经 upsert 回填真实输入。
+    """
     if request.tool_names:
         names = ", ".join(request.tool_names[:3])
         return f"[Tool call] {names}"
-    if request.model:
-        return f"[Session] {request.model}"
     return ""
 
 
@@ -437,10 +505,10 @@ def _extract_session_title(
     开头，则视为豁免、继续向下一层回退。Level 1 内部仍保留「逐条消息跳过」
     语义（清洗后文本以豁免前缀开头则跳过该条、继续查找下一条 user TEXT）；
     本函数在编排层对每层最终候选再做一次 ``_is_exempt`` 拦截，使 Level 2/3/4
-    的合成标题（如 ``[Tool output]``、``[N Image(s)]``、``[Tool call]``、
-    ``[Session]``）也能被用户显式豁免。全部层级均被豁免时返回空串，调用方
+    的合成标题（如 ``[Tool output]``、``[N Image(s)]``、``[Tool call]``）
+    也能被用户显式豁免。全部层级均被豁免时返回空串，调用方
     ``if title:`` 据此跳过写库，session 标题保持空，待后续请求经
-    ``update_empty_session_title`` 回填有意义标题。默认 ``None`` 时行为与历史一致。
+    ``set_session_title`` 幂等 upsert 回填有意义标题。默认 ``None`` 时行为与历史一致。
     """
     # 防御性过滤空串前缀："" startswith 恒真会误豁免一切。入参虽经配置层与
     # 构造器两层归一化，模块级直接调用（如测试）仍可能传入 [""]，此处兜底。
@@ -920,6 +988,22 @@ class _RouteExecutor:
 
     # ── 公开执行入口 ──────────────────────────────────────
 
+    def _pinned_tier_names(self, model: str | None) -> list[str] | None:
+        """返回绑定模型的锁定 tier 名单（合成目录中该条目 tiers 非空时）.
+
+        vendor.model 锁定语义：内置目录条目（及 config 覆盖 tiers 的条目）
+        声明了原生归属 vendor 时，绑定即钉死到该 vendor 链，不做跨系列
+        静默降级；tiers 为空（纯自定义透传条目）返回 None = 沿用链路顺序
+        （仍受 _try_gate_tier 的模型门控保护）。
+        """
+        if not model or not self._router:
+            return None
+        for entry in self._router.get_bindable_models():
+            if str(entry.get("model", "")) == model:
+                tiers = [str(t) for t in entry.get("tiers", []) if t]
+                return tiers or None
+        return None
+
     def _resolve_effective_tiers(
         self, session_key: str, policy: SessionPolicy | None = None
     ) -> list[VendorTier]:
@@ -928,13 +1012,33 @@ class _RouteExecutor:
         策略指定的 vendor 按其顺序排列在头部，未提及的保持在末尾。
         无策略时返回全局默认顺序。policy 可由调用方预先 resolve 传入，
         与会话级模型覆盖共用同一次解析（避免双重 resolve 的竞态窗口）。
+        绑定模型带锁定 tiers（pinned）时为严格链：恰为 policy.tiers 的
+        有效子序列，不再尾部追加未提及 vendor。
         """
         if policy is None:
             policy = self._policy_resolver.resolve(session_key)
+        pinned = (
+            self._pinned_tier_names(policy.model) if policy and policy.model else None
+        )
+        name_to_tier = {t.name: t for t in self._tiers}
+        if pinned is not None:
+            # 严格链：绑定模型锁定归属 vendor 时不尾部追加未提及 vendor；
+            # policy.tiers（用户显式点名）优先于目录默认锁定值
+            names = policy.tiers or pinned
+            ordered = [
+                name_to_tier[n] for n in dict.fromkeys(names) if n in name_to_tier
+            ]
+            if not ordered:
+                logger.warning(
+                    "Pinned model %s has no eligible tier (locked vendors %s "
+                    "not in active chain) — request will fail explicitly",
+                    policy.model,
+                    names,
+                )
+            return ordered
         if not policy or not policy.tiers:
             return self._tiers
 
-        name_to_tier = {t.name: t for t in self._tiers}
         ordered: list[VendorTier] = []
         seen: set[str] = set()
         for name in policy.tiers:
@@ -997,13 +1101,30 @@ class _RouteExecutor:
             request, exempt_prefixes=self._title_exempt_prefixes
         )
 
+    async def _maybe_write_session_title(self, canonical_request) -> None:
+        """提取并落库 session 标题（幂等 upsert），仅在真实写入时触发联动策略.
+
+        统一覆盖新 session 首写与延迟补写：行缺失补建（首请求全层级被豁免
+        未建行时由后续请求自愈）、空标题更新、已有标题不动。compat TTL 过期
+        重判新会话时行已存在（written=False），自动绑定不复活已删的运行时绑定。
+        """
+        title = self._extract_session_title(canonical_request)
+        if not title:
+            return
+        written = await self._recorder.set_session_title(
+            canonical_request.session_key, title
+        )
+        if written:
+            self._apply_title_based_policy(canonical_request.session_key, title)
+
     def _apply_title_based_policy(self, session_key: str, title: str) -> None:
         """根据 Session 标题前缀自动绑定供应商.
 
         当标题以预配置的前缀开头时，通过 SessionPolicyResolver.upsert()
         将该 Session 绑定到指定供应商，后续请求无需再走默认路由。
 
-        仅在新 Session 首次提取标题时调用，避免覆盖手动绑定的策略。
+        仅在标题首次落库时调用（新 session 首写或延迟补写真正写入时），
+        避免覆盖手动绑定的策略。
         """
         if not title or not self._title_vendor_bindings:
             return
@@ -1110,24 +1231,11 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record, is_new_session = await self._session_mgr.get_or_create_record(
+        session_record, _is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
-        if is_new_session:
-            title = self._extract_session_title(canonical_request)
-            if title:
-                await self._recorder.set_session_title(
-                    canonical_request.session_key, title
-                )
-                self._apply_title_based_policy(canonical_request.session_key, title)
-        else:
-            # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
-            title = self._extract_session_title(canonical_request)
-            if title:
-                await self._recorder.update_empty_session_title(
-                    canonical_request.session_key, title
-                )
+        await self._maybe_write_session_title(canonical_request)
         incompatible_reasons: list[str] = []
         session_policy = self._policy_resolver.resolve(canonical_request.session_key)
         client_model = str(body.get("model", "unknown"))
@@ -1155,6 +1263,7 @@ class _RouteExecutor:
                 canonical_request,
                 session_record,
                 incompatible_reasons,
+                bound_model=bound_model,
             )
             if gate == "skip":
                 continue
@@ -1291,7 +1400,7 @@ class _RouteExecutor:
         if last_exc:
             raise last_exc
         raise NoCompatibleVendorError(
-            "当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商",
+            _no_compatible_message(incompatible_reasons, bound_model),
             reasons=incompatible_reasons,
         )
 
@@ -1305,24 +1414,11 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record, is_new_session = await self._session_mgr.get_or_create_record(
+        session_record, _is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
-        if is_new_session:
-            title = self._extract_session_title(canonical_request)
-            if title:
-                await self._recorder.set_session_title(
-                    canonical_request.session_key, title
-                )
-                self._apply_title_based_policy(canonical_request.session_key, title)
-        else:
-            # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
-            title = self._extract_session_title(canonical_request)
-            if title:
-                await self._recorder.update_empty_session_title(
-                    canonical_request.session_key, title
-                )
+        await self._maybe_write_session_title(canonical_request)
         incompatible_reasons: list[str] = []
         session_policy = self._policy_resolver.resolve(canonical_request.session_key)
         client_model = str(body.get("model", "unknown"))
@@ -1350,6 +1446,7 @@ class _RouteExecutor:
                 canonical_request,
                 session_record,
                 incompatible_reasons,
+                bound_model=bound_model,
             )
             if gate == "skip":
                 continue
@@ -1518,10 +1615,13 @@ class _RouteExecutor:
 
         if incompatible_reasons:
             raise NoCompatibleVendorError(
-                "当前请求包含仅客户端/MCP 可安全承接的能力，未找到兼容供应商",
+                _no_compatible_message(incompatible_reasons, bound_model),
                 reasons=incompatible_reasons,
             )
-        raise RuntimeError("无可用供应商层级")
+        raise NoCompatibleVendorError(
+            _no_compatible_message([], bound_model),
+            reasons=[],
+        )
 
     # ── 门控与错误处理 ──────────────────────────────────────
 
@@ -1533,6 +1633,7 @@ class _RouteExecutor:
         canonical_request: Any,
         session_record: Any,
         incompatible_reasons: list[str],
+        bound_model: str | None = None,
     ) -> str:
         """对单个 tier 执行能力门控和兼容性检查.
 
@@ -1540,6 +1641,14 @@ class _RouteExecutor:
             "eligible" — 通过所有门控，可执行请求
             "skip" — 未通过门控，跳过此 tier
         """
+        if bound_model and not tier.vendor.supports_model(bound_model):
+            incompatible_reasons.append(f"{tier.name}:model_not_supported")
+            logger.info(
+                "Tier %s skipped: bound model %s not supported by vendor",
+                tier.name,
+                bound_model,
+            )
+            return "skip"
         supported, reasons = tier.vendor.supports_request(request_caps)
         if not supported:
             reason_text = ",".join(sorted({r.value for r in reasons}))

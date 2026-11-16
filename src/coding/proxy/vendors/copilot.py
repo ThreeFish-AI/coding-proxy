@@ -182,6 +182,8 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
             models_cache_ttl_seconds=int(config.models_cache_ttl_seconds),
             model_mapper=model_mapper,
         )
+        # 门控（supports_model）需要同步查 copilot 作用域映射规则
+        self._model_mapper = model_mapper
         # Copilot 特有诊断字段（不在 Mixin 中）
         self._last_request_base_url = ""
         self._last_421_base_url = ""
@@ -198,6 +200,27 @@ class CopilotVendor(TokenBackendMixin, BaseVendor):
 
     def get_name(self) -> str:
         return "copilot"
+
+    def supports_model(self, model: str) -> bool:
+        """显式 copilot 作用域映射命中或 claude-* 家族可服务.
+
+        CopilotModelResolver.resolve 先同步消费 vendor="copilot" 作用域的
+        mapper 规则（exact/pattern），门控同口径放行；余按家族前缀：
+        claude- 前缀即其可绑定面，他族原生名（glm-/qwen- 等）不支持，
+        未知名宽容放行（resolver 按目录家族匹配解析）。
+        """
+        from .model_catalog import ALL_NATIVE_PREFIXES
+
+        mapper = self._model_mapper
+        if mapper is not None:
+            _, reason = mapper.map_with_reason(model, vendor="copilot")
+            if reason in ("exact", "pattern"):
+                return True
+        if model.startswith("claude-"):
+            return True
+        if model.startswith(ALL_NATIVE_PREFIXES):
+            return False
+        return True
 
     def get_capabilities(self) -> VendorCapabilities:
         return VendorCapabilities(

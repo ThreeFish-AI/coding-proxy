@@ -227,8 +227,12 @@ class TestEquivalenceMatrix:
         path = Path.cwd().parent / "user.yaml"
         shutil.copy(FIXTURES / "legacy_config_default_v052.yaml", path)
         plan = plan_import(path)
-        # 旧拷贝只与当前默认在 zhipu 配额与 pricing 上不同；路径字面量被丢弃
-        assert set(plan.sections) == {"vendors", "pricing"}
+        # 旧拷贝只与当前默认在 zhipu 配额、pricing 与 title_exempt_prefixes
+        # （旧默认两条豁免前缀 → 新默认空，探测识别已内建）上不同；路径字面量被丢弃
+        assert set(plan.sections) == {"vendors", "pricing", "session_policies"}
+        assert plan.sections["session_policies"] == {
+            "title_exempt_prefixes": ["Write the title in the", "[Session]"]
+        }
         assert set(plan.sections["vendors"]) == {"zhipu"}
         assert "database" not in plan.sections and "auth" not in plan.sections
         assert plan.secrets["vendors.zhipu.api_key"].env_var == "ZHIPU_API_KEY"

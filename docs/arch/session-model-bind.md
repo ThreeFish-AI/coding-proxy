@@ -25,28 +25,34 @@
 
 关键语义：
 
-- **failover 为 best-effort**：绑定的 tier 被熔断 / quota / 能力门控跳过时，后续 tier 按自身映射接单，实际 served 模型可能偏离绑定模型。`_log_model_drift` 在两种情形打 WARNING：served 既非绑定名、也非接单 vendor 映射预期（failover 接单 / 上游换名），或绑定名命中映射 default 回退被改写（缺显式规则）；配置内等价映射（如 claude 档位名 → glm 档位名）属预期行为不告警。dashboard Models 列展示真实 served 模型。
-- **运行时绑定纯内存态**：重启后回落默认路由（与 Vendor Bind 现状一致）；配置热切换（generation swap）时绑定经迁移保留——vendor 需仍在新链路、模型需仍在 `bindable_models` 清单，失效部分移除并在 `reset_runtime` 提示。标题前缀自动绑定（`title_vendor_bindings`）与手动绑定共用同一存储。
+- **vendor.model 锁定**：绑定内置目录模型（如 `glm-5.3`）时为严格链——候选 tier 恰为该条目锁定的 vendor（用户显式点名多 vendor 时按点名顺序，均不尾部追加），绑定模型只发给原生支持它的 vendor，不做跨系列静默降级；对应 vendor 全体不可用时请求显式失败。custom 条目（tiers 留空）沿用「置头 + 垫尾」重排语义，并受模型门控保护（`supports_model` 不支持时 skip 并记因）。
+- **failover 为 best-effort（custom 条目）**：绑定的 tier 被熔断 / quota / 能力门控跳过时，后续 tier 按自身映射接单，实际 served 模型可能偏离绑定模型。`_log_model_drift` 在两种情形打 WARNING：served 既非绑定名、也非接单 vendor 映射预期（failover 接单 / 上游换名），或绑定名命中映射 default 回退被改写（缺显式规则）；配置内等价映射（如 claude 档位名 → glm 档位名）属预期行为不告警。dashboard Models 列展示真实 served 模型。
+- **运行时绑定纯内存态**：重启后回落默认路由（与 Vendor Bind 现状一致）；配置热切换（generation swap）时绑定经迁移保留——vendor 需仍在新链路、模型需仍在合成目录内，失效部分移除并在 `reset_runtime` 提示。标题前缀自动绑定（`title_vendor_bindings`）与手动绑定共用同一存储。
 - **`count_tokens` 不同步覆盖**：透传路径非会话感知，token 估算可能与实际对话模型存在偏差（Claude Code 对其精度不敏感）。
 
-## 3. 配置（[config-reference.md](config-reference.md) 为参数权威）
+## 3. 可绑定目录与配置（[config-reference.md](config-reference.md) 为参数权威）
+
+下拉选项 = **内置 vendor 目录（按激活 vendor 过滤）∪ `bindable_models` 显式条目**，合成于 app 构建时（[model_catalog.py](../../src/coding/proxy/vendors/model_catalog.py)）：
 
 ```yaml
 session_policies:
-  # 可绑定模型清单 —— Model Bind 下拉选项的唯一来源
+  # 可绑定模型显式定制层；空清单 = 整体关闭模型绑定（含内置目录）
   bindable_models:
     - label: "Opus 4.6"          # UI 显示名（唯一）
-      model: "claude-opus-4.6"   # 覆盖目标模型名（唯一）
-      tiers: []                  # 可选：随绑定重排的 vendor 优先级（空 = 不改顺序）
+      model: "claude-opus-4-6"   # 覆盖目标模型名（唯一）
+      tiers: []                  # 留空继承内置目录锁定值；非空覆盖
+      exclude: false             # true = 剔除同名内置条目
 ```
 
-- 清单外的模型无法通过 API 绑定（PUT 校验返回 400）。
-- **跨系列原生模型名（如 `glm-5.3`）必须配套 identity `model_mapping` 规则**（pattern = target = `glm-5.3`），否则 `ModelMapper` 对未匹配名回退 default 目标（如 `glm-5.1`），绑定会被静默改写。
-- 默认清单为 claude 家族三档，已有映射规则全覆盖，零额外配置。
+- 合成规则：按 `model` 去重；config 同名条目覆盖 `label`/`tiers`（`tiers` 留空继承内置锁定值），`exclude: true` 剔除内置同名条目；纯自定义条目原样保留（`vendor: custom`，tiers 留空 = 沿用全局链路顺序）。
+- **identity 映射规则自动合成**：合成目录中 native 系 vendor（zhipu/minimax/kimi/doubao/xiaomi/alibaba）的模型在 app 构建时自动获得 `pattern=target=model` 规则（custom 条目按锁定 tiers 或原生前缀族归属），无需手工配置，杜绝 ModelMapper default 回退静默改写；已被用户显式映射规则（exact/通配/正则）覆盖的模型跳过合成，用户规则优先。
+- 未知名（不在任何原生前缀族，如自定义微调模型名）绑定到 native 系 vendor 需配套显式 `model_mapping` 规则，否则门控不放行（native 系对未知名的 default 回退是静默改写而非透传，不放行是刻意防错）；anthropic 真透传 vendor 对未知名仍放行。
+- 合成目录外的模型无法通过 API 绑定（PUT 校验返回 400）。
+- 内置目录是发版节奏的静态快照：上游新模型未经目录/自定义条目触达不出现在下拉；用户可经自定义条目即时自救（自动获得 identity 规则）。
 
 ## 4. API 与 CLI
 
-- `PUT /api/session-vendor`：body `{session_key, vendors?: [..], model?: "..."}`，至少一项；`model` 必须在 `bindable_models` 清单内；`vendors` 省略时沿用清单 entry 的 `tiers`。
+- `PUT /api/session-vendor`：body `{session_key, vendors?: [..], model?: "..."}`，至少一项；`model` 必须在合成目录（内置 ∪ config）内；`vendors` 省略时沿用目录 entry 的 `tiers`。
 - `GET /api/session-vendor`：bindings 增返 `model` 字段（无模型覆盖时为 `null`）。
 - `DELETE /api/session-vendor/{session_key}`：清除整条运行时绑定（model + tiers 一并移除，恢复配置态策略备份）。
 - `GET /api/status`：增返 `bindable_models` 数组（UI 选项源）。
@@ -56,19 +62,22 @@ session_policies:
 
 | 模块 | 位置 | 变更 |
 | --- | --- | --- |
-| 配置模型 | `config/session_policy.py` | `SessionPolicy.model` 可选字段；`BindableModel` 与 `bindable_models` 校验（label/model 唯一） |
+| 模型目录 | `vendors/model_catalog.py` | 内置 vendor 目录常量 + `compose_bindable_catalog`（内置 ∪ config，exclude/覆盖/去重）+ `builtin_identity_rules`（自动 identity 规则）+ 原生前缀族 |
+| 配置模型 | `config/session_policy.py` | `SessionPolicy.model` 可选字段；`BindableModel`（label/model/tiers/exclude）与 `bindable_models` 校验（label/model 唯一；空清单 = 关闭） |
 | 解析引擎 | `routing/session_policy.py` | `upsert(..., model=None)`、`get_runtime_binding()`、`list_runtime_bindings()` 增返 model |
-| 执行器 | `routing/executor.py` | 两入口注入模型覆盖（shadow copy）；failover / map 漂移 WARNING；`_apply_title_based_policy` 遇已有运行时绑定即跳过 |
-| 路由 | `server/routes.py` | PUT 增 `model` 校验；GET/status 增返字段 |
-| Vendor 契约 | `vendors/base.py` + `antigravity.py`、`native_anthropic.py` | `BaseVendor.map_model_with_reason` 扩展点（默认恒等 + "vendor"），经 ModelMapper 解析的 vendor 覆写为真实 exact/pattern/default，供漂移告警区分等价映射与缺规则改写 |
-| UI | `server/dashboard.py` | Vendor Bind 列 → Model Bind；选项来自 `bindable_models`；Default = 清除整条绑定；vendor-only 绑定（CLI/旧 API 建立）以 `Default (vendor: …)` 标注可见 |
+| 执行器 | `routing/executor.py` | 两入口注入模型覆盖（shadow copy）；`_pinned_tier_names` 严格链（锁定条目不垫尾）；`_try_gate_tier` 模型门控（`supports_model` 不支持时 skip）；failover / map 漂移 WARNING；`_apply_title_based_policy` 遇已有运行时绑定即跳过 |
+| 路由 | `server/routes.py` | PUT 增 `model` 校验（合成目录）；GET/status 增返字段（含 vendor 归属） |
+| Vendor 契约 | `vendors/base.py` + `antigravity.py`、`native_anthropic.py`、`copilot.py` | `BaseVendor.map_model_with_reason` 扩展点（默认恒等 + "vendor"）；`supports_model` 门控判定（前缀族 + exact/pattern 命中） |
+| UI | `server/dashboard.py` | Vendor Bind 列 → Model Bind；选项来自合成目录并按 vendor optgroup 分组；Default = 清除整条绑定；vendor-only 绑定（CLI/旧 API 建立）以 `Default (vendor: …)` 标注可见 |
 | CLI | `cli/__init__.py` | `session bind --model`、`session list` 显示 model |
 
 ## 6. 已知边界与风险
 
 | 风险 | 处置 |
 | --- | --- |
-| ModelMapper default 静默改写原生模型名 | 清单配套 identity 规则（文档约束）+ executor map 漂移 WARNING |
+| ModelMapper default 静默改写原生模型名 | 目录内模型自动获得 identity 规则（构造期合成）；目录外自定义条目按 tiers/前缀族兜底合成 + executor map 漂移 WARNING |
+| 内置目录滞后于上游新模型 | 发版补目录为补给线；自定义条目即时自救（自动 identity 规则）；identity 透传保证「发什么是什么」，无静默错路由 |
+| 绑定 vendor.model 后该 vendor 全体不可用 | 严格链显式失败（可用性换确定性，流式/非流式同型 `NoCompatibleVendorError`、文案指向锁定链真因）；custom 条目（tiers 空）不受影响 |
 | 标题自动绑定覆盖手动绑定（compat TTL 24h 过期重触发） | `_apply_title_based_policy` 先查 `get_runtime_binding`，存在即跳过 |
 | 跨供应商 thinking signature / cache_control 残留 | `VENDOR_TRANSITIONS` 通道按方向注册；无通道方向原样透传，可能上游 400 → 走 semantic failover；跨系列放开前需补通道并实测 |
 | 跨模型切换 prompt cache 失效（成本跳变） | 预期行为：切换即重建缓存，dashboard 成本列天然反映 |
@@ -77,8 +86,9 @@ session_policies:
 
 ## 7. 测试锚点
 
+- `tests/test_model_catalog.py`：目录合成矩阵（激活过滤/覆盖/exclude/去重/label 冲突降级/空清单关闭）、identity 规则合成（内置/custom/前缀族兜底/用户规则优先）、`supports_model` 判定矩阵、executor 严格链与模型门控。
 - `tests/test_session_aware.py`：resolver model 语义（upsert / get_runtime_binding / list）、空 tiers 继承配置策略顺序、`bindable_models` 配置校验（唯一性 / 非空）。
 - `tests/test_router_executor.py`：模型覆盖注入（shadow copy、绑定按原 session_key 命中、客户端原始模型名留存于 INFO 日志）、在途请求不受绑定变更影响（流式 / 非流式）、failover 接单与映射改写的漂移告警、配置策略携带 model、标题自动绑定避让。
-- `tests/test_app_routes.py`：`PUT/DELETE/GET /api/session-vendor` 路由级校验（含 model 分支、清单为空、vendors 非列表）与 `/api/status` 的 `bindable_models`。
+- `tests/test_app_routes.py`：`PUT/DELETE/GET /api/session-vendor` 路由级校验（含 model 分支、合成目录、清单为空、vendors 非列表）与 `/api/status` 的 `bindable_models`。
 - `tests/test_config_loader.py`：默认清单来自 `config.default.yaml` 的加载守护。
 - `tests/test_cli_usage.py`：`session bind --model/--vendor` payload 与缺参退出码。
