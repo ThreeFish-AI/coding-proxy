@@ -187,8 +187,8 @@ def _sanitize_user_text(raw: str) -> str:
 # Level 1: user TEXT → 噪声剥离 → 首条非空文本 (原有逻辑)
 # Level 2: user TOOL_RESULT → text 截取 → "[Tool output] <snippet>"
 # Level 3: user IMAGE → 计数 → "[1 Image]" / "[N Images]"
-# Level 4: 请求元数据 → tool_names / model → "[Tool call] Bash, Read"
-#          / "[Session] claude-opus-4-8"
+# Level 4: 请求元数据 → tool_names → "[Tool call] Bash, Read"
+#          （模型名兜底已移除：合成模型名无业务语义）
 # ─────────────────────────────────────────────────────────────────
 
 
@@ -346,6 +346,48 @@ def _extract_injected_prompt_title(cleaned: str) -> str | None:
     return None
 
 
+# ── CC 会话标题探测消息（session-title probe）载荷提取 ─────────
+#
+# Claude Code 在会话早期发送内部标题探测请求（haiku，querySource=
+# generate_session_title），user 文本为固定指令模板，形态取自 CC 2.1.325
+# 取证：可选未闭合 <session> 壳 + "Write the title in ..." 指令句；
+# legacy 变体为裸 <session> 壳直接包裹真实输入。指令内嵌首条用户消息
+# 原文时剥离指令取载荷；纯指令无载荷时跳过该条，待延迟补写回填。
+# 此前靠 title_exempt_prefixes 配置豁免（且 <session> 前缀形态漏匹配，
+# 历史库残留 256 条垃圾标题），现收敛为代码内建识别，配置可清零。
+_PROBE_SESSION_TAG_PREFIX = re.compile(r"^\s*<session\b[^>]*>\s*", re.IGNORECASE)
+_PROBE_INSTRUCTION_OPEN = re.compile(r"^\s*Write the title in\b", re.IGNORECASE)
+# 指令块句尾锚定（当前两代模板 + legacy 逗号变体）；未命中的未知变体
+# 整条跳过（返回 ""），宁可延迟补写也不产出垃圾标题。
+_PROBE_INSTRUCTION_BLOCK = re.compile(
+    r"Write the title in\b.*?"
+    r"(?:in their original form\.|the English of these instructions\.|wrote in,)\s*",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _extract_session_probe_payload(cleaned: str) -> str | None:
+    """CC 标题探测消息 → 真实业务载荷.
+
+    Returns:
+        ``None`` — 非探测消息（调用方按真实用户输入/注入家族继续处理）；
+        ``""`` — 探测指令无载荷（调用方跳过该条，靠延迟补写回填）；
+        ``str`` — 剥离壳与指令后的真实载荷（首条用户消息原文）。
+    """
+    tag = _PROBE_SESSION_TAG_PREFIX.match(cleaned)
+    text = cleaned[tag.end() :] if tag else cleaned
+    if not _PROBE_INSTRUCTION_OPEN.match(text):
+        # 裸 <session> 壳包裹真实输入（legacy 形态）：标签后即载荷
+        if tag:
+            return text.strip()
+        return None
+    stripped = _PROBE_INSTRUCTION_BLOCK.sub("", text, count=1)
+    if stripped == text:
+        # 指令块句尾锚定未命中（未知模板变体）：整条按无载荷跳过
+        return ""
+    return stripped.strip()
+
+
 def _derive_title_from_user_texts(
     texts, exempt_prefixes: list[str] | None = None
 ) -> str:
@@ -377,6 +419,13 @@ def _derive_title_from_user_texts(
         ):
             continue
         if _exempt(cleaned):
+            continue
+        probe = _extract_session_probe_payload(cleaned)
+        if probe is not None:
+            # 探测家族命中：载荷即真实首条输入，直接成题；
+            # 无载荷/未知变体跳过该条，靠延迟补写回填。
+            if probe and not _exempt(probe):
+                return probe[:_SESSION_TITLE_MAX_LEN]
             continue
         injected = _extract_injected_prompt_title(cleaned)
         if injected is None:
@@ -431,12 +480,15 @@ def _extract_title_from_images(messages: list[CanonicalMessagePart]) -> str:
 
 
 def _extract_title_from_metadata(request: CanonicalRequest) -> str:
-    """Level 4: 从请求元数据 (tool_names / model) 合成兜底标题."""
+    """Level 4: 从请求元数据 (tool_names) 合成兜底标题.
+
+    模型名兜底（``[Session] <model>``）已移除：合成模型名无业务语义，
+    与「标题总具备实际识别意义的业务 message」目标冲突；无 user 输入的
+    会话保持空标题，待延迟补写经 upsert 回填真实输入。
+    """
     if request.tool_names:
         names = ", ".join(request.tool_names[:3])
         return f"[Tool call] {names}"
-    if request.model:
-        return f"[Session] {request.model}"
     return ""
 
 
@@ -453,10 +505,10 @@ def _extract_session_title(
     开头，则视为豁免、继续向下一层回退。Level 1 内部仍保留「逐条消息跳过」
     语义（清洗后文本以豁免前缀开头则跳过该条、继续查找下一条 user TEXT）；
     本函数在编排层对每层最终候选再做一次 ``_is_exempt`` 拦截，使 Level 2/3/4
-    的合成标题（如 ``[Tool output]``、``[N Image(s)]``、``[Tool call]``、
-    ``[Session]``）也能被用户显式豁免。全部层级均被豁免时返回空串，调用方
+    的合成标题（如 ``[Tool output]``、``[N Image(s)]``、``[Tool call]``）
+    也能被用户显式豁免。全部层级均被豁免时返回空串，调用方
     ``if title:`` 据此跳过写库，session 标题保持空，待后续请求经
-    ``update_empty_session_title`` 回填有意义标题。默认 ``None`` 时行为与历史一致。
+    ``set_session_title`` 幂等 upsert 回填有意义标题。默认 ``None`` 时行为与历史一致。
     """
     # 防御性过滤空串前缀："" startswith 恒真会误豁免一切。入参虽经配置层与
     # 构造器两层归一化，模块级直接调用（如测试）仍可能传入 [""]，此处兜底。
@@ -1049,13 +1101,30 @@ class _RouteExecutor:
             request, exempt_prefixes=self._title_exempt_prefixes
         )
 
+    async def _maybe_write_session_title(self, canonical_request) -> None:
+        """提取并落库 session 标题（幂等 upsert），仅在真实写入时触发联动策略.
+
+        统一覆盖新 session 首写与延迟补写：行缺失补建（首请求全层级被豁免
+        未建行时由后续请求自愈）、空标题更新、已有标题不动。compat TTL 过期
+        重判新会话时行已存在（written=False），自动绑定不复活已删的运行时绑定。
+        """
+        title = self._extract_session_title(canonical_request)
+        if not title:
+            return
+        written = await self._recorder.set_session_title(
+            canonical_request.session_key, title
+        )
+        if written:
+            self._apply_title_based_policy(canonical_request.session_key, title)
+
     def _apply_title_based_policy(self, session_key: str, title: str) -> None:
         """根据 Session 标题前缀自动绑定供应商.
 
         当标题以预配置的前缀开头时，通过 SessionPolicyResolver.upsert()
         将该 Session 绑定到指定供应商，后续请求无需再走默认路由。
 
-        仅在新 Session 首次提取标题时调用，避免覆盖手动绑定的策略。
+        仅在标题首次落库时调用（新 session 首写或延迟补写真正写入时），
+        避免覆盖手动绑定的策略。
         """
         if not title or not self._title_vendor_bindings:
             return
@@ -1162,24 +1231,11 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record, is_new_session = await self._session_mgr.get_or_create_record(
+        session_record, _is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
-        if is_new_session:
-            title = self._extract_session_title(canonical_request)
-            if title:
-                await self._recorder.set_session_title(
-                    canonical_request.session_key, title
-                )
-                self._apply_title_based_policy(canonical_request.session_key, title)
-        else:
-            # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
-            title = self._extract_session_title(canonical_request)
-            if title:
-                await self._recorder.update_empty_session_title(
-                    canonical_request.session_key, title
-                )
+        await self._maybe_write_session_title(canonical_request)
         incompatible_reasons: list[str] = []
         session_policy = self._policy_resolver.resolve(canonical_request.session_key)
         client_model = str(body.get("model", "unknown"))
@@ -1358,24 +1414,11 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record, is_new_session = await self._session_mgr.get_or_create_record(
+        session_record, _is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
-        if is_new_session:
-            title = self._extract_session_title(canonical_request)
-            if title:
-                await self._recorder.set_session_title(
-                    canonical_request.session_key, title
-                )
-                self._apply_title_based_policy(canonical_request.session_key, title)
-        else:
-            # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
-            title = self._extract_session_title(canonical_request)
-            if title:
-                await self._recorder.update_empty_session_title(
-                    canonical_request.session_key, title
-                )
+        await self._maybe_write_session_title(canonical_request)
         incompatible_reasons: list[str] = []
         session_policy = self._policy_resolver.resolve(canonical_request.session_key)
         client_model = str(body.get("model", "unknown"))

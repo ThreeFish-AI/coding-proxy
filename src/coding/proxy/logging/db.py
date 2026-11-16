@@ -325,29 +325,24 @@ class TokenLogger:
                     "Migration: renamed 'backend' column to 'vendor' in %s", table
                 )
 
-    async def set_session_title(self, session_key: str, title: str) -> None:
-        """为新 session 设置标题（幂等，仅首次写入）."""
+    async def set_session_title(self, session_key: str, title: str) -> bool:
+        """写入 session 标题（幂等 upsert，仅填充缺失行或空标题）.
+
+        统一的标题写者：行缺失则插入（新 session 首写）、行存在且标题为空则
+        更新（延迟补写）、已有标题不动（首条真实标题胜出）。返回是否实际写入，
+        供调用方仅在标题真正落库时触发标题联动策略——compat TTL 过期导致
+        长会话被重新判定为新会话时，已有标题不会被改写，自动绑定也不复活。
+        """
         if not self._db or not title or not session_key:
-            return
-        await self._db.execute(
-            "INSERT OR IGNORE INTO session_meta (session_key, title) VALUES (?, ?)",
+            return False
+        cursor = await self._db.execute(
+            """INSERT INTO session_meta (session_key, title) VALUES (?, ?)
+               ON CONFLICT(session_key) DO UPDATE SET title = excluded.title
+               WHERE session_meta.title = ''""",
             (session_key, title),
         )
         await self._db.commit()
-
-    async def update_empty_session_title(self, session_key: str, title: str) -> None:
-        """为标题为空的 session 补写标题（幂等,仅覆盖空标题行）.
-
-        使用 ``AND title = ''`` 条件确保不覆盖已有标题,
-        即使行已存在但标题为空也会被更新。
-        """
-        if not self._db or not title or not session_key:
-            return
-        await self._db.execute(
-            "UPDATE session_meta SET title = ? WHERE session_key = ? AND title = ''",
-            (title, session_key),
-        )
-        await self._db.commit()
+        return bool(cursor.rowcount)
 
     async def get_session_titles(self, session_keys: list[str]) -> dict[str, str]:
         """批量查询 session 标题."""
