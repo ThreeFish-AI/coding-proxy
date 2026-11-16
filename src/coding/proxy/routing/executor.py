@@ -440,7 +440,7 @@ def _extract_session_title(
     的合成标题（如 ``[Tool output]``、``[N Image(s)]``、``[Tool call]``、
     ``[Session]``）也能被用户显式豁免。全部层级均被豁免时返回空串，调用方
     ``if title:`` 据此跳过写库，session 标题保持空，待后续请求经
-    ``update_empty_session_title`` 回填有意义标题。默认 ``None`` 时行为与历史一致。
+    ``set_session_title`` 幂等 upsert 回填有意义标题。默认 ``None`` 时行为与历史一致。
     """
     # 防御性过滤空串前缀："" startswith 恒真会误豁免一切。入参虽经配置层与
     # 构造器两层归一化，模块级直接调用（如测试）仍可能传入 [""]，此处兜底。
@@ -997,6 +997,22 @@ class _RouteExecutor:
             request, exempt_prefixes=self._title_exempt_prefixes
         )
 
+    async def _maybe_write_session_title(self, canonical_request) -> None:
+        """提取并落库 session 标题（幂等 upsert），仅在真实写入时触发联动策略.
+
+        统一覆盖新 session 首写与延迟补写：行缺失补建（首请求全层级被豁免
+        未建行时由后续请求自愈）、空标题更新、已有标题不动。compat TTL 过期
+        重判新会话时行已存在（written=False），自动绑定不复活已删的运行时绑定。
+        """
+        title = self._extract_session_title(canonical_request)
+        if not title:
+            return
+        written = await self._recorder.set_session_title(
+            canonical_request.session_key, title
+        )
+        if written:
+            self._apply_title_based_policy(canonical_request.session_key, title)
+
     def _apply_title_based_policy(self, session_key: str, title: str) -> None:
         """根据 Session 标题前缀自动绑定供应商.
 
@@ -1111,31 +1127,11 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record, is_new_session = await self._session_mgr.get_or_create_record(
+        session_record, _is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
-        if is_new_session:
-            # 首写经 INSERT OR IGNORE 落库;TTL 过期重判新会话时行已存在
-            # (written=False),自动绑定不复活用户已删除的运行时绑定。
-            title = self._extract_session_title(canonical_request)
-            if title:
-                written = await self._recorder.set_session_title(
-                    canonical_request.session_key, title
-                )
-                if written:
-                    self._apply_title_based_policy(canonical_request.session_key, title)
-        else:
-            # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
-            # upsert 语义:行缺失(首请求全层级被豁免未建行)也会补建,
-            # 仅在标题真正落库时触发标题联动策略(供应商自动绑定)。
-            title = self._extract_session_title(canonical_request)
-            if title:
-                written = await self._recorder.update_empty_session_title(
-                    canonical_request.session_key, title
-                )
-                if written:
-                    self._apply_title_based_policy(canonical_request.session_key, title)
+        await self._maybe_write_session_title(canonical_request)
         incompatible_reasons: list[str] = []
         session_policy = self._policy_resolver.resolve(canonical_request.session_key)
         client_model = str(body.get("model", "unknown"))
@@ -1313,31 +1309,11 @@ class _RouteExecutor:
         failed_tier_name: str | None = None
         request_caps = build_request_capabilities(body)
         canonical_request = build_canonical_request(body, headers)
-        session_record, is_new_session = await self._session_mgr.get_or_create_record(
+        session_record, _is_new_session = await self._session_mgr.get_or_create_record(
             canonical_request.session_key,
             canonical_request.trace_id,
         )
-        if is_new_session:
-            # 首写经 INSERT OR IGNORE 落库;TTL 过期重判新会话时行已存在
-            # (written=False),自动绑定不复活用户已删除的运行时绑定。
-            title = self._extract_session_title(canonical_request)
-            if title:
-                written = await self._recorder.set_session_title(
-                    canonical_request.session_key, title
-                )
-                if written:
-                    self._apply_title_based_policy(canonical_request.session_key, title)
-        else:
-            # 延迟标题补写: 若 session 尚无标题,尝试从当前请求中提取并回写。
-            # upsert 语义:行缺失(首请求全层级被豁免未建行)也会补建,
-            # 仅在标题真正落库时触发标题联动策略(供应商自动绑定)。
-            title = self._extract_session_title(canonical_request)
-            if title:
-                written = await self._recorder.update_empty_session_title(
-                    canonical_request.session_key, title
-                )
-                if written:
-                    self._apply_title_based_policy(canonical_request.session_key, title)
+        await self._maybe_write_session_title(canonical_request)
         incompatible_reasons: list[str] = []
         session_policy = self._policy_resolver.resolve(canonical_request.session_key)
         client_model = str(body.get("model", "unknown"))

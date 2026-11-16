@@ -326,28 +326,12 @@ class TokenLogger:
                 )
 
     async def set_session_title(self, session_key: str, title: str) -> bool:
-        """为新 session 设置标题（幂等，仅首次写入）.
+        """写入 session 标题（幂等 upsert，仅填充缺失行或空标题）.
 
-        返回是否实际写入（行已存在时 INSERT OR IGNORE 静默跳过返回 False），
+        统一的标题写者：行缺失则插入（新 session 首写）、行存在且标题为空则
+        更新（延迟补写）、已有标题不动（首条真实标题胜出）。返回是否实际写入，
         供调用方仅在标题真正落库时触发标题联动策略——compat TTL 过期导致
         长会话被重新判定为新会话时，已有标题不会被改写，自动绑定也不复活。
-        """
-        if not self._db or not title or not session_key:
-            return False
-        cursor = await self._db.execute(
-            "INSERT OR IGNORE INTO session_meta (session_key, title) VALUES (?, ?)",
-            (session_key, title),
-        )
-        await self._db.commit()
-        return bool(cursor.rowcount)
-
-    async def update_empty_session_title(self, session_key: str, title: str) -> bool:
-        """为标题为空的 session 补写标题（幂等 upsert,仅覆盖空标题）.
-
-        新 session 首请求提取为空（如全层级被豁免前缀拦截）时 ``session_meta``
-        行不会被创建，纯 ``UPDATE`` 对缺失行静默 no-op，导致标题永远无法回填；
-        改用 upsert：行缺失则插入、行存在且标题为空则更新、已有标题不动。
-        返回是否实际写入（插入或更新），供调用方仅在标题落库时触发标题联动策略。
         """
         if not self._db or not title or not session_key:
             return False

@@ -3460,7 +3460,7 @@ class TestApplyTitleBasedPolicy:
     async def test_execute_message_existing_session_no_binding(self):
         """端到端: 已存在 session(is_new=False) 且标题未落库 → 不触发标题绑定.
 
-        前提: 默认 UsageRecorder 无 token_logger,update_empty 返回
+        前提: 默认 UsageRecorder 无 token_logger,set_session_title 返回
         written=False → 策略不触发。真实落库触发的正例见
         TestDelayedTitleBackfill.test_backfill_write_triggers_title_binding。
         """
@@ -3711,7 +3711,7 @@ class TestDelayedTitleBackfill:
         """补写真正落库(written=True) → 触发 title_vendor_bindings 自动绑定."""
         resolver = SessionPolicyResolver()
         recorder = UsageRecorder()
-        recorder.update_empty_session_title = AsyncMock(return_value=True)
+        recorder.set_session_title = AsyncMock(return_value=True)
         executor = _executor(
             recorder=recorder,
             session_mgr=_stub_session_manager(is_new=False),
@@ -3733,7 +3733,7 @@ class TestDelayedTitleBackfill:
         """补写 no-op(written=False,标题已存在) → 不触发自动绑定."""
         resolver = SessionPolicyResolver()
         recorder = UsageRecorder()
-        recorder.update_empty_session_title = AsyncMock(return_value=False)
+        recorder.set_session_title = AsyncMock(return_value=False)
         executor = _executor(
             recorder=recorder,
             session_mgr=_stub_session_manager(is_new=False),

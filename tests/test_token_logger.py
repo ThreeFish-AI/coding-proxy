@@ -635,10 +635,10 @@ async def test_query_daily_different_vendors_not_merged(logger):
 
 
 class TestSessionTitleUpsert:
-    """``update_empty_session_title`` upsert 语义测试.
+    """``set_session_title`` 幂等 upsert 语义测试.
 
-    回归背景: 新 session 首请求全层级被豁免前缀拦截时不写库、不建行,
-    纯 UPDATE 对缺失行静默 no-op,导致标题永远无法回填(dashboard 显示 "-")。
+    统一写者语义:行缺失插入、空标题更新、已有标题不动,返回是否实际写入。
+    回归背景: 旧实现纯 UPDATE 对缺失行静默 no-op,标题永远无法回填。
     """
 
     async def _get_title(self, tl: TokenLogger, key: str) -> str | None:
@@ -648,7 +648,7 @@ class TestSessionTitleUpsert:
     @pytest.mark.asyncio
     async def test_update_empty_creates_missing_row(self, logger):
         """行缺失时 upsert 补建 — 旧实现 UPDATE no-op 的回归场景."""
-        written = await logger.update_empty_session_title("sess-a", "真实业务标题")
+        written = await logger.set_session_title("sess-a", "真实业务标题")
         assert written is True
         assert await self._get_title(logger, "sess-a") == "真实业务标题"
 
@@ -660,7 +660,7 @@ class TestSessionTitleUpsert:
             "UPDATE session_meta SET title = '' WHERE session_key = 'sess-b'"
         )
         await logger._db.commit()
-        written = await logger.update_empty_session_title("sess-b", "补写标题")
+        written = await logger.set_session_title("sess-b", "补写标题")
         assert written is True
         assert await self._get_title(logger, "sess-b") == "补写标题"
 
@@ -668,20 +668,20 @@ class TestSessionTitleUpsert:
     async def test_update_empty_keeps_existing_title(self, logger):
         """已有非空标题 → 不覆盖,返回 False."""
         await logger.set_session_title("sess-c", "原始标题")
-        written = await logger.update_empty_session_title("sess-c", "后来标题")
+        written = await logger.set_session_title("sess-c", "后来标题")
         assert written is False
         assert await self._get_title(logger, "sess-c") == "原始标题"
 
     @pytest.mark.asyncio
     async def test_update_empty_guards_invalid_input(self, logger):
         """空标题 / 空 session_key → 返回 False 且不建行."""
-        assert await logger.update_empty_session_title("sess-d", "") is False
-        assert await logger.update_empty_session_title("", "标题") is False
+        assert await logger.set_session_title("sess-d", "") is False
+        assert await logger.set_session_title("", "标题") is False
         assert await self._get_title(logger, "sess-d") is None
 
     @pytest.mark.asyncio
     async def test_update_empty_repeat_backfill_is_idempotent(self, logger):
         """首次补写后,后续请求重复补写 no-op(首条真实标题胜出)."""
-        assert await logger.update_empty_session_title("sess-e", "第一条") is True
-        assert await logger.update_empty_session_title("sess-e", "第二条") is False
+        assert await logger.set_session_title("sess-e", "第一条") is True
+        assert await logger.set_session_title("sess-e", "第二条") is False
         assert await self._get_title(logger, "sess-e") == "第一条"
