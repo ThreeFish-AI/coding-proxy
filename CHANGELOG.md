@@ -2,6 +2,13 @@
 
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.3](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.3) - 2026-11-16
+
+> 本周期主轴：Dashboard Overview 新增「订阅状态」面板，聚合展示 Claude Code / GLM / Antigravity 三家订阅的档位与真实配额用量。
+
+- feat(subscription-status): 新增 **Overview「🎫 订阅状态」面板 + `GET /api/dashboard/subscriptions`**——三家订阅档位与用量聚合（TTL 120s 缓存、per-vendor 错误隔离、错误同样入缓存防刷新风暴打未文档化端点）：**GLM** 用已配 api_key 主动查智谱官方监控端点（裸 key 鉴权、`data.level` 档位 + 5h/周窗已用百分比与重置时间，percentage/used_percent 双字段形态防御式解析）；**Antigravity** 用 OAuth token 主动查 `v1internal:loadCodeAssist`（档位 + cloudaicompanionProject，缓存 1h）+ `retrieveUserQuotaSummary`（Gemini / Claude+GPT 分组双窗口剩余比例），客户端指纹与上游 host 复用仓内权威常量（UA 门控必需，配额 host 尊重 `antigravity_gateway.base_url` 覆写），凭证 vendor 通道优先、config + token store 回退合成；**Claude Code** 走 unified ratelimit 响应头被动采集（`BaseVendor._on_upstream_response` 新钩子 + 进程级快照，透传链路零凭证零影响，档位不展示属已知边界）；未预期异常对齐 I2 canon（类型 + 堆栈帧），上游错误收敛短消息不携凭证；数值守门拒绝 NaN/Infinity（畸形值仅丢弃对应窗口不拖垮整家）；前端卡片复用既有 quota 徽章/进度条组件，上游字符串全量 escapeHtml（Node 行为测试含 XSS 用例）；真机实测三家真实数据，Claude 被动行待正式实例首个 CC 请求点亮（#301，经 review-once 两轮收敛 14 项 Findings 全修复、独立 fresh-context 复审无 Finding）；
+- docs(antigravity-gateway): 纠偏通道③覆盖范围——桌面 2.32.1 模型流不经 `CLOUD_CODE_URL`，模型级统计指引收敛至通道②（#299）；
+
 ## [v0.6.2](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.2) - 2026-11-16
 
 > 本周期主轴：新增 Antigravity IDE 客户端透传通道；Model Bind 下拉升级为内置 vendor 目录合成 + vendor.model 锁定；修复新会话标题永久缺失。
