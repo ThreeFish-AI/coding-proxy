@@ -25,9 +25,11 @@ Dashboard Overview ── GET /api/dashboard/subscriptions
 卡片是纯前端渲染：订阅数据（`GET /api/dashboard/subscriptions`）与路由 tier 数据（`GET /api/status` 的 `tiers`）并发拉取后，在 `_renderStatusRows` 里做 full outer join。两个端点与响应形状互不耦合，订阅数据不并入 `/api/status`（后者被 Model Calling 面板 10 秒轮询，而订阅拉取带上游超时）。
 
 - 归并键：`SUB_META[key].tier`，`claude → anthropic`、`glm → zhipu`、`antigravity → antigravity`。`tier.name` 恒等于 vendor 类型字面量且运行时同类型至多一个 tier，按名归并不会串行；取值必须是 [config/routing.py](../../src/coding/proxy/config/routing.py) 的 `VendorType` 之一，由测试钉死；
-- 三类行：合并行（订阅 × tier，行名取订阅名，路由区灰字标注 tier 名）、供应商行（无订阅对应，路由区灰字「供应商状态」）、订阅行（无对应 tier，灰字「未加入路由链」）；
+- 三类行：合并行（订阅 × tier，行名取订阅名，路由区灰字标注 tier 名）、供应商行（无订阅对应，路由区灰字「供应商状态」；头像首字母与订阅行头像撞字母时取前两个字母，如 copilot → `Co`，见 `_tierInitial`）、订阅行（无对应 tier，灰字「未加入路由链」）；
 - 容器与行序：带 tier 的行按 `tiers` 顺序排在 `#vendor-list`，无 tier 的订阅行排在其后的 `#subscription-list`。拖拽按 `#vendor-list` 的 DOM 顺序拼 `PUT /api/tier-order` 载荷，可拖拽行必须是连续前缀，订阅行不得进入该容器；
-- 并发守卫：`updateVendorStatus` 与 `updateSubscriptions` 只更新缓存（`_tierStatus` / `_subData`）再调 `_renderStatusRows`，拖拽进行中或 PUT 未决时跳过重绘。仅带 tier 数据的定向重渲染（拖拽回滚、复位后刷新）复用订阅缓存，订阅徽章不会被清空；`PUT /api/tier-order` 成功后先按已提交顺序同步 `_tierStatus`（`_syncTierOrder`）再刷新，拖拽结束时的补绘不会用过期顺序把行序画回去；
+- 并发守卫：`updateVendorStatus` 与 `updateSubscriptions` 只更新缓存（`_tierStatus` / `_subData`）再调 `_renderStatusRows`，拖拽进行中或 PUT 未决时跳过重绘。仅带 tier 数据的定向重渲染（拖拽回滚、复位后刷新）复用订阅缓存，订阅徽章不会被清空；`PUT /api/tier-order` 成功后先按已提交顺序同步 `_tierStatus`（`_syncTierOrder`）再刷新，拖拽结束时的补绘不会用过期顺序把行序画回去。三处拉取路由状态的入口统一走 `fetchTierStatus`：请求发出后才有重排被确认时（连按方向键），迟到的快照只采用状态字段，行序以已确认的顺序为准；整页刷新时两路数据到齐后只重绘一次，避免行节点被连续替换；
+- 键盘调整：手柄是可聚焦按钮，`↑` / `↓` 触发 `_tierMove`（乐观重排并重绘，再走与拖拽相同的 `persistTierOrder` 与失败回滚）；重绘会替换节点，`_renderStatusRows` 记住焦点所在的行，重绘后回到同一行的手柄；
+- 在途交互：按住手柄尚未越过阈值时行被重绘，被拖行节点已脱离文档，下一次移动按名字重新定位（找不到则本次拖拽作废）；指针按在手柄上时方向键只拦截页面滚动，不触发移动；
 - 订阅数据缺失（接口失败、服务未装配）时行名不跳变，卡片底部显示「无订阅数据」。
 
 ## 三家获取途径与契约
@@ -80,4 +82,4 @@ Dashboard Overview ── GET /api/dashboard/subscriptions
 ## 测试锚点
 
 - [tests/test_subscription_status.py](../../tests/test_subscription_status.py)：unified 头解析（含大小写/畸形值/NaN/Infinity/钳制）、vendor 钩子旁路采集（流式+非流式）、两家 fetcher（MockTransport、双字段形态、403 门控、token 失效）、服务 TTL/错误隔离、端点集成、token store 回退构建（含 enabled 口径与 gateway host 覆写）；
-- [tests/test_dashboard_subscription_card.py](../../tests/test_dashboard_subscription_card.py)：HTML 接线、XSS 转义静态检查、`SUB_META` 归并键与 `VendorType` 的一致性、内联渲染函数 Node vm 行为验证（三类行与行序、徽章分支、订阅数据缺失降级、拖拽并发守卫、恶意档位名与 tier 名转义）；拖拽状态机在最小假 DOM 上的 Node 行为验证（指针在列表外松开、多指重入、过期缓存补绘、PUT 失败回滚）。
+- [tests/test_dashboard_subscription_card.py](../../tests/test_dashboard_subscription_card.py)：HTML 接线、XSS 转义静态检查、`SUB_META` 归并键与 `VendorType` 的一致性、内联渲染函数 Node vm 行为验证（三类行与行序、徽章分支、订阅数据缺失降级、拖拽并发守卫、恶意档位名与 tier 名转义）；拖拽状态机在最小假 DOM 上的 Node 行为验证（指针在列表外松开、多指重入、过期缓存补绘、PUT 失败回滚、键盘调整与焦点保持、迟到的状态快照不覆盖行序、按住期间行被重绘）。

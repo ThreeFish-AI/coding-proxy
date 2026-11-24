@@ -511,7 +511,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .vendor-item {
       display: flex; align-items: center; justify-content: space-between;
       column-gap: 10px;
-      padding: 12px 14px;
+      /* 左内边距为 24px 宽的手柄留位（最小命中区），有无手柄的行头像左缘对齐 */
+      padding: 12px 14px 12px 38px;
       background: rgba(255,255,255,.015);
       border: 1px solid rgba(255,255,255,.04);
       border-radius: var(--radius-sm);
@@ -553,25 +554,27 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     /* ── 订阅状态：拖拽排序（Pointer Events，手柄发起） ── */
     .vendor-item.dragging { opacity: .4; }
     .drag-handle {
-      display: flex; align-items: center;
-      position: absolute; left: 0; top: 0; height: 100%;
-      justify-content: center;
+      display: flex; align-items: center; justify-content: center;
+      position: absolute; left: 14px; top: 0; width: 24px; height: 100%;
+      padding: 0; border: 0; background: none; font-family: inherit;
       color: var(--text-tertiary); font-size: 15px; line-height: 1;
-      cursor: grab; user-select: none; touch-action: none; padding: 0 4px 0 5px;
+      cursor: grab; user-select: none; touch-action: none;
       opacity: 0; transition: opacity .2s ease;
     }
     .drag-handle:active { cursor: grabbing; }
     .vendor-item:hover .drag-handle { opacity: .55; }
-    .drag-handle:hover { opacity: 1 !important; color: var(--text-secondary); }
+    .drag-handle:hover, .drag-handle:focus-visible { opacity: 1 !important; color: var(--text-secondary); }
+    /* 键盘焦点环不做淡入：调整优先级后行节点会被重建，淡入会让焦点环闪烁 */
+    .drag-handle:focus-visible { transition: none; }
     /* 同一实体一行：[标识] [订阅区] │ [路由区]。路由区不收缩，空间不足时由订阅区折行；
-       手柄脱离文档流落在行左内边距，有无 tier 的行头像左缘对齐 */
+       手柄脱离文档流落在行左内边距里 */
     .vendor-item[data-vendor] { position: relative; }
     .tier-zone { flex: 0 0 auto; }
     /* 路由区紧跟订阅区时以竖线分隔（列间距 10px + 左内边距 10px，竖线居中） */
     .sub-zone + .tier-zone { padding-left: 10px; border-left: 1px solid rgba(255,255,255,.22); }
     .tier-tag { font-size: 11px; font-weight: 500; color: var(--text-tertiary); white-space: nowrap; }
     .zone-note { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
-    .list-note { padding: 0 14px; font-size: 12px; }
+    .list-note { padding: 0 14px 0 38px; font-size: 12px; }
     .subscription-card .vendor-list + .vendor-list { margin-top: 8px; }
     .subscription-card .vendor-list + .vendor-list:empty { display: none; }
     @media (max-width: 960px) {
@@ -827,6 +830,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .btn-refresh:focus-visible,
     .page-btn:focus-visible,
     .btn-card-action:focus-visible,
+    .drag-handle:focus-visible,
     .copy-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
@@ -1577,6 +1581,12 @@ function renderQuotaBar(qg) {
     `</div></div></div>`;
 }
 
+// 供应商行头像首字母（撞字母时取前两个字母，见 SUB_INITIALS）
+function _tierInitial(name) {
+  const text = name || '?';
+  return SUB_INITIALS.has(text.charAt(0).toUpperCase()) ? text.charAt(0).toUpperCase() + text.charAt(1) : text.charAt(0).toUpperCase();
+}
+
 // 路由区徽章：熔断器 / 配额守卫 / 限速（本 proxy 的滑动窗口用量，与订阅区上游额度不同源）
 function _tierZoneHTML(tier) {
   const cb = tier.circuit_breaker || {};
@@ -1594,10 +1604,11 @@ function _tierZoneHTML(tier) {
 let _tierStatus = { tiers: [] };   // 最近一次 /api/status 载荷
 let _subData = { vendors: [] };    // 最近一次订阅载荷；tier 定向重渲染时复用，订阅徽章不被清空
 
-function updateVendorStatus(status) {
-  // 仅带 tier 数据的定向重渲染入口（refreshOverview / 拖拽回滚 / 复位后刷新），订阅区取缓存
+function updateVendorStatus(status, deferRender) {
+  // 仅带 tier 数据的定向重渲染入口（refreshOverview / 拖拽回滚 / 复位后刷新），订阅区取缓存。
+  // deferRender：随后还有订阅数据到达时延后重绘，由 updateSubscriptions 统一重绘
   _tierStatus = status || { tiers: [] };
-  _renderStatusRows();
+  if (!deferRender) _renderStatusRows();
 }
 
 // ── 订阅状态：订阅区（Claude Code / GLM / Antigravity）与合并渲染 ─────────────
@@ -1612,6 +1623,9 @@ const SUB_BY_TIER = {};
 Object.keys(SUB_META).forEach(function(key) {
   if (SUB_META[key].tier) SUB_BY_TIER[SUB_META[key].tier] = SUB_META[key];
 });
+// 供应商行头像首字母与订阅行头像相同时改用前两个字母（copilot → Co，alibaba → Al），
+// 只取决于固定的订阅头像集合，不随行序变化
+const SUB_INITIALS = new Set(Object.keys(SUB_META).map(function(key) { return SUB_META[key].initial; }));
 function fmtResetCountdown(resetEpoch) {
   if (!resetEpoch) return '';
   const diff = resetEpoch * 1000 - Date.now();
@@ -1681,15 +1695,17 @@ function _renderStatusRows() {
   });
 
   const reorderable = tiers.length >= 2;
-  const tierRows = tiers.map(function(tier) {
+  // 重绘会替换节点：焦点若在某个手柄上（键盘调整优先级），重绘后回到同一行
+  const focusedVendor = _focusedTierHandle(tierList);
+  const tierRows = tiers.map(function(tier, index) {
     const safeName = escapeHtml(tier.name || '');
-    // Pointer Events 重排：仅需 data-vendor 定位；手柄作为拖拽发起点（无原生 draggable）
-    const handle = reorderable ? `<div class="drag-handle" title="拖拽调整优先级">⠿</div>` : '';
-    const routeBadges = _tierZoneHTML(tier);
     const meta = SUB_BY_TIER[tier.name];
+    // Pointer Events 重排：仅需 data-vendor 定位；手柄是可聚焦按钮，键盘 ↑ / ↓ 与拖拽等价（无原生 draggable）
+    const handle = reorderable ? `<button type="button" class="drag-handle" title="拖拽或按 ↑ / ↓ 调整优先级" aria-keyshortcuts="ArrowUp ArrowDown" aria-label="调整 ${escapeHtml(meta ? meta.label : tier.name || '')} 的优先级：第 ${index + 1} 位，共 ${tiers.length} 个">⠿</button>` : '';
+    const routeBadges = _tierZoneHTML(tier);
     if (!meta) {
       // 无订阅对应的 tier 行：路由区加「供应商状态」标注，避免在订阅卡片里被读成订阅行
-      const initial = escapeHtml((tier.name || '?').charAt(0).toUpperCase());
+      const initial = escapeHtml(_tierInitial(tier.name));
       return `<div class="vendor-item" data-vendor="${safeName}">
         <div class="vendor-info">
           ${handle}
@@ -1734,6 +1750,27 @@ function _renderStatusRows() {
       <div class="vendor-badges tier-zone"><span class="zone-note" title="该订阅对应的供应商未启用或未加入路由链（tiers）">未加入路由链</span></div>
     </div>`;
   }).join('') + (vendors.length ? '' : '<div class="zone-note list-note">无订阅数据</div>');
+
+  if (focusedVendor) _focusTierHandle(tierList, focusedVendor);
+}
+
+// 焦点所在的供应商行（仅当焦点在该行的手柄上）
+function _focusedTierHandle(listEl) {
+  const el = document.activeElement;
+  const handle = el && el.closest ? el.closest('.drag-handle') : null;
+  const item = handle ? handle.closest('.vendor-item') : null;
+  return item ? item.dataset.vendor : null;
+}
+
+function _tierRowByName(listEl, name) {
+  return Array.from(listEl.querySelectorAll('.vendor-item[data-vendor]'))
+    .find(function(el) { return el.dataset.vendor === name; }) || null;
+}
+
+function _focusTierHandle(listEl, vendor) {
+  const item = _tierRowByName(listEl, vendor);
+  const handle = item ? item.querySelector('.drag-handle') : null;
+  if (handle) handle.focus({ preventScroll: true });
 }
 
 // ── 订阅状态：拖拽调整优先级（Pointer Events 重排，运行时生效，不重置配额） ────
@@ -1811,8 +1848,24 @@ function initTierDrag() {
     e.preventDefault();                                        // 阻止文本选择
   });
 
+  // 键盘调整优先级：手柄聚焦时 ↑ 上移、↓ 下移，与拖拽一行等价
+  list.addEventListener('keydown', function(e) {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const handle = e.target && e.target.closest && e.target.closest('.drag-handle');
+    if (!handle) return;
+    e.preventDefault();                                        // 方向键默认滚动页面
+    if (_tierDrag.inFlight || _tierDrag.srcEl) return;         // 上一次提交未决，或指针正按在手柄上
+    _tierMove(handle.closest('.vendor-item').dataset.vendor, e.key === 'ArrowUp' ? -1 : 1);
+  });
+
   list.addEventListener('pointermove', function(e) {
     if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
+    if (!_tierDrag.srcEl.isConnected) {
+      // 按住未移动期间行被重绘（如上一次重排后的刷新）：原节点已脱离，按名字重新定位后再继续
+      const item = _tierRowByName(list, _tierDrag.srcName);
+      if (!item) { _tierDragReset(); return; }
+      _tierDrag.srcEl = item;
+    }
     if (!_tierDrag.active) {
       if (Math.abs(e.clientY - _tierDrag.startY) < _TIER_DRAG_THRESHOLD) return;
       _tierDrag.active = true;                                 // 越阈值 → 正式进入拖拽
@@ -1849,6 +1902,18 @@ function initTierDrag() {
   });
 }
 
+// 键盘移动：乐观重排并立即重绘（焦点回到同一行），再走与拖拽相同的 PUT 与失败回滚
+function _tierMove(vendor, delta) {
+  const tiers = ((_tierStatus && _tierStatus.tiers) || []).slice();
+  const from = tiers.findIndex(function(tier) { return tier.name === vendor; });
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= tiers.length) return;      // 已在两端
+  [tiers[from], tiers[to]] = [tiers[to], tiers[from]];
+  _tierStatus.tiers = tiers;
+  _renderStatusRows();
+  persistTierOrder(tiers.map(function(tier) { return tier.name; }));
+}
+
 // 服务端已确认新顺序：先同步缓存，刷新落地前的重绘（刷新失败、或拖拽进行中被守卫跳过）才不会画回旧序
 function _syncTierOrder(names) {
   const tiers = (_tierStatus && _tierStatus.tiers) || [];
@@ -1856,6 +1921,25 @@ function _syncTierOrder(names) {
   tiers.forEach(function(tier) { byName[tier.name] = tier; });
   const next = names.map(function(name) { return byName[name]; });
   if (next.every(Boolean)) _tierStatus.tiers = next;
+}
+
+// 行序代次：每次 PUT 成功加一。请求发出后才被服务端确认的重排，其状态快照落地时行序已过期
+let _tierOrderGen = 0;
+let _tierConfirmedOrder = null;
+
+// 拉取路由状态。请求发出后若有新的重排被确认（连按方向键时两次 PUT 只隔几十毫秒），
+// 返回的快照只采用状态字段，行序以已确认的顺序为准，避免迟到的旧快照把行序画回上一步
+async function fetchTierStatus() {
+  const gen = _tierOrderGen;
+  const status = await fetchJSON('/api/status');
+  const tiers = (status && status.tiers) || [];
+  if (gen !== _tierOrderGen && _tierConfirmedOrder) {
+    const byName = {};
+    tiers.forEach(function(tier) { byName[tier.name] = tier; });
+    const next = _tierConfirmedOrder.map(function(name) { return byName[name]; });
+    if (next.length === tiers.length && next.every(Boolean)) status.tiers = next;
+  }
+  return status;
 }
 
 function persistTierOrder(names) {
@@ -1871,6 +1955,8 @@ function persistTierOrder(names) {
     if (res.ok) {
       // 服务端已更新顺序；刷新以同步请求趋势图等的排序。拖拽进行中也照常刷新，
       // 状态行的重绘由 _renderStatusRows 的守卫延后到拖拽结束
+      _tierConfirmedOrder = names;
+      _tierOrderGen++;
       _syncTierOrder(names);
       refreshOverview().catch(function() {});
     } else {
@@ -1886,7 +1972,7 @@ function persistTierOrder(names) {
 
 function _tierRevertToList() {
   // 回滚到服务端真实顺序（PUT 失败 → 服务端顺序未变）
-  fetchJSON('/api/status').then(function(status) {
+  fetchTierStatus().then(function(status) {
     updateVendorStatus(status);
   }).catch(function() {});
 }
@@ -1904,7 +1990,7 @@ function resetVendorStatus(btn) {
     if (!res.ok) throw new Error(res.status);
     btn.textContent = '✓ 已复位';
     // 复位已生效，状态刷新失败不应误报失败、诱导重复点击 → 单独吞掉
-    return fetchJSON('/api/status').then(function(status) {
+    return fetchTierStatus().then(function(status) {
       updateVendorStatus(status);                    // 定向重渲染，不等 10 分钟轮询
     }).catch(function() {});
   }).catch(function(e) {
@@ -2667,7 +2753,7 @@ async function refreshOverview() {
   const [summary, timeline, status, subs] = await Promise.all([
     fetchJSON('/api/dashboard/summary?days=' + days),
     fetchJSON('/api/dashboard/timeline?days=' + days),
-    fetchJSON('/api/status'),
+    fetchTierStatus(),
     // 订阅状态面板失败不拖垮整体刷新（服务端已隔离单家错误，这里兜底网络层）
     fetchJSON('/api/dashboard/subscriptions').catch(function () { return { vendors: [] }; }),
   ]);
@@ -2677,7 +2763,8 @@ async function refreshOverview() {
   }
 
   updateKPI(summary);
-  updateVendorStatus(status);
+  // 行数据与随后的订阅数据到齐后只重绘一次：连续替换行节点会让键盘焦点环闪烁
+  updateVendorStatus(status, true);
   updateModelCalling(status);
   updateSubscriptions(subs);
   updateChartTitles(days);

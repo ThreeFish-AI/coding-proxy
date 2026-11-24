@@ -214,6 +214,23 @@ _SUB_HARNESS = textwrap.dedent(
     assert.ok(copilotRow.includes('7d配额 12%'));
     assert.ok(!copilotRow.includes('sub-zone'));
 
+    // 头像首字母：供应商行与订阅行头像（C / G / A）撞字母时取前两个字母
+    assert.ok(copilotRow.includes('<div class="vendor-avatar">Co</div>'));
+    updateVendorStatus({ tiers: [tier('alibaba'), tier('minimax'), tier('kimi')] });
+    rows = tierHTML();
+    assert.ok(rows.includes('<div class="vendor-avatar">Al</div>'));
+    assert.ok(rows.includes('<div class="vendor-avatar">M</div>'));
+    assert.ok(rows.includes('<div class="vendor-avatar">K</div>'));
+
+    // 手柄是可聚焦按钮：读屏标签带当前位置，快捷键 ↑ / ↓
+    updateVendorStatus({ tiers: [tier('zhipu'), tier('copilot'), tier('anthropic')] });
+    rows = tierHTML();
+    assert.strictEqual((rows.match(/<button type="button" class="drag-handle"/g) || []).length, 3);
+    assert.ok(rows.includes('aria-keyshortcuts="ArrowUp ArrowDown"'));
+    assert.ok(rows.includes('aria-label="调整 GLM Coding Plan 的优先级：第 1 位，共 3 个"'));
+    assert.ok(rows.includes('aria-label="调整 copilot 的优先级：第 2 位，共 3 个"'));
+    assert.ok(rows.includes('aria-label="调整 Claude Code 订阅 的优先级：第 3 位，共 3 个"'));
+
     // 行序跟随运行时优先级（拖拽后 tiers 顺序变化）
     updateVendorStatus({ tiers: [tier('anthropic'), tier('zhipu')] });
     rows = tierHTML();
@@ -329,6 +346,10 @@ _ROW_FUNCTION_SIGNATURES = (
     "function cbStateClass(",
     "function cbStateLabel(",
     "function _tierZoneHTML(",
+    "function _tierInitial(",
+    "function _focusedTierHandle(",
+    "function _tierRowByName(",
+    "function _focusTierHandle(",
     "function _subZoneHTML(",
     "function updateVendorStatus(",
     "function updateSubscriptions(",
@@ -383,79 +404,124 @@ def test_subscription_render_behavior(client: TestClient, tmp_path):
     )
 
 
-# 最小假 DOM：只实现拖拽状态机与合并渲染用到的表面（子节点重排 / 事件监听 / 指针捕获 / 按序取行）。
+# 最小假 DOM：只实现拖拽状态机与合并渲染用到的表面。约束与真实 DOM 保持一致：行是列表的直接
+# 子节点，手柄是行下的独立节点；closest 沿父链匹配；innerHTML 重建后旧节点脱离文档，
+# 其上的焦点随之丢失，游离节点不能聚焦（否则把焦点还给旧节点的错误实现也能通过）。
 _DRAG_PRELUDE = textwrap.dedent(
     r"""
     class FakeEl {
-      constructor(kind, vendor) {
-        this.kind = kind; this.dataset = vendor ? { vendor: vendor } : {};
-        this.children = []; this.parentElement = null; this._h = {}; this.captured = null;
-        const set = new Set();
-        this.classList = { add: c => set.add(c), remove: c => set.delete(c), contains: c => set.has(c) };
+      constructor(kind, classes, vendor) {
+        this.kind = kind; this.classes = classes; this.dataset = vendor ? { vendor: vendor } : {};
+        this.children = []; this.parentElement = null; this._h = {};
+        this.isConnected = false; this.captured = null;
+        const state = new Set();
+        this.classList = { add: c => state.add(c), remove: c => state.delete(c), contains: c => state.has(c) };
+        this._state = state;
+      }
+      matches(sel) {
+        // 只支持本页用到的简单选择器：.class、[data-attr] 及其组合
+        const parts = Array.from(sel.matchAll(/\.([\w-]+)|\[data-([\w-]+)\]/g));
+        return parts.length > 0 && parts.every(m => (m[1]
+          ? (this.classes.includes(m[1]) || this._state.has(m[1]))
+          : this.dataset[m[2]] !== undefined));
+      }
+      closest(sel) {
+        for (let el = this; el; el = el.parentElement) if (el.matches(sel)) return el;
+        return null;
       }
       addEventListener(type, fn) { (this._h[type] = this._h[type] || []).push(fn); }
       fire(type, ev) { (this._h[type] || []).forEach(fn => fn(Object.assign({ preventDefault() {}, button: 0 }, ev))); }
-      setPointerCapture(id) { this.captured = id; }
+      setPointerCapture(id) { if (this.isConnected) this.captured = id; }
       releasePointerCapture() { this.captured = null; }
+      focus() {
+        if (this.isConnected && this.matches('.drag-handle')) document.activeElement = this;
+      }
       getBoundingClientRect() {
         const i = this.parentElement ? this.parentElement.children.indexOf(this) : 0;
         return { top: i * 56, height: 56 };
       }
+      _setConnected(flag) { this.isConnected = flag; this.children.forEach(c => c._setConnected(flag)); }
       querySelectorAll(sel) {
-        const items = this.children.filter(c => c.kind === 'item');
-        return sel.includes('[data-vendor]') ? items.filter(c => c.dataset.vendor) : items;
+        return this.children.filter(c => c.matches(sel))
+          .concat(...this.children.filter(c => c.kind === 'item').map(c => c.querySelectorAll(sel)));
       }
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
       _detach(node) {
         const p = node.parentElement;
         if (p) p.children.splice(p.children.indexOf(node), 1);
+        node.parentElement = null; node._setConnected(false);
       }
       insertBefore(node, ref) {
         this._detach(node);
         const i = ref ? this.children.indexOf(ref) : this.children.length;
-        this.children.splice(i, 0, node); node.parentElement = this;
+        this.children.splice(i, 0, node); node.parentElement = this; node._setConnected(true);
       }
-      appendChild(node) { this._detach(node); this.children.push(node); node.parentElement = this; }
+      appendChild(node) {
+        this._detach(node);
+        this.children.push(node); node.parentElement = this; node._setConnected(true);
+      }
       get lastElementChild() { return this.children[this.children.length - 1] || null; }
       get nextElementSibling() {
         const p = this.parentElement;
         return p ? (p.children[p.children.indexOf(this) + 1] || null) : null;
       }
-      closest() { return this; }
-      // 合并渲染写回 innerHTML：按 data-vendor 出现顺序重建行节点
+      // 合并渲染写回 innerHTML：按 data-vendor 出现顺序重建行节点，并按标记挂上手柄。
+      // 旧节点随之脱离文档，其上的焦点丢失；paints 记下每次重绘的行序
       set innerHTML(html) {
         this.html = html;
-        this.children = Array.from(
-          html.matchAll(/data-vendor="([^"]*)"/g),
-          m => new FakeEl('item', m[1])
-        );
+        const stale = this.children;
+        const marks = Array.from(html.matchAll(/data-vendor="([^"]*)"/g));
+        this.children = marks.map((m, i) => {
+          const item = new FakeEl('item', ['vendor-item'], m[1]);
+          if (html.slice(m.index, i + 1 < marks.length ? marks[i + 1].index : html.length).includes('class="drag-handle"')) {
+            const handle = new FakeEl('handle', ['drag-handle']);
+            handle.parentElement = item; item.children.push(handle);
+          }
+          return item;
+        });
         this.children.forEach(c => { c.parentElement = this; });
+        this._setConnected(this.isConnected);
+        stale.forEach(old => { old.parentElement = null; old._setConnected(false); });
+        if (stale.some(old => old === document.activeElement || old.children.includes(document.activeElement))) {
+          document.activeElement = null;
+        }
+        this.paints.push(marks.map(m => m[1]));
       }
       get innerHTML() { return this.html || ''; }
     }
-    const tierList = new FakeEl('list');
-    const subList = new FakeEl('list');
+    const tierList = new FakeEl('list', ['vendor-list']);
+    const subList = new FakeEl('list', ['vendor-list']);
+    tierList.isConnected = subList.isConnected = true;
+    tierList.paints = []; subList.paints = [];
     const docHandlers = {};
     const document = {
+      activeElement: null,
       getElementById(id) { return id === 'vendor-list' ? tierList : id === 'subscription-list' ? subList : null; },
       addEventListener(type, fn) { (docHandlers[type] = docHandlers[type] || []).push(fn); },
       // 指针在列表外松开：收尾事件只到达 document，不经过 #vendor-list
       releaseOutside(pointerId) { (docHandlers.pointerup || []).forEach(fn => fn({ pointerId: pointerId, preventDefault() {} })); },
     };
-    const handleOf = (vendor) => {
-      const item = tierList.querySelectorAll('[data-vendor]').find(el => el.dataset.vendor === vendor);
-      const handle = new FakeEl('handle');
-      handle.closest = sel => (sel === '.vendor-item' ? item : handle);
-      return handle;
+    const rowOf = (vendor) => tierList.querySelectorAll('.vendor-item[data-vendor]').find(el => el.dataset.vendor === vendor);
+    const handleOf = (vendor) => rowOf(vendor).querySelector('.drag-handle');
+    const focusHandle = (vendor) => handleOf(vendor).focus();
+    const focusedVendor = () => (document.activeElement ? document.activeElement.closest('.vendor-item').dataset.vendor : null);
+    // 在某行手柄上按键，返回是否拦截了默认行为
+    const keyDown = (vendor, key) => {
+      const ev = { key: key, defaultPrevented: false, preventDefault() { ev.defaultPrevented = true; } };
+      tierList.fire('keydown', Object.assign({ target: handleOf(vendor) }, ev));
+      return ev.defaultPrevented;
     };
     const domOrder = () => _tierCurrentOrder(tierList);
     const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+    const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     const server = { order: ['zhipu', 'anthropic', 'copilot'], cb: {} };
     const serverStatus = () => ({ tiers: server.order.map(name => ({
       name: name,
       circuit_breaker: { state: server.cb[name] || 'closed', failure_count: server.cb[name] ? 2 : 0 },
       rate_limit: { is_rate_limited: false } })) });
     const puts = [];
-    const pending = { gate: null, fail: false };
+    const pending = { gate: null, fail: false, statusDelay: 0 };
     let refreshFails = false;
     function fetch(url, opts) {
       if (url !== '/api/tier-order') throw new Error('unexpected fetch: ' + url);
@@ -472,11 +538,15 @@ _DRAG_PRELUDE = textwrap.dedent(
         if (gate) gate.settle = settle; else settle();      // 扣住响应，由用例决定何时返回
       });
     }
-    function fetchJSON(url) { return Promise.resolve(url === '/api/status' ? serverStatus() : {}); }
+    function fetchJSON(url) {
+      if (url !== '/api/status') return Promise.resolve({});
+      const snapshot = serverStatus();                      // 响应内容取请求发出那一刻的服务端状态
+      return pending.statusDelay > 0 ? wait(pending.statusDelay).then(() => snapshot) : Promise.resolve(snapshot);
+    }
     // 与页面一致：任一请求失败则整次刷新失败，updateVendorStatus 不会被调用
     async function refreshOverview() {
       if (refreshFails) throw new Error('refresh failed');
-      updateVendorStatus(await fetchJSON('/api/status'));
+      updateVendorStatus(await fetchTierStatus(), true);
       updateSubscriptions({ vendors: [] });
     }
     """
@@ -487,18 +557,17 @@ _DRAG_HARNESS = textwrap.dedent(
     (async () => {
       const pointerDown = (vendor, id) => tierList.fire('pointerdown', { target: handleOf(vendor), pointerId: id, clientY: 100 });
       const pointerMove = (id, y) => tierList.fire('pointermove', { pointerId: id, clientY: y });
-      // 收尾事件经冒泡到达 document，统一从 document 侧派发
-      const pointerUp = (id) => document.releaseOutside(id);
-      const rowTop = (vendor) => tierList.querySelectorAll('[data-vendor]').find(el => el.dataset.vendor === vendor).getBoundingClientRect().top;
+      const pointerUp = (id) => document.releaseOutside(id);  // 收尾事件经冒泡到达 document
+      const rowTop = (vendor) => rowOf(vendor).getBoundingClientRect().top;
       const startDrag = async (vendor, id) => {
         pointerDown(vendor, id);
         pointerMove(id, 112);                                   // 越过 4px 阈值
       };
       const reset = async (order) => {
-        server.order = order.slice();
-        server.cb = {};
-        refreshFails = false; pending.fail = false; pending.gate = null;
-        puts.length = 0;
+        server.order = order.slice(); server.cb = {};
+        refreshFails = false; pending.fail = false; pending.gate = null; pending.statusDelay = 0;
+        _tierConfirmedOrder = null; _tierOrderGen = 0;
+        puts.length = 0; tierList.paints.length = 0;
         await refreshOverview();
       };
 
@@ -514,7 +583,7 @@ _DRAG_HARNESS = textwrap.dedent(
       assert.deepStrictEqual(server.order, ['anthropic', 'zhipu', 'copilot']);
       assert.deepStrictEqual(domOrder(), server.order);
       assert.strictEqual(_tierDrag.active, false);
-      assert.strictEqual(tierList.querySelectorAll('[data-vendor]').filter(el => el.classList.contains('dragging')).length, 0);
+      assert.strictEqual(tierList.querySelectorAll('.vendor-item').filter(el => el.classList.contains('dragging')).length, 0);
 
       // 二、拖拽进行中第二个指针按在另一行手柄上：不得劫持（触屏多指）
       await reset(['zhipu', 'anthropic', 'copilot']);
@@ -586,6 +655,132 @@ _DRAG_HARNESS = textwrap.dedent(
       await tick();
       assert.strictEqual(puts.length, 0);
       assert.deepStrictEqual(domOrder(), ['zhipu', 'anthropic', 'copilot']);
+
+      // 七、键盘调整优先级：手柄聚焦后 ↑ 上移，乐观重绘、焦点回到同一行的新手柄、提交新顺序
+      await reset(['zhipu', 'anthropic', 'copilot']);
+      focusHandle('copilot');
+      assert.strictEqual(focusedVendor(), 'copilot');
+      assert.ok(tierList.innerHTML.includes('aria-label="调整 copilot 的优先级：第 3 位，共 3 个"'));
+      const paintsBeforeKey = tierList.paints.length;
+      assert.strictEqual(keyDown('copilot', 'ArrowUp'), true);   // 拦截方向键的页面滚动
+      assert.deepStrictEqual(domOrder(), ['zhipu', 'copilot', 'anthropic']);
+      assert.strictEqual(tierList.paints.length, paintsBeforeKey + 1);
+      assert.strictEqual(focusedVendor(), 'copilot');
+      assert.strictEqual(document.activeElement, handleOf('copilot'));   // 聚焦的是重建后的新节点
+      assert.ok(tierList.innerHTML.includes('aria-label="调整 copilot 的优先级：第 2 位，共 3 个"'));
+      await tick(); await tick(); await tick();
+      assert.deepStrictEqual(server.order, ['zhipu', 'copilot', 'anthropic']);
+      assert.strictEqual(tierList.paints.length, paintsBeforeKey + 2);   // PUT 成功后的刷新只重绘一次
+      assert.strictEqual(focusedVendor(), 'copilot');                     // 刷新重绘后焦点仍在原行
+      assert.deepStrictEqual(puts, [['zhipu', 'copilot', 'anthropic']]);
+      keyDown('copilot', 'ArrowDown');                            // ↓ 下移回原位
+      assert.deepStrictEqual(domOrder(), ['zhipu', 'anthropic', 'copilot']);
+      await tick(); await tick(); await tick();
+      assert.deepStrictEqual(server.order, ['zhipu', 'anthropic', 'copilot']);
+      assert.strictEqual(focusedVendor(), 'copilot');
+
+      // 八、两端不再移动：方向键仍被拦截，但不发 PUT、顺序不变
+      await reset(['zhipu', 'anthropic', 'copilot']);
+      focusHandle('zhipu');
+      assert.strictEqual(keyDown('zhipu', 'ArrowUp'), true);
+      focusHandle('copilot');
+      assert.strictEqual(keyDown('copilot', 'ArrowDown'), true);
+      assert.strictEqual(puts.length, 0);
+      assert.deepStrictEqual(domOrder(), server.order);
+
+      // 九、PUT 失败：回滚到服务端顺序，焦点仍在该行
+      await reset(['zhipu', 'anthropic', 'copilot']);
+      pending.fail = true;
+      focusHandle('anthropic');
+      keyDown('anthropic', 'ArrowUp');
+      assert.deepStrictEqual(domOrder(), ['anthropic', 'zhipu', 'copilot']);
+      await tick(); await tick(); await tick();
+      assert.deepStrictEqual(domOrder(), ['zhipu', 'anthropic', 'copilot']);
+      assert.strictEqual(focusedVendor(), 'anthropic');
+
+      // 十、其它按键不拦截默认行为；上一次提交未决时方向键仍被拦截但不移动
+      await reset(['zhipu', 'anthropic', 'copilot']);
+      focusHandle('zhipu');
+      assert.strictEqual(keyDown('zhipu', 'Tab'), false);
+      assert.strictEqual(keyDown('zhipu', 'Enter'), false);
+      const heldPut = {}; pending.gate = heldPut;                // 扣住 PUT 响应
+      focusHandle('copilot');
+      keyDown('copilot', 'ArrowUp');
+      assert.strictEqual(_tierDrag.inFlight, true);
+      assert.strictEqual(keyDown('copilot', 'ArrowUp'), true);   // 未决期间：拦截滚动
+      assert.deepStrictEqual(domOrder(), ['zhipu', 'copilot', 'anthropic']);   // 但不叠加移动
+      assert.deepStrictEqual(_tierStatus.tiers.map(t => t.name), domOrder());   // 被忽略的按键不改动缓存顺序
+      await tick();
+      assert.strictEqual(puts.length, 1);
+      heldPut.settle();
+      await tick(); await tick(); await tick();
+      assert.deepStrictEqual(domOrder(), server.order);
+      assert.strictEqual(focusedVendor(), 'copilot');
+
+      // 十一、指针按在另一行手柄上时按方向键：不移动（指针与键盘不抢同一次重排）
+      await reset(['zhipu', 'anthropic', 'copilot']);
+      focusHandle('copilot');
+      pointerDown('anthropic', 1);
+      assert.strictEqual(keyDown('copilot', 'ArrowUp'), true);
+      assert.deepStrictEqual(domOrder(), server.order);
+      pointerUp(1);
+      await tick();
+      assert.strictEqual(puts.length, 0);
+
+      // 十二、连按方向键：上一次提交触发的状态请求迟到时，不得把行序画回上一步
+      await reset(['zhipu', 'anthropic', 'copilot']);
+      pending.statusDelay = 40;                                 // 状态请求比 PUT 慢
+      focusHandle('zhipu');
+      keyDown('zhipu', 'ArrowDown');                             // 第 1 步：[anthropic, zhipu, copilot]
+      await tick(); await tick();                                // PUT#1 成功，其状态请求已在途
+      assert.deepStrictEqual(server.order, ['anthropic', 'zhipu', 'copilot']);
+      focusHandle('zhipu');
+      keyDown('zhipu', 'ArrowDown');                             // 第 2 步：[anthropic, copilot, zhipu]
+      await tick(); await tick();                                // PUT#2 成功
+      assert.deepStrictEqual(server.order, ['anthropic', 'copilot', 'zhipu']);
+      await wait(150);                                           // 两次状态请求先后返回
+      assert.deepStrictEqual(domOrder(), server.order);
+      const step2 = ['anthropic', 'copilot', 'zhipu'];
+      const firstStep2 = tierList.paints.findIndex(p => same(p, step2));
+      assert.ok(firstStep2 >= 0);
+      assert.ok(tierList.paints.slice(firstStep2).every(p => same(p, step2)),   // 第 2 步之后不再画回第 1 步
+        JSON.stringify(tierList.paints));
+      pending.statusDelay = 0;
+      assert.strictEqual(focusedVendor(), 'zhipu');
+
+      // 十三、按住手柄未移动时行被重绘：原节点已脱离，按名字重新定位后再拖，不产生重复行
+      await reset(['zhipu', 'anthropic', 'copilot']);
+      pointerDown('copilot', 1);
+      const held = _tierDrag.srcEl;
+      await refreshOverview();                                   // 例如上一次重排后的刷新此时落地
+      assert.strictEqual(held.isConnected, false);
+      pointerMove(1, 112);
+      pointerMove(1, rowTop('anthropic') - 10);
+      assert.deepStrictEqual(domOrder(), ['zhipu', 'copilot', 'anthropic']);
+      assert.strictEqual(_tierDrag.srcEl, rowOf('copilot'));
+      pointerUp(1);
+      await tick(); await tick();
+      assert.deepStrictEqual(puts, [['zhipu', 'copilot', 'anthropic']]);       // 载荷无重复 vendor
+      assert.deepStrictEqual(domOrder(), server.order);
+
+      // 十四、按住的行在重绘后已不存在（tier 被移除）：本次拖拽作废
+      await reset(['zhipu', 'anthropic', 'copilot']);
+      pointerDown('copilot', 1);
+      updateVendorStatus({ tiers: [tier('zhipu'), tier('anthropic')] });
+      pointerMove(1, 112);
+      assert.strictEqual(_tierDrag.active, false);
+      assert.strictEqual(_tierDrag.srcEl, null);
+      pointerUp(1);
+      await tick();
+      assert.strictEqual(puts.length, 0);
+
+      // 十五、刷新只重绘一次：行数据与订阅数据到齐后统一重绘
+      await reset(['zhipu', 'anthropic', 'copilot']);
+      const paints0 = tierList.paints.length;
+      updateVendorStatus(serverStatus(), true);                  // 延后重绘
+      assert.strictEqual(tierList.paints.length, paints0);
+      updateSubscriptions({ vendors: [] });
+      assert.strictEqual(tierList.paints.length, paints0 + 1);
       console.log('tier drag harness OK');
     })().catch(err => { console.error(err); process.exit(1); });
     """
@@ -594,11 +789,14 @@ _DRAG_HARNESS = textwrap.dedent(
 
 @pytest.mark.skipif(_NODE is None, reason="node 不可用")
 def test_tier_drag_behavior(client: TestClient, tmp_path):
-    """拖拽状态机在最小假 DOM 上执行：列表外松开、多指重入、过期缓存补绘、失败回滚."""
+    """拖拽状态机在最小假 DOM 上执行：列表外松开、多指重入、过期缓存补绘、失败回滚、键盘调整."""
     script = _inline_script(client.get("/dashboard").text)
     drag_sources = [
         _extract_block(script, "const _tierDrag = {", "};"),
         _extract_block(script, "const _TIER_DRAG_THRESHOLD = ", ";"),
+        _extract_block(
+            script, "let _tierOrderGen = 0;", "let _tierConfirmedOrder = null;"
+        ),
     ]
     drag_sources += [
         _extract_function(script, signature)
@@ -607,12 +805,16 @@ def test_tier_drag_behavior(client: TestClient, tmp_path):
             "function _tierDragMoveTo(",
             "function _tierDragReset(",
             "function initTierDrag(",
+            "function _tierMove(",
             "function _syncTierOrder(",
+            "async function fetchTierStatus(",
             "function persistTierOrder(",
             "function _tierRevertToList(",
         )
     ]
     prelude = (
+        "const tier = (name) => ({ name: name, circuit_breaker: { state: 'closed', "
+        "failure_count: 0 }, rate_limit: { is_rate_limited: false } });\n"
         "let _tierStatus = { tiers: [] };\n"
         "let _subData = { vendors: [] };\n" + _meta_block(script)
     )
@@ -626,3 +828,25 @@ def test_tier_drag_behavior(client: TestClient, tmp_path):
         + _DRAG_HARNESS,
         "tier drag harness OK",
     )
+
+
+def test_status_refresh_guards_confirmed_order(client: TestClient):
+    """状态请求发出后才被服务端确认的重排：迟到的快照不得把行序画回上一步（连按方向键）.
+
+    fetchTierStatus 记下请求发出时的行序代次，返回时若代次已变，只采用快照里的状态字段，
+    行序以已确认的顺序为准；三处拉取路由状态的入口都必须走它。
+    """
+    script = _inline_script(client.get("/dashboard").text)
+    guard = _extract_function(script, "function fetchTierStatus(")
+    assert "gen !== _tierOrderGen" in guard
+    assert "_tierConfirmedOrder.map(" in guard
+    put = _extract_function(script, "function persistTierOrder(")
+    assert "_tierConfirmedOrder = names;" in put and "_tierOrderGen++;" in put
+    refresh = _extract_function(script, "async function refreshOverview(")
+    assert "fetchTierStatus()," in refresh
+    # 行数据与订阅数据到齐后只重绘一次（连续替换行节点会让键盘焦点环闪烁）
+    assert "updateVendorStatus(status, true);" in refresh
+    for signature in ("function _tierRevertToList(", "function resetVendorStatus("):
+        source = _extract_function(script, signature)
+        assert "fetchTierStatus()" in source
+        assert "fetchJSON('/api/status')" not in source
