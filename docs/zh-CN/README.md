@@ -30,7 +30,7 @@
 ## 🌟 核心特性 (Core Features)
 
 <div align="center">
-    <img src="../../assets/dashboard-v0.4.0.png">
+    <img src="https://raw.githubusercontent.com/ThreeFish-AI/coding-proxy/master/assets/dashboard/overview.png" alt="coding-proxy Dashboard Overview">
 </div>
 
 - **⛓️ N-tier 链式故障转移 (Failover)**：自主降序序列，支持 Claude 官方 Plans，以及 GitHub Copilot、Google Antigravity、智谱、MiniMax、阿里千问、小米、Kimi、豆包等的 Coding Plan。

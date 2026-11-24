@@ -1291,16 +1291,42 @@ def test_dashboard_serves_pointer_drag_reorder_and_no_cache():
         assert "addEventListener('dragstart'" not in html
 
 
+def test_dashboard_drag_survives_release_outside_list():
+    """拖拽行被 DOM 重排后浏览器会释放指针捕获，指针在列表外松开时收尾事件不经过 #vendor-list.
+
+    收尾监听须挂 document，且每次重排后补捕获；否则 _tierDrag.active 永久为真、
+    行停在 .dragging 且列表不再重渲染。
+    """
+    with _make_app() as client:
+        html = client.get("/dashboard").text
+        assert "document.addEventListener('pointerup'" in html
+        assert "document.addEventListener('pointercancel'" in html
+        assert "list.addEventListener('pointerup'" not in html
+        assert "list.addEventListener('pointercancel'" not in html
+        # pointermove 内先重排再补捕获；拖拽进行中第二个指针按下不劫持
+        move = html[html.index("list.addEventListener('pointermove'") :]
+        move = move[: move.index("function _tierDragFinish(")]
+        assert move.index("_tierDragMoveTo(list, e.clientY);") < move.index(
+            "setPointerCapture(e.pointerId)"
+        )
+        assert "if (_tierDrag.srcEl) return;" in html
+
+
 def test_dashboard_serves_vendor_status_reset_control():
-    """供应商状态卡片标题栏交付「状态复位」按钮，且走无 body 的 POST /api/reset.
+    """「订阅状态」卡片标题栏交付「状态复位」按钮（复位供应商路由状态），走无 body 的 POST /api/reset.
 
     无 body 是语义关键：服务端据此跳过重排序（routes.py 的 vendor_names 守卫），
     因此复位不会改动供应商优先级。
     """
     with _make_app() as client:
         html = client.get("/dashboard").text
-        # 按钮随卡片标题栏交付
+        # 按钮随卡片标题栏交付（位于列表容器之前，即标题栏内）
         assert 'id="btn-vendor-reset"' in html
+        assert (
+            html.index('id="subscription-card"')
+            < html.index('id="btn-vendor-reset"')
+            < html.index('id="vendor-list"')
+        )
         assert "btn-card-action" in html
         assert "resetVendorStatus(this)" in html
         # 处理器在位，且为无 body 的 POST（不触发重排序）

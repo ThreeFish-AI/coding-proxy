@@ -26,6 +26,7 @@
     - [12.1 GET /dashboard](#121-get-dashboard)
     - [12.2 GET /api/dashboard/summary](#122-get-apidashboardsummary)
     - [12.3 GET /api/dashboard/timeline](#123-get-apidashboardtimeline)
+    - [12.4 GET /api/dashboard/subscriptions](#124-get-apidashboardsubscriptions)
   - [13. 原生 API 透传端点](#13-原生-api-透传端点)
   - [14. Antigravity 客户端透传端点](#14-antigravity-客户端透传端点)
 
@@ -396,6 +397,16 @@ curl "http://127.0.0.1:3392/api/dashboard/timeline?days=30"
 | `days` | int  | `7`    | 统计天数（1~90） |
 
 **返回结构**：`period`（`"day"`）、`count`（天数）、`rows`（按天分组的用量数组）。
+
+### 12.4 GET /api/dashboard/subscriptions
+
+返回三家订阅（Claude Code / GLM / Antigravity）的档位与用量窗口，供 [订阅状态卡片](./dashboard.md#订阅状态)渲染。
+
+```bash
+curl http://127.0.0.1:3392/api/dashboard/subscriptions
+```
+
+**返回结构**：`vendors`（订阅条目数组，固定 3 条：`claude`、`glm`、`antigravity`），每条含 `key`、`plan`（可选，档位名）、`status`（`ok` / `waiting` / `not_configured` / `error`；claude 条目有被动快照时透传上游响应头原值，如 `allowed`）、`error`（仅查询失败时有）、`windows`（用量窗口：`id`、`label`、`used_percent`、`reset_epoch`）。订阅服务未装配或聚合异常时返回空的 `vendors`，HTTP 状态仍为 200。上游契约与错误隔离见 [订阅状态面板](../arch/subscription-status.md)。
 
 ## 13. 原生 API 透传端点
 
