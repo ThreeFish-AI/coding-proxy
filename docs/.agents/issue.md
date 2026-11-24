@@ -21,6 +21,7 @@
 | I-009 | Dashboard Sessions 页 `Tokens` 列漏算缓存 Token | ✅ 已完成 | 2026-05-16 | [详情](#I-009) |
 | I-010 | Zhipu vendor 间歇性 `[1210][API 调用参数有误]` 拒绝（诊断阶段） | ✅ 已完成 | 2026-05-26 | [详情](#I-010) |
 | I-011 | Antigravity 桌面 2.32.1 模型流绕过 `CLOUD_CODE_URL` 通道（前端只见控制面调用次数，无模型/Token 指标） | ✅ 已完成 | 2026-11-16 | [详情](#I-011) |
+| I-012 | Dashboard 供应商行拖拽在列表外松开后卡死（行停在半透明，列表不再刷新） | ✅ 已完成 | 2026-11-24 | [详情](#I-012) |
 
 ---
 
@@ -487,5 +488,30 @@ v0.6.2 用户报障：Antigravity 经 `CLOUD_CODE_URL=http://127.0.0.1:3392/api/
 **同类问题影响与处理注意事项**
 
 Antigravity 模型级用量统计当前唯一可用通道为②（agy CLI + `GEMINI_API_KEY`）；桌面模型流捕获只剩 MITM（自签 CA）或改 `app.asar`（升级即失效），属产品级投入未见授权不做。若未来 Antigravity 版本恢复 v1internal 模型面经 `CLOUD_CODE_URL`，gateway 与记账链路无需改动即可承接。
+
+---
+
+<a id="I-012"></a>
+## I-012：Dashboard 供应商行拖拽在列表外松开后卡死（行停在半透明，列表不再刷新）
+
+**问题描述**
+
+Overview 页拖动供应商行调整优先级：行越过相邻行（发生一次 DOM 重排）后，指针移到列表外再松开鼠标，被拖行停在半透明（`.dragging`），新顺序不提交；此后状态复位与 10 分钟轮询都不再重绘该列表，刷新页面才恢复。
+
+**表因根因**
+
+表因：`pointerup` / `pointercancel` 只挂在列表容器 `#vendor-list` 上，指针在列表外松开时收尾事件不经过容器，`_tierDragFinish` 不执行，`_tierDrag.active` 永久为真。根因：`pointerdown` 时对被拖行调用 `setPointerCapture`，但拖拽重排会把该行从 DOM 中移走再插回，浏览器随即释放指针捕获（Chromium 实测重排后立刻触发 `lostpointercapture`）；代码注释「捕获后 DOM 重排不丢事件」与实际行为相反。验证覆盖面同样有缺口：#269 的原生 DnD 从未做过浏览器验证，#271 改用 Pointer Events 时的实机验证只覆盖指针在列表内松开的常规路径，未覆盖越过相邻行后在列表外松开。
+
+**处理方式**
+
+`initTierDrag` 加固三处：`pointermove` 每次重排后补一次 `setPointerCapture`；`pointerup` / `pointercancel` 改挂 `document`；`pointerdown` 在已有指针在拖时忽略新的按下（触屏多指不劫持拖拽）。`tests/test_app_routes.py` 补静态守卫（监听挂载点、补捕获位置、重入守卫），`tests/test_dashboard_subscription_card.py` 在最小假 DOM 上执行拖拽状态机（列表外松开 / 多指重入 / 过期缓存补绘 / 失败回滚），逐项做过变异验证（撤掉任一处修复都有用例变红）。对照验证（隔离实例，Playwright 真实指针事件，基线与修复版喂同一份数据）：基线松开后 `_tierDrag.active` 仍为 true 且无 PUT，修复版正常收尾并提交 `PUT /api/tier-order`。
+
+**后续防范**
+
+拖拽与指针捕获类交互必须有浏览器实测：合成事件不触发真实指针捕获，Node vm 测不出。DOM 重排会释放捕获属浏览器既定行为，依赖捕获的交互在重排后要补捕获，收尾监听挂 `document`。验证用例要覆盖指针移出容器后松开、多指重入等边界路径，不能只测常规拖拽。
+
+**同类问题影响与处理注意事项**
+
+同类风险：凡「`setPointerCapture` + 移动捕获元素自身」的实现都会中招（拖拽排序、可拖浮层）。处理时只动监听挂载点与补捕获，不改既有 Pointer Events 状态机（手柄发起、4px 阈值、顺序未变不发 PUT、失败回滚均保持不变）。
 
 ---

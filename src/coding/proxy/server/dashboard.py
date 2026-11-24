@@ -1717,12 +1717,13 @@ function initTierDrag() {
     if (!handle) return;                                       // 仅从手柄发起，避免误触与文本选择
     const item = handle.closest('.vendor-item');
     if (!item || !item.dataset.vendor) return;
+    if (_tierDrag.srcEl) return;                               // 已有指针在拖：忽略第二个指针（触屏多指）
     if (list.querySelectorAll('.vendor-item').length < 2) return;
     _tierDrag.srcEl = item;
     _tierDrag.srcName = item.dataset.vendor;
     _tierDrag.pointerId = e.pointerId;
     _tierDrag.startY = e.clientY;
-    try { item.setPointerCapture(e.pointerId); } catch (_) {}  // 捕获后 DOM 重排不丢事件
+    try { item.setPointerCapture(e.pointerId); } catch (_) {}  // 捕获后指针移出列表仍持续收到 pointermove
     e.preventDefault();                                        // 阻止文本选择
   });
 
@@ -1736,6 +1737,8 @@ function initTierDrag() {
     }
     e.preventDefault();
     _tierDragMoveTo(list, e.clientY);
+    // 行被 DOM 重排后浏览器会释放指针捕获，每次重排后补捕获
+    try { _tierDrag.srcEl.setPointerCapture(e.pointerId); } catch (_) {}
   });
 
   function _tierDragFinish(commit) {
@@ -1750,11 +1753,12 @@ function initTierDrag() {
     persistTierOrder(order);                                   // 提交新顺序（PUT + 失败回滚）
   }
 
-  list.addEventListener('pointerup', function(e) {
+  // 收尾监听挂 document：指针在列表外松开时事件不经过 #vendor-list
+  document.addEventListener('pointerup', function(e) {
     if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
     _tierDragFinish(true);
   });
-  list.addEventListener('pointercancel', function(e) {
+  document.addEventListener('pointercancel', function(e) {
     if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
     _tierDragFinish(false);
   });
