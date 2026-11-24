@@ -1313,15 +1313,20 @@ def test_dashboard_drag_survives_release_outside_list():
 
 
 def test_dashboard_serves_vendor_status_reset_control():
-    """供应商状态卡片标题栏交付「状态复位」按钮，且走无 body 的 POST /api/reset.
+    """「订阅状态」卡片标题栏交付「状态复位」按钮（复位供应商路由状态），走无 body 的 POST /api/reset.
 
     无 body 是语义关键：服务端据此跳过重排序（routes.py 的 vendor_names 守卫），
     因此复位不会改动供应商优先级。
     """
     with _make_app() as client:
         html = client.get("/dashboard").text
-        # 按钮随卡片标题栏交付
+        # 按钮随卡片标题栏交付（位于列表容器之前，即标题栏内）
         assert 'id="btn-vendor-reset"' in html
+        assert (
+            html.index('id="subscription-card"')
+            < html.index('id="btn-vendor-reset"')
+            < html.index('id="vendor-list"')
+        )
         assert "btn-card-action" in html
         assert "resetVendorStatus(this)" in html
         # 处理器在位，且为无 body 的 POST（不触发重排序）

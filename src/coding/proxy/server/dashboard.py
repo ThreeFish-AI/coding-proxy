@@ -421,25 +421,18 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .color-purple { color: var(--accent-purple); }
     .color-orange { color: var(--accent-orange); }
     /* ── 图表网格 ── */
-    .charts-grid {
-      display: grid;
-      grid-template-columns: 1fr 2fr;
-      gap: 16px;
-      margin-bottom: var(--gap-section);
-    }
     .charts-grid-2 {
       display: grid;
       grid-template-columns: 1fr 2fr;
       gap: 16px;
       margin-bottom: var(--gap-section);
     }
-    .charts-grid > .card,
     .charts-grid-2 > .card {
       min-width: 0;
       overflow: hidden;
     }
     @media (max-width: 960px) {
-      .charts-grid, .charts-grid-2 { grid-template-columns: 1fr; }
+      .charts-grid-2 { grid-template-columns: 1fr; }
     }
     .card {
       background: rgba(18,22,30,.7);
@@ -513,10 +506,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       .html-legend-wrap { flex: none; max-height: 120px; padding: 8px 0 0 0; }
       .html-legend-wrap ul { flex-direction: row; flex-wrap: wrap; gap: 4px 10px; }
     }
-    /* ── 供应商状态 ── */
+    /* ── 订阅状态（订阅档位 / 用量窗口 × 路由 tier 运行状态）── */
     .vendor-list { display: flex; flex-direction: column; gap: 8px; }
     .vendor-item {
       display: flex; align-items: center; justify-content: space-between;
+      column-gap: 10px;
       padding: 12px 14px;
       background: rgba(255,255,255,.015);
       border: 1px solid rgba(255,255,255,.04);
@@ -524,7 +518,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       transition: all .2s ease;
     }
     .vendor-item:hover { background: rgba(255,255,255,.03); border-color: rgba(255,255,255,.08); }
-    .vendor-info { display: flex; align-items: center; gap: 10px; }
+    /* 标识区占满余宽且不收缩：空间不足时只由订阅区折行，行名不被挤成多行 */
+    .vendor-info { display: flex; align-items: center; gap: 10px; flex: 1 0 auto; }
     .vendor-avatar {
       width: 30px; height: 30px; border-radius: 8px;
       background: var(--gradient-primary);
@@ -555,17 +550,37 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       height: 100%; border-radius: 2px;
       transition: width .6s cubic-bezier(.4,0,.2,1);
     }
-    /* ── 供应商状态：拖拽排序（Pointer Events，手柄发起） ── */
+    /* ── 订阅状态：拖拽排序（Pointer Events，手柄发起） ── */
     .vendor-item.dragging { opacity: .4; }
     .drag-handle {
-      display: flex; align-items: center; flex-shrink: 0;
+      display: flex; align-items: center;
+      position: absolute; left: 0; top: 0; height: 100%;
+      justify-content: center;
       color: var(--text-tertiary); font-size: 15px; line-height: 1;
-      cursor: grab; user-select: none; touch-action: none; padding: 0 2px;
+      cursor: grab; user-select: none; touch-action: none; padding: 0 4px 0 5px;
       opacity: 0; transition: opacity .2s ease;
     }
     .drag-handle:active { cursor: grabbing; }
     .vendor-item:hover .drag-handle { opacity: .55; }
     .drag-handle:hover { opacity: 1 !important; color: var(--text-secondary); }
+    /* 同一实体一行：[标识] [订阅区] │ [路由区]。路由区不收缩，空间不足时由订阅区折行；
+       手柄脱离文档流落在行左内边距，有无 tier 的行头像左缘对齐 */
+    .vendor-item[data-vendor] { position: relative; }
+    .tier-zone { flex: 0 0 auto; }
+    /* 路由区紧跟订阅区时以竖线分隔（列间距 10px + 左内边距 10px，竖线居中） */
+    .sub-zone + .tier-zone { padding-left: 10px; border-left: 1px solid rgba(255,255,255,.22); }
+    .tier-tag { font-size: 11px; font-weight: 500; color: var(--text-tertiary); white-space: nowrap; }
+    .zone-note { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+    .list-note { padding: 0 14px; font-size: 12px; }
+    .subscription-card .vendor-list + .vendor-list { margin-top: 8px; }
+    .subscription-card .vendor-list + .vendor-list:empty { display: none; }
+    @media (max-width: 960px) {
+      /* 窄屏：标识与路由区占首行，订阅区独占次行；徽章放不下时整体换行而非内部挤压 */
+      .subscription-card .vendor-item { flex-wrap: wrap; row-gap: 6px; }
+      .has-sub > .sub-zone { order: 3; flex: 1 1 100%; }
+      .has-sub > .tier-zone { order: 2; flex: 0 1 auto; }
+      .sub-zone + .tier-zone { padding-left: 0; border-left: 0; }
+    }
     /* ── 故障转移表 ── */
     .ft-table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
@@ -818,7 +833,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     /* ── Model Calling 实时状态 ────────────────────────── */
     .model-calling-card,
-    .subscription-card {
+    .subscription-card,
+    .timeline-card {
       margin-bottom: var(--gap-section);
     }
     .model-token-card {
@@ -1031,27 +1047,20 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- 订阅状态（Claude Code / GLM / Antigravity） -->
+  <!-- 订阅状态：订阅档位 / 用量窗口 + 路由 tier 运行状态，同一实体合并为一行 -->
   <div class="card subscription-card" id="subscription-card">
-    <div class="card-title">🎫 订阅状态</div>
-    <div class="vendor-list" id="subscription-list">
-      <div class="mc-empty">加载中…</div>
+    <div class="card-title">🎫 订阅状态<button type="button" class="btn-card-action" id="btn-vendor-reset" onclick="resetVendorStatus(this)" aria-label="状态复位：复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）" title="复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）">⟲ 状态复位</button></div>
+    <div class="vendor-list" id="vendor-list">
+      <div class="empty">加载中…</div>
     </div>
+    <div class="vendor-list" id="subscription-list"></div>
   </div>
 
-  <!-- 供应商状态 + 请求量趋势折线图 -->
-  <div class="charts-grid">
-    <div class="card">
-      <div class="card-title">供应商状态<button type="button" class="btn-card-action" id="btn-vendor-reset" onclick="resetVendorStatus(this)" aria-label="复位供应商状态" title="复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）">⟲ 状态复位</button></div>
-      <div class="vendor-list" id="vendor-list">
-        <div class="empty">加载中…</div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title" id="title-timeline">近 7 天请求量趋势</div>
-      <div class="chart-wrap-lg">
-        <canvas id="chart-timeline"></canvas>
-      </div>
+  <!-- 请求量趋势折线图 -->
+  <div class="card timeline-card">
+    <div class="card-title" id="title-timeline">近 7 天请求量趋势</div>
+    <div class="chart-wrap-lg">
+      <canvas id="chart-timeline"></canvas>
     </div>
   </div>
 
@@ -1509,7 +1518,7 @@ function updateKPI(summary) {
   document.getElementById('kpi-lat-week').textContent = lbl + ' ' + (r.avg_duration_ms ? r.avg_duration_ms + 'ms' : '–');
 }
 
-// ── 供应商状态 ────────────────────────────────────────────
+// ── 订阅状态：路由区（熔断 / 配额守卫 / 限速）────────────────
 function cbStateClass(state) {
   if (!state) return 'sb-ok';
   const s = state.toUpperCase();
@@ -1551,55 +1560,41 @@ function renderQuotaBar(qg) {
     `</div></div></div>`;
 }
 
-function updateVendorStatus(status) {
-  // 拖拽进行中 / 重排序 POST 未决时跳过重渲染，避免抢占正在操作的 DOM
-  if (_tierDrag.active || _tierDrag.inFlight) return;
-  const tiers = status.tiers || [];
-  const list = document.getElementById('vendor-list');
-  if (!tiers.length) {
-    list.innerHTML = '<div class="empty"><div class="empty-icon">🔌</div>无供应商数据</div>';
-    return;
-  }
-  const reorderable = tiers.length >= 2;
-  list.innerHTML = tiers.map(tier => {
-    const cb = tier.circuit_breaker || {};
-    const cbClass = cbStateClass(cb.state);
-    const cbLabel = cbStateLabel(cb.state);
-    const initial = escapeHtml((tier.name || '?').charAt(0).toUpperCase());
-    const safeName = escapeHtml(tier.name || '');
+// 路由区徽章：熔断器 / 配额守卫 / 限速（本 proxy 的滑动窗口用量，与订阅区上游额度不同源）
+function _tierZoneHTML(tier) {
+  const cb = tier.circuit_breaker || {};
+  let quotaHTML = '';
+  if (tier.quota_guard) quotaHTML += renderQuotaBar(tier.quota_guard);
+  if (tier.weekly_quota_guard) quotaHTML += renderQuotaBar(tier.weekly_quota_guard);
 
-    let quotaHTML = '';
-    if (tier.quota_guard) quotaHTML += renderQuotaBar(tier.quota_guard);
-    if (tier.weekly_quota_guard) quotaHTML += renderQuotaBar(tier.weekly_quota_guard);
+  const rlInfo = tier.rate_limit || {};
+  const rlHtml = rlInfo.is_rate_limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
 
-    const rlInfo = tier.rate_limit || {};
-    const rlHtml = rlInfo.is_rate_limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
-
-    // Pointer Events 重排：仅需 data-vendor 定位；手柄作为拖拽发起点（无原生 draggable）
-    const dragAttrs = ` data-vendor="${safeName}"`;
-    const handle = reorderable ? `<div class="drag-handle" title="拖拽调整优先级">⠿</div>` : '';
-
-    return `<div class="vendor-item"${dragAttrs}>
-      <div class="vendor-info">
-        ${handle}
-        <div class="vendor-avatar">${initial}</div>
-        <span class="vendor-name">${safeName}</span>
-      </div>
-      <div class="vendor-badges">
-        <span class="status-badge ${cbClass}">${cbLabel}${cb.failure_count ? ' ×'+cb.failure_count : ''}</span>
-        ${quotaHTML}
-        ${rlHtml}
-      </div>
-    </div>`;
-  }).join('');
+  return `<span class="status-badge ${cbStateClass(cb.state)}">${cbStateLabel(cb.state)}${cb.failure_count ? ' ×'+cb.failure_count : ''}</span>` +
+    quotaHTML + rlHtml;
 }
 
-// ── 订阅状态（Claude Code / GLM / Antigravity） ─────────────
+let _tierStatus = { tiers: [] };   // 最近一次 /api/status 载荷
+let _subData = { vendors: [] };    // 最近一次订阅载荷；tier 定向重渲染时复用，订阅徽章不被清空
+
+function updateVendorStatus(status) {
+  // 仅带 tier 数据的定向重渲染入口（refreshOverview / 拖拽回滚 / 复位后刷新），订阅区取缓存
+  _tierStatus = status || { tiers: [] };
+  _renderStatusRows();
+}
+
+// ── 订阅状态：订阅区（Claude Code / GLM / Antigravity）与合并渲染 ─────────────
 const SUB_META = {
-  claude: { label: 'Claude Code 订阅', initial: 'C' },
-  glm: { label: 'GLM Coding Plan', initial: 'G' },
-  antigravity: { label: 'Antigravity', initial: 'A' },
+  claude: { label: 'Claude Code 订阅', initial: 'C', tier: 'anthropic' },
+  glm: { label: 'GLM Coding Plan', initial: 'G', tier: 'zhipu' },
+  antigravity: { label: 'Antigravity', initial: 'A', tier: 'antigravity' },
 };
+// tier 名 → 订阅元信息：合并行按 tier 反查显示名，订阅数据未到达时行名也不跳变。
+// tier.name 恒等于 vendor 类型字面量且运行时同类型至多一个 tier，按名归并不会串行。
+const SUB_BY_TIER = {};
+Object.keys(SUB_META).forEach(function(key) {
+  if (SUB_META[key].tier) SUB_BY_TIER[SUB_META[key].tier] = SUB_META[key];
+});
 function fmtResetCountdown(resetEpoch) {
   if (!resetEpoch) return '';
   const diff = resetEpoch * 1000 - Date.now();
@@ -1622,37 +1617,109 @@ function renderSubWindow(w) {
     (reset ? `<span class="sub-reset">${reset}</span>` : '') +
     `</div>`;
 }
+function _subZoneHTML(v) {
+  let badges = '';
+  if (v.plan) badges += `<span class="status-badge sb-ok">${escapeHtml(v.plan)}</span>`;
+  if (v.status === 'error' && v.error) {
+    badges += `<span class="status-badge sb-err" title="${escapeHtml(v.error)}">查询失败</span>`;
+  } else if (v.status === 'not_configured') {
+    badges += `<span class="status-badge sb-warn">未启用</span>`;
+  } else if (v.status === 'waiting') {
+    badges += `<span class="status-badge sb-warn">等待首个请求（被动采集）</span>`;
+  }
+  return badges + (v.windows || []).map(renderSubWindow).join('');
+}
+
 function updateSubscriptions(data) {
-  const list = document.getElementById('subscription-list');
-  if (!list) return;
-  const vendors = (data && data.vendors) || [];
-  if (!vendors.length) {
-    list.innerHTML = '<div class="empty">无订阅数据</div>';
+  _subData = (data && Array.isArray(data.vendors)) ? data : { vendors: [] };
+  _renderStatusRows();
+}
+
+// 合并卡的渲染出口：订阅（/api/dashboard/subscriptions）× 路由 tier（/api/status）做 full outer join。
+// 行序 = 路由优先级：带 tier 的行按 tiers 顺序排在 #vendor-list（可拖拽行须是连续前缀，拖拽按 DOM
+// 顺序拼 PUT 载荷），无 tier 的订阅行排在其后的 #subscription-list。
+function _renderStatusRows() {
+  // 拖拽进行中 / 重排序 PUT 未决时跳过重渲染，避免抢占正在操作的 DOM
+  if (_tierDrag.active || _tierDrag.inFlight) return;
+  const tierList = document.getElementById('vendor-list');
+  const subList = document.getElementById('subscription-list');
+  if (!tierList || !subList) return;
+
+  const tiers = (_tierStatus && _tierStatus.tiers) || [];
+  const vendors = (_subData && _subData.vendors) || [];
+  if (!tiers.length && !vendors.length) {
+    tierList.innerHTML = '<div class="empty">无订阅数据</div>';
+    subList.innerHTML = '';
     return;
   }
-  list.innerHTML = vendors.map(v => {
-    const meta = SUB_META[v.key] || { label: v.key, initial: '?' };
-    let badges = '';
-    if (v.plan) badges += `<span class="status-badge sb-ok">${escapeHtml(v.plan)}</span>`;
-    if (v.status === 'error' && v.error) {
-      badges += `<span class="status-badge sb-err" title="${escapeHtml(v.error)}">查询失败</span>`;
-    } else if (v.status === 'not_configured') {
-      badges += `<span class="status-badge sb-warn">未启用</span>`;
-    } else if (v.status === 'waiting') {
-      badges += `<span class="status-badge sb-warn">等待首个请求（被动采集）</span>`;
+
+  const subByTier = {};
+  const hasTier = {};
+  tiers.forEach(function(tier) {
+    hasTier[tier.name] = true;
+  });
+  vendors.forEach(function(v) {
+    const tierName = v && SUB_META[v.key] && SUB_META[v.key].tier;
+    if (tierName && !subByTier[tierName]) subByTier[tierName] = v;
+  });
+
+  const reorderable = tiers.length >= 2;
+  const tierRows = tiers.map(function(tier) {
+    const safeName = escapeHtml(tier.name || '');
+    // Pointer Events 重排：仅需 data-vendor 定位；手柄作为拖拽发起点（无原生 draggable）
+    const handle = reorderable ? `<div class="drag-handle" title="拖拽调整优先级">⠿</div>` : '';
+    const routeBadges = _tierZoneHTML(tier);
+    const meta = SUB_BY_TIER[tier.name];
+    if (!meta) {
+      // 无订阅对应的 tier 行：路由区加「供应商状态」标注，避免在订阅卡片里被读成订阅行
+      const initial = escapeHtml((tier.name || '?').charAt(0).toUpperCase());
+      return `<div class="vendor-item" data-vendor="${safeName}">
+        <div class="vendor-info">
+          ${handle}
+          <div class="vendor-avatar">${initial}</div>
+          <span class="vendor-name">${safeName}</span>
+        </div>
+        <div class="vendor-badges">
+          <span class="tier-tag">供应商状态</span>
+          ${routeBadges}
+        </div>
+      </div>`;
     }
-    const windows = (v.windows || []).map(renderSubWindow).join('');
-    return `<div class="vendor-item">
+    // 同一实体合并为一行：[标识] [订阅区] │ [路由区]；显示名取订阅名，订阅数据缺失时也不跳变
+    const v = subByTier[tier.name];
+    const subHTML = v ? _subZoneHTML(v) : '';
+    // 订阅显示名与 tier 名仅大小写不同时不重复标注
+    const tag = meta.label.toLowerCase() === tier.name ? '' : `<span class="tier-tag">${safeName}</span>`;
+    return `<div class="vendor-item has-sub" data-vendor="${safeName}">
+      <div class="vendor-info">
+        ${handle}
+        <div class="vendor-avatar">${meta.initial}</div>
+        <span class="vendor-name">${escapeHtml(meta.label)}</span>
+      </div>
+      ${subHTML ? `<div class="vendor-badges sub-zone">${subHTML}</div>` : ''}
+      <div class="vendor-badges tier-zone">${tag}${routeBadges}</div>
+    </div>`;
+  }).join('');
+  tierList.innerHTML = (tiers.length ? '' : '<div class="empty"><div class="empty-icon">🔌</div>无供应商数据</div>') + tierRows;
+
+  // 无 tier 的订阅行（如仅走 IDE gateway 透传的 Antigravity）：不可拖拽
+  subList.innerHTML = vendors.filter(function(v) {
+    return !(v && SUB_META[v.key] && hasTier[SUB_META[v.key].tier]);
+  }).map(function(v) {
+    const meta = SUB_META[v.key] || { label: v.key, initial: '?' };
+    const subHTML = _subZoneHTML(v);
+    return `<div class="vendor-item has-sub">
       <div class="vendor-info">
         <div class="vendor-avatar">${meta.initial}</div>
         <span class="vendor-name">${escapeHtml(meta.label)}</span>
       </div>
-      <div class="vendor-badges">${badges}${windows}</div>
+      ${subHTML ? `<div class="vendor-badges sub-zone">${subHTML}</div>` : ''}
+      <div class="vendor-badges tier-zone"><span class="zone-note" title="该订阅对应的供应商未启用或未加入路由链（tiers）">未加入路由链</span></div>
     </div>`;
-  }).join('');
+  }).join('') + (vendors.length ? '' : '<div class="zone-note list-note">无订阅数据</div>');
 }
 
-// ── 供应商状态：拖拽调整优先级（Pointer Events 重排，运行时生效，不重置配额） ────
+// ── 订阅状态：拖拽调整优先级（Pointer Events 重排，运行时生效，不重置配额） ────
 // 采用 Pointer Events 而非原生 HTML5 DnD：后者触屏不支持、跨浏览器易「拿不起来」，
 // 是业界公认脆弱的重排序方案（故 SortableJS / dnd-kit 等均改用指针事件）。
 const _tierDrag = {
@@ -1749,7 +1816,8 @@ function initTierDrag() {
     _tierDragReset();
     if (!wasActive) return;                                    // 仅点击手柄未拖动 → 空操作
     if (!commit) { _tierRevertToList(); return; }              // 取消 → 回滚服务端真实顺序
-    if (orig && order.join(',') === orig.join(',')) return;   // 顺序未变 → 跳过 PUT
+    // 顺序未变 → 跳过 PUT，补绘拖拽期间被守卫跳过的刷新
+    if (orig && order.join(',') === orig.join(',')) { _renderStatusRows(); return; }
     persistTierOrder(order);                                   // 提交新顺序（PUT + 失败回滚）
   }
 
@@ -1764,6 +1832,15 @@ function initTierDrag() {
   });
 }
 
+// 服务端已确认新顺序：先同步缓存，刷新落地前的重绘（刷新失败、或拖拽进行中被守卫跳过）才不会画回旧序
+function _syncTierOrder(names) {
+  const tiers = (_tierStatus && _tierStatus.tiers) || [];
+  const byName = {};
+  tiers.forEach(function(tier) { byName[tier.name] = tier; });
+  const next = names.map(function(name) { return byName[name]; });
+  if (next.every(Boolean)) _tierStatus.tiers = next;
+}
+
 function persistTierOrder(names) {
   if (_tierDrag.inFlight) return;          // 防并发：上一次未决则忽略
   if (!Array.isArray(names) || names.length < 2) return;
@@ -1775,8 +1852,10 @@ function persistTierOrder(names) {
   }).then(function(res) {
     _tierDrag.inFlight = false;            // 先清守卫，允许随后的 refreshOverview 重渲染
     if (res.ok) {
-      // 服务端已更新顺序；刷新以同步请求趋势图等的排序
-      if (!_tierDrag.active) refreshOverview().catch(function() {});
+      // 服务端已更新顺序；刷新以同步请求趋势图等的排序。拖拽进行中也照常刷新，
+      // 状态行的重绘由 _renderStatusRows 的守卫延后到拖拽结束
+      _syncTierOrder(names);
+      refreshOverview().catch(function() {});
     } else {
       console.error('tier-order rejected:', res.status);
       _tierRevertToList();
@@ -1795,7 +1874,7 @@ function _tierRevertToList() {
   }).catch(function() {});
 }
 
-// ── 供应商状态：一键复位（熔断 / 限流 / 配额守卫状态；不动额度用量与优先级）────
+// ── 订阅状态：一键复位（熔断 / 限流 / 配额守卫状态；不动额度用量与优先级）────
 var _vendorResetInFlight = false;
 function resetVendorStatus(btn) {
   if (_vendorResetInFlight) return;                  // 防并发，同 persistTierOrder 范式
@@ -2687,7 +2766,7 @@ function switchTab(name) {
   fetchJSON('/api/dashboard/summary?days=7').then(function(s) {
     if (s && s.version) document.getElementById('version-badge').textContent = 'v' + s.version;
   }).catch(function(){});
-  initTierDrag();                // 绑定供应商列表拖拽（事件委托，幂等）
+  initTierDrag();                // 绑定 tier 行拖拽（事件委托，幂等）
   refresh();                     // 仅加载初始页签的数据
   setInterval(function () { if (currentTab !== 'config') refresh(); }, 600000);  // 每 10 分钟刷新当前页签（Config 除外）
   if (initial === 'overview') startModelCallingPoll();
