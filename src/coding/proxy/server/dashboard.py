@@ -421,25 +421,18 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .color-purple { color: var(--accent-purple); }
     .color-orange { color: var(--accent-orange); }
     /* ── 图表网格 ── */
-    .charts-grid {
-      display: grid;
-      grid-template-columns: 1fr 2fr;
-      gap: 16px;
-      margin-bottom: var(--gap-section);
-    }
     .charts-grid-2 {
       display: grid;
       grid-template-columns: 1fr 2fr;
       gap: 16px;
       margin-bottom: var(--gap-section);
     }
-    .charts-grid > .card,
     .charts-grid-2 > .card {
       min-width: 0;
       overflow: hidden;
     }
     @media (max-width: 960px) {
-      .charts-grid, .charts-grid-2 { grid-template-columns: 1fr; }
+      .charts-grid-2 { grid-template-columns: 1fr; }
     }
     .card {
       background: rgba(18,22,30,.7);
@@ -513,18 +506,21 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       .html-legend-wrap { flex: none; max-height: 120px; padding: 8px 0 0 0; }
       .html-legend-wrap ul { flex-direction: row; flex-wrap: wrap; gap: 4px 10px; }
     }
-    /* ── 供应商状态 ── */
+    /* ── 订阅状态（订阅档位 / 用量窗口 × 路由 tier 运行状态）── */
     .vendor-list { display: flex; flex-direction: column; gap: 8px; }
     .vendor-item {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 12px 14px;
+      column-gap: 10px;
+      /* 左内边距为 24px 宽的手柄留位（最小命中区），有无手柄的行头像左缘对齐 */
+      padding: 12px 14px 12px 38px;
       background: rgba(255,255,255,.015);
       border: 1px solid rgba(255,255,255,.04);
       border-radius: var(--radius-sm);
       transition: all .2s ease;
     }
     .vendor-item:hover { background: rgba(255,255,255,.03); border-color: rgba(255,255,255,.08); }
-    .vendor-info { display: flex; align-items: center; gap: 10px; }
+    /* 标识区占满余宽且不收缩：空间不足时只由订阅区折行，行名不被挤成多行 */
+    .vendor-info { display: flex; align-items: center; gap: 10px; flex: 1 0 auto; }
     .vendor-avatar {
       width: 30px; height: 30px; border-radius: 8px;
       background: var(--gradient-primary);
@@ -555,17 +551,39 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       height: 100%; border-radius: 2px;
       transition: width .6s cubic-bezier(.4,0,.2,1);
     }
-    /* ── 供应商状态：拖拽排序（Pointer Events，手柄发起） ── */
+    /* ── 订阅状态：拖拽排序（Pointer Events，手柄发起） ── */
     .vendor-item.dragging { opacity: .4; }
     .drag-handle {
-      display: flex; align-items: center; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      position: absolute; left: 14px; top: 0; width: 24px; height: 100%;
+      padding: 0; border: 0; background: none; font-family: inherit;
       color: var(--text-tertiary); font-size: 15px; line-height: 1;
-      cursor: grab; user-select: none; touch-action: none; padding: 0 2px;
+      cursor: grab; user-select: none; touch-action: none;
       opacity: 0; transition: opacity .2s ease;
     }
     .drag-handle:active { cursor: grabbing; }
     .vendor-item:hover .drag-handle { opacity: .55; }
-    .drag-handle:hover { opacity: 1 !important; color: var(--text-secondary); }
+    .drag-handle:hover, .drag-handle:focus-visible { opacity: 1 !important; color: var(--text-secondary); }
+    /* 键盘焦点环不做淡入：调整优先级后行节点会被重建，淡入会让焦点环闪烁 */
+    .drag-handle:focus-visible { transition: none; }
+    /* 同一实体一行：[标识] [订阅区] │ [路由区]。路由区不收缩，空间不足时由订阅区折行；
+       手柄脱离文档流落在行左内边距里 */
+    .vendor-item[data-vendor] { position: relative; }
+    .tier-zone { flex: 0 0 auto; }
+    /* 路由区紧跟订阅区时以竖线分隔（列间距 10px + 左内边距 10px，竖线居中） */
+    .sub-zone + .tier-zone { padding-left: 10px; border-left: 1px solid rgba(255,255,255,.22); }
+    .tier-tag { font-size: 11px; font-weight: 500; color: var(--text-tertiary); white-space: nowrap; }
+    .zone-note { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+    .list-note { padding: 0 14px 0 38px; font-size: 12px; }
+    .subscription-card .vendor-list + .vendor-list { margin-top: 8px; }
+    .subscription-card .vendor-list + .vendor-list:empty { display: none; }
+    @media (max-width: 960px) {
+      /* 窄屏：标识与路由区占首行，订阅区独占次行；徽章放不下时整体换行而非内部挤压 */
+      .subscription-card .vendor-item { flex-wrap: wrap; row-gap: 6px; }
+      .has-sub > .sub-zone { order: 3; flex: 1 1 100%; }
+      .has-sub > .tier-zone { order: 2; flex: 0 1 auto; }
+      .sub-zone + .tier-zone { padding-left: 0; border-left: 0; }
+    }
     /* ── 故障转移表 ── */
     .ft-table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
@@ -812,13 +830,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .btn-refresh:focus-visible,
     .page-btn:focus-visible,
     .btn-card-action:focus-visible,
+    .drag-handle:focus-visible,
     .copy-btn:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
 
     /* ── Model Calling 实时状态 ────────────────────────── */
     .model-calling-card,
-    .subscription-card {
+    .subscription-card,
+    .timeline-card {
       margin-bottom: var(--gap-section);
     }
     .model-token-card {
@@ -1031,27 +1051,20 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- 订阅状态（Claude Code / GLM / Antigravity） -->
+  <!-- 订阅状态：订阅档位 / 用量窗口 + 路由 tier 运行状态，同一实体合并为一行 -->
   <div class="card subscription-card" id="subscription-card">
-    <div class="card-title">🎫 订阅状态</div>
-    <div class="vendor-list" id="subscription-list">
-      <div class="mc-empty">加载中…</div>
+    <div class="card-title">🎫 订阅状态<button type="button" class="btn-card-action" id="btn-vendor-reset" onclick="resetVendorStatus(this)" aria-label="状态复位：复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）" title="复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）">⟲ 状态复位</button></div>
+    <div class="vendor-list" id="vendor-list">
+      <div class="empty">加载中…</div>
     </div>
+    <div class="vendor-list" id="subscription-list"></div>
   </div>
 
-  <!-- 供应商状态 + 请求量趋势折线图 -->
-  <div class="charts-grid">
-    <div class="card">
-      <div class="card-title">供应商状态<button type="button" class="btn-card-action" id="btn-vendor-reset" onclick="resetVendorStatus(this)" aria-label="复位供应商状态" title="复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）">⟲ 状态复位</button></div>
-      <div class="vendor-list" id="vendor-list">
-        <div class="empty">加载中…</div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title" id="title-timeline">近 7 天请求量趋势</div>
-      <div class="chart-wrap-lg">
-        <canvas id="chart-timeline"></canvas>
-      </div>
+  <!-- 请求量趋势折线图 -->
+  <div class="card timeline-card">
+    <div class="card-title" id="title-timeline">近 7 天请求量趋势</div>
+    <div class="chart-wrap-lg">
+      <canvas id="chart-timeline"></canvas>
     </div>
   </div>
 
@@ -1475,6 +1488,23 @@ function destroyCharts() {
   if (legendEl) legendEl.innerHTML = '';
 }
 
+// 图表 canvas 恒留在 DOM 中：空态只隐藏 canvas 并显示提示，数据到达后原位重建。
+// 不能用空态提示覆盖 canvas 父节点的内容（innerHTML）：canvas 一旦被移除，下一次构建取不到元素直接抛错。
+function chartContext(id) {
+  const canvas = document.getElementById(id);
+  const note = canvas.parentElement.querySelector('.empty');
+  if (note) note.remove();
+  canvas.style.display = '';
+  return canvas.getContext('2d');
+}
+function chartEmpty(ctx) {
+  ctx.canvas.style.display = 'none';
+  const note = document.createElement('div');
+  note.className = 'empty';
+  note.innerHTML = '<div class="empty-icon">📭</div>暂无数据';
+  ctx.canvas.parentElement.appendChild(note);
+}
+
 // ── 数据拉取 ──────────────────────────────────────────────
 async function fetchJSON(url) {
   const r = await fetch(url);
@@ -1509,7 +1539,7 @@ function updateKPI(summary) {
   document.getElementById('kpi-lat-week').textContent = lbl + ' ' + (r.avg_duration_ms ? r.avg_duration_ms + 'ms' : '–');
 }
 
-// ── 供应商状态 ────────────────────────────────────────────
+// ── 订阅状态：路由区（熔断 / 配额守卫 / 限速）────────────────
 function cbStateClass(state) {
   if (!state) return 'sb-ok';
   const s = state.toUpperCase();
@@ -1551,55 +1581,51 @@ function renderQuotaBar(qg) {
     `</div></div></div>`;
 }
 
-function updateVendorStatus(status) {
-  // 拖拽进行中 / 重排序 POST 未决时跳过重渲染，避免抢占正在操作的 DOM
-  if (_tierDrag.active || _tierDrag.inFlight) return;
-  const tiers = status.tiers || [];
-  const list = document.getElementById('vendor-list');
-  if (!tiers.length) {
-    list.innerHTML = '<div class="empty"><div class="empty-icon">🔌</div>无供应商数据</div>';
-    return;
-  }
-  const reorderable = tiers.length >= 2;
-  list.innerHTML = tiers.map(tier => {
-    const cb = tier.circuit_breaker || {};
-    const cbClass = cbStateClass(cb.state);
-    const cbLabel = cbStateLabel(cb.state);
-    const initial = escapeHtml((tier.name || '?').charAt(0).toUpperCase());
-    const safeName = escapeHtml(tier.name || '');
-
-    let quotaHTML = '';
-    if (tier.quota_guard) quotaHTML += renderQuotaBar(tier.quota_guard);
-    if (tier.weekly_quota_guard) quotaHTML += renderQuotaBar(tier.weekly_quota_guard);
-
-    const rlInfo = tier.rate_limit || {};
-    const rlHtml = rlInfo.is_rate_limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
-
-    // Pointer Events 重排：仅需 data-vendor 定位；手柄作为拖拽发起点（无原生 draggable）
-    const dragAttrs = ` data-vendor="${safeName}"`;
-    const handle = reorderable ? `<div class="drag-handle" title="拖拽调整优先级">⠿</div>` : '';
-
-    return `<div class="vendor-item"${dragAttrs}>
-      <div class="vendor-info">
-        ${handle}
-        <div class="vendor-avatar">${initial}</div>
-        <span class="vendor-name">${safeName}</span>
-      </div>
-      <div class="vendor-badges">
-        <span class="status-badge ${cbClass}">${cbLabel}${cb.failure_count ? ' ×'+cb.failure_count : ''}</span>
-        ${quotaHTML}
-        ${rlHtml}
-      </div>
-    </div>`;
-  }).join('');
+// 供应商行头像首字母（撞字母时取前两个字母，见 SUB_INITIALS）
+function _tierInitial(name) {
+  const text = name || '?';
+  return SUB_INITIALS.has(text.charAt(0).toUpperCase()) ? text.charAt(0).toUpperCase() + text.charAt(1) : text.charAt(0).toUpperCase();
 }
 
-// ── 订阅状态（Claude Code / GLM / Antigravity） ─────────────
+// 路由区徽章：熔断器 / 配额守卫 / 限速（本 proxy 的滑动窗口用量，与订阅区上游额度不同源）
+function _tierZoneHTML(tier) {
+  const cb = tier.circuit_breaker || {};
+  let quotaHTML = '';
+  if (tier.quota_guard) quotaHTML += renderQuotaBar(tier.quota_guard);
+  if (tier.weekly_quota_guard) quotaHTML += renderQuotaBar(tier.weekly_quota_guard);
+
+  const rlInfo = tier.rate_limit || {};
+  const rlHtml = rlInfo.is_rate_limited ? `<span class="status-badge sb-warn">限速中</span>` : '';
+
+  return `<span class="status-badge ${cbStateClass(cb.state)}">${cbStateLabel(cb.state)}${cb.failure_count ? ' ×'+cb.failure_count : ''}</span>` +
+    quotaHTML + rlHtml;
+}
+
+let _tierStatus = { tiers: [] };   // 最近一次 /api/status 载荷
+let _subData = { vendors: [] };    // 最近一次订阅载荷；tier 定向重渲染时复用，订阅徽章不被清空
+
+function updateVendorStatus(status, deferRender) {
+  // 仅带 tier 数据的定向重渲染入口（refreshOverview / 拖拽回滚 / 复位后刷新），订阅区取缓存。
+  // deferRender：随后还有订阅数据到达时延后重绘，由 updateSubscriptions 统一重绘
+  _tierStatus = status || { tiers: [] };
+  if (!deferRender) _renderStatusRows();
+}
+
+// ── 订阅状态：订阅区（Claude Code / GLM / Antigravity）与合并渲染 ─────────────
 const SUB_META = {
-  claude: { label: 'Claude Code 订阅', initial: 'C' },
-  glm: { label: 'GLM Coding Plan', initial: 'G' },
-  antigravity: { label: 'Antigravity', initial: 'A' },
+  claude: { label: 'Claude Code 订阅', initial: 'C', tier: 'anthropic' },
+  glm: { label: 'GLM Coding Plan', initial: 'G', tier: 'zhipu' },
+  antigravity: { label: 'Antigravity', initial: 'A', tier: 'antigravity' },
 };
+// tier 名 → 订阅元信息：合并行按 tier 反查显示名，订阅数据未到达时行名也不跳变。
+// tier.name 恒等于 vendor 类型字面量且运行时同类型至多一个 tier，按名归并不会串行。
+const SUB_BY_TIER = {};
+Object.keys(SUB_META).forEach(function(key) {
+  if (SUB_META[key].tier) SUB_BY_TIER[SUB_META[key].tier] = SUB_META[key];
+});
+// 供应商行头像首字母与订阅行头像相同时改用前两个字母（copilot → Co，alibaba → Al），
+// 只取决于固定的订阅头像集合，不随行序变化
+const SUB_INITIALS = new Set(Object.keys(SUB_META).map(function(key) { return SUB_META[key].initial; }));
 function fmtResetCountdown(resetEpoch) {
   if (!resetEpoch) return '';
   const diff = resetEpoch * 1000 - Date.now();
@@ -1622,37 +1648,132 @@ function renderSubWindow(w) {
     (reset ? `<span class="sub-reset">${reset}</span>` : '') +
     `</div>`;
 }
+function _subZoneHTML(v) {
+  let badges = '';
+  if (v.plan) badges += `<span class="status-badge sb-ok">${escapeHtml(v.plan)}</span>`;
+  if (v.status === 'error' && v.error) {
+    badges += `<span class="status-badge sb-err" title="${escapeHtml(v.error)}">查询失败</span>`;
+  } else if (v.status === 'not_configured') {
+    badges += `<span class="status-badge sb-warn">未启用</span>`;
+  } else if (v.status === 'waiting') {
+    badges += `<span class="status-badge sb-warn">等待首个请求（被动采集）</span>`;
+  }
+  return badges + (v.windows || []).map(renderSubWindow).join('');
+}
+
 function updateSubscriptions(data) {
-  const list = document.getElementById('subscription-list');
-  if (!list) return;
-  const vendors = (data && data.vendors) || [];
-  if (!vendors.length) {
-    list.innerHTML = '<div class="empty">无订阅数据</div>';
+  _subData = (data && Array.isArray(data.vendors)) ? data : { vendors: [] };
+  _renderStatusRows();
+}
+
+// 合并卡的渲染出口：订阅（/api/dashboard/subscriptions）× 路由 tier（/api/status）做 full outer join。
+// 行序 = 路由优先级：带 tier 的行按 tiers 顺序排在 #vendor-list（可拖拽行须是连续前缀，拖拽按 DOM
+// 顺序拼 PUT 载荷），无 tier 的订阅行排在其后的 #subscription-list。
+function _renderStatusRows() {
+  // 拖拽进行中 / 重排序 PUT 未决时跳过重渲染，避免抢占正在操作的 DOM
+  if (_tierDrag.active || _tierDrag.inFlight) return;
+  const tierList = document.getElementById('vendor-list');
+  const subList = document.getElementById('subscription-list');
+  if (!tierList || !subList) return;
+
+  const tiers = (_tierStatus && _tierStatus.tiers) || [];
+  const vendors = (_subData && _subData.vendors) || [];
+  if (!tiers.length && !vendors.length) {
+    tierList.innerHTML = '<div class="empty">无订阅数据</div>';
+    subList.innerHTML = '';
     return;
   }
-  list.innerHTML = vendors.map(v => {
-    const meta = SUB_META[v.key] || { label: v.key, initial: '?' };
-    let badges = '';
-    if (v.plan) badges += `<span class="status-badge sb-ok">${escapeHtml(v.plan)}</span>`;
-    if (v.status === 'error' && v.error) {
-      badges += `<span class="status-badge sb-err" title="${escapeHtml(v.error)}">查询失败</span>`;
-    } else if (v.status === 'not_configured') {
-      badges += `<span class="status-badge sb-warn">未启用</span>`;
-    } else if (v.status === 'waiting') {
-      badges += `<span class="status-badge sb-warn">等待首个请求（被动采集）</span>`;
+
+  const subByTier = {};
+  const hasTier = {};
+  tiers.forEach(function(tier) {
+    hasTier[tier.name] = true;
+  });
+  vendors.forEach(function(v) {
+    const tierName = v && SUB_META[v.key] && SUB_META[v.key].tier;
+    if (tierName && !subByTier[tierName]) subByTier[tierName] = v;
+  });
+
+  const reorderable = tiers.length >= 2;
+  // 重绘会替换节点：焦点若在某个手柄上（键盘调整优先级），重绘后回到同一行
+  const focusedVendor = _focusedTierHandle(tierList);
+  const tierRows = tiers.map(function(tier, index) {
+    const safeName = escapeHtml(tier.name || '');
+    const meta = SUB_BY_TIER[tier.name];
+    // Pointer Events 重排：仅需 data-vendor 定位；手柄是可聚焦按钮，键盘 ↑ / ↓ 与拖拽等价（无原生 draggable）
+    const handle = reorderable ? `<button type="button" class="drag-handle" title="拖拽或按 ↑ / ↓ 调整优先级" aria-keyshortcuts="ArrowUp ArrowDown" aria-label="调整 ${escapeHtml(meta ? meta.label : tier.name || '')} 的优先级：第 ${index + 1} 位，共 ${tiers.length} 个">⠿</button>` : '';
+    const routeBadges = _tierZoneHTML(tier);
+    if (!meta) {
+      // 无订阅对应的 tier 行：路由区加「供应商状态」标注，避免在订阅卡片里被读成订阅行
+      const initial = escapeHtml(_tierInitial(tier.name));
+      return `<div class="vendor-item" data-vendor="${safeName}">
+        <div class="vendor-info">
+          ${handle}
+          <div class="vendor-avatar">${initial}</div>
+          <span class="vendor-name">${safeName}</span>
+        </div>
+        <div class="vendor-badges">
+          <span class="tier-tag">供应商状态</span>
+          ${routeBadges}
+        </div>
+      </div>`;
     }
-    const windows = (v.windows || []).map(renderSubWindow).join('');
-    return `<div class="vendor-item">
+    // 同一实体合并为一行：[标识] [订阅区] │ [路由区]；显示名取订阅名，订阅数据缺失时也不跳变
+    const v = subByTier[tier.name];
+    const subHTML = v ? _subZoneHTML(v) : '';
+    // 订阅显示名与 tier 名仅大小写不同时不重复标注
+    const tag = meta.label.toLowerCase() === tier.name ? '' : `<span class="tier-tag">${safeName}</span>`;
+    return `<div class="vendor-item has-sub" data-vendor="${safeName}">
+      <div class="vendor-info">
+        ${handle}
+        <div class="vendor-avatar">${meta.initial}</div>
+        <span class="vendor-name">${escapeHtml(meta.label)}</span>
+      </div>
+      ${subHTML ? `<div class="vendor-badges sub-zone">${subHTML}</div>` : ''}
+      <div class="vendor-badges tier-zone">${tag}${routeBadges}</div>
+    </div>`;
+  }).join('');
+  tierList.innerHTML = (tiers.length ? '' : '<div class="empty"><div class="empty-icon">🔌</div>无供应商数据</div>') + tierRows;
+
+  // 无 tier 的订阅行（如仅走 IDE gateway 透传的 Antigravity）：不可拖拽
+  subList.innerHTML = vendors.filter(function(v) {
+    return !(v && SUB_META[v.key] && hasTier[SUB_META[v.key].tier]);
+  }).map(function(v) {
+    const meta = SUB_META[v.key] || { label: v.key, initial: '?' };
+    const subHTML = _subZoneHTML(v);
+    return `<div class="vendor-item has-sub">
       <div class="vendor-info">
         <div class="vendor-avatar">${meta.initial}</div>
         <span class="vendor-name">${escapeHtml(meta.label)}</span>
       </div>
-      <div class="vendor-badges">${badges}${windows}</div>
+      ${subHTML ? `<div class="vendor-badges sub-zone">${subHTML}</div>` : ''}
+      <div class="vendor-badges tier-zone"><span class="zone-note" title="该订阅对应的供应商未启用或未加入路由链（tiers）">未加入路由链</span></div>
     </div>`;
-  }).join('');
+  }).join('') + (vendors.length ? '' : '<div class="zone-note list-note">无订阅数据</div>');
+
+  if (focusedVendor) _focusTierHandle(tierList, focusedVendor);
 }
 
-// ── 供应商状态：拖拽调整优先级（Pointer Events 重排，运行时生效，不重置配额） ────
+// 焦点所在的供应商行（仅当焦点在该行的手柄上）
+function _focusedTierHandle(listEl) {
+  const el = document.activeElement;
+  const handle = el && el.closest ? el.closest('.drag-handle') : null;
+  const item = handle ? handle.closest('.vendor-item') : null;
+  return item ? item.dataset.vendor : null;
+}
+
+function _tierRowByName(listEl, name) {
+  return Array.from(listEl.querySelectorAll('.vendor-item[data-vendor]'))
+    .find(function(el) { return el.dataset.vendor === name; }) || null;
+}
+
+function _focusTierHandle(listEl, vendor) {
+  const item = _tierRowByName(listEl, vendor);
+  const handle = item ? item.querySelector('.drag-handle') : null;
+  if (handle) handle.focus({ preventScroll: true });
+}
+
+// ── 订阅状态：拖拽调整优先级（Pointer Events 重排，运行时生效，不重置配额） ────
 // 采用 Pointer Events 而非原生 HTML5 DnD：后者触屏不支持、跨浏览器易「拿不起来」，
 // 是业界公认脆弱的重排序方案（故 SortableJS / dnd-kit 等均改用指针事件）。
 const _tierDrag = {
@@ -1717,17 +1838,34 @@ function initTierDrag() {
     if (!handle) return;                                       // 仅从手柄发起，避免误触与文本选择
     const item = handle.closest('.vendor-item');
     if (!item || !item.dataset.vendor) return;
+    if (_tierDrag.srcEl) return;                               // 已有指针在拖：忽略第二个指针（触屏多指）
     if (list.querySelectorAll('.vendor-item').length < 2) return;
     _tierDrag.srcEl = item;
     _tierDrag.srcName = item.dataset.vendor;
     _tierDrag.pointerId = e.pointerId;
     _tierDrag.startY = e.clientY;
-    try { item.setPointerCapture(e.pointerId); } catch (_) {}  // 捕获后 DOM 重排不丢事件
+    try { item.setPointerCapture(e.pointerId); } catch (_) {}  // 捕获后指针移出列表仍持续收到 pointermove
     e.preventDefault();                                        // 阻止文本选择
+  });
+
+  // 键盘调整优先级：手柄聚焦时 ↑ 上移、↓ 下移，与拖拽一行等价
+  list.addEventListener('keydown', function(e) {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const handle = e.target && e.target.closest && e.target.closest('.drag-handle');
+    if (!handle) return;
+    e.preventDefault();                                        // 方向键默认滚动页面
+    if (_tierDrag.inFlight || _tierDrag.srcEl) return;         // 上一次提交未决，或指针正按在手柄上
+    _tierMove(handle.closest('.vendor-item').dataset.vendor, e.key === 'ArrowUp' ? -1 : 1);
   });
 
   list.addEventListener('pointermove', function(e) {
     if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
+    if (!_tierDrag.srcEl.isConnected) {
+      // 按住未移动期间行被重绘（如上一次重排后的刷新）：原节点已脱离，按名字重新定位后再继续
+      const item = _tierRowByName(list, _tierDrag.srcName);
+      if (!item) { _tierDragReset(); return; }
+      _tierDrag.srcEl = item;
+    }
     if (!_tierDrag.active) {
       if (Math.abs(e.clientY - _tierDrag.startY) < _TIER_DRAG_THRESHOLD) return;
       _tierDrag.active = true;                                 // 越阈值 → 正式进入拖拽
@@ -1736,6 +1874,8 @@ function initTierDrag() {
     }
     e.preventDefault();
     _tierDragMoveTo(list, e.clientY);
+    // 行被 DOM 重排后浏览器会释放指针捕获，每次重排后补捕获
+    try { _tierDrag.srcEl.setPointerCapture(e.pointerId); } catch (_) {}
   });
 
   function _tierDragFinish(commit) {
@@ -1746,18 +1886,60 @@ function initTierDrag() {
     _tierDragReset();
     if (!wasActive) return;                                    // 仅点击手柄未拖动 → 空操作
     if (!commit) { _tierRevertToList(); return; }              // 取消 → 回滚服务端真实顺序
-    if (orig && order.join(',') === orig.join(',')) return;   // 顺序未变 → 跳过 PUT
+    // 顺序未变 → 跳过 PUT，补绘拖拽期间被守卫跳过的刷新
+    if (orig && order.join(',') === orig.join(',')) { _renderStatusRows(); return; }
     persistTierOrder(order);                                   // 提交新顺序（PUT + 失败回滚）
   }
 
-  list.addEventListener('pointerup', function(e) {
+  // 收尾监听挂 document：指针在列表外松开时事件不经过 #vendor-list
+  document.addEventListener('pointerup', function(e) {
     if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
     _tierDragFinish(true);
   });
-  list.addEventListener('pointercancel', function(e) {
+  document.addEventListener('pointercancel', function(e) {
     if (!_tierDrag.srcEl || e.pointerId !== _tierDrag.pointerId) return;
     _tierDragFinish(false);
   });
+}
+
+// 键盘移动：乐观重排并立即重绘（焦点回到同一行），再走与拖拽相同的 PUT 与失败回滚
+function _tierMove(vendor, delta) {
+  const tiers = ((_tierStatus && _tierStatus.tiers) || []).slice();
+  const from = tiers.findIndex(function(tier) { return tier.name === vendor; });
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= tiers.length) return;      // 已在两端
+  [tiers[from], tiers[to]] = [tiers[to], tiers[from]];
+  _tierStatus.tiers = tiers;
+  _renderStatusRows();
+  persistTierOrder(tiers.map(function(tier) { return tier.name; }));
+}
+
+// 服务端已确认新顺序：先同步缓存，刷新落地前的重绘（刷新失败、或拖拽进行中被守卫跳过）才不会画回旧序
+function _syncTierOrder(names) {
+  const tiers = (_tierStatus && _tierStatus.tiers) || [];
+  const byName = {};
+  tiers.forEach(function(tier) { byName[tier.name] = tier; });
+  const next = names.map(function(name) { return byName[name]; });
+  if (next.every(Boolean)) _tierStatus.tiers = next;
+}
+
+// 行序代次：每次 PUT 成功加一。请求发出后才被服务端确认的重排，其状态快照落地时行序已过期
+let _tierOrderGen = 0;
+let _tierConfirmedOrder = null;
+
+// 拉取路由状态。请求发出后若有新的重排被确认（连按方向键时两次 PUT 只隔几十毫秒），
+// 返回的快照只采用状态字段，行序以已确认的顺序为准，避免迟到的旧快照把行序画回上一步
+async function fetchTierStatus() {
+  const gen = _tierOrderGen;
+  const status = await fetchJSON('/api/status');
+  const tiers = (status && status.tiers) || [];
+  if (gen !== _tierOrderGen && _tierConfirmedOrder) {
+    const byName = {};
+    tiers.forEach(function(tier) { byName[tier.name] = tier; });
+    const next = _tierConfirmedOrder.map(function(name) { return byName[name]; });
+    if (next.length === tiers.length && next.every(Boolean)) status.tiers = next;
+  }
+  return status;
 }
 
 function persistTierOrder(names) {
@@ -1771,8 +1953,12 @@ function persistTierOrder(names) {
   }).then(function(res) {
     _tierDrag.inFlight = false;            // 先清守卫，允许随后的 refreshOverview 重渲染
     if (res.ok) {
-      // 服务端已更新顺序；刷新以同步请求趋势图等的排序
-      if (!_tierDrag.active) refreshOverview().catch(function() {});
+      // 服务端已更新顺序；刷新以同步请求趋势图等的排序。拖拽进行中也照常刷新，
+      // 状态行的重绘由 _renderStatusRows 的守卫延后到拖拽结束
+      _tierConfirmedOrder = names;
+      _tierOrderGen++;
+      _syncTierOrder(names);
+      refreshOverview().catch(function() {});
     } else {
       console.error('tier-order rejected:', res.status);
       _tierRevertToList();
@@ -1786,12 +1972,12 @@ function persistTierOrder(names) {
 
 function _tierRevertToList() {
   // 回滚到服务端真实顺序（PUT 失败 → 服务端顺序未变）
-  fetchJSON('/api/status').then(function(status) {
+  fetchTierStatus().then(function(status) {
     updateVendorStatus(status);
   }).catch(function() {});
 }
 
-// ── 供应商状态：一键复位（熔断 / 限流 / 配额守卫状态；不动额度用量与优先级）────
+// ── 订阅状态：一键复位（熔断 / 限流 / 配额守卫状态；不动额度用量与优先级）────
 var _vendorResetInFlight = false;
 function resetVendorStatus(btn) {
   if (_vendorResetInFlight) return;                  // 防并发，同 persistTierOrder 范式
@@ -1804,7 +1990,7 @@ function resetVendorStatus(btn) {
     if (!res.ok) throw new Error(res.status);
     btn.textContent = '✓ 已复位';
     // 复位已生效，状态刷新失败不应误报失败、诱导重复点击 → 单独吞掉
-    return fetchJSON('/api/status').then(function(status) {
+    return fetchTierStatus().then(function(status) {
       updateVendorStatus(status);                    // 定向重渲染，不等 10 分钟轮询
     }).catch(function() {});
   }).catch(function(e) {
@@ -2053,9 +2239,9 @@ function buildVendorDist(rows, tierOrder) {
   const data = labels.map(v => vendorTotals[v]);
 
   if (chartVendorDist) chartVendorDist.destroy();
-  const ctx = document.getElementById('chart-vendor-dist').getContext('2d');
+  const ctx = chartContext('chart-vendor-dist');
   if (!labels.length) {
-    ctx.canvas.parentElement.innerHTML = '<div class="empty"><div class="empty-icon">📭</div>暂无数据</div>';
+    chartEmpty(ctx);
     return;
   }
   chartVendorDist = new Chart(ctx, {
@@ -2123,9 +2309,9 @@ function buildTokenTimeline(rows, tierOrder) {
   const vendors = sortByTierOrder(Object.keys(vendorDateMap), tierOrder);
 
   if (chartTokenTimeline) chartTokenTimeline.destroy();
-  const ctx = document.getElementById('chart-token-timeline').getContext('2d');
+  const ctx = chartContext('chart-token-timeline');
   if (!dates.length) {
-    ctx.canvas.parentElement.innerHTML = '<div class="empty"><div class="empty-icon">📭</div>暂无数据</div>';
+    chartEmpty(ctx);
     return;
   }
 
@@ -2188,9 +2374,7 @@ function buildModelTokenTimeline(rows) {
   });
 
   if (chartModelTokenTimeline) chartModelTokenTimeline.destroy();
-  const canvasEl = document.getElementById('chart-model-token-timeline');
-  if (!canvasEl) return;
-  const ctx = canvasEl.getContext('2d');
+  const ctx = chartContext('chart-model-token-timeline');
 
   // 清理 HTML Legend 容器
   const legendEl = document.getElementById('model-token-legend');
@@ -2198,7 +2382,7 @@ function buildModelTokenTimeline(rows) {
 
   if (!dates.length || !keys.length) {
     if (legendEl) legendEl.style.display = 'none';
-    ctx.canvas.parentElement.innerHTML = '<div class="empty"><div class="empty-icon">📭</div>暂无数据</div>';
+    chartEmpty(ctx);
     return;
   }
 
@@ -2569,7 +2753,7 @@ async function refreshOverview() {
   const [summary, timeline, status, subs] = await Promise.all([
     fetchJSON('/api/dashboard/summary?days=' + days),
     fetchJSON('/api/dashboard/timeline?days=' + days),
-    fetchJSON('/api/status'),
+    fetchTierStatus(),
     // 订阅状态面板失败不拖垮整体刷新（服务端已隔离单家错误，这里兜底网络层）
     fetchJSON('/api/dashboard/subscriptions').catch(function () { return { vendors: [] }; }),
   ]);
@@ -2579,7 +2763,8 @@ async function refreshOverview() {
   }
 
   updateKPI(summary);
-  updateVendorStatus(status);
+  // 行数据与随后的订阅数据到齐后只重绘一次：连续替换行节点会让键盘焦点环闪烁
+  updateVendorStatus(status, true);
   updateModelCalling(status);
   updateSubscriptions(subs);
   updateChartTitles(days);
@@ -2683,7 +2868,7 @@ function switchTab(name) {
   fetchJSON('/api/dashboard/summary?days=7').then(function(s) {
     if (s && s.version) document.getElementById('version-badge').textContent = 'v' + s.version;
   }).catch(function(){});
-  initTierDrag();                // 绑定供应商列表拖拽（事件委托，幂等）
+  initTierDrag();                // 绑定 tier 行拖拽（事件委托，幂等）
   refresh();                     // 仅加载初始页签的数据
   setInterval(function () { if (currentTab !== 'config') refresh(); }, 600000);  // 每 10 分钟刷新当前页签（Config 除外）
   if (initial === 'overview') startModelCallingPoll();
