@@ -22,6 +22,7 @@
 | I-010 | Zhipu vendor 间歇性 `[1210][API 调用参数有误]` 拒绝（诊断阶段） | ✅ 已完成 | 2026-05-26 | [详情](#I-010) |
 | I-011 | Antigravity 桌面 2.32.1 模型流绕过 `CLOUD_CODE_URL` 通道（前端只见控制面调用次数，无模型/Token 指标） | ✅ 已完成 | 2026-11-16 | [详情](#I-011) |
 | I-012 | Dashboard 供应商行拖拽在列表外松开后卡死（行停在半透明，列表不再刷新） | ✅ 已完成 | 2026-11-24 | [详情](#I-012) |
+| I-013 | Dashboard 无用量数据时第二次刷新起抛 TypeError（图表空态替换掉 canvas 后未恢复） | ✅ 已完成 | 2026-11-24 | [详情](#I-013) |
 
 ---
 
@@ -513,5 +514,30 @@ Overview 页拖动供应商行调整优先级：行越过相邻行（发生一�
 **同类问题影响与处理注意事项**
 
 同类风险：凡「`setPointerCapture` + 移动捕获元素自身」的实现都会中招（拖拽排序、可拖浮层）。处理时只动监听挂载点与补捕获，不改既有 Pointer Events 状态机（手柄发起、4px 阈值、顺序未变不发 PUT、失败回滚均保持不变）。
+
+---
+
+<a id="I-013"></a>
+## I-013：Dashboard 无用量数据时第二次刷新起抛 TypeError（图表空态替换掉 canvas 后未恢复）
+
+**问题描述**
+
+没有用量数据的实例（新装、空库，或所选时间区间内没有请求）上，Overview 首次加载后三张图表显示「暂无数据」；此后每次刷新（手动刷新、10 分钟轮询、切换页签）都在控制台抛 `TypeError: Cannot read properties of null (reading 'getContext')`，右上角显示「刷新失败」。
+
+**表因根因**
+
+表因：`buildVendorDist` / `buildTokenTimeline` / `buildModelTokenTimeline` 在无数据时执行 `ctx.canvas.parentElement.innerHTML = '<div class="empty">…暂无数据</div>'`，空态提示覆盖了 canvas 父节点的内容，canvas 元素随之从 DOM 中移除。根因：空态与图表共用同一个父节点并以内联方式互相覆盖，没有可恢复的状态切换；下一次刷新 `document.getElementById('chart-…')` 返回 null，`.getContext('2d')` 抛错。`refreshOverview` 在构建图表之前已更新 KPI 与状态面板，所以数据其实是最新的，只是报错刺眼、趋势图不再出现。
+
+**处理方式**
+
+新增 `chartContext(id)` 与 `chartEmpty(ctx)`：canvas 恒留在 DOM 中，空态只把 canvas 设为 `display:none` 并在其旁插入提示，下一次构建先移除提示、恢复 canvas 再取上下文。三个构建函数改用这两个入口，并去掉 `buildModelTokenTimeline` 里「canvas 不存在就静默返回」的兜底（它会让图表永远出不来）。新增 `tests/test_dashboard_charts.py`（静态守卫 + Node vm 行为）。真实浏览器对照（无数据实例，同一份 mock 数据）：修复前第二次刷新抛 TypeError、三个 canvas 从 DOM 消失；修复后连续刷新无报错，空态 → 出图 → 空态 → 出图往返正常。
+
+**后续防范**
+
+切换到空态或占位态时，不要用 innerHTML 覆盖承载控件的容器；需要保留的节点（canvas、输入框）只隐藏不移除。带占位态的面板，验证用例至少覆盖一轮「空 → 有 → 空 → 有」往返和连续两次刷新。
+
+**同类问题影响与处理注意事项**
+
+同类风险：任何「无数据时用 innerHTML 替换容器内容」的图表或列表面板（Chart.js、地图、表格容器）；排查时先看报错前的第一次渲染有没有移除节点。Chart.js 实例销毁后再调用 `destroy()` 不会出错（canvas 已置空，直接跳过），空态分支不清空图表变量不影响正确性。
 
 ---

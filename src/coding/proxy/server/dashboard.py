@@ -1484,6 +1484,23 @@ function destroyCharts() {
   if (legendEl) legendEl.innerHTML = '';
 }
 
+// 图表 canvas 恒留在 DOM 中：空态只隐藏 canvas 并显示提示，数据到达后原位重建。
+// 不能用空态提示覆盖 canvas 父节点的内容（innerHTML）：canvas 一旦被移除，下一次构建取不到元素直接抛错。
+function chartContext(id) {
+  const canvas = document.getElementById(id);
+  const note = canvas.parentElement.querySelector('.empty');
+  if (note) note.remove();
+  canvas.style.display = '';
+  return canvas.getContext('2d');
+}
+function chartEmpty(ctx) {
+  ctx.canvas.style.display = 'none';
+  const note = document.createElement('div');
+  note.className = 'empty';
+  note.innerHTML = '<div class="empty-icon">📭</div>暂无数据';
+  ctx.canvas.parentElement.appendChild(note);
+}
+
 // ── 数据拉取 ──────────────────────────────────────────────
 async function fetchJSON(url) {
   const r = await fetch(url);
@@ -2136,9 +2153,9 @@ function buildVendorDist(rows, tierOrder) {
   const data = labels.map(v => vendorTotals[v]);
 
   if (chartVendorDist) chartVendorDist.destroy();
-  const ctx = document.getElementById('chart-vendor-dist').getContext('2d');
+  const ctx = chartContext('chart-vendor-dist');
   if (!labels.length) {
-    ctx.canvas.parentElement.innerHTML = '<div class="empty"><div class="empty-icon">📭</div>暂无数据</div>';
+    chartEmpty(ctx);
     return;
   }
   chartVendorDist = new Chart(ctx, {
@@ -2206,9 +2223,9 @@ function buildTokenTimeline(rows, tierOrder) {
   const vendors = sortByTierOrder(Object.keys(vendorDateMap), tierOrder);
 
   if (chartTokenTimeline) chartTokenTimeline.destroy();
-  const ctx = document.getElementById('chart-token-timeline').getContext('2d');
+  const ctx = chartContext('chart-token-timeline');
   if (!dates.length) {
-    ctx.canvas.parentElement.innerHTML = '<div class="empty"><div class="empty-icon">📭</div>暂无数据</div>';
+    chartEmpty(ctx);
     return;
   }
 
@@ -2271,9 +2288,7 @@ function buildModelTokenTimeline(rows) {
   });
 
   if (chartModelTokenTimeline) chartModelTokenTimeline.destroy();
-  const canvasEl = document.getElementById('chart-model-token-timeline');
-  if (!canvasEl) return;
-  const ctx = canvasEl.getContext('2d');
+  const ctx = chartContext('chart-model-token-timeline');
 
   // 清理 HTML Legend 容器
   const legendEl = document.getElementById('model-token-legend');
@@ -2281,7 +2296,7 @@ function buildModelTokenTimeline(rows) {
 
   if (!dates.length || !keys.length) {
     if (legendEl) legendEl.style.display = 'none';
-    ctx.canvas.parentElement.innerHTML = '<div class="empty"><div class="empty-icon">📭</div>暂无数据</div>';
+    chartEmpty(ctx);
     return;
   }
 
