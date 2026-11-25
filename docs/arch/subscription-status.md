@@ -53,7 +53,7 @@ Dashboard Overview ── GET /api/dashboard/subscriptions
 ### Antigravity（Google）— 主动查询
 
 - 两步：`POST cloudcode-pa.../v1internal:loadCodeAssist`（取 `currentTier.name` 档位 + `cloudaicompanionProject`，结果缓存 1h）→ `POST daily-cloudcode-pa.../v1internal:retrieveUserQuotaSummary`（body `{"project": ...}`）；
-- 响应：`groups[].buckets[]`，每桶 `remainingFraction`(0–1) + `resetTime`(ISO8601) + `window`(5h/weekly)，按模型族分组（Gemini / Claude+GPT 各自双窗口）；used = 1 − remaining；
+- 响应：`groups[].buckets[]`，每桶 `remainingFraction`(0–1) + `resetTime`(ISO8601) + `window`(5h/weekly)，按模型族分组（Gemini / Claude+GPT 各自双窗口）；used = 1 − remaining。透出时 `window` 原样保留，`group` 取 `displayName` 的短名（去尾部 models、「and」缩成「+」，见 `_ag_group_label`），完整名称留在 `label`；
 - **UA 门控**：请求必须带 Antigravity 客户端指纹（`User-Agent: Antigravity/...` + `x-client-name: antigravity`，常量复用 `vendors/antigravity.py` 权威定义），否则 403 或缺 Gemini 组；
 - 双 host 数据分裂：Gemini 组用量以 `daily-cloudcode-pa` 为准（配额查询 host 默认取 `antigravity_gateway` 的漂移敏感默认值，可经其 `base_url` 配置覆写）；
 - 凭证来源优先级：vendor 通道 token manager（reauth 热更新天然跟随）→ 回退 config + token store 合成独立 `GoogleOAuthTokenManager`（vendor 未进路由链路时，如仅用 IDE gateway 透传）。
@@ -69,7 +69,7 @@ Dashboard Overview ── GET /api/dashboard/subscriptions
 | [server/app.py](../../src/coding/proxy/server/app.py) | `app.state.subscription_status` 装配（随 generation 整体重建） |
 | [server/dashboard.py](../../src/coding/proxy/server/dashboard.py) | `GET /api/dashboard/subscriptions` 端点 + Overview 卡片；合并渲染 `_renderStatusRows`（订阅 × 路由 tier），`updateSubscriptions` / `updateVendorStatus` 为其两个数据入口 |
 
-响应形状：`{"vendors": [{key, plan?, status, error?, windows: [{id, label, used_percent, reset_epoch, exhausted?}], updated_at?}]}`。`status` 为 `ok | waiting | not_configured | error`；例外：claude 条目在被动快照存在时透传 `anthropic-ratelimit-unified-status` 头原值（如 `allowed`，缺省 `ok`），前端仅按 error/not_configured/waiting 三态渲染徽章、其余值不显示状态徽章。`plan` 为可选字段（claude 恒为 null；error/not_configured 条目缺省）。
+响应形状：`{"vendors": [{key, plan?, status, error?, windows: [{id, label, window, group?, used_percent, reset_epoch, exhausted?}], updated_at?}]}`。`window` 是三家统一的窗口类别（`5h` / `weekly`，上游未知类别原样透出、可能为空串），前端据此取短标签，认不出时回退 `label`；`group` 仅 Antigravity 窗口携带（模型族短名，无分组时为空串）。`status` 为 `ok | waiting | not_configured | error`；例外：claude 条目在被动快照存在时透传 `anthropic-ratelimit-unified-status` 头原值（如 `allowed`，缺省 `ok`），前端仅按 error/not_configured/waiting 三态渲染徽章、其余值不显示状态徽章。`plan` 为可选字段（claude 恒为 null；error/not_configured 条目缺省）。
 
 ## 风险边界与已知缺口
 
@@ -81,5 +81,5 @@ Dashboard Overview ── GET /api/dashboard/subscriptions
 
 ## 测试锚点
 
-- [tests/test_subscription_status.py](../../tests/test_subscription_status.py)：unified 头解析（含大小写/畸形值/NaN/Infinity/钳制）、vendor 钩子旁路采集（流式+非流式）、两家 fetcher（MockTransport、双字段形态、403 门控、token 失效）、服务 TTL/错误隔离、端点集成、token store 回退构建（含 enabled 口径与 gateway host 覆写）；
+- [tests/test_subscription_status.py](../../tests/test_subscription_status.py)：unified 头解析（含大小写/畸形值/NaN/Infinity/钳制）、vendor 钩子旁路采集（流式+非流式）、两家 fetcher（MockTransport、双字段形态、403 门控、token 失效、缺 displayName / window 的容错、模型族短名）、服务 TTL/错误隔离、端点集成、token store 回退构建（含 enabled 口径与 gateway host 覆写）；
 - [tests/test_dashboard_subscription_card.py](../../tests/test_dashboard_subscription_card.py)：HTML 接线、XSS 转义静态检查、`SUB_META` 归并键与 `VendorType` 的一致性、内联渲染函数 Node vm 行为验证（三类行与行序、徽章分支、订阅数据缺失降级、拖拽并发守卫、恶意档位名与 tier 名转义）；拖拽状态机在最小假 DOM 上的 Node 行为验证（指针在列表外松开、多指重入、过期缓存补绘、PUT 失败回滚、键盘调整与焦点保持、迟到的状态快照不覆盖行序、按住期间行被重绘）。

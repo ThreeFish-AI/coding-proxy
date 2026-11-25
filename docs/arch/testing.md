@@ -114,7 +114,7 @@
 | `test_dashboard_config_tab.py`| Config 页 HTML 接线、CSP/XSS 静态检查与 config.js Node harness |
 | `test_dashboard_subscription_card.py`| 订阅状态卡片 HTML 接线、XSS 静态检查、归并键一致性、合并渲染与拖拽状态机 Node harness（三类行 / 行序 / 并发守卫 / 列表外松开 / 多指 / 键盘调整 / 焦点保持 / 迟到快照 / 失败回滚） |
 | `test_dashboard_charts.py`| 图表空态：canvas 恒留在 DOM 中，无数据与有数据之间反复刷新不抛错（静态检查 + Node harness） |
-| `test_subscription_status.py`| 订阅状态聚合：被动信号解析、两家 fetcher、TTL 服务、端点集成 |
+| `test_subscription_status.py`| 订阅状态聚合：被动信号解析、两家 fetcher（含模型族短名与上游缺字段容错）、TTL 服务、端点集成 |
 
 ### 2.9 其他
 
