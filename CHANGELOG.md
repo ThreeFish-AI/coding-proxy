@@ -2,6 +2,14 @@
 
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.6](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.6) - 2026-11-25
+
+> 本版主轴：Overview「订阅状态」卡片统一为单行用量格语法，文字与图形收敛成一套；用量窗口补结构化字段。
+
+- feat(dashboard): **订阅状态卡片统一用量格语法并保证单行**：胶囊只承载状态，用量统一为「窗口短标签 + 进度条 + 百分比（订阅窗口再缀重置倒计时）」的用量格，底色与进度条按用量转黄、转红；窗口标签三家同一套（`5h` / `周` / `1d` / `7d`），Antigravity 四个窗口按模型族 `Gemini` / `Claude+GPT` 分组、组内先 5h 后 周；档位改为行名后的加粗亮字，与行名相同时不再重复显示；行名列定宽、订阅区左对齐、路由区分隔线对齐；视口宽于 960px 时每行始终单行，放不下时只在订阅区内横向滚动并保留滚动位置（#312）；
+- feat(subscription-status): `GET /api/dashboard/subscriptions` 的用量窗口补 `window`（窗口类别）与 `group`（模型族短名）字段，前端不再拆上游字符串，`id` / `label` 不变（#312）；
+- docs(dashboard): README 首图同步新样式，版本徽标更新为 v0.6.6（#312）；
+
 ## [v0.6.5](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.5) - 2026-11-24
 
 > 本周期主轴：Dashboard Overview 的「订阅状态」与「供应商状态」合并为一张卡片，同一个账号一行；修复拖拽卡死与图表空态刷新两个存量缺陷。
