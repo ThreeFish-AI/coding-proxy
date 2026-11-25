@@ -406,7 +406,7 @@ curl "http://127.0.0.1:3392/api/dashboard/timeline?days=30"
 curl http://127.0.0.1:3392/api/dashboard/subscriptions
 ```
 
-**返回结构**：`vendors`（订阅条目数组，固定 3 条：`claude`、`glm`、`antigravity`），每条含 `key`、`plan`（可选，档位名）、`status`（`ok` / `waiting` / `not_configured` / `error`；claude 条目有被动快照时透传上游响应头原值，如 `allowed`）、`error`（仅查询失败时有）、`windows`（用量窗口：`id`、`label`、`used_percent`、`reset_epoch`）。订阅服务未装配或聚合异常时返回空的 `vendors`，HTTP 状态仍为 200。上游契约与错误隔离见 [订阅状态面板](../arch/subscription-status.md)。
+**返回结构**：`vendors`（订阅条目数组，固定 3 条：`claude`、`glm`、`antigravity`），每条含 `key`、`plan`（可选，档位名）、`status`（`ok` / `waiting` / `not_configured` / `error`；claude 条目有被动快照时透传上游响应头原值，如 `allowed`）、`error`（仅查询失败时有）、`windows`（用量窗口）。每个窗口含 `id`、`label`（完整展示名）、`window`（窗口类别，三家统一为 `5h` / `weekly`，未知类别原样透出）、`group`（模型族短名，仅 Antigravity 有，如 `Gemini`、`Claude+GPT`）、`used_percent`、`reset_epoch`。订阅服务未装配或聚合异常时返回空的 `vendors`，HTTP 状态仍为 200。上游契约与错误隔离见 [订阅状态面板](../arch/subscription-status.md)。
 
 ## 13. 原生 API 透传端点
 
