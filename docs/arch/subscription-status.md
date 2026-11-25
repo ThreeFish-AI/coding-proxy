@@ -25,9 +25,12 @@ Dashboard Overview ── GET /api/dashboard/subscriptions
 卡片是纯前端渲染：订阅数据（`GET /api/dashboard/subscriptions`）与路由 tier 数据（`GET /api/status` 的 `tiers`）并发拉取后，在 `_renderStatusRows` 里做 full outer join。两个端点与响应形状互不耦合，订阅数据不并入 `/api/status`（后者被 Model Calling 面板 10 秒轮询，而订阅拉取带上游超时）。
 
 - 归并键：`SUB_META[key].tier`，`claude → anthropic`、`glm → zhipu`、`antigravity → antigravity`。`tier.name` 恒等于 vendor 类型字面量且运行时同类型至多一个 tier，按名归并不会串行；取值必须是 [config/routing.py](../../src/coding/proxy/config/routing.py) 的 `VendorType` 之一，由测试钉死；
-- 三类行：合并行（订阅 × tier，行名取订阅名；订阅显示名与 tier 名仅大小写不同时不标注，其余在路由区灰字标注 tier 名）、供应商行（无订阅对应，路由区灰字「供应商状态」；头像首字母与订阅行头像撞字母时取前两个字母，如 copilot → `Co`，见 `_tierInitial`）、订阅行（无对应 tier，灰字「未加入路由链」）；
+- 三类行：合并行（订阅 × tier，行名取订阅名；订阅显示名与 tier 名仅大小写不同时不标注，其余在路由区灰字标注 tier 名）、供应商行（无订阅对应，路由区灰字「供应商状态」；头像首字母与订阅行头像撞字母时取前两个字母，如 copilot → `Co`，见 `_tierInitial`）、订阅行（无对应 tier，行尾灰字「未加入路由链」，没有路由区也就不画分隔线）；
+- 渲染语法：每个分区都是 `[灰字标签] [状态胶囊] [用量格]*`。胶囊只承载状态（熔断 / 限速 / 等待 / 未启用 / 查询失败）；档位是行名后的加粗亮字，档位名与行名相同时不重复显示（`_planLabel`，如 Antigravity）；用量格 `renderQuotaCell` = 窗口短标签 + 40px 进度条 + 百分比，订阅窗口再缀紧凑重置倒计时（`fmtResetShort`，完整写法 `fmtResetCountdown` 进 Tooltip），严重度类名 `quotaClass` 同时决定格底色与进度条填充色。订阅窗口的短标签取自 `window`（`5h` / `weekly` → `5h` / `周`），配额守卫窗口按 `window_hours` 折算（`quotaWindowLabel`），认不出的类别回退 `label`。类别表与分组表都是 `Map`：上游给到 `constructor`、`__proto__` 一类的值时不会命中继承成员而让整卡渲染抛错；
+- 分组与排序（`_subZoneHTML`）：窗口按 `group` 分组，每组 = 灰字标签 + 该组用量格，无 `group` 的家（GLM / Claude）并为一组不出标签；组内先 5h 后 周，未知类别殿后（`_windowRank`）；
+- 单行与对齐：视口宽于 960px 时行是 `nowrap` 的 flex 行，分区各自 `overflow-x: auto`，余量不足时只由订阅区横向滚动（路由区 `flex: 0 0 auto` 不收缩）。滚动条隐藏：经典滚动条平台（Windows / Linux、macOS 接鼠标）上它会占掉分区的行内高度，让放不下的一行文字比行名高出几个像素。分区滚动位置按「行名 + 区」在重绘前后带走（`_zoneScroll` / `_restoreZoneScroll`），刷新不会把用户滚到的位置弹回起点。标识区 `min-width: 168px` 让各行的订阅区从同一竖线起排，路由区 `min-width: 208px` 让内容不超过它的行分隔线彼此对齐（tier 名 + 状态徽章 + 一个用量格），内容更多的行（如同时配了 5h 与周两个配额守卫）自动外扩、仅该行的分隔线左移。960px 及以下退回两行：标识与路由区占首行，订阅区独占次行；
 - 容器与行序：带 tier 的行按 `tiers` 顺序排在 `#vendor-list`，无 tier 的订阅行排在其后的 `#subscription-list`。拖拽按 `#vendor-list` 的 DOM 顺序拼 `PUT /api/tier-order` 载荷，可拖拽行必须是连续前缀，订阅行不得进入该容器；
-- 并发守卫：`updateVendorStatus` 与 `updateSubscriptions` 只更新缓存（`_tierStatus` / `_subData`）再调 `_renderStatusRows`，拖拽进行中或 PUT 未决时跳过重绘。仅带 tier 数据的定向重渲染（拖拽回滚、复位后刷新）复用订阅缓存，订阅徽章不会被清空；`PUT /api/tier-order` 成功后先按已提交顺序同步 `_tierStatus`（`_syncTierOrder`）再刷新，拖拽结束时的补绘不会用过期顺序把行序画回去。三处拉取路由状态的入口统一走 `fetchTierStatus`：请求发出后才有重排被确认时（连按方向键），迟到的快照只采用状态字段，行序以已确认的顺序为准；整页刷新时两路数据到齐后只重绘一次，避免行节点被连续替换；
+- 并发守卫：`updateVendorStatus` 与 `updateSubscriptions` 只更新缓存（`_tierStatus` / `_subData`）再调 `_renderStatusRows`，拖拽进行中或 PUT 未决时跳过重绘。仅带 tier 数据的定向重渲染（拖拽回滚、复位后刷新）复用订阅缓存，订阅区不会被清空；`PUT /api/tier-order` 成功后先按已提交顺序同步 `_tierStatus`（`_syncTierOrder`）再刷新，拖拽结束时的补绘不会用过期顺序把行序画回去。三处拉取路由状态的入口统一走 `fetchTierStatus`：请求发出后才有重排被确认时（连按方向键），迟到的快照只采用状态字段，行序以已确认的顺序为准；整页刷新时两路数据到齐后只重绘一次，避免行节点被连续替换；
 - 键盘调整：手柄是可聚焦按钮，`↑` / `↓` 触发 `_tierMove`（乐观重排并重绘，再走与拖拽相同的 `persistTierOrder` 与失败回滚）；重绘会替换节点，`_renderStatusRows` 记住焦点所在的行，重绘后回到同一行的手柄；
 - 在途交互：按住手柄尚未越过阈值时行被重绘，被拖行节点已脱离文档，下一次移动按名字重新定位（找不到则本次拖拽作废）；指针按在手柄上时方向键只拦截页面滚动，不触发移动；
 - 订阅数据缺失（接口失败、服务未装配）时行名不跳变，卡片底部显示「无订阅数据」。
@@ -40,7 +43,7 @@ Dashboard Overview ── GET /api/dashboard/subscriptions
 
 - 采集点：`BaseVendor._on_upstream_response` 钩子（`vendors/base.py`，流式/非流式各一处调用），`AnthropicVendor` 覆写为 `capture_anthropic_ratelimit`（`routing/subscription_signals.py`）；
 - 信号：OAuth 订阅流量专属的 `anthropic-ratelimit-unified-*` 响应头（API key 流量不返回，解析为空即跳过）；utilization 为 0.0–1.0 小数、reset 为 epoch 秒（与 `/api/oauth/usage` JSON 的 0–100/ISO8601 不同源，勿混淆）；
-- 存储：进程内单例快照，重启清零，首个订阅请求即回填；无数据时卡片显示「等待首个请求（被动采集）」；
+- 存储：进程内单例快照，重启清零，首个订阅请求即回填；无数据时卡片显示「等待首个请求」；
 - 档位（Pro/Max）拿不到：响应头不含档位信息（需要凭证或读 claude.ai 网页，见「已知边界」）。
 
 ### GLM（智谱 Coding Plan）— 主动查询
@@ -82,4 +85,4 @@ Dashboard Overview ── GET /api/dashboard/subscriptions
 ## 测试锚点
 
 - [tests/test_subscription_status.py](../../tests/test_subscription_status.py)：unified 头解析（含大小写/畸形值/NaN/Infinity/钳制）、vendor 钩子旁路采集（流式+非流式）、两家 fetcher（MockTransport、双字段形态、403 门控、token 失效、缺 displayName / window 的容错、模型族短名）、服务 TTL/错误隔离、端点集成、token store 回退构建（含 enabled 口径与 gateway host 覆写）；
-- [tests/test_dashboard_subscription_card.py](../../tests/test_dashboard_subscription_card.py)：HTML 接线、XSS 转义静态检查、`SUB_META` 归并键与 `VendorType` 的一致性、内联渲染函数 Node vm 行为验证（三类行与行序、徽章分支、订阅数据缺失降级、拖拽并发守卫、恶意档位名与 tier 名转义）；拖拽状态机在最小假 DOM 上的 Node 行为验证（指针在列表外松开、多指重入、过期缓存补绘、PUT 失败回滚、键盘调整与焦点保持、迟到的状态快照不覆盖行序、按住期间行被重绘）。
+- [tests/test_dashboard_subscription_card.py](../../tests/test_dashboard_subscription_card.py)：HTML 接线、XSS 转义静态检查、`SUB_META` 归并键与 `VendorType` 的一致性、内联渲染函数 Node vm 行为验证（三类行与行序、用量格语法与严重度、倒计时两种写法、分组与排序、档位去重、未知窗口类别与原型键名称回退、徽章分支、订阅数据缺失降级、拖拽并发守卫、恶意档位名 / 模型族 / 窗口标签与 tier 名转义）、单行 CSS 约束的静态断言；拖拽状态机在最小假 DOM 上的 Node 行为验证（指针在列表外松开、多指重入、过期缓存补绘、PUT 失败回滚、键盘调整与焦点保持、迟到的状态快照不覆盖行序、按住期间行被重绘、重绘保留分区滚动位置）。

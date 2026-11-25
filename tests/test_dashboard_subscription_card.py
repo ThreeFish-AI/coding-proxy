@@ -61,10 +61,12 @@ def test_subscription_card_wired(client: TestClient):
 
 
 def test_subscription_card_escapes_upstream_strings(client: TestClient):
-    """档位名 / 窗口 label / 错误消息 / tier 名均来自载荷，渲染必须经 escapeHtml."""
+    """档位名 / 模型族 / 窗口 label / 错误消息 / tier 名均来自载荷，渲染必须经 escapeHtml."""
     html = client.get("/dashboard").text
-    assert "${escapeHtml(v.plan)}" in html
-    assert "${escapeHtml(w.label || w.id || '')}" in html
+    assert "${escapeHtml(plan)}" in html
+    assert '<span class="zone-label">${escapeHtml(g)}</span>' in html
+    assert '<span class="quota-label">${escapeHtml(label)}</span>' in html
+    assert 'title="${escapeHtml(title)}"' in html
     assert 'title="${escapeHtml(v.error)}"' in html
     assert "${escapeHtml(meta.label)}" in html
     assert '<span class="vendor-name">${safeName}</span>' in html
@@ -89,6 +91,33 @@ def test_subscription_card_inline_handler_limited_to_reset_button(client: TestCl
         "function _tierZoneHTML(",
     ):
         assert not re.search(r"\son[a-z]+=\"", _extract_function(script, signature))
+
+
+def test_subscription_card_css_keeps_rows_on_one_line(client: TestClient):
+    """单行是 CSS 硬约束：分区不折行、放不下时区内横向滚动；960px 及以下才退回两行."""
+    html = client.get("/dashboard").text
+    start = html.index("/* ── 订阅状态")
+    block = html[start : html.index("/* ── 故障转移表", start)]
+    narrow_at = block.index("@media (max-width: 960px)")
+    wide, narrow = block[:narrow_at], block[narrow_at:]
+
+    def rule(source: str, selector: str) -> str:
+        match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", source)
+        assert match, f"{selector} 规则缺失"
+        return match.group(1)
+
+    zones = rule(wide, ".vendor-badges")
+    assert "flex-wrap: nowrap" in zones and "overflow-x: auto" in zones
+    # 经典滚动条平台上滚动条会占掉分区的行内高度，让放不下的那一行文字上移，所以隐藏
+    assert "scrollbar-width: none" in zones
+    assert "white-space: nowrap" in rule(wide, ".vendor-name")
+    assert "flex: 1 1 auto" in rule(wide, ".has-sub > .sub-zone")
+    assert "flex: 0 0 auto" in rule(
+        wide, ".tier-zone"
+    )  # 路由区不收缩，余量不足只由订阅区滚动
+    assert "flex-wrap: wrap" in rule(narrow, ".subscription-card .vendor-item")
+    assert "min-width: 0" in rule(narrow, ".subscription-card .vendor-info")
+    assert "flex: 1 1 100%" in rule(narrow, ".subscription-card .has-sub > .sub-zone")
 
 
 @pytest.mark.skipif(_NODE is None, reason="node 不可用")
@@ -156,23 +185,51 @@ _SUB_HARNESS = textwrap.dedent(
     assert.strictEqual(fmtResetCountdown(past), '即将重置');
     assert.strictEqual(fmtResetCountdown(null), '');
     assert.strictEqual(fmtResetCountdown(undefined), '');
+    // 紧凑写法留在行内，完整写法进 Tooltip
+    assert.strictEqual(fmtResetShort(soon), '30m');
+    assert.strictEqual(fmtResetShort(later), '30h');
+    assert.strictEqual(fmtResetShort(later + 2 * 86400), '3d');
+    assert.strictEqual(fmtResetShort(past), '即将');
+    assert.strictEqual(fmtResetShort(null), '');
+    // 距重置不足半分钟按「即将」处理，不出 0m；48 小时是「小时」与「天」的分界
+    const almost = Math.floor(Date.now() / 1000) + 20;
+    assert.strictEqual(fmtResetShort(almost), '即将');
+    assert.strictEqual(fmtResetCountdown(almost), '即将重置');
+    assert.strictEqual(fmtResetShort(Math.floor(Date.now() / 1000) + 47 * 3600 + 58 * 60), '47h');
+    assert.strictEqual(fmtResetShort(Math.floor(Date.now() / 1000) + 48 * 3600), '2d');
+    // 重置时间不是有限数字（ISO 字符串 / NaN）：不出倒计时
+    assert.strictEqual(fmtResetShort('2026-11-25T00:00:00Z'), '');
+    assert.strictEqual(fmtResetShort(NaN), '');
+    assert.strictEqual(fmtResetCountdown('2026-11-25T00:00:00Z'), '');
+
+    // 用量格严重度与守卫窗口短标签
+    assert.strictEqual(quotaClass(69), 'q-ok');
+    assert.strictEqual(quotaClass(70), 'q-warn');
+    assert.strictEqual(quotaClass(90), 'q-err');
+    assert.strictEqual(quotaWindowLabel(5), '5h');
+    assert.strictEqual(quotaWindowLabel(24), '1d');
+    assert.strictEqual(quotaWindowLabel(168), '7d');
+    assert.strictEqual(quotaWindowLabel(undefined), '配额');
+    const labels = (html) => Array.from(html.matchAll(/class="quota-label">([^<]*)<\/span>/g), m => m[1]);
+    const values = (html) => Array.from(html.matchAll(/class="quota-val">([^<]*)<\/span>/g), m => m[1]);
 
     const tier = (name, extra) => Object.assign(
       { name: name, circuit_breaker: { state: 'closed', failure_count: 0 },
         rate_limit: { is_rate_limited: false } }, extra || {});
     const quota = (hours, pct) => ({ state: 'within_quota', usage_percent: pct, window_hours: hours });
     const screenshotTiers = [tier('zhipu', { quota_guard: quota(24, 0) }), tier('anthropic')];
+    // 上游按「先 周 后 5h」给窗口：渲染时组内固定先 5h 后 周
+    const agWindows = [
+      { id: 'gemini-weekly', window: 'weekly', group: 'Gemini', label: 'Gemini Models weekly', used_percent: 0, reset_epoch: later },
+      { id: 'gemini-5h', window: '5h', group: 'Gemini', label: 'Gemini Models 5h', used_percent: 4.9, reset_epoch: soon },
+      { id: 'gpt-weekly', window: 'weekly', group: 'Claude+GPT', label: 'Claude and GPT models weekly', used_percent: 0, reset_epoch: later },
+      { id: 'gpt-5h', window: '5h', group: 'Claude+GPT', label: 'Claude and GPT models 5h', used_percent: 0, reset_epoch: soon },
+    ];
     const screenshotVendors = [
       { key: 'claude', plan: null, status: 'waiting', windows: [] },
       { key: 'glm', plan: 'Max', status: 'ok',
-        windows: [{ id: '5h', label: '5 小时', used_percent: 30, reset_epoch: soon }] },
-      { key: 'antigravity', plan: 'Antigravity', status: 'ok',
-        windows: [
-          { id: 'gemini-weekly', label: 'Gemini Models weekly', used_percent: 0, reset_epoch: later },
-          { id: 'gemini-5h', label: 'Gemini Models 5h', used_percent: 4.9, reset_epoch: soon },
-          { id: 'gpt-weekly', label: 'Claude and GPT models weekly', used_percent: 0, reset_epoch: later },
-          { id: 'gpt-5h', label: 'Claude and GPT models 5h', used_percent: 0, reset_epoch: soon },
-        ] },
+        windows: [{ id: '5h', window: '5h', label: '5 小时', used_percent: 30, reset_epoch: soon }] },
+      { key: 'antigravity', plan: 'Antigravity', status: 'ok', windows: agWindows },
     ];
 
     // 同账号合并为一行：[标识] [订阅区] │ [路由区]，行序 = tier 优先级
@@ -184,23 +241,38 @@ _SUB_HARNESS = textwrap.dedent(
     const glmRow = rows.slice(0, rows.indexOf('data-vendor="anthropic"'));
     assert.ok(glmRow.includes('GLM Coding Plan'));                           // 行名取订阅名
     assert.ok(glmRow.includes('<span class="tier-tag">zhipu</span>'));        // 路由区标注 tier 名
-    assert.ok(glmRow.includes('>Max</span>') && glmRow.includes('5 小时 30%'));
-    assert.ok(glmRow.includes('分钟后重置'));
-    assert.ok(glmRow.includes('>正常</span>') && glmRow.includes('1d配额 0%'));
+    assert.ok(glmRow.includes('<span class="zone-label plan">Max</span>'));   // 档位：行名后的加粗亮字
+    assert.deepStrictEqual(labels(glmRow), ['5h', '1d']);                     // 订阅区与路由区的窗口短标签同一套
+    assert.deepStrictEqual(values(glmRow), ['30%', '0%']);
+    // 用量格：完整写法进 Tooltip，行内只留紧凑倒计时
+    assert.ok(/class="quota-group q-ok" title="5 小时：已用 30%，\d+ 分钟后重置">/.test(glmRow));
+    assert.ok(/class="sub-reset"><svg[^>]*>.*?<\/svg>\d+m<\/span>/.test(glmRow));
+    assert.ok(glmRow.includes('title="本代理 1d 滑动窗口配额守卫：已用 0%"'));
+    assert.ok(glmRow.includes('>正常</span>'));
     assert.ok(glmRow.indexOf('class="vendor-badges sub-zone"')
       < glmRow.indexOf('class="vendor-badges tier-zone"'));
     assert.strictEqual((glmRow.match(/class="drag-handle"/g) || []).length, 1);
     const claudeRow = rows.slice(rows.indexOf('data-vendor="anthropic"'));
     assert.ok(claudeRow.includes('Claude Code 订阅'));
     assert.ok(claudeRow.includes('<span class="tier-tag">anthropic</span>'));
-    assert.ok(claudeRow.includes('等待首个请求（被动采集）'));
+    assert.ok(claudeRow.includes('>等待首个请求</span>'));                    // 行内短文案，说明进 Tooltip
+    assert.ok(claudeRow.includes('title="用量来自被动采集'));
     assert.ok(!rows.includes('无订阅数据'));
 
-    // 无 tier 的订阅行排在其后的独立容器，不可拖拽
+    // 无 tier 的订阅行排在其后的独立容器，不可拖拽；没有路由区，也就不画分隔线
     assert.strictEqual(rowCount(subHTML()), 1);
-    assert.ok(subHTML().includes('Antigravity') && subHTML().includes('Gemini Models 5h 5%'));
-    assert.ok(!subHTML().includes('data-vendor') && !subHTML().includes('drag-handle'));
-    assert.ok(subHTML().includes('未加入路由链'));
+    const agHTML = subHTML();
+    assert.ok(agHTML.includes('<span class="vendor-name">Antigravity</span>'));
+    assert.ok(!agHTML.includes('zone-label plan'));                          // 档位名与行名相同，不重复显示
+    assert.ok(agHTML.includes('<span class="zone-note sub-only" title="该订阅对应的供应商未启用或未加入路由链（tiers）">未加入路由链</span>'));
+    assert.ok(!agHTML.includes('tier-zone'));
+    assert.ok(!agHTML.includes('data-vendor') && !agHTML.includes('drag-handle'));
+    // 窗口按模型族分组：灰字标签 + 该组的用量格，组内先 5h 后 周
+    const groupLabels = (html) => Array.from(html.matchAll(/class="zone-label">([^<]*)<\/span>/g), m => m[1]);
+    assert.deepStrictEqual(groupLabels(agHTML), ['Gemini', 'Claude+GPT']);
+    assert.ok(agHTML.includes('<span class="qg"><span class="zone-label">Gemini</span><span class="quota-group '));
+    assert.deepStrictEqual(labels(agHTML), ['5h', '周', '5h', '周']);
+    assert.deepStrictEqual(values(agHTML), ['5%', '0%', '0%', '0%']);
 
     // 无订阅对应的 tier 行：保留路由区并加「供应商状态」标注，不出订阅区
     updateVendorStatus({ tiers: [tier('zhipu'),
@@ -211,7 +283,9 @@ _SUB_HARNESS = textwrap.dedent(
     const copilotRow = rows.slice(rows.indexOf('data-vendor="copilot"'), rows.indexOf('data-vendor="anthropic"'));
     assert.ok(copilotRow.includes('<span class="vendor-name">copilot</span>'));
     assert.ok(copilotRow.includes('<span class="tier-tag">供应商状态</span>'));
-    assert.ok(copilotRow.includes('7d配额 12%'));
+    assert.ok(copilotRow.includes('<div class="vendor-badges tier-zone">'));  // 路由区类名统一，分隔线才对齐
+    assert.deepStrictEqual(labels(copilotRow), ['7d']);
+    assert.deepStrictEqual(values(copilotRow), ['12%']);
     assert.ok(!copilotRow.includes('sub-zone'));
 
     // 头像首字母：供应商行与订阅行头像（C / G / A）撞字母时取前两个字母
@@ -236,17 +310,21 @@ _SUB_HARNESS = textwrap.dedent(
     rows = tierHTML();
     assert.ok(rows.indexOf('data-vendor="anthropic"') < rows.indexOf('data-vendor="zhipu"'));
 
-    // 路由区徽章分支：熔断 ×N / 半开 / 周配额 / 限速中
+    // 路由区：状态徽章在前（熔断 ×N / 限速中 / 半开），配额守卫用量格在后
     updateVendorStatus({ tiers: [
       tier('zhipu', { circuit_breaker: { state: 'open', failure_count: 3 },
-        rate_limit: { is_rate_limited: true }, weekly_quota_guard: quota(168, 45) }),
+        rate_limit: { is_rate_limited: true }, weekly_quota_guard: quota(168, 78) }),
       tier('anthropic', { circuit_breaker: { state: 'half_open', failure_count: 0 } }),
     ] });
     rows = tierHTML();
-    assert.ok(rows.includes('<span class="status-badge sb-err">熔断 ×3</span>'));
+    const zhipuRow = rows.slice(0, rows.indexOf('data-vendor="anthropic"'));
+    const zhipuTier = zhipuRow.slice(zhipuRow.indexOf('class="vendor-badges tier-zone"'));
+    assert.ok(zhipuRow.includes('<span class="status-badge sb-err">熔断 ×3</span>'));
+    assert.ok(zhipuTier.includes('<span class="status-badge sb-warn">限速中</span>'));
+    assert.ok(zhipuTier.indexOf('>熔断 ×3</span>') < zhipuTier.indexOf('>限速中</span>'));
+    assert.ok(zhipuTier.indexOf('>限速中</span>') < zhipuTier.indexOf('class="quota-group'));
+    assert.ok(zhipuTier.includes('<span class="quota-group q-warn" title="本代理 7d 滑动窗口配额守卫：已用 78%">'));
     assert.ok(rows.includes('<span class="status-badge sb-warn">半开</span>'));
-    assert.ok(rows.includes('<span class="status-badge sb-warn">限速中</span>'));
-    assert.ok(rows.includes('7d配额 45%'));
 
     // 订阅接口失败或为空：行名不跳变、订阅区不渲染，卡片底部提示
     updateVendorStatus({ tiers: screenshotTiers });
@@ -262,7 +340,8 @@ _SUB_HARNESS = textwrap.dedent(
     // 状态分支与 XSS：上游字符串经 escapeHtml，不得出现可执行标签
     updateSubscriptions({ vendors: [
       { key: 'glm', plan: '<img src=x onerror=alert(1)>', status: 'ok',
-        windows: [{ id: '5h', label: '<script>', used_percent: 1, reset_epoch: null }] },
+        windows: [{ id: 'w', window: '<b>', group: '<img src=x onerror=alert(4)>',
+          label: '<script>', used_percent: 95, reset_epoch: null }] },
       { key: 'antigravity', plan: 'P', status: 'error',
         error: '" onmouseover="alert(2)', windows: [] },
       { key: 'claude', status: 'not_configured', windows: [] },
@@ -271,11 +350,13 @@ _SUB_HARNESS = textwrap.dedent(
     // 原始标签不得出现；onerror 仅允许以转义后的惰性文本存在
     assert.ok(!out.includes('<img'));
     assert.ok(!out.includes('<script>'));
-    assert.ok(out.includes('&lt;img src=x onerror='));
-    assert.ok(out.includes('&lt;script&gt;'));
+    assert.ok(out.includes('&lt;img src=x onerror=alert(1)&gt;</span>'));     // 档位名
+    assert.ok(out.includes('&lt;img src=x onerror=alert(4)&gt;</span>'));     // 模型族
+    assert.ok(out.includes('&lt;script&gt;'));                                // 认不出的窗口类别回退 label
     assert.ok(!out.includes('" onmouseover="alert(2)'));
     assert.ok(out.includes('查询失败'));
     assert.ok(out.includes('未启用'));
+    assert.ok(out.includes('<span class="quota-group q-err"'));               // ≥ 90% 落红档
 
     // tier 名同样来自载荷：名称 / data-vendor / 首字母三处均转义
     updateVendorStatus({ tiers: [tier('<img src=x onerror=alert(3)>'), tier('anthropic')] });
@@ -286,11 +367,11 @@ _SUB_HARNESS = textwrap.dedent(
     assert.strictEqual((out.match(/data-vendor="/g) || []).length, 2);
     updateVendorStatus({ tiers: screenshotTiers });
 
-    // 仅带 tier 数据的定向重渲染（拖拽回滚 / 复位后刷新）复用订阅缓存，订阅徽章不被清空
+    // 仅带 tier 数据的定向重渲染（拖拽回滚 / 复位后刷新）复用订阅缓存，订阅区不被清空
     updateSubscriptions({ vendors: screenshotVendors });
     updateVendorStatus({ tiers: [tier('anthropic'), tier('zhipu')] });
     rows = tierHTML();
-    assert.ok(rows.includes('>Max</span>') && rows.includes('5 小时 30%'));
+    assert.ok(rows.includes('<span class="zone-label plan">Max</span>') && rows.includes('<span class="quota-val">30%</span>'));
     assert.ok(rows.indexOf('data-vendor="anthropic"') < rows.indexOf('data-vendor="zhipu"'));
 
     // 拖拽进行中 / PUT 未决：两路刷新只更新缓存、不动 DOM，守卫解除后按最新缓存补绘
@@ -307,7 +388,7 @@ _SUB_HARNESS = textwrap.dedent(
     _tierDrag.inFlight = false;
     updateVendorStatus({ tiers: draggingTiers });
     rows = tierHTML();
-    assert.ok(rows.includes('<span class="vendor-name">copilot</span>') && rows.includes('>Pro</span>'));
+    assert.ok(rows.includes('<span class="vendor-name">copilot</span>') && rows.includes('<span class="zone-label plan">Pro</span>'));
 
     // antigravity tier 在路由链上时并入同一行；显示名与 tier 名仅大小写不同，不重复标注。
     // 此时 anthropic 不在路由链上，Claude 订阅转为无 tier 的订阅行
@@ -322,6 +403,61 @@ _SUB_HARNESS = textwrap.dedent(
     // 后端新增的未知订阅 key：落为无 tier 的订阅行，不误并
     updateSubscriptions({ vendors: screenshotVendors.concat([{ key: 'newvendor', status: 'ok', windows: [] }]) });
     assert.ok(subHTML().includes('<span class="vendor-name">newvendor</span>'));
+
+    // 认不出的窗口类别（上游新增）：标签回退 label，排在已知类别之后；没有重置时间就不出倒计时
+    updateVendorStatus({ tiers: [tier('zhipu')] });
+    updateSubscriptions({ vendors: [{ key: 'glm', plan: null, status: 'ok', windows: [
+      { id: 'x', label: '自定义窗口', used_percent: 20, reset_epoch: null },
+      { id: 'weekly', window: 'weekly', label: '每周', used_percent: 10, reset_epoch: null },
+      { id: '5h', window: '5h', label: '5 小时', used_percent: 5, reset_epoch: null },
+    ] }] });
+    assert.deepStrictEqual(labels(tierHTML()), ['5h', '周', '自定义窗口']);
+    assert.ok(!tierHTML().includes('sub-reset'));
+
+    // 窗口类别 / 模型族取到对象原型上的名字：不命中继承成员，按未知类别处理
+    updateSubscriptions({ vendors: [{ key: 'glm', status: 'ok', windows: [
+      { id: 'x', window: 'constructor', label: 'legacy-window', used_percent: 5, reset_epoch: null },
+    ] }] });
+    assert.deepStrictEqual(labels(tierHTML()), ['legacy-window']);
+    updateSubscriptions({ vendors: [{ key: 'antigravity', status: 'ok', windows: [
+      { id: 'y', window: '5h', group: 'constructor', label: 'g 5h', used_percent: 5, reset_epoch: null },
+      { id: 'z', window: 'weekly', group: '__proto__', label: 'p weekly', used_percent: 6, reset_epoch: null },
+    ] }] });
+    const protoHTML = subHTML();
+    assert.ok(protoHTML.includes('<span class="zone-label">constructor</span>'));
+    assert.ok(protoHTML.includes('<span class="zone-label">__proto__</span>'));
+    assert.deepStrictEqual(labels(protoHTML), ['5h', '周']);
+
+    // 同一家混有分组与不分组的窗口：不分组的前一组在前，分组标签只带在该组窗口之前
+    updateSubscriptions({ vendors: [{ key: 'antigravity', status: 'ok', windows: [
+      { id: 'a', label: 'A', used_percent: 1, reset_epoch: null },
+      { id: 'b', window: 'weekly', group: 'B', label: 'B weekly', used_percent: 2, reset_epoch: null },
+      { id: 'c', label: 'C', used_percent: 3, reset_epoch: null },
+    ] }] });
+    const mixedHTML = subHTML();
+    assert.deepStrictEqual(labels(mixedHTML), ['A', 'C', '周']);
+    assert.ok(mixedHTML.indexOf('zone-label">B</span>') > mixedHTML.indexOf('>C</span>'));
+
+    // 整组窗口都没有用量：不出用量格，也不留空的订阅区
+    updateVendorStatus({ tiers: [tier('zhipu')] });
+    updateSubscriptions({ vendors: [{ key: 'glm', status: 'ok', windows: [
+      { id: '5h', window: '5h', label: '5 小时', used_percent: null },
+    ] }] });
+    assert.ok(!tierHTML().includes('sub-zone') && !tierHTML().includes('class="qg"'));
+
+    // 档位去重不分大小写、忽略首尾空白；未知 key 以 key 本身作行名；非字符串档位也能显示
+    assert.strictEqual(_planLabel({ key: 'antigravity', plan: ' antigravity ' }), '');
+    assert.strictEqual(_planLabel({ key: 'antigravity', plan: 'Antigravity Pro' }), 'Antigravity Pro');
+    assert.strictEqual(_planLabel({ key: 'newvendor', plan: 'NewVendor' }), '');
+    assert.strictEqual(_planLabel({ key: 'glm', plan: 7 }), '7');
+    assert.strictEqual(_planLabel(null), '');
+
+    // 失败次数来自载荷：数字照常显示，非数字当作 0 且不进 HTML
+    updateVendorStatus({ tiers: [tier('zhipu', { circuit_breaker: { state: 'open', failure_count: '3' } })] });
+    assert.ok(tierHTML().includes('<span class="status-badge sb-err">熔断 ×3</span>'));
+    updateVendorStatus({ tiers: [tier('zhipu', { circuit_breaker: { state: 'open', failure_count: '<img src=x onerror=alert(5)>' } })] });
+    assert.ok(tierHTML().includes('<span class="status-badge sb-err">熔断</span>'));
+    assert.ok(!tierHTML().includes('<img'));
 
     // 只有 1 个 tier 不渲染手柄；两侧都空只给一个空态
     updateVendorStatus({ tiers: [tier('zhipu')] });
@@ -338,22 +474,30 @@ _SUB_HARNESS = textwrap.dedent(
 _ROW_FUNCTION_SIGNATURES = (
     "function escapeHtml(",
     "function quotaClass(",
-    "function quotaBarColor(",
     "function quotaWindowLabel(",
-    "function fmtResetCountdown(",
-    "function renderSubWindow(",
+    "function renderQuotaCell(",
     "function renderQuotaBar(",
     "function cbStateClass(",
     "function cbStateLabel(",
     "function _tierZoneHTML(",
     "function _tierInitial(",
-    "function _focusedTierHandle(",
-    "function _tierRowByName(",
-    "function _focusTierHandle(",
+    "function fmtResetCountdown(",
+    "function fmtResetShort(",
+    "function _resetIn(",
+    "function _windowRank(",
+    "function windowLabel(",
+    "function renderSubWindow(",
+    "function _planLabel(",
     "function _subZoneHTML(",
     "function updateVendorStatus(",
     "function updateSubscriptions(",
     "function _renderStatusRows(",
+    "function _focusedTierHandle(",
+    "function _tierRowByName(",
+    "function _focusTierHandle(",
+    "function _zoneScrollKey(",
+    "function _zoneScroll(",
+    "function _restoreZoneScroll(",
 )
 
 
@@ -387,7 +531,8 @@ def test_subscription_render_behavior(client: TestClient, tmp_path):
     prelude = (
         "let captured = { 'vendor-list': '', 'subscription-list': '' };\n"
         "const document = { getElementById(id) {\n"
-        "  return id in captured ? { set innerHTML(v) { captured[id] = v; },\n"
+        "  return id in captured ? { querySelectorAll() { return []; },\n"
+        "  set innerHTML(v) { captured[id] = v; },\n"
         "  get innerHTML() { return captured[id]; } } : null; } };\n"
         "const _tierDrag = { active: false, inFlight: false };\n"
         "let _tierStatus = { tiers: [] };\n"
@@ -415,7 +560,7 @@ _DRAG_PRELUDE = textwrap.dedent(
         this.children = []; this.parentElement = null; this._h = {};
         this.isConnected = false; this.captured = null;
         const state = new Set();
-        this.classList = { add: c => state.add(c), remove: c => state.delete(c), contains: c => state.has(c) };
+        this.classList = { add: c => state.add(c), remove: c => state.delete(c), contains: c => state.has(c) || this.classes.includes(c) };
         this._state = state;
       }
       matches(sel) {
@@ -465,18 +610,24 @@ _DRAG_PRELUDE = textwrap.dedent(
         const p = this.parentElement;
         return p ? (p.children[p.children.indexOf(this) + 1] || null) : null;
       }
-      // 合并渲染写回 innerHTML：按 data-vendor 出现顺序重建行节点，并按标记挂上手柄。
-      // 旧节点随之脱离文档，其上的焦点丢失；paints 记下每次重绘的行序
+      // 合并渲染写回 innerHTML：按 data-vendor 出现顺序重建行节点，挂上手柄与分区（订阅区 / 路由区，
+      // 分区带可读写的 scrollLeft）。旧节点随之脱离文档，其上的焦点丢失；paints 记下每次重绘的行序
       set innerHTML(html) {
         this.html = html;
         const stale = this.children;
         const marks = Array.from(html.matchAll(/data-vendor="([^"]*)"/g));
         this.children = marks.map((m, i) => {
+          const slice = html.slice(m.index, i + 1 < marks.length ? marks[i + 1].index : html.length);
           const item = new FakeEl('item', ['vendor-item'], m[1]);
-          if (html.slice(m.index, i + 1 < marks.length ? marks[i + 1].index : html.length).includes('class="drag-handle"')) {
+          if (slice.includes('class="drag-handle"')) {
             const handle = new FakeEl('handle', ['drag-handle']);
             handle.parentElement = item; item.children.push(handle);
           }
+          Array.from(slice.matchAll(/class="vendor-badges (sub-zone|tier-zone)"/g)).forEach(z => {
+            const zone = new FakeEl('zone', ['vendor-badges', z[1]]);
+            zone.scrollLeft = 0;
+            zone.parentElement = item; item.children.push(zone);
+          });
           return item;
         });
         this.children.forEach(c => { c.parentElement = this; });
@@ -781,6 +932,23 @@ _DRAG_HARNESS = textwrap.dedent(
       assert.strictEqual(tierList.paints.length, paints0);
       updateSubscriptions({ vendors: [] });
       assert.strictEqual(tierList.paints.length, paints0 + 1);
+
+      // 十六、重绘保留分区的横向滚动位置：放不下的行被用户滚到右侧后，刷新不把它弹回起点
+      await reset(['zhipu', 'anthropic', 'copilot']);
+      const glmSub = { vendors: [{ key: 'glm', plan: 'Pro', status: 'ok', windows: [] }] };
+      updateSubscriptions(glmSub);
+      const zoneOf = (vendor, kind) => rowOf(vendor).querySelectorAll('.vendor-badges').find(z => z.classList.contains(kind));
+      zoneOf('zhipu', 'sub-zone').scrollLeft = 120;
+      zoneOf('zhipu', 'tier-zone').scrollLeft = 30;                // 同一行的两个分区各记各的
+      updateVendorStatus(serverStatus(), true);
+      updateSubscriptions(glmSub);                                 // 重绘：行节点全部重建
+      assert.strictEqual(zoneOf('zhipu', 'sub-zone').scrollLeft, 120);
+      assert.strictEqual(zoneOf('zhipu', 'tier-zone').scrollLeft, 30);
+      assert.strictEqual(zoneOf('anthropic', 'tier-zone').scrollLeft, 0);
+      assert.strictEqual(zoneOf('copilot', 'tier-zone').scrollLeft, 0);
+      // 行已不在列表里：它的滚动位置不会串到别的行
+      updateVendorStatus({ tiers: [tier('anthropic'), tier('copilot')] });
+      assert.strictEqual(zoneOf('anthropic', 'tier-zone').scrollLeft, 0);
       console.log('tier drag harness OK');
     })().catch(err => { console.error(err); process.exit(1); });
     """
