@@ -19,6 +19,7 @@ from coding.proxy.server.subscription_status import (
     SubscriptionError,
     SubscriptionStatusService,
     ZhipuUsageFetcher,
+    _ag_group_label,
 )
 from coding.proxy.vendors.anthropic import AnthropicVendor
 from coding.proxy.vendors.token_manager import (
@@ -183,6 +184,7 @@ async def test_zhipu_fetcher_official_shape():
     result = await _zhipu_fetcher(handler).fetch()
     assert result["plan"] == "Pro"
     assert [w["id"] for w in result["windows"]] == ["5h", "weekly"]
+    assert [w["window"] for w in result["windows"]] == ["5h", "weekly"]
     assert result["windows"][0]["used_percent"] == pytest.approx(42.0)
     assert result["windows"][0]["reset_epoch"] == 1731750000  # ms → s
     assert result["windows"][1]["label"] == "每周"
@@ -297,15 +299,60 @@ async def test_antigravity_fetcher_groups_and_tier_cache():
     by_id = {w["id"]: w for w in result["windows"]}
     assert by_id["gemini-5h"]["used_percent"] == pytest.approx(75.0)
     assert by_id["gemini-5h"]["label"] == "Gemini Models 5h"
+    assert by_id["gemini-5h"]["window"] == "5h"
+    assert by_id["gemini-5h"]["group"] == "Gemini"
     assert by_id["gemini-5h"]["reset_epoch"] is not None
     assert by_id["gemini-weekly"]["used_percent"] == pytest.approx(0.0)
     assert by_id["3p-5h"]["exhausted"] is True
     assert by_id["3p-5h"]["used_percent"] == 100.0
+    assert by_id["3p-5h"]["group"] == "Claude+GPT"
 
     # 第二次 fetch：loadCodeAssist 命中缓存，仅重查配额汇总
     calls_before = list(state["calls"])
     await fetcher.fetch()
     assert state["calls"] == calls_before + ["/v1internal:retrieveUserQuotaSummary"]
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Gemini Models", "Gemini"),
+        ("Claude and GPT models", "Claude+GPT"),
+        ("Gemini 3 Pro", "Gemini 3 Pro"),  # 上游改名：原样返回
+        ("  Models  ", "Models"),  # 缩完为空时退回原名
+        ("", ""),
+    ],
+)
+def test_ag_group_label_shortens_display_name(name: str, expected: str):
+    assert _ag_group_label(name) == expected
+
+
+async def test_antigravity_fetcher_tolerates_missing_group_and_window():
+    """上游缺 displayName / window / bucketId：group 与 window 置空，label 退回「配额」."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(":loadCodeAssist"):
+            return httpx.Response(200, json={"cloudaicompanionProject": "p"})
+        return httpx.Response(
+            200, json={"groups": [{"buckets": [{"remainingFraction": 0.6}]}]}
+        )
+
+    fetcher = AntigravityUsageFetcher(
+        lambda: _async_return("tok"), transport=httpx.MockTransport(handler)
+    )
+    result = await fetcher.fetch()
+    assert result["plan"] is None
+    assert result["windows"] == [
+        {
+            "id": "配额",
+            "label": "配额",
+            "window": "",
+            "group": "",
+            "used_percent": 40.0,
+            "reset_epoch": None,
+            "exhausted": False,
+        }
+    ]
 
 
 async def test_antigravity_fetcher_403_gate():
@@ -374,6 +421,7 @@ async def test_service_ttl_cache_and_claude_waiting():
     claude = status["vendors"][0]
     assert claude["status"] == "allowed"
     assert [w["id"] for w in claude["windows"]] == ["5h", "weekly"]
+    assert [w["window"] for w in claude["windows"]] == ["5h", "weekly"]
 
 
 async def test_service_error_isolation():

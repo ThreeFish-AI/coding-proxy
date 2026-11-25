@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 import time
 import traceback
 from collections.abc import Awaitable, Callable
@@ -200,6 +201,7 @@ class ZhipuUsageFetcher:
                 {
                     "id": kind,
                     "label": _WINDOW_LABELS[kind],
+                    "window": kind,
                     "used_percent": _clamp_percent(percent),
                     "reset_epoch": _epoch_seconds(
                         _pick(item, "nextResetTime", "reset_time")
@@ -207,6 +209,16 @@ class ZhipuUsageFetcher:
                 }
             )
         return {"plan": str(plan).capitalize() if plan else None, "windows": windows}
+
+
+def _ag_group_label(name: str) -> str:
+    """模型族短名（卡片展示用）：去掉冗余的 models 后缀，「and」缩成「+」.
+
+    Gemini Models → Gemini；Claude and GPT models → Claude+GPT。上游改名时
+    原样返回，完整名称仍留在窗口的 ``label`` 里。
+    """
+    short = re.sub(r"\s+models?$", "", name.strip(), flags=re.IGNORECASE)
+    return re.sub(r"\s+and\s+", "+", short) or name
 
 
 # ── Antigravity fetcher ──────────────────────────────────────
@@ -333,6 +345,8 @@ class AntigravityUsageFetcher:
                     {
                         "id": str(bucket.get("bucketId") or label),
                         "label": label,
+                        "window": window,
+                        "group": _ag_group_label(group_name),
                         "used_percent": _clamp_percent((1.0 - remaining) * 100.0),
                         "reset_epoch": _iso_to_epoch(bucket.get("resetTime")),
                         "exhausted": bool(bucket.get("disabled")) or remaining <= 0,
@@ -457,6 +471,7 @@ class SubscriptionStatusService:
                 {
                     "id": "5h",
                     "label": "5 小时",
+                    "window": "5h",
                     "used_percent": snapshot.five_hour_percent,
                     "reset_epoch": snapshot.five_hour_reset_epoch,
                 }
@@ -466,6 +481,7 @@ class SubscriptionStatusService:
                 {
                     "id": "weekly",
                     "label": "7 天",
+                    "window": "weekly",
                     "used_percent": snapshot.seven_day_percent,
                     "reset_epoch": snapshot.seven_day_reset_epoch,
                 }
