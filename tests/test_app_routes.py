@@ -1486,6 +1486,7 @@ def test_status_returns_bindable_models():
         # 内置 zhipu 目录随激活 vendor 进入下拉，config 条目按 model 去重合并
         assert "glm-5.3" in models_only
         assert "glm-5.3-flash" in models_only  # 内置目录条目
+        assert "glm-5.4" in models_only  # 内置目录条目（最新 GLM）
         assert "claude-opus-4.6" in models_only  # config 纯自定义条目
         assert models_only.count("glm-5.3") == 1  # 同名去重不重复
         glm = next(m for m in models if m["model"] == "glm-5.3")

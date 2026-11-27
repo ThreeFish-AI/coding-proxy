@@ -66,6 +66,7 @@ _ANTHROPIC = [
 
 # zhipu（智谱）可绑定的 glm 家族
 _ZHIPU = [
+    ("GLM 5.4", "glm-5.4"),
     ("GLM 5.3", "glm-5.3"),
     ("GLM 5.3 Flash", "glm-5.3-flash"),
     ("GLM 5.2", "glm-5.2"),

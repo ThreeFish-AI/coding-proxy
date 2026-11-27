@@ -99,6 +99,16 @@ class TestComposeCatalog:
         for entry in builtin_entries_for("zhipu") + builtin_entries_for("anthropic"):
             assert entry.tiers == (entry.vendor,)
 
+    def test_zhipu_glm_5_4_in_builtin_catalog(self):
+        """回归：pricing 与调用记录不是目录来源，GLM 5.4 须随内置目录进下拉."""
+        cat = compose_bindable_catalog(["zhipu"], [_cfg("A", "glm-5.3")])
+        glm = next(e for e in cat if e["model"] == "glm-5.4")
+        assert (glm["label"], glm["vendor"], glm["tiers"]) == (
+            "GLM 5.4",
+            "zhipu",
+            ["zhipu"],
+        )
+
 
 # ── builtin_identity_rules ──────────────────────────────────
 
@@ -110,6 +120,12 @@ class TestIdentityRules:
         zhipu_rules = {r.pattern for r in rules if r.vendors == ["zhipu"]}
         assert "glm-5.3" in zhipu_rules
         assert all(r.pattern == r.target and not r.is_regex for r in rules)
+
+    def test_glm_5_4_gets_identity_rule(self):
+        """内置目录里的 GLM 5.4 发往 zhipu 时 exact 命中原名，不被 default 回退改写."""
+        cat = compose_bindable_catalog(["zhipu"], [_cfg("A", "glm-5.3")])
+        rules = builtin_identity_rules(cat)
+        assert any(r.pattern == "glm-5.4" and r.vendors == ["zhipu"] for r in rules)
 
     def test_anthropic_entries_get_no_rules(self):
         """anthropic 恒等透传，不进 ModelMapper 规则空间."""
