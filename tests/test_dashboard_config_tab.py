@@ -400,6 +400,28 @@ _NODE_HARNESS = textwrap.dedent(
     assert.deepStrictEqual(h.pricingMergeRows(['pricing'], saved, dflt, dflt), []);
     assert.ok(h.validToken('A'.repeat(32)) && !h.validToken('short') && !h.validToken('a b'.repeat(16)));
     assert.ok(h.isTmpl({ $tmpl: '${X}' }) && !h.isTmpl({ $tmpl: 1 }));
+
+    // 保存后果清单：无后果为空（不弹确认框）；在途请求、密钥、地址变更、熔断、移除 vendor 各自成条
+    const view0 = { running: { tiers: ['a'], boot_revisions: {} }, revisions: {} };
+    const plain = { sections: { failover: {} }, secret_ops: {}, revisions: {} };
+    assert.deepStrictEqual(h.saveImpact({ payload: plain, base: {}, work: {}, view: view0, status: { in_flight: 0, tiers: [] }, cleared: [], chain: ['a'] }), []);
+    const codes = o => h.saveImpact(o).map(x => x.code);
+    assert.deepStrictEqual(codes({ payload: plain, base: {}, work: {}, view: view0, status: { in_flight: 2, tiers: [] }, cleared: [], chain: ['a'] }), ['inflight']);
+    const sec = { sections: {}, secret_ops: { 'vendors.zhipu.api_key': { op: 'clear' } }, revisions: {} };
+    const it = h.saveImpact({ payload: sec, base: {}, work: {}, view: view0, status: null, cleared: [], chain: ['a'] });
+    assert.deepStrictEqual(it.map(x => [x.code, x.danger]), [['secrets', true]]);
+    assert.ok(h.saveImpact({ payload: plain, base: {}, work: {}, view: view0, status: null, cleared: ['vendors.zhipu.api_key'], chain: ['a'] })[0].danger);
+    assert.deepStrictEqual(codes({ payload: plain, base: {}, work: {}, view: view0, status: { tiers: [{ name: 'a', circuit_breaker: { state: 'open' } }] }, cleared: [], chain: ['a'] }), ['breaker']);
+    const vpay = { sections: { vendors: [] }, secret_ops: {}, revisions: {} };
+    assert.ok(codes({ payload: vpay, base: { vendors: [{ vendor: 'kimi' }] }, work: { vendors: [] }, view: view0, status: null, cleared: [], chain: ['a'] }).includes('removed'));
+    // 字段级 diff：vendors 按名配对、pricing 按 vendor + model 配对，未配上的行记为新增 / 移除
+    const lab = { label: p => p.split('.').pop(), skip: () => false, sectionLabel: s => s, rowTitle: (s, r) => r.vendor + '/' + r.model };
+    const g = h.changedRows(
+      { vendors: [{ vendor: 'zhipu', timeout_ms: 1 }], pricing: [{ vendor: 'a', model: 'x' }, { vendor: 'a', model: 'y' }] },
+      { vendors: [{ vendor: 'zhipu', timeout_ms: 2 }], pricing: [{ vendor: 'a', model: 'y' }] }, lab);
+    assert.deepStrictEqual(g.map(x => x.title), ['vendors › zhipu', 'pricing']);
+    assert.deepStrictEqual([g[0].rows[0].label, g[0].rows[0].before, g[0].rows[0].after], ['timeout_ms', '1', '2']);
+    assert.deepStrictEqual(g[1].rows.map(r => [r.label, !!r.removed]), [['a/x', true]]);
     console.log('ok');
     """
 )

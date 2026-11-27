@@ -204,6 +204,89 @@
     return newDefaultRows(work, newDefaultRows(base, defaults));
   }
 
+  // 字段级 diff（保存确认框用）：对象按路径递归；vendors 按 vendor 名配对；列表型 section 按行键配对
+  var ROW_KEY = {
+    pricing: ['vendor', 'model'], model_mapping: ['pattern'], 'session_policies.policies': ['name'],
+    'session_policies.bindable_models': ['label'], 'session_policies.title_vendor_bindings': ['prefix'],
+  };
+  function rowKeyOf(sec, row) {
+    var ks = ROW_KEY[sec];
+    return ks && isObj(row) ? ks.map(function (k) { return String(row[k]); }).join('/') : JSON.stringify(row);
+  }
+  function shortVal(v) {
+    var s = Array.isArray(v) ? (v.length ? v.map(String).join(' → ') : '[]') : fmtVal(v);
+    return s.length > 60 ? s.slice(0, 57) + '…' : s;
+  }
+  function maskUrl(v) { return typeof v === 'string' ? v.replace(/\/\/[^/@\s]+@/, '//***@') : v; }
+  function diffLeaves(a, b, path, out, o) {
+    if (deepEqual(a, b)) return;
+    if (Array.isArray(a) && Array.isArray(b) && ROW_KEY[path]) { diffRows(path, a, b, out, o); return; }
+    if (isObj(a) && isObj(b)) {
+      Object.keys(a).concat(Object.keys(b).filter(function (k) { return !(k in a); }))
+        .forEach(function (k) { if (!o.skip(path + '.' + k)) diffLeaves(a[k], b[k], path + '.' + k, out, o); });
+      return;
+    }
+    out.push({ path: path, label: o.label(path), before: maskUrl(shortVal(a)), after: maskUrl(shortVal(b)) });
+  }
+  function diffRows(sec, a, b, out, o) {
+    var pool = {}, hit = {};
+    (b || []).forEach(function (r, j) { var k = rowKeyOf(sec, r); (pool[k] = pool[k] || []).push(j); });
+    (a || []).forEach(function (r, i) {
+      var q = pool[rowKeyOf(sec, r)];
+      if (q && q.length) { var j = q.shift(); hit[j] = true; diffLeaves(r, b[j], sec + '.' + j, out, o); }
+      else out.push({ path: sec + '.' + i, label: o.rowTitle(sec, r), before: '', after: '', removed: true });
+    });
+    (b || []).forEach(function (r, j) { if (!hit[j]) out.push({ path: sec + '.' + j, label: o.rowTitle(sec, r), before: '', after: '', added: true }); });
+  }
+  // 返回按 section 分组的差异行；数组型 section 只给「新增 / 移除 / 同键条目的字段变化」
+  function changedRows(base, work, o) {
+    var groups = [], open = function (title) { var g = { title: title, rows: [] }; groups.push(g); return g.rows; };
+    dirtySections(base, work).forEach(function (s) {
+      if (s === 'vendors') {
+        var a = vendorMap(base.vendors), b = vendorMap(work.vendors);
+        var oa = (base.vendors || []).map(function (v) { return v.vendor; }), ob = (work.vendors || []).map(function (v) { return v.vendor; });
+        if (oa.join('\u0000') !== ob.join('\u0000') && oa.slice().sort().join('\u0000') === ob.slice().sort().join('\u0000')) {
+          open(o.sectionLabel(s)).push({ path: 'vendors', label: '顺序', before: oa.join(' → '), after: ob.join(' → ') });
+        }
+        Object.keys(a).concat(Object.keys(b).filter(function (t) { return !(t in a); })).forEach(function (t) {
+          var rows = open(o.sectionLabel(s) + ' › ' + t);
+          if (!a[t]) rows.push({ path: 'vendors.' + t, label: t, before: '', after: '', added: true });
+          else if (!b[t]) rows.push({ path: 'vendors.' + t, label: t, before: '', after: '', removed: true });
+          else diffLeaves(a[t], b[t], 'vendors.' + t, rows, o);
+        });
+        return;
+      }
+      var rows = open(o.sectionLabel(s));
+      if (Array.isArray(base[s]) || Array.isArray(work[s])) diffRows(s, base[s] || [], work[s] || [], rows, o);
+      else diffLeaves(base[s], work[s], s, rows, o);
+    });
+    return groups.filter(function (g) { return g.rows.length; });
+  }
+  // 保存后果清单（非空才弹确认框）：只返回原因码与数据，文案由界面层生成
+  function saveImpact(o) {
+    var out = [], p = o.payload, v = o.view, st = o.status || {}, tiers = st.tiers || [];
+    var names = function (pred) { return tiers.filter(pred).map(function (t) { return t.name; }); };
+    var ops = Object.keys(p.secret_ops);
+    if (ops.length) out.push({ code: 'secrets', danger: ops.some(function (x) { return p.secret_ops[x].op === 'clear'; }), paths: ops });
+    if (o.cleared.length) out.push({ code: 'cleared', danger: true, paths: o.cleared });
+    if (st.in_flight > 0) out.push({ code: 'inflight', n: st.in_flight });
+    var cb = names(function (t) { return t.circuit_breaker && t.circuit_breaker.state && t.circuit_breaker.state !== 'closed'; });
+    var rl = names(function (t) { return t.rate_limit && t.rate_limit.is_rate_limited; });
+    var qx = names(function (t) { return [t.quota_guard, t.weekly_quota_guard].some(function (q) { return q && q.state === 'quota_exceeded'; }); });
+    if (cb.length) out.push({ code: 'breaker', names: cb });
+    if (rl.length) out.push({ code: 'ratelimit', names: rl });
+    if (qx.length) out.push({ code: 'quota', names: qx });
+    var running = v.running && v.running.tiers;
+    if (Array.isArray(running) && (p.sections.vendors || p.sections.tiers) && !deepEqual(running, o.chain)) out.push({ code: 'tiers' });
+    var boot = (v.running && v.running.boot_revisions) || {};
+    var pend = Object.keys(p.sections).filter(function (s) { return s in boot && boot[s] !== v.revisions[s]; });
+    if (pend.length) out.push({ code: 'pending', sections: pend });
+    var before = vendorMap(o.base.vendors), after = vendorMap(o.work.vendors);
+    var gone = Object.keys(before).filter(function (t) { return !after[t]; });
+    if (gone.length && p.sections.vendors) out.push({ code: 'removed', vendors: gone });
+    return out;
+  }
+
   var helpers = {
     deepEqual: deepEqual, clone: clone, isTmpl: isTmpl, validToken: validToken, assignField: assignField,
     parsePrice: parsePrice, entryCurrency: entryCurrency, priceText: priceText, withCurrency: withCurrency,
@@ -211,6 +294,7 @@
     countChangedFields: countChangedFields, buildPayload: buildPayload, predictClearedSecrets: predictClearedSecrets,
     movedOpenIndex: movedOpenIndex,
     effectiveChain: effectiveChain, newDefaultRows: newDefaultRows, pricingMergeRows: pricingMergeRows,
+    changedRows: changedRows, saveImpact: saveImpact,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = helpers;
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
@@ -232,6 +316,7 @@
     pill: 'vendors', vendor: null, expanded: {}, loaded: false, saving: false, readonly: false,
     specs: [], specMap: {}, schema: { fields: {}, groups: {} },
     retryOnly: null, fatalText: null,
+    confirming: false, focus: null, focusTo: null, focusRemap: null, newRow: null, undo: null, live: null,
   };
   var uid = 0;
 
