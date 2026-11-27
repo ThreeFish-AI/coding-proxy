@@ -671,7 +671,7 @@ def _migrate_bindings(
         )
     catalog = {
         str(entry.get("model"))
-        for entry in (router.get_bindable_models() if router else [])
+        for entry in (router.get_known_models() if router else [])
     }
     dropped = 0
     model_dropped = 0

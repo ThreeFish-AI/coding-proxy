@@ -1496,6 +1496,61 @@ def test_status_returns_bindable_models():
         assert custom["vendor"] == "custom"
 
 
+def _offline_pricing_app() -> TestClient:
+    """创建带下线 pricing 行的测试应用（offline 过滤与 PUT 拒绑路径）."""
+    config = ProxyConfig(
+        primary={"enabled": False},
+        fallback={"enabled": True},
+        database={"path": "/tmp/test-coding-proxy-routes.db"},
+        session_policies={
+            "bindable_models": [
+                {"label": "GLM 5.3", "model": "glm-5.3", "tiers": ["zhipu"]}
+            ]
+        },
+        pricing=[
+            {"vendor": "zhipu", "model": "glm-5.4"},
+            {"vendor": "zhipu", "model": "glm-9.9", "online": False},
+        ],
+    )
+    return TestClient(create_app(config))
+
+
+def test_status_hides_offline_pricing_models():
+    """/api/status 不含下线（pricing online=false）模型，在线 pricing 模型正常派生."""
+    with _offline_pricing_app() as client:
+        models = [
+            m["model"] for m in client.get("/api/status").json()["bindable_models"]
+        ]
+        assert "glm-5.4" in models  # 在线 pricing 行派生
+        assert "glm-9.9" not in models  # 下线行不进下拉
+
+
+def test_bind_offline_model_rejected_with_offline_message():
+    """绑定下线模型返回 400 且文案指明 offline（而非 unknown）."""
+    with _offline_pricing_app() as client:
+        resp = client.put(
+            "/api/session-vendor",
+            json={"session_key": "s-off", "model": "glm-9.9"},
+        )
+        assert resp.status_code == 400
+        assert "offline" in resp.json()["error"]["message"]
+        assert "unknown model" not in resp.json()["error"]["message"]
+
+
+def test_migrate_bindings_keep_offline_pricing_model():
+    """热切换迁移保留已绑的下线模型（known 清单含 offline 条目）."""
+    from coding.proxy.server.generations import _migrate_bindings
+
+    with _offline_pricing_app() as client:
+        app = client.app
+        dropped, model_dropped, vendor_dropped = _migrate_bindings(
+            {"s-off": (("zhipu",), "glm-9.9")}, app
+        )
+        assert (dropped, model_dropped, vendor_dropped) == (0, 0, 0)
+        resolver = app.state.router._executor._policy_resolver  # noqa: SLF001
+        assert resolver.resolve("s-off").model == "glm-9.9"
+
+
 def test_dashboard_model_bind_column():
     """Sessions 页交付 Model Bind 列（替换 Vendor Bind），PUT 走 model 字段."""
     with _bindable_app() as client:

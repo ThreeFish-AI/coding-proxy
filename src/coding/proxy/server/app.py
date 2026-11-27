@@ -137,7 +137,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     else:
         _active_vendor_names = [v.vendor for v in config.vendors if v.enabled]
     _bindable_catalog = compose_bindable_catalog(
-        _active_vendor_names, config.session_policies.bindable_models
+        _active_vendor_names, config.session_policies.bindable_models, config.pricing
     )
     mapper = ModelMapper(
         [

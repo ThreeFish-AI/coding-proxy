@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from coding.proxy.config.routing import ModelMappingRule
+from coding.proxy.config.routing import ModelMappingRule, ModelPricingEntry
 from coding.proxy.config.session_policy import BindableModel
 from coding.proxy.config.vendors import AnthropicConfig, ZhipuConfig
 from coding.proxy.routing.model_mapper import ModelMapper
@@ -108,6 +108,108 @@ class TestComposeCatalog:
             "zhipu",
             ["zhipu"],
         )
+
+
+def _price(vendor: str, model: str, online: bool = True) -> ModelPricingEntry:
+    return ModelPricingEntry(vendor=vendor, model=model, online=online)
+
+
+class TestPricingDerivedCatalog:
+    """pricing 行并入目录：native vendor 配价即入下拉，online=false 只下线不删除."""
+
+    def test_native_vendor_priced_model_derives_entry(self):
+        cat = compose_bindable_catalog(
+            ["zhipu"], [_cfg("A", "glm-5.3")], [_price("zhipu", "glm-5.5")]
+        )
+        derived = next(e for e in cat if e["model"] == "glm-5.5")
+        assert (derived["label"], derived["vendor"], derived["tiers"]) == (
+            "glm-5.5",
+            "zhipu",
+            ["zhipu"],
+        )
+        assert "offline" not in derived
+
+    def test_non_native_vendor_pricing_not_derived(self):
+        cat = compose_bindable_catalog(
+            ["zhipu", "anthropic"],
+            [_cfg("A", "glm-5.3")],
+            [
+                _price("anthropic", "claude-x-9"),
+                _price("gemini", "gemini-x-9"),
+                _price("copilot", "copilot-x"),
+            ],
+        )
+        models = {e["model"] for e in cat}
+        assert "claude-x-9" not in models
+        assert "gemini-x-9" not in models
+        assert "copilot-x" not in models
+
+    def test_inactive_vendor_pricing_not_derived(self):
+        cat = compose_bindable_catalog(
+            ["zhipu"], [_cfg("A", "glm-5.3")], [_price("kimi", "kimi-k3")]
+        )
+        assert all(e["model"] != "kimi-k3" for e in cat)
+
+    def test_priced_builtin_model_deduped_builtin_label_wins(self):
+        cat = compose_bindable_catalog(
+            ["zhipu"], [_cfg("A", "claude-opus-4.6")], [_price("zhipu", "glm-5.3")]
+        )
+        assert [e["model"] for e in cat].count("glm-5.3") == 1
+        builtin = next(e for e in cat if e["model"] == "glm-5.3")
+        assert builtin["label"] == "GLM 5.3"
+
+    def test_config_entry_overrides_pricing_derived(self):
+        cat = compose_bindable_catalog(
+            ["zhipu"],
+            [_cfg("我的 GLM", "glm-5.5", ["zhipu"])],
+            [_price("zhipu", "glm-5.5")],
+        )
+        derived = next(e for e in cat if e["model"] == "glm-5.5")
+        assert derived["label"] == "我的 GLM"
+        assert derived["tiers"] == ["zhipu"]
+
+    def test_offline_row_marks_derived_entry(self):
+        cat = compose_bindable_catalog(
+            ["zhipu"],
+            [_cfg("A", "glm-5.3")],
+            [_price("zhipu", "glm-5.5", online=False)],
+        )
+        derived = next(e for e in cat if e["model"] == "glm-5.5")
+        assert derived["offline"] is True
+
+    def test_offline_row_marks_builtin_entry(self):
+        cat = compose_bindable_catalog(
+            ["zhipu"],
+            [_cfg("A", "glm-5.3")],
+            [_price("zhipu", "glm-5.3", online=False)],
+        )
+        builtin = next(e for e in cat if e["model"] == "glm-5.3")
+        assert builtin["offline"] is True
+
+    def test_any_row_offline_marks_model(self):
+        """下线以 model 为粒度：同名任一 pricing 行 online=false 即下线."""
+        cat = compose_bindable_catalog(
+            ["zhipu"],
+            [_cfg("A", "glm-5.3")],
+            [_price("zhipu", "glm-5.5"), _price("minimax", "glm-5.5", online=False)],
+        )
+        assert next(e for e in cat if e["model"] == "glm-5.5")["offline"] is True
+
+    def test_empty_config_disables_binding_even_with_pricing(self):
+        """bindable_models 空清单仍是整体 off 开关（含 pricing 派生条目）."""
+        assert (
+            compose_bindable_catalog(["zhipu"], [], [_price("zhipu", "glm-5.5")]) == []
+        )
+
+    def test_offline_derived_model_keeps_identity_rule(self):
+        """下线模型保留 identity 规则：已绑会话继续 exact 命中原名，不被回退改写."""
+        cat = compose_bindable_catalog(
+            ["zhipu"],
+            [_cfg("A", "glm-5.3")],
+            [_price("zhipu", "glm-5.5", online=False)],
+        )
+        rules = builtin_identity_rules(cat)
+        assert any(r.pattern == "glm-5.5" and r.vendors == ["zhipu"] for r in rules)
 
 
 # ── builtin_identity_rules ──────────────────────────────────
@@ -286,7 +388,7 @@ def test_pinned_model_strict_chain_without_tail_append():
     zhipu_tier = _make_tier(_mock_vendor(name="zhipu"))
     anthropic_tier = _make_tier(_mock_vendor(name="anthropic"))
     router = MagicMock()
-    router.get_bindable_models.return_value = [
+    router.get_known_models.return_value = [
         {"label": "GLM 5.3", "model": "glm-5.3", "tiers": ["zhipu"], "vendor": "zhipu"}
     ]
     exec_inst = _executor([zhipu_tier, anthropic_tier], router=router)
@@ -318,7 +420,7 @@ def test_unpinned_model_keeps_reorder_with_tail():
     zhipu_tier = _make_tier(_mock_vendor(name="zhipu"))
     anthropic_tier = _make_tier(_mock_vendor(name="anthropic"))
     router = MagicMock()
-    router.get_bindable_models.return_value = [
+    router.get_known_models.return_value = [
         {"label": "C", "model": "claude-opus-4.6", "tiers": [], "vendor": "custom"}
     ]
     exec_inst = _executor([zhipu_tier, anthropic_tier], router=router)
@@ -346,7 +448,7 @@ def test_pinned_model_honors_explicit_vendor_order():
     anthropic_tier = _make_tier(_mock_vendor(name="anthropic"))
     copilot_tier = _make_tier(_mock_vendor(name="copilot"))
     router = MagicMock()
-    router.get_bindable_models.return_value = [
+    router.get_known_models.return_value = [
         {"label": "GLM 5.3", "model": "glm-5.3", "tiers": ["zhipu"], "vendor": "zhipu"}
     ]
     exec_inst = _executor([zhipu_tier, anthropic_tier, copilot_tier], router=router)
