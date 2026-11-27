@@ -251,10 +251,13 @@
 | --------------------------- | ----- | -------------------------------------------------- |
 | `vendor`                    | str   | 供应商名称                                         |
 | `model`                     | str   | 实际模型名                                         |
+| `online`                    | bool  | 下线开关（默认 `true`）：`false` 后该模型不进 Model Bind 下拉、不可新绑定；已绑会话保留并继续按锁定 vendor 路由，成本照常计价 |
 | `input_cost_per_mtok`       | float | 输入 Token 单价（$/百万 token，支持 `$`/`¥` 前缀） |
 | `output_cost_per_mtok`      | float | 输出 Token 单价                                    |
 | `cache_write_cost_per_mtok` | float | 缓存创建 Token 单价                                |
 | `cache_read_cost_per_mtok`  | float | 缓存读取 Token 单价                                |
+
+写入边界：pricing 行**不可删除**——任何 (vendor, model) 行消失（删除、改名、「恢复默认」丢行）的保存一律拒绝（错误只带条数不回显值）；退役模型请置 `online: false`。`config import` 整体替换不在其限。已保存行的 vendor/model 在 Config 页只读。native 系 vendor（zhipu/minimax/kimi/doubao/xiaomi/alibaba）的 pricing 行同时是 Model Bind 目录的派生来源：配价即入下拉，无需等发版补内置目录（见 [session-model-bind.md](session-model-bind.md)）。
 
 ---
 
@@ -379,7 +382,7 @@ env var（运行时） > 存储的显式字段（Dashboard / CLI 配置） > Pyd
 | --- | --- | --- | --- |
 | `policies` | `list[SessionPolicy]` | `[]` | 配置态 Session 路由策略，按序求值首次命中生效（存量键：`name`/`match.session_keys`/`tiers`，注释见 `config.default.yaml`） |
 | `policies.*.model` | `str \| null` | `null` | 会话级模型覆盖：非空时该 Session 的后续请求体 `model` 统一改写为此值（逐请求生效，在途请求不受影响） |
-| `bindable_models` | `list[BindableModel]` | claude 三档 | 可绑定模型显式定制层：下拉选项为其与内置 vendor 目录（按激活 vendor 过滤）的合成结果；空清单 = 整体关闭模型绑定（含内置目录） |
+| `bindable_models` | `list[BindableModel]` | claude 三档 | 可绑定模型显式定制层：下拉选项为其与「内置 vendor 目录 ∪ pricing 行（native vendor）」（按激活 vendor 过滤）的合成结果；空清单 = 整体关闭模型绑定（含内置目录与 pricing 派生条目） |
 | `bindable_models.*.label` | `str` | — | UI 显示名，清单内唯一，非空 |
 | `bindable_models.*.model` | `str` | — | 覆盖目标模型名，清单内唯一，非空 |
 | `bindable_models.*.tiers` | `list[str]` | `[]` | 随绑定重排的 vendor 优先级；同名覆盖内置条目时留空继承内置锁定值，纯自定义条目留空 = 不改当前 tier 顺序 |
@@ -388,7 +391,7 @@ env var（运行时） > 存储的显式字段（Dashboard / CLI 配置） > Pyd
 
 ### 11.2 目录合成与 identity 规则
 
-下拉选项在 app 构建时合成（内置目录 ∪ 本清单，按 `model` 去重、config 覆盖 label/tiers、`exclude` 剔除）；合成目录中 native 系 vendor 的模型自动获得 identity `model_mapping` 规则（pattern = target，custom 条目按锁定 tiers 或原生前缀族归属），无需手工配置，防 `ModelMapper` default 静默改写。绑定语义为 vendor.model 锁定（严格链，不做跨系列静默降级）；详见 [session-model-bind.md](session-model-bind.md)。
+下拉选项在 app 构建时合成（内置目录 ∪ pricing 行 ∪ 本清单，按 `model` 去重、config 覆盖 label/tiers、`exclude` 剔除）；pricing 派生条目仅取 native 系 vendor 且在激活链（label = model 名，tiers 锁定该 vendor），`online: false` 的模型带 `offline` 标记——不进下拉与 PUT 校验，executor 锁定链与热切换迁移仍可见（已绑会话保留）。合成目录中 native 系 vendor 的模型自动获得 identity `model_mapping` 规则（pattern = target，custom 条目按锁定 tiers 或原生前缀族归属），无需手工配置，防 `ModelMapper` default 静默改写。绑定语义为 vendor.model 锁定（严格链，不做跨系列静默降级）；详见 [session-model-bind.md](session-model-bind.md)。
 
 ## 12. antigravity_gateway — Antigravity 客户端透传配置
 

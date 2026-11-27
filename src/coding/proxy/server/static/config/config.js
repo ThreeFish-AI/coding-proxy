@@ -456,7 +456,12 @@
     var host = a.closest && a.closest('[data-path], [data-pill], [data-vendor]');
     if (!host) return;
     var attr = host.hasAttribute('data-path') ? 'data-path' : host.hasAttribute('data-pill') ? 'data-pill' : 'data-vendor';
-    S.focus = { attr: attr, val: host.getAttribute(attr), role: roleOf(a), loose: looseRole(a), ring: visibleRing(a) };
+    var loose = looseRole(a);
+    S.focus = { attr: attr, val: host.getAttribute(attr), role: roleOf(a), loose: loose, li: sameLoose(host, loose).indexOf(a), ring: visibleRing(a) };
+  }
+  // 容器内与某控件同属一类的控件（文档序），用于按钮文案变化后按序号找回
+  function sameLoose(host, loose) {
+    return [host].concat(Array.prototype.slice.call(host.querySelectorAll('*'))).filter(function (n) { return looseRole(n) === loose; });
   }
   // 按钮文案会变（编辑 ↔ 收起），用「标签 + 首个按钮类」做第二级匹配
   function looseRole(el) {
@@ -481,10 +486,15 @@
       var val = remap && remap.from === key.val ? remap.to : key.val;
       var host = S.root.querySelector('[' + key.attr + '="' + val + '"]');
       if (host) {
+        var first = function (list, f) { for (var i = 0; i < list.length; i++) if (f(list[i]) && focusable(list[i])) return list[i]; return null; };
         var all = [host].concat(Array.prototype.slice.call(host.querySelectorAll('*')));
-        var first = function (f) { for (var i = 0; i < all.length; i++) if (f(all[i]) && focusable(all[i])) return all[i]; return null; };
-        target = first(function (n) { return roleOf(n) === key.role; }) || first(function (n) { return looseRole(n) === key.loose; }) ||
-          first(function (n) { return /^(BUTTON|INPUT|SELECT|TEXTAREA|A)$/.test(n.tagName) && n.type !== 'hidden'; });
+        target = first(all, function (n) { return roleOf(n) === key.role; });
+        if (!target) {
+          // 按钮文案会变（编辑 ↔ 收起、下线 ↔ 上线）：按它在同类按钮里的序号找回同一位置的那颗
+          var peers = sameLoose(host, key.loose);
+          target = first([peers[Math.min(key.li, peers.length - 1)]], function () { return true; }) || first(peers, function () { return true; });
+        }
+        if (!target) target = first(all, function (n) { return /^(BUTTON|INPUT|SELECT|TEXTAREA|A)$/.test(n.tagName) && n.type !== 'hidden'; });
       }
       if (!target) target = S.root.querySelector('.cfg-pills .range-btn.active');
     }
@@ -883,10 +893,17 @@
     ]);
   }
   // 列表 section：固定列宽表格 + 展开行编辑 +（可选）↑/↓ 排序
+  // 被移除行在保存栏里的名字：取前两列；刚「添加」还没填的空行统一叫「空行」
+  function rowName(o, item) {
+    var name = o.cols.slice(0, 2).map(function (c) { return fmtVal(c.text(item)); }).join(' / ');
+    return name === '— / —' ? '空行' : name;
+  }
+  // o.deletable(item, i)：行级移除开关（返回 false 不出「移除」）；o.rowActions(item, i)：行内额外按钮
   function listBlock(o) {
     var arr = function () { var a = getIn(S.work, o.parts); return Array.isArray(a) ? a : []; };
     var setArr = function (a, open) { setIn(S.work, o.parts, a); S.expanded[o.key] = open; changed(); rerender(); };
     var prefix = o.parts.join('.');
+    var canDelete = o.deletable || function () { return true; };
     var cols = (o.ordered ? [{ label: 'Order', w: '--col-order' }] : []).concat(o.cols, [{ label: 'Actions', w: '--col-actions' }]);
     var move = function (from, to) {
       var a = arr().slice(), item = a.splice(from, 1)[0];
@@ -898,7 +915,7 @@
     // 移除一行：不弹确认，保存栏给单级「撤销」（插回原位，不影响其后的其它编辑）
     var removeRow = function (i) {
       var a = arr().slice(), item = a.splice(i, 1)[0];
-      S.undo = { kind: 'row', section: o.parts[0], key: o.key, label: '已移除 ' + o.title + ' 的「' + o.cols.slice(0, 2).map(function (c) { return fmtVal(c.text(item)); }).join(' / ') + '」', parts: o.parts, index: i, item: clone(item) };
+      S.undo = { kind: 'row', section: o.parts[0], key: o.key, label: '已移除 ' + o.title + ' 的「' + rowName(o, item) + '」', parts: o.parts, index: i, item: clone(item) };
       S.focusTo = function () {
         var wrap = S.root.querySelector('.ft-table-wrap[data-path="' + prefix + '"]');
         var rs = wrap.querySelectorAll('.cfg-list-row');
@@ -920,8 +937,9 @@
       rows.push(h('tr', { class: 'cfg-list-row' + (open ? ' cfg-row-open' : ''), 'data-path': prefix + '.' + i, onclick: toggle },
         (o.ordered ? [orderCell(arr(), i, move)] : []).concat(cells, [h('td', { class: 'cfg-cell-actions' }, [
           btn(open ? '收起' : '编辑', function (e) { e.stopPropagation(); toggle(); }, 'cfg-btn-sm', { 'aria-expanded': open ? 'true' : 'false' }),
-          S.readonly ? null : btn('移除', function (e) { e.stopPropagation(); removeRow(i); }, 'cfg-btn-sm cfg-btn-danger'),
-        ]), h('td')])));
+        ].concat(o.rowActions ? (o.rowActions(item, i) || []) : [], [
+          S.readonly || !canDelete(item, i) ? null : btn('移除', function (e) { e.stopPropagation(); removeRow(i); }, 'cfg-btn-sm cfg-btn-danger'),
+        ])), h('td')])));
       if (!open) return;
       var fields = o.fields(i).map(function (f) {
         var b = f.bind, set = b.set;
@@ -1142,20 +1160,48 @@
 
   RENDER.pricing = function (body) {
     var fresh = pricingMergeRows(S.view.overridden, S.base.pricing, S.work.pricing, S.view.defaults.pricing);
-    var before = [h('p', { class: 'cfg-note', text: '单价单位为每百万 token；修改后历史用量成本按新价格重算。' })];
+    var before = [h('p', { class: 'cfg-note', text: '单价单位为每百万 token；修改后历史用量成本按新价格重算。定价行不可删除：退役模型请下线（不进 Model Bind 下拉，已绑会话保留，成本照常计价）。' })];
     if (fresh.length && !S.readonly) {
       before.push(banner('info', '包内默认定价中有 ' + fresh.length + ' 行不在已保存的定价表中（定价表已覆盖默认值，不会自动合入）',
         [btn('合并', function () { S.work.pricing = (S.work.pricing || []).concat(clone(fresh)); changed(); rerender(); }, 'cfg-btn-sm')]));
     }
     var price = function (f) { return function (r) { return r[f] === undefined ? '0' : fmtVal(r[f]); }; };
     var curSpec = { label: 'Currency', description: '整行单价的币种：$ 为 USD，¥ 为 CNY', widget: 'enum', enum: ['USD', 'CNY'] };
+    var savedRow = function (i) { return i < (S.base.pricing || []).length; };
+    // pricing 行不可删除（Model Bind 目录派生与下线的锚）：已保存行只可下线/上线，vendor/model 不可改名
+    var restoreBtn = btn('恢复默认价格', function () {
+      var defaults = S.view.defaults.pricing || [];
+      var merged = (S.work.pricing || []).map(function (row) {
+        var hit = defaults.filter(function (d) { return pricingKey(d) === pricingKey(row); })[0];
+        return hit ? clone(hit) : row;
+      });
+      defaults.forEach(function (d) {
+        if (!merged.some(function (row) { return pricingKey(row) === pricingKey(d); })) merged.push(clone(d));
+      });
+      S.work.pricing = merged;
+      changed();
+      rerender();
+    }, 'cfg-btn-sm', { title: '默认行恢复包内默认价格，自定义行保留（pricing 行不可删除）' });
     body.appendChild(listBlock({
       key: 'pricing', parts: ['pricing'], specPath: 'pricing', title: 'Pricing', ordered: false, before: before,
-      actions: [resetBtn('pricing')],
+      actions: S.readonly ? [] : [restoreBtn],
+      deletable: function (item, i) { return !savedRow(i); },
+      rowActions: function (item, i) {
+        if (S.readonly || !savedRow(i)) return null;
+        var off = item.online === false;
+        return [btn(off ? '上线' : '下线', function (e) {
+          e.stopPropagation();
+          var row = S.work.pricing[i];
+          if (off) delete row.online; else row.online = false;
+          changed();
+          rerender();
+        }, 'cfg-btn-sm', { title: off ? '重新进入 Model Bind 下拉，新绑定可用' : '不进 Model Bind 下拉；已绑会话保留，成本照常计价' })];
+      },
       cols: [
         { label: 'Vendor', w: '--col-vendor', text: function (r) { return r.vendor; } },
         { label: 'Model', w: '--col-model', mono: true, text: function (r) { return r.model; } },
         { label: 'Currency', w: '--col-currency', text: entryCurrency },
+        { label: 'Status', w: '--col-bool', text: function (r) { return r.online === false ? 'Offline' : 'Online'; } },
         { label: 'Input', w: '--col-price', mono: true, text: price(PRICE_FIELDS[0]) },
         { label: 'Output', w: '--col-price', mono: true, text: price(PRICE_FIELDS[1]) },
         { label: 'Cache W', w: '--col-price', mono: true, text: price(PRICE_FIELDS[2]) },
@@ -1174,7 +1220,13 @@
             changed();
           },
         };
-        return itemFields(['pricing'], i, ['vendor', 'model']).concat([{ spec: curSpec, bind: cur }], PRICE_FIELDS.map(function (f) {
+        var baseFields = itemFields(['pricing'], i, ['vendor', 'model']);
+        if (savedRow(i)) {
+          baseFields = baseFields.map(function (f, k) {
+            return { spec: f.spec, bind: f.bind, row: function (b) { return field(spec('pricing.*.' + ['vendor', 'model'][k]), b, true); } };
+          });
+        }
+        return baseFields.concat([{ spec: curSpec, bind: cur }], PRICE_FIELDS.map(function (f) {
           return {
             spec: spec('pricing.*.' + f),
             bind: {

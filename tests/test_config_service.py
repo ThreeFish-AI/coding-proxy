@@ -1045,3 +1045,85 @@ class TestSessionPoliciesListNormalization:
         }
         view = service.view()["values"]["session_policies"]
         assert isinstance(view, dict) and len(view["policies"]) == 1
+
+
+# ── pricing 行不可删除（下线开关替代删除） ──────────────────────
+
+
+def _pricing_rows(service: ConfigService) -> list[dict]:
+    return service.view()["values"]["pricing"]
+
+
+def _set_pricing(service: ConfigService, rows: list[dict]):
+    return _http(
+        service,
+        {
+            "revisions": {"pricing": service.revision("pricing")},
+            "sections": {"pricing": rows},
+        },
+    )
+
+
+class TestPricingNoDelete:
+    """pricing 行不可删除：删除 / 改名 / 恢复默认丢行一律 422，online 开关放行."""
+
+    def _rows_with_custom(self, service: ConfigService) -> list[dict]:
+        rows = _pricing_rows(service)
+        rows.append(
+            {"vendor": "zhipu", "model": "glm-5.5", "input_cost_per_mtok": "$1.0"}
+        )
+        return rows
+
+    def test_add_row_allowed(self, service):
+        result = _set_pricing(service, self._rows_with_custom(service))
+        assert "pricing" in result.changed_sections
+        models = {r["model"] for r in _pricing_rows(service)}
+        assert "glm-5.5" in models
+
+    def test_delete_custom_row_rejected(self, service):
+        _set_pricing(service, self._rows_with_custom(service))
+        rows = [r for r in _pricing_rows(service) if r.get("model") != "glm-5.5"]
+        with pytest.raises(ConfigValidationError) as ei:
+            _set_pricing(service, rows)
+        err = _errors(ei)[0]
+        assert err["loc"] == ["pricing"]
+        assert "不可删除" in err["msg"]
+
+    def test_delete_default_row_rejected(self, service):
+        rows = _pricing_rows(service)
+        assert len(rows) >= 2  # 包内默认定价表非空
+        with pytest.raises(ConfigValidationError) as ei:
+            _set_pricing(service, rows[1:])
+        assert "不可删除" in _errors(ei)[0]["msg"]
+
+    def test_rename_model_rejected(self, service):
+        rows = _pricing_rows(service)
+        rows[0] = dict(rows[0], model="renamed-model")
+        with pytest.raises(ConfigValidationError) as ei:
+            _set_pricing(service, rows)
+        assert "不可删除" in _errors(ei)[0]["msg"]
+
+    def test_online_toggle_roundtrip(self, service):
+        rows = _pricing_rows(service)
+        rows[0] = dict(rows[0], online=False)
+        _set_pricing(service, rows)
+        assert _pricing_rows(service)[0]["online"] is False
+        rows = _pricing_rows(service)
+        rows[0] = {k: v for k, v in rows[0].items() if k != "online"}
+        _set_pricing(service, rows)
+        assert "online" not in _pricing_rows(service)[0]
+
+    def test_reset_section_with_custom_row_rejected(self, service):
+        _set_pricing(service, self._rows_with_custom(service))
+        with pytest.raises(ConfigValidationError) as ei:
+            service.reset_section("pricing")
+        assert "不可删除" in _errors(ei)[0]["msg"]
+
+    def test_error_does_not_leak_values(self, service):
+        rows = _pricing_rows(service)
+        dropped = rows[0]
+        with pytest.raises(ConfigValidationError) as ei:
+            _set_pricing(service, rows[1:])
+        msg = _errors(ei)[0]["msg"]
+        assert str(dropped.get("model")) not in msg
+        assert str(dropped.get("vendor")) not in msg
