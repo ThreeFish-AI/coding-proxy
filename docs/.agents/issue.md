@@ -558,12 +558,14 @@ Overview 页拖动供应商行调整优先级：行越过相邻行（发生一�
 
 `_ZHIPU` 补 `("GLM 5.4", "glm-5.4")`；条目随目录自动获得 zhipu 锁定与 identity 映射规则（`glm-5.4 → glm-5.4`，不被 default 回退改写）。`tests/test_model_catalog.py` 补目录与 identity 规则两条回归用例，`tests/test_app_routes.py::test_status_returns_bindable_models` 补 `/api/status` 断言，补完先红后绿。对照验证（隔离实例，Playwright）：`/api/status` 含 GLM 5.4，Sessions 下拉 Zhipu 组首位出现 GLM 5.4，选中后 `PUT /api/session-vendor` 返回 200，绑定为 `vendors=[zhipu]`、`model=glm-5.4`。
 
+**第二步（同日，用户拍板「pricing 并入目录 + 只能下线不能删除」后实施）**：`compose_bindable_catalog` 扩为「内置 ∪ pricing 行（仅 native vendor，配价即入下拉）∪ bindable_models」；pricing 行新增 `online` 字段（false = 下线：不进下拉、PUT 拒绝新绑，executor 锁定链与热切换迁移改用 `get_known_models()` 含下线清单，已绑会话保留）；`ConfigService._plan` 加「pricing 不可缩减」校验（删除/改名/恢复默认丢行一律拒绝，错误只带条数不回显值）；Config 页 Pricing 表去删除、vendor/model 只读、加 Status 列与「下线/上线」，「恢复默认」改「恢复默认价格并保留自定义行」。全量 2270 项通过；隔离实例 + Playwright 端到端：配价即入下拉并可绑定，下线后下拉消失、已绑会话保留并显示 `(off-list)`、新绑 400 指明 offline，删除行被 422 拒绝，`online: true` 恢复可绑。
+
 **后续防范**
 
-上游出新 native 模型（GLM、MiniMax、Kimi、Doubao、MiMo、Qwen）时，同步补 `model_catalog.py` 对应目录。用户侧即时自救：Config 页 Session Policies → Bindable Models 加一条 `label` + `model`（`tiers` 留空即可，自动获得 identity 规则），保存并应用配置后生效（每代配置经 `create_app` 重新合成目录）。
+上游出新 native 模型（GLM、MiniMax、Kimi、Doubao、MiMo、Qwen）时，配价（pricing 行）即入下拉，无需等发版补目录；非 native 模型或需要自定义 label/tiers 时，Config 页 Session Policies → Bindable Models 加一条 `label` + `model`（`tiers` 留空即可，自动获得 identity 规则），保存并应用配置后生效（每代配置经 `create_app` 重新合成目录）。模型退役走 pricing 行「下线」，不可删除。
 
 **同类问题影响与处理注意事项**
 
-同类风险：所有 native 系 vendor 的新型号。仅配 pricing 不会进下拉，这是目录设计而非 pricing 缺陷；把 pricing 条目并入目录（配价即入下拉）属设计变更，需另行评估。`config.default.yaml` 的默认 pricing 也未含 `glm-5.3` / `glm-5.4`，这两个型号的价格需用户按官方公布自配，代码里不臆填。
+同类风险：所有 native 系 vendor 的新型号。pricing 并入目录已落地（第二步）：配价即入下拉，删除被服务端拦截，退役走 `online: false`；注意该规则使「打错一行 pricing」无法删除只能下线后重加，属刻意取舍。`config.default.yaml` 的默认 pricing 未含 `glm-5.3` / `glm-5.4`，这两个型号的价格需用户按官方公布自配，代码里不臆填。
 
 ---
