@@ -111,7 +111,7 @@
 | `test_generations_app.py`    | 真实 app/store 下的 PUT 热切换、流式跨切换、会话绑定迁移、真实 uvicorn |
 | `test_generations_cli.py`    | CLI `start` 与 GenerationManager 接线、Dashboard URL 提示、degraded 启动 |
 | `test_security_middleware.py`| L1 跨站请求拒绝 / L2 管理面 Host 白名单 / 响应安全头加固 |
-| `test_dashboard_config_tab.py`| Config 页 HTML 接线、CSP/XSS 静态检查与 config.js Node harness |
+| `test_dashboard_config_tab.py`| Config 页 HTML 接线、CSP/XSS 静态检查与 config.js Node harness（含保存后果清单与字段差异纯函数、保存栏结果态与关闭、行级移除撤销） |
 | `test_dashboard_subscription_card.py`| 订阅状态卡片 HTML 接线、XSS 静态检查、归并键一致性、单行 CSS 约束静态断言、合并渲染与拖拽状态机 Node harness（三类行 / 行序 / 用量格语法与分组排序 / 档位去重 / 并发守卫 / 列表外松开 / 多指 / 键盘调整 / 焦点保持 / 迟到快照 / 失败回滚 / 重绘保留滚动位置） |
 | `test_dashboard_charts.py`| 图表空态：canvas 恒留在 DOM 中，无数据与有数据之间反复刷新不抛错（静态检查 + Node harness） |
 | `test_subscription_status.py`| 订阅状态聚合：被动信号解析、两家 fetcher（含模型族短名与上游缺字段容错）、TTL 服务、端点集成 |
