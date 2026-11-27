@@ -1,6 +1,7 @@
 /* Dashboard → Config 页样式（深色主题，复用 dashboard :root token）.
  * 规范：表格固定列宽（同属性同宽 token）、单行 + 省略号 + tooltip；
- * 表单行 label 恰占 1/12、ⓘ 独占右侧 20px、控件同一行。
+ * 表单行 label 占行宽 1/12（下限 104px，窗口变窄时不截断）、ⓘ 独占右侧 20px、控件同一行；
+ * 视口 ≤640px 时 label 与控件分两行。
  */
 /* 列宽 token（--col-*）定义在 dashboard :root，与 Sessions 表共用 */
 #config-root { color-scheme: dark; --cfg-control-bg: rgba(48,54,61,.4); }
@@ -51,7 +52,7 @@
 
 /* ── 表单行：[label 恰占行宽 1/12][ⓘ 20px][control] 同一行（详情卡内同样适用） ── */
 .cfg-row {
-  display: grid; grid-template-columns: calc(100% / 12) 20px minmax(0, 1fr);
+  display: grid; grid-template-columns: minmax(104px, calc(100% / 12)) 20px minmax(0, 1fr);
   align-items: center; min-height: 36px; padding: 3px 0;
 }
 .cfg-label { font-size: 13px; color: var(--text-secondary); padding-right: 6px; cursor: default; }
@@ -72,7 +73,7 @@
 .cfg-info:hover, .cfg-info:focus-visible { color: var(--accent-blue); outline: none; background: rgba(88,166,255,.1); }
 .cfg-tip {
   display: none; position: absolute; left: 22px; top: 50%; transform: translateY(-50%); z-index: 20;
-  width: max-content; max-width: 360px; padding: 8px 10px; white-space: normal;
+  width: max-content; max-width: min(360px, calc(100vw - 3rem)); padding: 8px 10px; white-space: normal;
   font-size: 12px; font-weight: 400; line-height: 1.5; color: var(--text-primary); text-transform: none; letter-spacing: 0;
   background: rgba(10,14,20,.97); border: 1px solid rgba(255,255,255,.1); border-radius: var(--radius-sm);
   box-shadow: var(--shadow-md);
@@ -220,4 +221,14 @@ html:has(#config-root .cfg-savebar:not([hidden])) { scroll-padding-bottom: 120px
 
 @media (max-width: 960px) {
   .cfg-input, .cfg-secret-input, .cfg-lock-row .cfg-input { width: 100%; }
+}
+@media (max-width: 640px) {
+  .cfg-row { grid-template-columns: minmax(0, max-content) 20px; justify-content: start; row-gap: 4px; }
+  .cfg-control { grid-column: 1 / -1; padding-left: 0; }
+  .cfg-control > .cfg-input { flex: 1 1 140px; width: auto; }
+  .cfg-control > .cfg-unit { flex: none; }
+  /* 说明气泡改为贴着行的左缘展开，停在视口内（ⓘ 在两行布局下位于 label 右侧，向右展开会出屏） */
+  .cfg-row { position: relative; }
+  .cfg-row .cfg-info-wrap { position: static; }
+  .cfg-row .cfg-tip { left: 0; top: 100%; transform: none; max-width: calc(100vw - 5rem); } /* 展开在行的下方，不盖住自己的 ⓘ */
 }

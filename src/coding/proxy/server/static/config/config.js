@@ -519,6 +519,7 @@
     clear(S.root);
     add(S.root, nodes);
     applyErrors();
+    syncTruncTitles();
     updateDirty();
     restoreFocus();
     flashNewRow();
@@ -629,13 +630,13 @@
   }
 
   // ── 表单行与控件 ──────────────────────────────────────────
-  function infoTip(label, desc) {
+  function infoTip(label, desc, withLabel) {
     var id = 'cfg-tip' + (++uid);
     // Esc 隐藏全部说明；再次悬停或聚焦某个 ⓘ 时恢复该项
     var rearm = function (e) { e.currentTarget.classList.remove('cfg-tip-off'); };
     return h('span', { class: 'cfg-info-wrap', onmouseenter: rearm, onfocusin: rearm }, [
       h('button', { type: 'button', class: 'cfg-info', 'aria-label': 'Help: ' + label, 'aria-describedby': id, text: 'ⓘ' }),
-      h('span', { class: 'cfg-tip', role: 'tooltip', id: id, text: desc || label }),
+      h('span', { class: 'cfg-tip', role: 'tooltip', id: id, text: withLabel && desc ? label + '：' + desc : (desc || label) }),
     ]);
   }
   var LABELABLE = ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'OUTPUT', 'METER', 'PROGRESS'];
@@ -649,7 +650,7 @@
       labelable
         ? h('label', { class: 'cfg-label cfg-trunc', for: id, text: sp.label })
         : h('span', { class: 'cfg-label cfg-trunc', id: lid, text: sp.label }),
-      infoTip(sp.label, sp.description),
+      infoTip(sp.label, sp.description, true),
       h('div', { class: 'cfg-control', role: labelable ? null : 'group', 'aria-labelledby': labelable ? null : lid },
         [ctrl, sp.unit ? h('span', { class: 'cfg-unit', text: sp.unit }) : null].concat(extras || [])),
     ]);
@@ -1666,6 +1667,15 @@
     if (!el || (el.title && !el.getAttribute('data-auto-title'))) return; // 显式 title 优先
     if (el.scrollWidth > el.clientWidth) { el.title = el.textContent; el.setAttribute('data-auto-title', '1'); }
     else if (el.getAttribute('data-auto-title')) { el.removeAttribute('title'); el.removeAttribute('data-auto-title'); }
+  }
+  // rerender 后立即为被截断的文本补 title（原先只在鼠标移入时懒补，键盘与触屏拿不到）
+  function syncTruncTitles() {
+    if (!S.root) return;
+    Array.prototype.forEach.call(S.root.querySelectorAll('.cfg-trunc'), function (el) {
+      if (el.title && !el.getAttribute('data-auto-title')) return;
+      if (el.scrollWidth > el.clientWidth) { el.title = el.textContent; el.setAttribute('data-auto-title', '1'); }
+      else if (el.getAttribute('data-auto-title')) { el.removeAttribute('title'); el.removeAttribute('data-auto-title'); }
+    });
   }
   function readSchemaDefaults() {
     var el = document.getElementById('config-schema-defaults');
