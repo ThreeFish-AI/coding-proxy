@@ -17,6 +17,7 @@ from tests.test_dashboard_subscription_card import (
 )
 
 _CHARTS = (
+    ("buildTimeline", "chart-timeline"),
     ("buildVendorDist", "chart-vendor-dist"),
     ("buildTokenTimeline", "chart-token-timeline"),
     ("buildModelTokenTimeline", "chart-model-token-timeline"),
@@ -56,6 +57,29 @@ def test_chart_builders_keep_canvas_in_dom(client: TestClient):
             assert pattern not in source, (builder, pattern)
 
 
+def test_trend_charts_are_stacked_areas_with_empty_states(client: TestClient):
+    """三张趋势图共用一个页签图位：折线填到上一条堆叠线，空数据时显示「暂无数据」而不是空坐标轴."""
+    script = _inline_script(client.get("/dashboard").text)
+    for builder in ("buildTimeline", "buildTokenTimeline", "buildModelTokenTimeline"):
+        source = _extract_function(script, f"function {builder}(")
+        assert "fill: i === 0 ? 'start' : '-1'," in source, builder
+        assert "chartEmpty(ctx);" in source, builder
+    # 空态提示只有文字：不依赖 emoji 图标（各平台渲染不一）
+    assert "note.textContent = '暂无数据';" in _extract_function(
+        script, "function chartEmpty("
+    )
+    # 销毁后随即清空实例引用：空态分支返回后，不能再对已销毁的实例调用 update
+    for builder, instance in (
+        ("buildTimeline", "chartTimeline"),
+        ("buildTokenTimeline", "chartTokenTimeline"),
+        ("buildModelTokenTimeline", "chartModelTokenTimeline"),
+    ):
+        source = _extract_function(script, f"function {builder}(")
+        assert (
+            f"if ({instance}) {{ {instance}.destroy(); {instance} = null; }}" in source
+        ), builder
+
+
 def test_chart_empty_state_class_pairs_with_selector(client: TestClient):
     """chartEmpty 打的类名必须能被 chartContext 的选择器命中，否则空态提示清不掉、逐轮残留."""
     script = _inline_script(client.get("/dashboard").text)
@@ -93,12 +117,12 @@ _CHART_HARNESS = textwrap.dedent(
       getElementById(id) { return canvases[id] || null; },
       createElement() {
         return {
-          className: '', innerHTML: '',
+          className: '', textContent: '',
           remove() { const p = this.parentElement; p.children.splice(p.children.indexOf(this), 1); },
         };
       },
     };
-    for (const id of ['chart-vendor-dist', 'chart-token-timeline', 'chart-model-token-timeline']) canvases[id] = makeCanvas(id);
+    for (const id of ['chart-timeline', 'chart-vendor-dist', 'chart-token-timeline', 'chart-model-token-timeline']) canvases[id] = makeCanvas(id);
 
     for (const id of Object.keys(canvases)) {
       const canvas = canvases[id];
@@ -108,7 +132,7 @@ _CHART_HARNESS = textwrap.dedent(
       chartEmpty(ctx);                                         // 数据清空：显示空态
       assert.strictEqual(canvas.style.display, 'none');
       assert.strictEqual(canvas.parentElement.notes().length, 1);
-      assert.ok(canvas.parentElement.notes()[0].innerHTML.includes('暂无数据'));
+      assert.ok(canvas.parentElement.notes()[0].textContent.includes('暂无数据'));
       ctx = chartContext(id);                                  // 下一次刷新：空态清除、canvas 复原（旧实现在此抛 TypeError）
       assert.strictEqual(ctx.canvas, canvas);
       assert.strictEqual(canvas.style.display, '');

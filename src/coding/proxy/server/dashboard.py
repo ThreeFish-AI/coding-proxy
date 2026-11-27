@@ -357,6 +357,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
        六格合成一个表面，格间只留 hairline。数值穿文字色；图标、彩色顶线、hover 光晕这类装饰一概不加 */
     .kpi-grid {
       display: grid;
+      gap: 0;
       /* 费用可能是双币种长串（¥1,234.56 + $987.65），那一列略宽，其余五列等宽 */
       grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.45fr) repeat(2, minmax(0, 1fr));
       overflow: hidden;
@@ -471,8 +472,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .btn-card-action:disabled { opacity: .35; cursor: default; }
     .chart-wrap { position: relative; height: 260px; min-width: 0; }
-    .chart-wrap-lg { position: relative; height: 260px; min-width: 0; }
-    .chart-wrap-xl { position: relative; height: 280px; min-width: 0; }
+    /* 图位高度由外层容器定死；960px 及以下 .chart-with-legend 转为纵向 flex，那里要把图位的 flex-basis 解除（见下方媒体查询） */
+    .chart-wrap-lg { position: relative; height: 300px; min-width: 0; }
+    .chart-wrap-xl { position: relative; height: 300px; min-width: 0; }
     /* ── HTML Legend（单列可滚动） ── */
     .chart-with-legend {
       display: flex; align-items: stretch; gap: 0;
@@ -507,8 +509,53 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     @media (max-width: 960px) {
       .chart-with-legend { flex-direction: column; }
+      /* 纵向 flex 下 flex-basis: 0 会让图位高度跟着 canvas 内在高度走、塌成 150px */
+      .chart-with-legend > .chart-wrap-xl { flex: none; }
       .html-legend-wrap { flex: none; max-height: 120px; padding: 8px 0 0 0; }
       .html-legend-wrap ul { flex-direction: row; flex-wrap: wrap; gap: 4px 10px; }
+      .chart-wrap-lg, .chart-wrap-xl { height: 260px; }
+    }
+    /* ── 趋势页签：三张图共用一个图位 ──
+       类名另起 trend- 前缀：.tab-btn / .tab-pane 被页首主页签的状态逻辑按类名全文档匹配，不能借用 */
+    .trend-head {
+      display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    .trend-tabs {
+      display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none;
+      padding-bottom: 1px; margin-bottom: -1px;   /* 让选中页签的 2px 下划线压在头部 hairline 上且不被裁掉 */
+    }
+    .trend-tabs::-webkit-scrollbar { display: none; }
+    .trend-tab {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      padding: 8px 12px 10px;
+      font-family: inherit; font-size: 13px; font-weight: 500;
+      color: var(--text-secondary);
+      white-space: nowrap; cursor: pointer;
+      transition: color .15s ease, border-color .15s ease;
+    }
+    .trend-tab:hover { color: var(--text-primary); }
+    .trend-tab[aria-selected="true"] { color: var(--text-primary); border-bottom-color: var(--accent-blue); }
+    .trend-tab:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; border-radius: 4px; }
+    /* 区间说明放不下时可收缩换行，不挤页签 */
+    .trend-range {
+      flex: 0 1 auto; min-width: 0; padding-bottom: 11px;
+      font-size: 12px; line-height: 1.35; color: var(--text-secondary);
+      text-align: right; white-space: normal; overflow-wrap: anywhere;
+    }
+    .trend-panel[hidden] { display: none; }
+    .trend-panel .html-legend-wrap { max-height: 300px; }
+    @media (max-width: 960px) {
+      .trend-panel .html-legend-wrap { max-height: 120px; }
+    }
+    /* 手机宽度：页签折成两行而不是横向截断；区间说明收起（上方区间栏已写明当前区间） */
+    @media (max-width: 600px) {
+      .trend-tabs { flex-wrap: wrap; overflow-x: visible; row-gap: 2px; }
+      .trend-range { display: none; }
     }
     /* ── 订阅状态（订阅档位 / 用量窗口 × 路由 tier 运行状态）── */
     .vendor-list { display: flex; flex-direction: column; gap: 8px; }
@@ -878,10 +925,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     /* ── Model Calling 实时状态：对齐成列的 meter list ─────
        一个表面内按行列出：vendor | 模型 | 并行度条 | 在途/上限 | 排队，五列逐行对齐 */
     .model-calling-card,
-    .subscription-card,
-    .timeline-card,
-    .token-timeline-card,
-    .model-token-card {
+    .timeline-card {
       margin-bottom: var(--gap-section);
     }
     .card-note { font-size: 12px; font-weight: 400; color: var(--text-secondary); letter-spacing: 0; white-space: nowrap; }
@@ -1114,33 +1158,35 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- 请求量趋势折线图 -->
-  <div class="card timeline-card">
-    <div class="card-title" id="title-timeline">近 7 天请求量趋势</div>
-    <div class="chart-wrap-lg">
-      <canvas id="chart-timeline"></canvas>
-    </div>
-  </div>
-
-  <!-- Token 量趋势（按 vendor） -->
-  <div class="card token-timeline-card">
-    <div class="card-title" id="title-token-timeline">近 7 天 Token 量趋势（按供应商）</div>
-    <div class="chart-wrap-lg">
-      <canvas id="chart-token-timeline"></canvas>
-    </div>
-  </div>
-
-
-  <!-- Token 用量（按 Vendor / 模型）堆叠图 -->
-  <div class="card model-token-card">
-    <div class="card-title" id="title-model-token-timeline">近 7 天 Token 用量（按 Vendor / 模型）</div>
-    <div class="chart-with-legend">
-      <div class="chart-wrap-xl">
-        <canvas id="chart-model-token-timeline"></canvas>
+  <!-- 趋势：三张图共用一个图位，页签切换 -->
+  <section class="card timeline-card" aria-label="趋势">
+    <div class="trend-head">
+      <div class="trend-tabs" role="tablist" aria-label="趋势图">
+        <button type="button" class="trend-tab" id="trend-tab-requests" role="tab" aria-selected="true" aria-controls="trend-panel-requests" tabindex="0" data-trend="requests">请求量</button>
+        <button type="button" class="trend-tab" id="trend-tab-tokens" role="tab" aria-selected="false" aria-controls="trend-panel-tokens" tabindex="-1" data-trend="tokens">Token（按供应商）</button>
+        <button type="button" class="trend-tab" id="trend-tab-models" role="tab" aria-selected="false" aria-controls="trend-panel-models" tabindex="-1" data-trend="models">Token（Vendor / 模型）</button>
       </div>
-      <div class="html-legend-wrap" id="model-token-legend" style="display:none"></div>
+      <span class="trend-range" id="trend-range">近 7 天</span>
     </div>
-  </div>
+    <div class="trend-panel" id="trend-panel-requests" role="tabpanel" aria-labelledby="trend-tab-requests" aria-label="请求量趋势图" tabindex="0">
+      <div class="chart-wrap-lg">
+        <canvas id="chart-timeline"></canvas>
+      </div>
+    </div>
+    <div class="trend-panel" id="trend-panel-tokens" role="tabpanel" aria-labelledby="trend-tab-tokens" aria-label="Token（按供应商）趋势图" tabindex="0" hidden>
+      <div class="chart-wrap-lg">
+        <canvas id="chart-token-timeline"></canvas>
+      </div>
+    </div>
+    <div class="trend-panel" id="trend-panel-models" role="tabpanel" aria-labelledby="trend-tab-models" aria-label="Token（Vendor / 模型）趋势图" tabindex="0" hidden>
+      <div class="chart-with-legend">
+        <div class="chart-wrap-xl">
+          <canvas id="chart-model-token-timeline"></canvas>
+        </div>
+        <div class="html-legend-wrap" id="model-token-legend" style="display:none"></div>
+      </div>
+    </div>
+  </section>
   </section>
 
   <!-- Sessions 页签 -->
@@ -1315,6 +1361,10 @@ if (window.Chart) {
   Chart.defaults.font.size = 13;
   Chart.defaults.plugins.tooltip.usePointStyle = true;
   Chart.defaults.devicePixelRatio = window.devicePixelRatio || 1;
+  // 系统开启「减少动态效果」时关掉画布动画（页面下方的 CSS 规则管不到 canvas）
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    Chart.defaults.animation = false;
+  }
 }
 
 const COMMON_SCALE_X = { grid: { display: false }, ticks: { maxTicksLimit: 10, font: { size: 12 } } };
@@ -1548,7 +1598,7 @@ function chartEmpty(ctx) {
   ctx.canvas.style.display = 'none';
   const note = document.createElement('div');
   note.className = 'empty';
-  note.innerHTML = '<div class="empty-icon">📭</div>暂无数据';
+  note.textContent = '暂无数据';
   ctx.canvas.parentElement.appendChild(note);
 }
 
@@ -2468,8 +2518,12 @@ function buildTimeline(rows, tierOrder) {
   const dates = [...allDates].sort();
   const vendors = sortByTierOrder(Object.keys(vendorDateMap), tierOrder);
 
-  if (chartTimeline) chartTimeline.destroy();
-  const ctx = document.getElementById('chart-timeline').getContext('2d');
+  if (chartTimeline) { chartTimeline.destroy(); chartTimeline = null; }
+  const ctx = chartContext('chart-timeline');
+  if (!dates.length) {
+    chartEmpty(ctx);
+    return;
+  }
   const datasets = vendors.map((v, i) => {
     const color = VENDOR_COLORS[i % VENDOR_COLORS.length];
     return {
@@ -2478,7 +2532,8 @@ function buildTimeline(rows, tierOrder) {
       data: dates.map(d => vendorDateMap[v][d] || 0),
       borderColor: color,
       backgroundColor: color + '30',
-      fill: true,
+      // 真堆叠面积：每条线填充到上一条堆叠线，首条填到底；各自填到底会叠成灰褐色
+      fill: i === 0 ? 'start' : '-1',
     };
   });
 
@@ -2585,7 +2640,7 @@ function buildTokenTimeline(rows, tierOrder) {
   const dates = [...allDates].sort();
   const vendors = sortByTierOrder(Object.keys(vendorDateMap), tierOrder);
 
-  if (chartTokenTimeline) chartTokenTimeline.destroy();
+  if (chartTokenTimeline) { chartTokenTimeline.destroy(); chartTokenTimeline = null; }
   const ctx = chartContext('chart-token-timeline');
   if (!dates.length) {
     chartEmpty(ctx);
@@ -2600,7 +2655,8 @@ function buildTokenTimeline(rows, tierOrder) {
       data: dates.map(d => vendorDateMap[v][d] || 0),
       borderColor: color,
       backgroundColor: color + '30',
-      fill: true,
+      // 真堆叠面积：每条线填充到上一条堆叠线，首条填到底；各自填到底会叠成灰褐色
+      fill: i === 0 ? 'start' : '-1',
     };
   });
 
@@ -2650,7 +2706,7 @@ function buildModelTokenTimeline(rows) {
     return sumB - sumA;
   });
 
-  if (chartModelTokenTimeline) chartModelTokenTimeline.destroy();
+  if (chartModelTokenTimeline) { chartModelTokenTimeline.destroy(); chartModelTokenTimeline = null; }
   const ctx = chartContext('chart-model-token-timeline');
 
   // 清理 HTML Legend 容器
@@ -2675,7 +2731,8 @@ function buildModelTokenTimeline(rows) {
       data: dates.map(d => modelDateMap[key][d] || 0),
       borderColor: color,
       backgroundColor: color + '30',
-      fill: true,
+      // 真堆叠面积：每条线填充到上一条堆叠线，首条填到底；各自填到底会叠成灰褐色
+      fill: i === 0 ? 'start' : '-1',
     };
   });
 
@@ -2777,17 +2834,72 @@ function applyCustomRange() {
   refresh();
 }
 
-function updateChartTitles(days) {
-  const label = days <= 7 ? '近 7 天' : (days <= 30 ? '近 30 天' : '近 ' + days + ' 天');
-  const tl = document.getElementById('title-timeline');
-  const tt = document.getElementById('title-token-timeline');
+// 区间说明同步到分布图标题与趋势页签行（三张趋势图的标题就是页签文案，不带区间）
+function updateChartTitles() {
+  const label = rangeLabel();
   const vd = document.getElementById('title-vendor-dist');
-  const mt = document.getElementById('title-model-token-timeline');
-  if (tl) tl.textContent = label + ' 请求量趋势';
-  if (tt) tt.textContent = label + ' Token 量趋势（按供应商）';
   if (vd) vd.textContent = '供应商请求分布（' + label + '）';
-  if (mt) mt.textContent = label + ' Token 用量（按 Vendor / 模型）';
+  const range = document.getElementById('trend-range');
+  if (range) range.textContent = label;
 }
+
+// ── 趋势页签：三张图共用一个图位 ──────────────────────────
+// 三张图在刷新时一并重建，非当前页签 hidden；切换只改显示，不做懒建。
+// 类名另起 trend- 前缀：applyTabState / switchTab 按 .tab-btn / .tab-pane 全文档匹配，借用量会被主页签逻辑误伤
+const TREND_CHARTS = {
+  requests: 'chart-timeline',
+  tokens: 'chart-token-timeline',
+  models: 'chart-model-token-timeline',
+};
+
+// 面板由隐藏变可见后让 Chart.js 按容器尺寸重算并直接出终帧：它在 resize 里会先建一段 attach 动画，
+// 只调 update('none') 取消不了在途动画，要先 stop
+function showTrendChart(key) {
+  const instance = window.Chart ? Chart.getChart(TREND_CHARTS[key]) : null;
+  if (instance) { instance.resize(); instance.stop(); instance.update('none'); }
+}
+
+function setTrendTab(key, focus) {
+  document.querySelectorAll('.trend-tab').forEach(function (tab) {
+    const on = tab.dataset.trend === key;
+    tab.setAttribute('aria-selected', on ? 'true' : 'false');
+    tab.tabIndex = on ? 0 : -1;
+  });
+  document.querySelectorAll('.trend-panel').forEach(function (panel) {
+    const on = panel.id === 'trend-panel-' + key;
+    panel.hidden = !on;
+    if (on) showTrendChart(key);
+  });
+  if (focus) {
+    const tab = document.getElementById('trend-tab-' + key);
+    if (tab) tab.focus();
+  }
+}
+
+(function initTrendTabs() {
+  const tablist = document.querySelector('.trend-tabs');
+  if (!tablist) return;
+  tablist.addEventListener('click', function (e) {
+    const tab = e.target.closest('.trend-tab');
+    if (tab) setTrendTab(tab.dataset.trend, false);
+  });
+  // 方向键在页签间循环，Home / End 到首尾；焦点移到哪个页签就选中哪个
+  // （automatic activation：面板内容都已在 DOM 里，切换没有延迟）
+  tablist.addEventListener('keydown', function (e) {
+    const tab = e.target.closest('.trend-tab');
+    if (!tab) return;
+    const keys = Array.from(tablist.querySelectorAll('.trend-tab'), function (t) { return t.dataset.trend; });
+    const i = keys.indexOf(tab.dataset.trend);
+    let next = null;
+    if (e.key === 'ArrowRight') next = keys[(i + 1) % keys.length];
+    else if (e.key === 'ArrowLeft') next = keys[(i - 1 + keys.length) % keys.length];
+    else if (e.key === 'Home') next = keys[0];
+    else if (e.key === 'End') next = keys[keys.length - 1];
+    if (next == null) return;
+    e.preventDefault();
+    setTrendTab(next, true);
+  });
+})();
 
 // ── Sessions Panel ──────────────────────────────────────────────
 function relativeTime(tsStr) {
@@ -3056,7 +3168,7 @@ async function refreshOverview() {
   updateVendorStatus(status, true);
   updateModelCalling(status);
   updateSubscriptions(subs);
-  updateChartTitles(days);
+  updateChartTitles();
 
   const rows = timeline.rows || [];
   const tierOrder = (status.tiers || []).map(t => t.name);
