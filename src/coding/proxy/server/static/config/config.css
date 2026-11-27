@@ -27,6 +27,9 @@
 
 /* ── 卡片与分组 ── */
 .cfg-body { margin-bottom: 72px; }
+/* 表单卡每次 rerender 都会重建：不重放入场动画，也不做 hover 抬升 */
+.card.cfg-body, .card.cfg-lock { animation: none; }
+.card.cfg-body:hover { box-shadow: var(--shadow); }
 .cfg-body[inert] { opacity: .65; pointer-events: none; } /* 保存进行中冻结表单（pointer-events 兜底不支持 inert 的浏览器） */
 .cfg-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 12px; }
 .cfg-section-title {
@@ -147,6 +150,10 @@ span.cfg-map-key { color: var(--text-secondary); }
 .cfg-row-open > td { background: rgba(88,166,255,.05); }
 .cfg-detail-row > td { padding: 0 0 6px; white-space: normal; overflow: visible; }
 .cfg-detail { margin: 4px 0 0; padding: 12px 16px; }
+@media (prefers-reduced-motion: no-preference) {
+  .cfg-list-row.cfg-row-new > td { animation: cfg-row-new 2s ease-out; }
+}
+@keyframes cfg-row-new { from { background: rgba(88,166,255,.24); } to { background: rgba(88,166,255,.05); } }
 
 /* ── Banner / 保存栏 / 对话框 ── */
 .cfg-banner {

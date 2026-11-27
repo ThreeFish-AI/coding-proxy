@@ -504,7 +504,7 @@ _DOM_HARNESS = textwrap.dedent(
         for (let n = this; n; n = n.parentNode) (n.listeners[t] || []).forEach(f => f(Object.assign(e, { currentTarget: n })));
       }
       click() { if (!this.disabled) this.dispatch('click'); }
-      focus() {}
+      focus() { doc.activeElement = this; }
       scrollIntoView() {}
       showModal() { this.open = true; }
       close() { this.open = false; }
@@ -801,10 +801,21 @@ _DOM_HARNESS = textwrap.dedent(
       pill('model_mapping');
       rows()[1].click(); // 展开 B（index 1）
       assert.ok(root.querySelector('.cfg-detail-row .cfg-row[data-path="model_mapping.1.pattern"]'));
+      rows()[0].querySelector('.cfg-btn-icon[aria-label="下移"]').focus();
       rows()[0].querySelector('.cfg-btn-icon[aria-label="下移"]').click(); // [A,B,C] → [B,A,C]
       assert.ok(root.querySelector('.cfg-detail-row .cfg-row[data-path="model_mapping.0.pattern"]'),
         'expanded row must follow the original entry after move');
       assert.ok(root.querySelectorAll('.cfg-detail-row').length === 1);
+      const moved = doc.activeElement;
+      assert.ok(moved && moved.tagName === 'BUTTON' && moved.getAttribute('aria-label') === '下移' &&
+        moved.closest('[data-path]').getAttribute('data-path') === 'model_mapping.1', 'focus must follow the moved row');
+
+      // 10b) 「添加」后焦点落在新行自己的编辑表单（此时另一行处于展开状态）
+      root.querySelectorAll('.cfg-section-head .cfg-btn').find(b => b.textContent === '添加').click();
+      const added = doc.activeElement;
+      assert.ok(added && added.tagName === 'INPUT' && added.closest('.cfg-detail-row') &&
+        added.closest('.cfg-detail-row').querySelector('.cfg-row').getAttribute('data-path') === 'model_mapping.3.pattern',
+        'focus must land in the newly added row, not an already expanded one');
 
       // 11) 409 + 定向重载失败：不保留「已重新加载」承诺；重试仅重载冲突 section
       view = mkView([], pricing.slice());

@@ -431,8 +431,85 @@
   }
 
   // ── 渲染骨架 ──────────────────────────────────────────────
+  // ── 焦点找回：rerender 整体重建 DOM，按「容器路径 + 控件角色」把焦点还给同一控件 ──
+  var ROLE_CLASS = /^(cfg-(input|num|check|info|chip-add|chip-x|link|secret-menu|secret-input|map-key|btn-icon|btn-sm|btn-primary)|range-btn)$/;
+  function roleOf(el) {
+    if (!el || !el.getAttribute) return null;
+    var aria = el.getAttribute('aria-label');
+    if (aria) return el.tagName + '@' + aria;
+    if (/^(BUTTON|A|SUMMARY)$/.test(el.tagName)) return el.tagName + ':' + String(el.textContent || '').trim().slice(0, 24);
+    var cls = String(el.className || '').split(/\s+/).filter(function (c) { return ROLE_CLASS.test(c); });
+    return el.tagName + '.' + (cls[0] || '');
+  }
+  // :focus-visible 在旧浏览器是未知伪类，matches() 会抛 SyntaxError
+  function visibleRing(el) {
+    if (!el || !el.matches) return false;
+    try { return el.matches(':focus-visible'); } catch (e) { return false; }
+  }
+  function captureFocus() {
+    S.focus = null;
+    var a = document.activeElement;
+    if (!a || a === document.body || !S.root) return;
+    if (S.root.contains && !S.root.contains(a)) return;
+    var host = a.closest && a.closest('[data-path], [data-pill], [data-vendor]');
+    if (!host) return;
+    var attr = host.hasAttribute('data-path') ? 'data-path' : host.hasAttribute('data-pill') ? 'data-pill' : 'data-vendor';
+    S.focus = { attr: attr, val: host.getAttribute(attr), role: roleOf(a), loose: looseRole(a), ring: visibleRing(a) };
+  }
+  // 按钮文案会变（编辑 ↔ 收起），用「标签 + 首个按钮类」做第二级匹配
+  function looseRole(el) {
+    if (!/^(BUTTON|A|SUMMARY)$/.test(el.tagName)) return roleOf(el);
+    var c = String(el.className || '').split(/\s+/).filter(function (x) { return /^(cfg-btn|range-btn)/.test(x); });
+    return el.tagName + '.' + (c[c.length - 1] || '');
+  }
+  function focusable(n) {
+    return !!(n && n.focus && !n.disabled && n.getAttribute('tabindex') !== '-1');
+  }
+  // 落点优先级：调用方指定的 S.focusTo > 同容器内同角色 > 同容器内同类按钮 > 同容器内首个控件 > 当前激活的 pill；
+  // 目标必须可聚焦（如上移到首行后「上移」已禁用，落到同行的「下移」）
+  function restoreFocus() {
+    // focusRemap 无条件取走：鼠标点 ↑/↓ 不聚焦按钮的浏览器不会带 key，不能让它留到下一次重绘
+    var pick = S.focusTo, key = S.focus, remap = S.focusRemap;
+    S.focusTo = null; S.focus = null; S.focusRemap = null;
+    if (!S.root) return;
+    var target = null, ring = !!(key && key.ring);
+    // 调用方的落点：返回 false 表示「不聚焦」（如撤销目标已不在当前页），不走回退
+    if (pick) { try { target = pick(); } catch (e) { target = null; } if (target === false) return; }
+    if (!target && key && key.val !== null && key.role) {
+      var val = remap && remap.from === key.val ? remap.to : key.val;
+      var host = S.root.querySelector('[' + key.attr + '="' + val + '"]');
+      if (host) {
+        var all = [host].concat(Array.prototype.slice.call(host.querySelectorAll('*')));
+        var first = function (f) { for (var i = 0; i < all.length; i++) if (f(all[i]) && focusable(all[i])) return all[i]; return null; };
+        target = first(function (n) { return roleOf(n) === key.role; }) || first(function (n) { return looseRole(n) === key.loose; }) ||
+          first(function (n) { return /^(BUTTON|INPUT|SELECT|TEXTAREA|A)$/.test(n.tagName) && n.type !== 'hidden'; });
+      }
+      if (!target) target = S.root.querySelector('.cfg-pills .range-btn.active');
+    }
+    if (!focusable(target)) return;
+    // 焦点原由键盘而来时，重绘后脚本聚焦不触发 :focus-visible，用属性补回焦点环，失焦即撤
+    if (ring && target.setAttribute) {
+      target.setAttribute('data-focus-ring', '1');
+      target.addEventListener('blur', function () { target.removeAttribute('data-focus-ring'); });
+    }
+    // 不用 preventScroll：控件被常驻保存栏盖住时，让浏览器按 scroll-padding-bottom 把它滚出来；
+    // 控件本来就在视口内时 focus() 不会滚动
+    target.focus();
+  }
+  // 「添加」后的新行：高亮 2 秒，并把展开的编辑表单滚到视口中部
+  function flashNewRow() {
+    var key = S.newRow;
+    S.newRow = null;
+    if (!key || !S.root) return;
+    var row = S.root.querySelector('.cfg-list-row[data-path="' + key + '"]');
+    if (!row) return;
+    row.classList.add('cfg-row-new');
+    if (row.nextElementSibling && row.nextElementSibling.scrollIntoView) row.nextElementSibling.scrollIntoView({ block: 'center' });
+    setTimeout(function () { row.classList.remove('cfg-row-new'); }, 2000);
+  }
   function rerender() {
     if (!S.root || !S.view) return;
+    captureFocus();
     var nodes = [renderToolbar()].concat(renderBanners());
     var body = h('div', { class: 'card cfg-body', 'data-path': S.pill === 'system' ? null : S.pill });
     RENDER[S.pill](body);
@@ -441,6 +518,8 @@
     add(S.root, nodes);
     applyErrors();
     updateDirty();
+    restoreFocus();
+    flashNewRow();
   }
   function renderToolbar() {
     // pills 为按钮组（非 tabs 模式）：当前项以 aria-current 标注
@@ -464,6 +543,9 @@
     S.pill = name;
     if (vendor) S.vendor = vendor;
     syncUrl();
+    // 整页重绘后焦点落到新的激活项，而不是掉回 body
+    var sel = vendor ? '.cfg-subpills .range-btn[data-vendor="' + vendor + '"]' : '.cfg-pills .range-btn[data-pill="' + name + '"]';
+    S.focusTo = function () { return S.root.querySelector(sel); };
     rerender();
   }
   function syncUrl() {
@@ -680,7 +762,9 @@
         var k = key.value.trim();
         if (!k || val.value === '') return;
         var n = cur(); n[k] = numVal(val.value); b.set(n); redraw();
-      }, 'cfg-btn-sm')]));
+        var first = wrap.querySelector('.cfg-map-key[type="text"]');
+        if (first && first.focus) first.focus();
+      }, 'cfg-btn-sm', { 'data-map-add': '1' })]));
     }
     redraw();
     return wrap;
@@ -709,16 +793,17 @@
     if (!kind || kind === 'keep') delete S.ops[path];
     else S.ops[path] = kind === 'set' ? { op: 'set', value: '' } : { op: kind };
     changed();
+    S.focusTo = function () {
+      return S.root.querySelector(kind === 'set' ? '.cfg-secret-input[data-for="' + path + '"]' : 'select.cfg-secret-menu[data-for="' + path + '"]');
+    };
     rerender();
-    var input = kind === 'set' && S.root.querySelector('.cfg-secret-input[data-for="' + path + '"]');
-    if (input) input.focus();
   }
   function secretWidget(sp, path, id) {
     var st = (S.view.secrets || {})[path] || { kind: 'empty' }, op = S.ops[path];
     var wrap = h('div', { class: 'cfg-secret' }, [secretPill(st, op, sp)]);
     if (S.readonly || sp.readonly) return wrap;
     wrap.appendChild(h('select', {
-      id: id, class: 'cfg-input cfg-secret-menu', onchange: function (e) { var k = e.target.value; e.target.value = ''; if (k) setOp(path, k); },
+      id: id, class: 'cfg-input cfg-secret-menu', 'data-for': path, onchange: function (e) { var k = e.target.value; e.target.value = ''; if (k) setOp(path, k); },
     }, [
       h('option', { value: '', text: '更改 ▾' }),
       h('option', { value: 'set', text: '设置新值' }),
@@ -774,6 +859,8 @@
     var move = function (from, to) {
       var a = arr().slice(), item = a.splice(from, 1)[0];
       a.splice(to, 0, item);
+      S.focusRemap = { from: prefix + '.' + from, to: prefix + '.' + to };
+      S.undo = null; // 撤销按下标插回，行序变了就不再是原位
       setArr(a, movedOpenIndex(S.expanded[o.key], from, to));
     };
     var rows = [];
@@ -781,7 +868,7 @@
       var open = S.expanded[o.key] === i;
       var cells = o.cols.map(function (c) { return cell(c.text(item), c.mono ? 'cfg-mono' : ''); });
       var refresh = function () { var it = arr()[i]; o.cols.forEach(function (c, k) { cells[k].textContent = fmtVal(c.text(it)); }); };
-      var toggle = function () { S.expanded[o.key] = open ? null : i; rerender(); };
+      var toggle = function () { if (window.getSelection && String(window.getSelection())) return; S.expanded[o.key] = open ? null : i; rerender(); };
       rows.push(h('tr', { class: 'cfg-list-row' + (open ? ' cfg-row-open' : ''), 'data-path': prefix + '.' + i, onclick: toggle },
         (o.ordered ? [orderCell(arr(), i, move)] : []).concat(cells, [h('td', { class: 'cfg-cell-actions' }, [
           btn(open ? '收起' : '编辑', function (e) { e.stopPropagation(); toggle(); }, 'cfg-btn-sm', { 'aria-expanded': open ? 'true' : 'false' }),
@@ -796,7 +883,19 @@
       rows.push(h('tr', { class: 'cfg-detail-row' }, h('td', { colspan: String(cols.length + 1) }, h('div', { class: 'detail-card cfg-detail' }, fields))));
     });
     if (!rows.length) rows.push(h('tr', {}, h('td', { colspan: String(cols.length + 1), class: 'empty', text: '暂无条目' })));
-    var actions = (o.actions || []).concat(S.readonly ? [] : [btn('添加', function () { var a = arr().slice(); a.push(o.blank()); setArr(a, a.length - 1); }, 'cfg-btn-sm')]);
+    var actions = (o.actions || []).concat(S.readonly ? [] : [btn('添加', function () {
+      var a = arr().slice(); a.push(o.blank());
+      S.undo = null;
+      var at = a.length - 1;
+      S.newRow = prefix + '.' + at;
+      // 落点限定在「新行自己的展开表单」：别的行可能也处于展开状态
+      S.focusTo = function () {
+        var row = S.root.querySelector('.cfg-list-row[data-path="' + prefix + '.' + at + '"]');
+        var detail = row && row.nextElementSibling;
+        return detail ? detail.querySelector('.cfg-control input, .cfg-control select') : null;
+      };
+      setArr(a, a.length - 1);
+    }, 'cfg-btn-sm')]);
     return h('div', { class: 'cfg-list' }, [sectionHead(o.title, spec(o.specPath), actions)].concat(o.before || [], [table(cols, rows, prefix)]));
   }
   function itemBind(parts, i, rel, specPath) {
