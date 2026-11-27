@@ -248,19 +248,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       --text-primary: #e6edf3;
       --text-secondary: #8b949e;
       --text-tertiary: #6e7681;
-      --text-muted: #6e7681;
       --accent-blue: #58a6ff;
       --accent-green: #3fb950;
       --accent-yellow: #d29922;
       --accent-red: #f85149;
       --accent-purple: #bc8cff;
-      --accent-orange: #ffa657;
       --accent-teal: #39d353;
       --radius: 14px;
       --radius-sm: 8px;
       --shadow: 0 1px 2px rgba(0,0,0,.3);
       --shadow-md: 0 8px 24px rgba(0,0,0,.3);
-      --glow-blue: 0 0 0 1px rgba(88,166,255,.1), 0 8px 32px rgba(88,166,255,.04);
       --gradient-primary: linear-gradient(135deg, #667eea, #764ba2);
       --gap-section: 12px;
       /* 表格固定列宽 token（Sessions 与 Config 共用：同一属性同一宽度；
@@ -397,13 +394,12 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       font-size: clamp(18px, 1.5vw, 22px); line-height: 1.25; letter-spacing: -.3px;
     }
     .kpi-cost .kpi-value > span { white-space: nowrap; }
-    /* 副行 = 区间标签 + 数值：放不下时在两段之间换行（数值自身不断开），不截断 */
+    /* 副行 = 区间标签 + 数值：放不下时在两段之间换行，两段各自不断开，不截断 */
     .kpi-sub {
       display: flex; flex-wrap: wrap; column-gap: 5px;
       margin-top: 6px; font-size: 12px; line-height: 1.35; color: var(--text-secondary);
     }
-    .kpi-sub-label { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
-    .kpi-sub-val { white-space: nowrap; }
+    .kpi-sub-label, .kpi-sub-val { white-space: nowrap; }
     /* ── KPI 响应式：平板横屏及以下转 3 列两行，手机转 2 列三行；分隔线跟着换行位置走 ── */
     @media (max-width: 1023px) {
       .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -411,10 +407,12 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       .kpi-card:nth-child(3n) { padding-right: 24px; }
       .kpi-card:nth-child(n+4) { border-top: 1px solid rgba(255,255,255,.06); }
     }
+    /* 列内边距规则按「先清 3 列、再排 2 列」的顺序写：同特异性下后写的赢，末列才是 24px */
     @media (max-width: 519px) {
       .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .kpi-card { padding: 14px 16px 12px; }
       .kpi-card:nth-child(3n+1) { border-left: 1px solid rgba(255,255,255,.06); padding-left: 16px; padding-right: 16px; }
+      .kpi-card:nth-child(3n) { padding-right: 16px; }
       .kpi-card:nth-child(2n+1) { border-left: 0; padding-left: 24px; }
       .kpi-card:nth-child(2n) { padding-right: 24px; }
       .kpi-card:nth-child(n+3) { border-top: 1px solid rgba(255,255,255,.06); }
@@ -432,9 +430,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       margin-bottom: 0;
       overflow: hidden;
     }
-    /* 分布卡随左卡等高：标题留在顶上，图形区吃掉余量，甜甜圈与图例在余量里垂直居中 */
+    /* 分布卡随左卡等高：标题留在顶上，图形区吃掉余量，甜甜圈与图例在余量里垂直居中。
+       flex-basis 取 0 而不是 auto：auto 会让图形区的高度钉在 canvas 上一次写下的像素高度上，
+       左卡变矮后这一行回不去 */
     .dist-card { display: flex; flex-direction: column; }
-    .dist-card .chart-wrap { flex: 1 1 auto; height: auto; min-height: 250px; }
+    .dist-card .chart-wrap { flex: 1 1 0; height: auto; min-height: 250px; }
     @media (max-width: 1179px) {
       .status-row { grid-template-columns: minmax(0, 1fr); }
       .dist-card .chart-wrap { flex: none; height: 240px; min-height: 0; }
@@ -524,7 +524,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .trend-tabs {
       display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none;
-      padding-bottom: 1px; margin-bottom: -1px;   /* 让选中页签的 2px 下划线压在头部 hairline 上且不被裁掉 */
+      /* 负下边距：选中页签的 2px 下划线盖在头部 hairline 上；负左边距抵消首个页签的左内边距，
+         页签文字与其它卡片标题左对齐，各页签的内边距保持一致 */
+      margin: 0 0 -1px -12px;
+    }
+    /* 区间说明再长也不挤页签（≤600px 页签折行，需保留收缩，见下） */
+    @media (min-width: 601px) {
+      .trend-tabs { flex: 0 0 auto; }
     }
     .trend-tabs::-webkit-scrollbar { display: none; }
     .trend-tab {
@@ -541,13 +547,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .trend-tab:hover { color: var(--text-primary); }
     .trend-tab[aria-selected="true"] { color: var(--text-primary); border-bottom-color: var(--accent-blue); }
     .trend-tab:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; border-radius: 4px; }
-    /* 区间说明放不下时可收缩换行，不挤页签 */
+    /* 区间说明只有「近 N 天」，不换行 */
     .trend-range {
-      flex: 0 1 auto; min-width: 0; padding-bottom: 11px;
+      flex: 0 0 auto; padding-bottom: 11px;
       font-size: 12px; line-height: 1.35; color: var(--text-secondary);
-      text-align: right; white-space: normal; overflow-wrap: anywhere;
+      white-space: nowrap;
     }
     .trend-panel[hidden] { display: none; }
+    /* 面板可聚焦（tabpanel 惯例）：焦点环画在内侧，与全页 2px 蓝色焦点环一致 */
+    .trend-panel:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; border-radius: 4px; }
     .trend-panel .html-legend-wrap { max-height: 300px; }
     @media (max-width: 960px) {
       .trend-panel .html-legend-wrap { max-height: 120px; }
@@ -612,7 +620,6 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border-radius: 10px;
       font-weight: 500;
     }
-    .sb-ok { background: rgba(63,185,80,.12); color: var(--accent-green); border: 1px solid rgba(63,185,80,.2); }
     .sb-warn { background: rgba(210,153,34,.12); color: var(--accent-yellow); border: 1px solid rgba(210,153,34,.2); }
     .sb-err { background: rgba(248,81,73,.12); color: var(--accent-red); border: 1px solid rgba(248,81,73,.2); }
     .sb-info { background: rgba(88,166,255,.12); color: var(--accent-blue); border: 1px solid rgba(88,166,255,.2); }
@@ -958,7 +965,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       padding: 6px 16px;
     }
     .mc-row + .mc-row { border-top: 1px solid rgba(255,255,255,.04); }
-    /* 视口不少于 1280px 且不少于 3 行时排两列（再窄模型名会被挤到截断）：列间竖线，行间横线 */
+    /* 视口不少于 1280px 且不少于 3 行时排两列（更窄时模型名列连常见的带日期后缀的模型 ID 都要折行）：列间竖线，行间横线 */
     @media (min-width: 1280px) {
       .mc-list.mc-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .mc-list.mc-cols-2 .mc-row + .mc-row { border-top: 0; }
@@ -968,10 +975,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .mc-vendor,
     .mc-model-name {
       font-family: 'JetBrains Mono', monospace;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+      overflow: hidden; min-width: 0;
     }
-    .mc-vendor { font-size: 11px; color: var(--text-secondary); }
-    .mc-model-name { font-size: 12px; color: var(--text-primary); }
+    .mc-vendor { font-size: 11px; color: var(--text-secondary); white-space: nowrap; text-overflow: ellipsis; }
+    /* 模型名最多折成两行：带日期后缀的模型 ID（claude-sonnet-4-5-20250929）在两列布局下放不进一行，
+       折行后仍完整可读；两行还放不下才省略，全名在 title 里（title 键盘与触屏拿不到，所以不默认截断） */
+    .mc-model-name {
+      font-size: 12px; color: var(--text-primary);
+      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+      white-space: normal; overflow-wrap: anywhere;
+    }
     .mc-meter {
       height: 6px; border-radius: 3px; overflow: hidden;
       background: rgba(255,255,255,.16);
@@ -1138,6 +1151,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="model-calling-wrap" id="model-calling-wrap">
       <div class="mc-empty">加载中…</div>
     </div>
+    <!-- 并行度编辑结果的读屏播报节点：写死在模板里，首次播报前就已在可访问性树中（动态插入的 live region 首条可能被漏读） -->
+    <div class="sr-only" id="mc-live" role="status" aria-live="polite"></div>
   </div>
 
   <!-- 同一水平栏：订阅状态 | 供应商请求分布 -->
@@ -1168,17 +1183,18 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
       <span class="trend-range" id="trend-range">近 7 天</span>
     </div>
-    <div class="trend-panel" id="trend-panel-requests" role="tabpanel" aria-labelledby="trend-tab-requests" aria-label="请求量趋势图" tabindex="0">
+    <!-- 面板只靠 aria-labelledby 取名（再写 aria-label 会被它覆盖）；图形读屏读不到，canvas 的文字摘要由 setChartSummary 写入 -->
+    <div class="trend-panel" id="trend-panel-requests" role="tabpanel" aria-labelledby="trend-tab-requests" tabindex="0">
       <div class="chart-wrap-lg">
         <canvas id="chart-timeline"></canvas>
       </div>
     </div>
-    <div class="trend-panel" id="trend-panel-tokens" role="tabpanel" aria-labelledby="trend-tab-tokens" aria-label="Token（按供应商）趋势图" tabindex="0" hidden>
+    <div class="trend-panel" id="trend-panel-tokens" role="tabpanel" aria-labelledby="trend-tab-tokens" tabindex="0" hidden>
       <div class="chart-wrap-lg">
         <canvas id="chart-token-timeline"></canvas>
       </div>
     </div>
-    <div class="trend-panel" id="trend-panel-models" role="tabpanel" aria-labelledby="trend-tab-models" aria-label="Token（Vendor / 模型）趋势图" tabindex="0" hidden>
+    <div class="trend-panel" id="trend-panel-models" role="tabpanel" aria-labelledby="trend-tab-models" tabindex="0" hidden>
       <div class="chart-with-legend">
         <div class="chart-wrap-xl">
           <canvas id="chart-model-token-timeline"></canvas>
@@ -1602,6 +1618,21 @@ function chartEmpty(ctx) {
   ctx.canvas.parentElement.appendChild(note);
 }
 
+// ── 图表的读屏摘要 ────────────────────────────────────────
+// canvas 里的图形与 Chart.js 自绘的图例读屏都读不到：建图时给 canvas 一句文字摘要，作为 role=img 的可访问名称
+function setChartSummary(canvas, text) {
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label', text);
+}
+
+// 堆叠趋势图的摘要：区间、合计、单日最高
+function trendSummary(name, fmt, unit, dates, datasets) {
+  const dayTotals = dates.map((_, i) => datasets.reduce((sum, ds) => sum + (Number(ds.data[i]) || 0), 0));
+  const peak = dayTotals.indexOf(Math.max(...dayTotals));
+  return name + '，' + rangeLabel(overviewDays) + '：合计 ' + fmt(dayTotals.reduce((s, v) => s + v, 0)) + unit
+    + '，单日最高 ' + fmt(dayTotals[peak]) + unit + '（' + dates[peak] + '）';
+}
+
 // ── 数据拉取 ──────────────────────────────────────────────
 async function fetchJSON(url) {
   const r = await fetch(url);
@@ -1616,9 +1647,10 @@ function costParts(cost) {
   return parts.map((part, i) => (i ? '+\u00a0' : '') + part);
 }
 
-function updateKPI(summary) {
+// days：这批 summary 实际取数的天数，区间标签由它生成
+function updateKPI(summary, days) {
   const t = summary.today, r = summary.range;
-  const lbl = rangeLabel();
+  const lbl = rangeLabel(days);
   // 副行 = 区间标签 + 若干数值段，用 DOM API 写入（文案来自接口）
   const sub = (id, label, ...values) => {
     const node = document.getElementById(id);
@@ -2235,6 +2267,7 @@ function resetVendorStatus(btn) {
 // 行节点按 vendor/model 键复用，只改文字与条宽，不整体重建 DOM：轮询不闪，编辑并行度时也不打断输入
 const _mcRows = new Map();   // key → 行节点引用
 var _mcEditing = false;      // 正在编辑并行度
+var _mcPendingEdit = null;   // 编辑期间点了另一行的上限：当前编辑结束后接着打开那一行
 
 function _mcRowKey(vendor, model) { return vendor + '/' + model; }
 
@@ -2387,24 +2420,22 @@ function limitValue(raw) {
   return value >= 1 && value <= 20 ? value : NaN;
 }
 
-// 捕获阶段接管上限按钮的点击。编辑期间 _mcEditing 为真，轮询不重绘；提交带在途守卫与 8 秒超时，
-// 请求悬住时也能解除编辑态；结束编辑后焦点回到按钮；结果用静态色标并写进 role=status 节点供读屏播报
+// 事件委托接管上限按钮的点击。编辑期间（含提交在途）_mcEditing 为真、轮询不重绘：这时点了另一行的上限，
+// 先记入 _mcPendingEdit，由当前编辑的 restore 接着打开，这次点击不被吞掉。
+// 提交带在途守卫与 8 秒超时，请求悬住时也能解除编辑态；结束编辑后焦点回到按钮；
+// 结果用静态色标并写进 role=status 节点供读屏播报
 document.addEventListener('click', function (e) {
   const btn = e.target.closest('.mc-limit-editable');
-  if (!btn || _mcEditing) return;
+  if (!btn) return;
+  if (_mcEditing) { _mcPendingEdit = btn; return; }
   e.preventDefault();
   startLimitEdit(btn);
-}, true);
+});
 
+// 播报节点 #mc-live 写在模板里：动态插入的 live region，首条内容可能被读屏漏掉
 function _mcAnnounce(text) {
-  let live = document.getElementById('mc-live');
-  if (!live) {
-    live = _mcEl('div', 'sr-only');
-    live.id = 'mc-live';
-    live.setAttribute('role', 'status');
-    live.setAttribute('aria-live', 'polite');
-    document.getElementById('model-calling-card').appendChild(live);
-  }
+  const live = document.getElementById('mc-live');
+  if (!live) return;
   live.textContent = '';
   setTimeout(function () { live.textContent = text; }, 30);
 }
@@ -2434,6 +2465,11 @@ function startLimitEdit(btn) {
     _mcEditing = false;
     input.remove();
     btn.style.display = '';
+    // 编辑期间点了另一行的上限：接着编辑那一行。期间焦点已被用户移到别处就作罢，不抢焦点
+    const next = _mcPendingEdit;
+    _mcPendingEdit = null;
+    const idle = document.activeElement === next || document.activeElement === document.body;
+    if (next && next.isConnected && idle) { startLimitEdit(next); return; }
     if (hadFocus) btn.focus();   // 回车 / Esc 结束后焦点回到上限按钮，键盘用户不用从头 Tab
   };
   let markTimer = null;
@@ -2536,6 +2572,7 @@ function buildTimeline(rows, tierOrder) {
       fill: i === 0 ? 'start' : '-1',
     };
   });
+  setChartSummary(ctx.canvas, trendSummary('请求量趋势', fmtNum, ' 次', dates, datasets));
 
   chartTimeline = new Chart(ctx, {
     type: 'line',
@@ -2560,6 +2597,18 @@ function buildTimeline(rows, tierOrder) {
 }
 
 // ── 供应商分布环形图 ──────────────────────────────────────
+// 图例位置：Chart.js 给右侧图例最多一半画布宽，最长的标签（「agy | antigravity」实测约 130px）放不下时会被裁掉。
+// 并排右列在约 1210px 视口以下放不下，这时图例移到下方自动换行。宽度用 Chart.js 自己的字体量出来，不另抄一份
+function distLegendPosition(ctx, labels, canvasWidth) {
+  const opts = COMMON_LEGEND.labels;
+  const font = Chart.helpers.toFont(opts.font);
+  ctx.save();
+  ctx.font = font.string;
+  const widest = labels.reduce((w, text) => Math.max(w, opts.boxWidth + font.size / 2 + ctx.measureText(text).width), 0);
+  ctx.restore();
+  return canvasWidth >= 2 * (opts.padding + widest) ? 'right' : 'bottom';
+}
+
 function buildVendorDist(rows, tierOrder) {
   const vendorTotals = {};
   for (const r of rows) {
@@ -2576,10 +2625,14 @@ function buildVendorDist(rows, tierOrder) {
     chartEmpty(ctx);
     return;
   }
+  const total = data.reduce((s, v) => s + v, 0);
+  const legendLabels = labels.map(formatVendorLabel);
+  setChartSummary(ctx.canvas, '供应商请求分布，' + rangeLabel(overviewDays) + '：共 ' + fmtNum(total) + ' 次请求；'
+    + legendLabels.map((text, i) => text + ' ' + (total ? Math.round((data[i] / total) * 100) : 0) + '%').join('，'));
   chartVendorDist = new Chart(ctx, {
     type: 'doughnut',
     data: {
-      labels: labels.map(formatVendorLabel),
+      labels: legendLabels,
       datasets: [{
         data,
         backgroundColor: labels.map((_,i) => VENDOR_COLORS[i % VENDOR_COLORS.length]),
@@ -2590,9 +2643,11 @@ function buildVendorDist(rows, tierOrder) {
     options: {
       responsive: true, maintainAspectRatio: false,
       cutout: '55%',
+      // 建图与每次尺寸变化都会经过这里：跨过并排 / 堆叠断点、右列变宽变窄时图例位置跟着走
+      onResize: function (chart, size) { chart.options.plugins.legend.position = distLegendPosition(chart.ctx, chart.data.labels, size.width); },
       plugins: {
         legend: {
-          position: 'right',
+          position: distLegendPosition(ctx, legendLabels, ctx.canvas.parentElement.clientWidth),
           onClick: legendOnClick,
           labels: {
             ...COMMON_LEGEND.labels,
@@ -2659,6 +2714,7 @@ function buildTokenTimeline(rows, tierOrder) {
       fill: i === 0 ? 'start' : '-1',
     };
   });
+  setChartSummary(ctx.canvas, trendSummary('Token 量趋势（按供应商）', fmtTokens, ' Token', dates, datasets));
 
   chartTokenTimeline = new Chart(ctx, {
     type: 'line',
@@ -2752,6 +2808,8 @@ function buildModelTokenTimeline(rows) {
     },
   };
 
+  setChartSummary(ctx.canvas, trendSummary('Token 用量趋势（Vendor / 模型）', fmtTokens, ' Token', dates, datasets));
+
   chartModelTokenTimeline = new Chart(ctx, {
     type: 'line',
     data: { labels: dates, datasets },
@@ -2786,21 +2844,20 @@ function buildModelTokenTimeline(rows) {
 
 // ── 时间区间控制 ──────────────────────────────────────────
 let currentDays = 7;
+let overviewDays = 0;   // Overview 最近一次成功取数用的天数（0 = 尚未取数）
+// 与服务端 summary / timeline 接口的天数上限一致：接口只收 days，超出部分不取数
+const MAX_RANGE_DAYS = 90;
 
-// 区间标签：KPI 副行、趋势页签说明、分布图标题共用同一口径。自选区间且截止日是今天写「近 N 天」；
-// 看历史窗口写起止日期（跨年写两位年份，完整日期在区间栏的日期输入框里），不能也叫「近 N 天」
-function rangeLabel() {
-  const custom = document.getElementById('range-custom');
-  if (custom && custom.classList.contains('visible')) {
-    const start = document.getElementById('range-start');
-    const end = document.getElementById('range-end');
-    const today = new Date().toISOString().slice(0, 10);
-    if (start && start.value && end && end.value && end.value !== today) {
-      const sameYear = start.value.slice(0, 4) === end.value.slice(0, 4);
-      return start.value.slice(sameYear ? 5 : 2) + ' ~ ' + end.value.slice(sameYear ? 5 : 2);
-    }
-  }
-  return '近 ' + currentDays + ' 天';
+// 本地日期的 YYYY-MM-DD（toISOString 给的是 UTC 日期：东八区 0 到 8 点会写成昨天）
+function localDateStr(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+// 区间标签：KPI 副行、趋势页签说明、分布图标题共用同一口径，一律「近 N 天」。入参是这次取数实际用的天数，
+// 不是页面当前选中的区间：刷新途中改了区间，已上屏的数据仍属于旧区间，标签要跟数据走。
+// 自选区间也只折算成天数：接口取的是截至今天的最近 N 天，区间栏里选的起止日期不是取数窗口，写成起止日期会和横轴对不上
+function rangeLabel(days) {
+  return '近 ' + days + ' 天';
 }
 
 function setTimeRange(days, btn) {
@@ -2814,8 +2871,8 @@ function setTimeRange(days, btn) {
     const today = new Date();
     const weekAgo = new Date(today);
     weekAgo.setDate(weekAgo.getDate() - 6);
-    document.getElementById('range-end').value = today.toISOString().slice(0, 10);
-    document.getElementById('range-start').value = weekAgo.toISOString().slice(0, 10);
+    document.getElementById('range-end').value = localDateStr(today);
+    document.getElementById('range-start').value = localDateStr(weekAgo);
     applyCustomRange();
   } else {
     customEl.classList.remove('visible');
@@ -2830,13 +2887,13 @@ function applyCustomRange() {
   const startMs = new Date(s).getTime();
   const endMs = new Date(e).getTime();
   if (endMs < startMs) return;
-  currentDays = Math.ceil((endMs - startMs) / 86400000) + 1;
+  currentDays = Math.min(MAX_RANGE_DAYS, Math.ceil((endMs - startMs) / 86400000) + 1);
   refresh();
 }
 
 // 区间说明同步到分布图标题与趋势页签行（三张趋势图的标题就是页签文案，不带区间）
-function updateChartTitles() {
-  const label = rangeLabel();
+function updateChartTitles(days) {
+  const label = rangeLabel(days);
   const vd = document.getElementById('title-vendor-dist');
   if (vd) vd.textContent = '供应商请求分布（' + label + '）';
   const range = document.getElementById('trend-range');
@@ -3159,16 +3216,19 @@ async function refreshOverview() {
     fetchJSON('/api/dashboard/subscriptions').catch(function () { return { vendors: [] }; }),
   ]);
 
+  // 这批数据实际取数的天数：区间标签与图表摘要读它，不读页面当前选中的区间
+  overviewDays = days;
+
   if (summary.version) {
     document.getElementById('version-badge').textContent = 'v' + summary.version;
   }
 
-  updateKPI(summary);
+  updateKPI(summary, days);
   // 行数据与随后的订阅数据到齐后只重绘一次：连续替换行节点会让键盘焦点环闪烁
   updateVendorStatus(status, true);
   updateModelCalling(status);
   updateSubscriptions(subs);
-  updateChartTitles();
+  updateChartTitles(days);
 
   const rows = timeline.rows || [];
   const tierOrder = (status.tiers || []).map(t => t.name);
@@ -3187,9 +3247,11 @@ async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
-    // 循环：若 await 期间用户切到了尚未加载的另一页签，补一次刷新，避免 tabLoaded 错位。
+    // 循环：若 await 期间用户切到了尚未加载的另一页签，或改了时间区间，补一次刷新，
+    // 避免 tabLoaded 错位、或新区间的点击被在途标记挡掉后没有下文。
     while (true) {
       const tab = currentTab;
+      let ok = false;
       document.getElementById('refresh-time').textContent = '刷新中…';
       try {
         if (tab === 'config') {
@@ -3200,6 +3262,7 @@ async function refresh() {
           await refreshOverview();
         }
         tabLoaded[tab] = true;
+        ok = true;
         if (tab === currentTab) {
           document.getElementById('refresh-time').textContent =
             '上次刷新: ' + now() + '（' + TAB_LABELS[tab] + '）';
@@ -3209,6 +3272,8 @@ async function refresh() {
         document.getElementById('refresh-time').textContent = '刷新失败 ' + now();
       }
       if (currentTab !== tab && !tabLoaded[currentTab]) continue;
+      // 取数成功但区间已在途中改掉：按新区间再取一次（取数失败不重试，否则接口不可达时会空转）
+      if (ok && tab === 'overview' && overviewDays !== currentDays) continue;
       break;
     }
   } finally {

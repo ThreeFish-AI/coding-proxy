@@ -32,9 +32,9 @@ def _inline_script(html: str) -> str:
 
 
 def _card(html: str) -> str:
-    """截取合并卡片的 HTML 片段（起点为卡片 id，终点为紧随其后的折线图卡片）."""
+    """截取合并卡片的 HTML 片段（起点为卡片 id，终点为同一水平栏里紧随其后的分布卡）."""
     start = html.index('id="subscription-card"')
-    return html[start : html.index('class="card timeline-card"', start)]
+    return html[start : html.index('<div class="card dist-card">', start)]
 
 
 def test_subscription_card_wired(client: TestClient):
@@ -45,9 +45,9 @@ def test_subscription_card_wired(client: TestClient):
     assert 'id="btn-vendor-reset"' in card
     assert 'id="vendor-list"' in card
     assert card.index('id="vendor-list"') < card.index('id="subscription-list"')
-    # 原「供应商状态」卡片不再独立存在，折线图脱离网格变全宽
+    # 原「供应商状态」卡片不再独立存在；趋势图收在页签卡里，不再放进 charts-grid 网格
     assert '<div class="card-title">供应商状态' not in html
-    assert 'class="charts-grid"' not in html
+    assert 'class="charts-grid' not in html
     assert 'class="card timeline-card"' in html
     # 数据链路：refreshOverview 并发拉取 + 独立兜底
     assert "fetchJSON('/api/dashboard/subscriptions').catch" in html

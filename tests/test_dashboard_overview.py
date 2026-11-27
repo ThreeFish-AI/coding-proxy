@@ -65,7 +65,7 @@ def test_overview_status_row_and_trend_card_wired(client: TestClient):
     assert row.index('id="subscription-card"') < row.index('id="chart-vendor-dist"')
     assert len(re.findall(r'<div class="card ', row)) == 2
 
-    # 趋势卡保留完整的 class="card timeline-card"：订阅卡测试用它做片段的结束分隔
+    # 趋势卡带完整的 class="card timeline-card"（订阅卡测试静态断言它存在）
     trend = html[trend_tag_at : html.index("</section>", trend_tag_at)]
     tablist_at = trend.index('role="tablist"')
     tablist = trend[: trend.index("</div>", tablist_at)]
@@ -84,6 +84,8 @@ def test_overview_status_row_and_trend_card_wired(client: TestClient):
         assert trend.index(f'id="{tab_id}"') < trend.index(f">{label}</button>")
         assert panel["id"] == panel_id and panel["aria-labelledby"] == tab_id
         assert panel["role"] == "tabpanel" and panel["tabindex"] == "0"
+        # 面板只靠 aria-labelledby 取名：再写 aria-label 会被它覆盖，等于没写
+        assert "aria-label" not in panel
         # 只有当前页签的面板可见（hidden 是布尔属性，没有值）
         assert (" hidden" in panel_tags[i]) is (i != 0)
         panel_at = html.rindex(
@@ -125,6 +127,12 @@ def test_overview_kpi_and_model_calling_markup(client: TestClient):
     title = title[: title.index("</div>")]
     assert title.startswith('<div class="card-title">Model Calling 实时状态')
     assert title.endswith('<span class="card-note">每 10 秒刷新</span>')
+    # 并行度编辑结果的播报节点写在模板里，而不是首次播报时才插入（首条内容可能被读屏漏掉）
+    assert (
+        '<div class="sr-only" id="mc-live" role="status" aria-live="polite"></div>'
+        in html
+    )
+    assert html.count('id="mc-live"') == 1
 
 
 def test_overview_css_constraints(client: TestClient):
@@ -153,6 +161,34 @@ def test_overview_css_constraints(client: TestClient):
     assert "border-bottom-color: var(--accent-blue)" in _rule(
         html, '.trend-tab[aria-selected="true"]'
     )
+    # 负下边距：选中页签的下划线盖住头部 hairline；负左边距：首个页签的文字与其它卡片标题左对齐
+    assert "margin: 0 0 -1px -12px;" in _rule(html, ".trend-tabs")
+    # 区间标签只有「近 N 天」：标签与说明都不需要任意断行
+    assert "white-space: nowrap;" in _rule(html, ".trend-range")
+    assert "white-space: nowrap;" in _rule(html, ".kpi-sub-label, .kpi-sub-val")
+    # 可聚焦的页签面板有与全页一致的焦点环（2px 蓝色，画在内侧）
+    focus = _rule(html, ".trend-panel:focus-visible")
+    assert "outline: 2px solid var(--accent-blue); outline-offset: -2px;" in focus
+    # 分布卡图形区的 flex-basis 为 0：钉在 canvas 上一次写下的像素高度上，左卡变矮后这一行回不去
+    assert "flex: 1 1 0;" in _rule(html, ".dist-card .chart-wrap")
+    # 模型名最多折两行，不默认截断（全名只在 title 里，键盘与触屏拿不到）
+    name = html[html.index(".mc-model-name {\n      font-size: 12px") :]
+    assert "-webkit-line-clamp: 2" in name[: name.index("}")]
+    # 手机两列：先清掉 3 列布局的列内边距，再排 2 列（同特异性下后写的赢，末列才是 24px）
+    phone = html[html.index("@media (max-width: 519px)") :]
+    assert re.findall(r"\.kpi-card:nth-child\(([^)]*)\) \{ ([^}]*?);? \}", phone) == [
+        (
+            "3n+1",
+            "border-left: 1px solid rgba(255,255,255,.06); padding-left: 16px; padding-right: 16px",
+        ),
+        ("3n", "padding-right: 16px"),
+        ("2n+1", "border-left: 0; padding-left: 24px"),
+        ("2n", "padding-right: 24px"),
+        ("n+3", "border-top: 1px solid rgba(255,255,255,.06)"),
+    ]
+    # 简化后不再有引用的规则与变量已删除
+    for dead in (".sb-ok", "--glow-blue:", "--accent-orange:", "--text-muted:"):
+        assert dead not in html, dead
     assert "linear-gradient(90deg, #000 calc(100% - 28px), transparent)" in _rule(
         html, ".vendor-badges.has-more"
     )
@@ -169,7 +205,7 @@ def test_overview_css_constraints(client: TestClient):
 
 
 def test_overview_scripts_avoid_unsafe_dom_writes(client: TestClient):
-    """KPI 与 Model Calling 的文案全部来自接口，只能经 textContent 写入；编辑监听在捕获阶段接管."""
+    """KPI、Model Calling 与图表摘要的文案全部来自接口，只能经 textContent / setAttribute 写入."""
     script = _inline_script(client.get("/dashboard").text)
     for signature in (
         "function updateKPI(",
@@ -179,13 +215,18 @@ def test_overview_scripts_avoid_unsafe_dom_writes(client: TestClient):
         "function _mcAnnounce(",
         "function startLimitEdit(",
         "function setTrendTab(",
+        "function setChartSummary(",
     ):
         assert "innerHTML" not in _extract_function(script, signature), signature
-    # 编辑监听在捕获阶段接管：同一次点击不会再冒泡给页面里其它委托处理器
-    listener_at = script.index("document.addEventListener('click', function (e) {")
-    listener = script[listener_at : script.index("}, true);", listener_at)]
-    assert "startLimitEdit(btn);" in listener
-    assert script.count("startLimitEdit(") == 2  # 定义一次，只在这个监听器里调用
+    # 上限按钮的点击由挂在 document 上的事件委托接管（页面没有别的委托 click 处理器，不需要捕获阶段）
+    listener = _extract_function(
+        script, "document.addEventListener('click', function (e) {"
+    )
+    assert listener.startswith("document.addEventListener('click', function (e) {")
+    assert "startLimitEdit(btn);" in listener and "_mcPendingEdit = btn;" in listener
+    assert (
+        script.count("startLimitEdit(") == 3
+    )  # 定义一次，监听器与上一段编辑的收尾各调用一次
     # 页面原有的 CSS 规则管不到 canvas：减少动态时关掉 Chart.js 的画布动画
     assert (
         "if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {\n"
@@ -231,6 +272,8 @@ _FAKE_DOM = textwrap.dedent(
       }
       set id(value) { this._id = String(value); byId[this._id] = this; }
       get id() { return this._id; }
+      // 是否挂在树上：假 DOM 用 root 充当文档，祖先链上有 root 才算已连接（被移除的行连同它的子节点一起断开）
+      get isConnected() { for (let n = this; n; n = n.parentNode) if (n === root) return true; return false; }
       get nextSibling() {
         if (!this.parentNode) return null;
         return this.parentNode.children[this.parentNode.children.indexOf(this) + 1] || null;
@@ -290,7 +333,8 @@ _FAKE_DOM = textwrap.dedent(
         const node = new FakeEl(m[1]); node.className = m[2]; this.appendChild(node);
       }
     }
-    const document = { activeElement: null, createElement: (tag) => new FakeEl(tag), getElementById: (id) => byId[id] || null };
+    // body: null：假 DOM 用 null 表示焦点落空，等价于真实 DOM 里焦点回到 document.body
+    const document = { activeElement: null, body: null, createElement: (tag) => new FakeEl(tag), getElementById: (id) => byId[id] || null };
     const el = (tag, cls, text) => { const n = new FakeEl(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
     const root = new FakeEl('root');
     document.querySelector = (sel) => root.querySelectorAll(sel)[0] || null;
@@ -307,10 +351,13 @@ def _kpi_harness(script: str) -> str:
     return (
         "const assert = require('assert');\n"
         + _FAKE_DOM
-        + "let currentDays = 7;\n"
+        + "let currentDays = 7;\nconst MAX_RANGE_DAYS = 90;\nlet refreshed = 0;\n"
+        "const refresh = () => { refreshed += 1; };\n"
         + _sources(
             script,
+            "function localDateStr(",
             "function rangeLabel(",
+            "function applyCustomRange(",
             "function costParts(",
             "function updateKPI(",
             "function fmtTokens(",
@@ -318,8 +365,6 @@ def _kpi_harness(script: str) -> str:
         )
         + textwrap.dedent(
             r"""
-            const today = new Date().toISOString().slice(0, 10);
-            const custom = el('div', ''); custom.id = 'range-custom';
             const start = el('input', ''); start.id = 'range-start';
             const end = el('input', ''); end.id = 'range-end';
             const nodes = {};
@@ -333,29 +378,37 @@ def _kpi_harness(script: str) -> str:
               range: { requests: 14237, tokens: { input: 0, output: 4410000, cache_creation: 0, cache_read: 0 }, failovers: 21, avg_duration_ms: 4820, cost: rangeCost },
             });
 
-            // 内置区间：近 N 天
-            assert.strictEqual(rangeLabel(), '近 7 天');
-            currentDays = 30;
-            assert.strictEqual(rangeLabel(), '近 30 天');
-            // 自选区间且截止日是今天：仍写近 N 天
-            currentDays = 12; custom.classList.add('visible'); start.value = today; end.value = today;
-            assert.strictEqual(rangeLabel(), '近 12 天');
-            // 自选区间看历史窗口：写起止日期，不能也叫近 N 天；跨年写两位年份
+            // 区间标签只由取数天数决定：接口取的是截至今天的最近 N 天，自选区间也只折算成天数
+            assert.strictEqual(rangeLabel(7), '近 7 天');
+            assert.strictEqual(rangeLabel(30), '近 30 天');
+            // 本地日期：东八区凌晨（UTC 仍是前一天）也写本地的今天
+            assert.strictEqual(localDateStr(new Date(2026, 10, 27, 1, 0)), '2026-11-27');
+            assert.strictEqual(localDateStr(new Date(2026, 0, 5, 23, 59)), '2026-01-05');
+
+            // 自选区间：起止日期折算成天数（含首尾两天）；反向区间、缺一端都不取数
             start.value = '2026-11-01'; end.value = '2026-11-07';
-            assert.strictEqual(rangeLabel(), '11-01 ~ 11-07');
-            start.value = '2025-12-20'; end.value = '2026-01-05';
-            assert.strictEqual(rangeLabel(), '25-12-20 ~ 26-01-05');
-            // 自选面板没收起（点的是预设按钮）时不读日期输入框
-            custom.classList.remove('visible'); start.value = '';
-            assert.strictEqual(rangeLabel(), '近 12 天');
+            applyCustomRange();
+            assert.deepStrictEqual([currentDays, refreshed], [7, 1]);
+            start.value = '2026-11-20'; end.value = '2026-11-15';
+            applyCustomRange();
+            assert.deepStrictEqual([currentDays, refreshed], [7, 1]);
+            start.value = '';
+            applyCustomRange();
+            assert.deepStrictEqual([currentDays, refreshed], [7, 1]);
+            // 超出接口上限（90 天）按 90 天取数，标签与实际取数一致
+            start.value = '2025-12-20'; end.value = '2026-06-30';
+            applyCustomRange();
+            assert.deepStrictEqual([currentDays, refreshed], [90, 2]);
 
             // 费用按「 + 」拆段：第二段带加号；没有费用时是一格「–」
             assert.deepStrictEqual(costParts('¥54.24'), ['¥54.24']);
-            assert.deepStrictEqual(costParts('¥298.96 + $412.37'), ['¥298.96', '+ $412.37']);
+            assert.deepStrictEqual(costParts('¥298.96 + $412.37'), ['¥298.96', '+\u00a0$412.37']);   // 加号后是不换行空格
             assert.deepStrictEqual(costParts(''), ['–']);
             assert.deepStrictEqual(costParts(null), ['–']);
 
-            updateKPI(summary('¥54.24', '¥298.96 + $412.37'));
+            // 副行标签取这批数据实际取数的天数（入参），不读页面当前选中的区间
+            currentDays = 30;
+            updateKPI(summary('¥54.24', '¥298.96 + $412.37'), 12);
             assert.strictEqual(nodes.req.today.textContent, '2,583');
             assert.deepStrictEqual(partsOf(nodes.req.week), ['近 12 天', '14,237']);
             assert.deepStrictEqual(nodes.req.week.children.map((c) => c.className), ['kpi-sub-label', 'kpi-sub-val']);
@@ -364,21 +417,21 @@ def _kpi_harness(script: str) -> str:
             assert.strictEqual(nodes.out.today.textContent, '800.7K');
             assert.deepStrictEqual(partsOf(nodes.out.week), ['近 12 天', '4.41M']);
             assert.deepStrictEqual(partsOf(nodes.cost.today), ['¥54.24']);
-            assert.deepStrictEqual(partsOf(nodes.cost.week), ['近 12 天', '¥298.96', '+ $412.37']);
+            assert.deepStrictEqual(partsOf(nodes.cost.week), ['近 12 天', '¥298.96', '+\u00a0$412.37']);
             assert.strictEqual(nodes.fo.today.textContent, '3');
             assert.strictEqual(nodes.lat.today.textContent, '4820ms');
 
             // 重复刷新整体重写，不残留上一轮的段；没有费用时是一格「–」
-            updateKPI(summary('', null));
+            updateKPI(summary('', null), 12);
             assert.deepStrictEqual(partsOf(nodes.cost.week), ['近 12 天', '–']);
             assert.strictEqual(nodes.lat.today.textContent, '4820ms');
             // 没有请求数与延迟时都是「–」
-            updateKPI({ today: { requests: null, tokens: {}, failovers: null, avg_duration_ms: 0, cost: '' }, range: { requests: null, tokens: {}, failovers: null, avg_duration_ms: 0, cost: '' } });
+            updateKPI({ today: { requests: null, tokens: {}, failovers: null, avg_duration_ms: 0, cost: '' }, range: { requests: null, tokens: {}, failovers: null, avg_duration_ms: 0, cost: '' } }, 12);
             assert.strictEqual(nodes.req.today.textContent, '–');
             assert.strictEqual(nodes.lat.today.textContent, '–');
             assert.deepStrictEqual(partsOf(nodes.lat.week), ['近 12 天', '–']);
             // 文案原样进文本节点：带标签的字符串不会被当成标记
-            updateKPI({ today: { requests: '<img src=x onerror=alert(1)>', tokens: {}, failovers: 0, avg_duration_ms: 0, cost: '<b>x</b>' }, range: { requests: 0, tokens: {}, failovers: 0, avg_duration_ms: 0, cost: '' } });
+            updateKPI({ today: { requests: '<img src=x onerror=alert(1)>', tokens: {}, failovers: 0, avg_duration_ms: 0, cost: '<b>x</b>' }, range: { requests: 0, tokens: {}, failovers: 0, avg_duration_ms: 0, cost: '' } }, 7);
             assert.strictEqual(nodes.req.today.textContent, '<img src=x onerror=alert(1)>');
             assert.deepStrictEqual(nodes.req.today.children, []);
             assert.deepStrictEqual(partsOf(nodes.cost.today), ['<b>x</b>']);
@@ -391,7 +444,7 @@ def _kpi_harness(script: str) -> str:
 
 @pytest.mark.skipif(_NODE is None, reason="node 不可用")
 def test_kpi_range_label_and_sub_lines(client: TestClient, tmp_path):
-    """区间标签只有一处口径；副行由区间标签与数值段组成，费用按币种拆段，文案不拼 HTML."""
+    """区间标签一律「近 N 天」且跟着实际取数的天数走；副行由区间标签与数值段组成，费用按币种拆段，文案不拼 HTML."""
     script = _inline_script(client.get("/dashboard").text)
     _run_node(tmp_path, "kpi_harness.js", _kpi_harness(script), "kpi harness OK")
 
@@ -429,8 +482,10 @@ _MC_PRELUDE = textwrap.dedent(
       next.tiers[0].diagnostics.concurrency['glm-4.6'].limit = limit;
       return next;
     };
-    const card = el('div', 'card model-calling-card'); card.id = 'model-calling-card';
+    const card = el('div', 'card model-calling-card'); card.id = 'model-calling-card'; root.appendChild(card);
     const wrap = el('div', ''); wrap.id = 'model-calling-wrap'; card.appendChild(wrap);
+    // 播报节点写在模板里（属性由 HTML 接线测试断言），这里只占位
+    const live = el('div', 'sr-only'); live.id = 'mc-live'; card.appendChild(live);
     const list = () => wrap.querySelector('.mc-list');
     const rows = () => (list() ? list().children.slice() : []);
     const shown = (node) => node.style.display !== 'none';   // 与 CSS 的显隐一致：隐藏的段不算可见文案
@@ -455,7 +510,7 @@ def _mc_harness(script: str, body: str) -> str:
         "const assert = require('assert');\n"
         + _FAKE_DOM
         + _extract_block(
-            script, "const _mcRows = new Map();", "var _mcEditing = false;"
+            script, "const _mcRows = new Map();", "var _mcPendingEdit = null;"
         )
         + "\n"
         + _sources(
@@ -605,9 +660,11 @@ def test_model_calling_limit_edit_flow(client: TestClient, tmp_path):
                 assert.strictEqual(document.activeElement, input);
                 assert.strictEqual(btn.style.display, 'none');
                 assert.ok(_mcEditing);
-                // 编辑中点别处的上限：不开第二个编辑器
+                // 编辑中点别处的上限：不开第二个编辑器，这次点击记下来等当前编辑结束再接手（见 test_model_calling_limit_edit_hands_off_to_next_row）
                 clickLimit(limitOf(rows()[1]));
                 assert.strictEqual(inputs, 1);
+                assert.strictEqual(_mcPendingEdit, limitOf(rows()[1]));
+                _mcPendingEdit = null;   // 下面只验证单行流程，丢掉这次点击
                 // 编辑中轮询到达：不重绘，输入框、已输入的内容与焦点都原样保留（原实现在这里提交半截输入）
                 input.value = '1';
                 const drawn = rows();
@@ -643,8 +700,8 @@ def test_model_calling_limit_edit_flow(client: TestClient, tmp_path):
                   // 输入框移除引发的 blur 不会再提交第二次（原实现在这里连发两个 PUT）
                   advance(2000);
                   assert.strictEqual(puts.length, 1);
-                  const live = byId['mc-live'];
-                  assert.ok(live.classList.contains('sr-only') && live.getAttribute('role') === 'status' && live.getAttribute('aria-live') === 'polite');
+                  // 播报节点来自模板（属性由 HTML 接线测试断言）
+                  assert.strictEqual(live, byId['mc-live']);
                   assert.strictEqual(live.textContent, 'zhipu/glm-4.6 的并行度已更新为 12');
                   assert.ok(!btn.classList.contains('mc-limit-ok'), '静态色标 1.5 秒后清除');
 
@@ -712,6 +769,410 @@ def test_model_calling_limit_edit_flow(client: TestClient, tmp_path):
             ),
         ),
         "mc edit harness OK",
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node 不可用")
+def test_model_calling_limit_edit_hands_off_to_next_row(client: TestClient, tmp_path):
+    """编辑一行时点另一行的上限：当前编辑结束后接着打开那一行（这次点击不被吞掉）；焦点已被移走或那一行已消失则作废."""
+    script = _inline_script(client.get("/dashboard").text)
+    _run_node(
+        tmp_path,
+        "mc_handoff_harness.js",
+        _mc_harness(
+            script,
+            textwrap.dedent(
+                r"""
+                updateModelCalling(status);
+                const [rowA, rowB] = rows();
+                const btnA = limitOf(rowA), btnB = limitOf(rowB);
+                const inputOf = (btn) => { const node = btn.nextSibling; return node && node.className === 'mc-limit-input' ? node : null; };
+                const hang = () => { fetch = (url, opts) => { puts.push(opts.body); return new Promise((resolve) => { resolvePut = resolve; }); }; };
+                let resolvePut;
+
+                // 鼠标流：编辑 A 时点 B。浏览器先让 A 的输入框失焦，再派发点击；失焦守卫要 50 毫秒后才提交，
+                // 点击到达时仍是「编辑中」：记下 B，而不是把这次点击吞掉（原实现要再点一次才进编辑）
+                clickLimit(btnA);
+                const inputA = inputOf(btnA);
+                inputA.value = '12';
+                btnB.focus();
+                inputA.fire('blur', {});
+                clickLimit(btnB);
+                assert.strictEqual(_mcPendingEdit, btnB);
+                assert.strictEqual(inputOf(btnB), null, 'A 还在编辑：不同时开两个编辑器');
+                advance(50);
+                assert.deepStrictEqual(puts, ['{"tier":"zhipu","model":"glm-4.6","limit":12}']);
+                return tick().then(() => {
+                  const inputB = inputOf(btnB);
+                  assert.ok(inputB, 'A 提交完成后接着打开 B');
+                  assert.strictEqual(inputB.getAttribute('aria-label'), 'zhipu/glm-4.5-air 的并行度上限（1 到 20 的整数）');
+                  assert.strictEqual(document.activeElement, inputB);
+                  assert.strictEqual(_mcPendingEdit, null);
+                  assert.ok(_mcEditing, 'B 进入编辑，整张表仍是编辑中');
+                  assert.strictEqual(wrap.querySelectorAll('.mc-limit-input').length, 1);
+                  assert.strictEqual(btnB.style.display, 'none');
+                  assert.strictEqual(btnA.style.display, '');
+                  assert.strictEqual(btnA.querySelector('.mc-limit-val').textContent, '12');
+                  assert.deepStrictEqual(puts.length, 1);
+                  // B 按 Esc：不提交，焦点回到 B 的按钮
+                  inputB.fire('keydown', { key: 'Escape' });
+                  assert.strictEqual(puts.length, 1);
+                  assert.strictEqual(document.activeElement, btnB);
+                  assert.ok(!_mcEditing);
+
+                  // 键盘流：A 的输入框还聚焦时点了 B（Safari 不把焦点给按钮），A 回车提交后焦点直接交给 B 的输入框
+                  puts.length = 0;
+                  clickLimit(btnA);
+                  const inputA2 = inputOf(btnA);
+                  inputA2.value = '11';
+                  clickLimit(btnB);
+                  assert.strictEqual(btnA.nextSibling, inputA2, '点击不打断正在进行的编辑');
+                  assert.strictEqual(document.activeElement, inputA2);
+                  inputA2.fire('keydown', { key: 'Enter' });
+                  return tick().then(() => {
+                    assert.deepStrictEqual(puts, ['{"tier":"zhipu","model":"glm-4.6","limit":11}']);
+                    assert.strictEqual(document.activeElement, inputOf(btnB));
+                    inputOf(btnB).fire('keydown', { key: 'Escape' });
+
+                    // 点了 B 之后焦点又被移到别处（例如开始操作别的控件）：不抢焦点，这次点击作废
+                    puts.length = 0;
+                    hang();
+                    clickLimit(btnA);
+                    const inputA3 = inputOf(btnA);
+                    inputA3.value = '9';
+                    inputA3.fire('keydown', { key: 'Enter' });
+                    clickLimit(btnB);
+                    const elsewhere = el('button', 'range-btn'); root.appendChild(elsewhere); elsewhere.focus();
+                    resolvePut({ ok: true });
+                    return tick().then(() => {
+                      assert.strictEqual(inputOf(btnB), null, '不抢焦点');
+                      assert.strictEqual(_mcPendingEdit, null);
+                      assert.strictEqual(document.activeElement, elsewhere);
+                      assert.ok(!_mcEditing);
+
+                      // 排队的那一行在当前编辑结束前已不在页面上了：作废，也不把整张表留在「编辑中」
+                      clickLimit(btnA);
+                      const inputA4 = inputOf(btnA);
+                      inputA4.value = '7';
+                      clickLimit(btnB);
+                      rowB.remove();
+                      inputA4.fire('keydown', { key: 'Escape' });
+                      assert.strictEqual(inputOf(btnB), null);
+                      assert.strictEqual(_mcPendingEdit, null);
+                      assert.ok(!_mcEditing);
+                      console.log('mc handoff harness OK');
+                    });
+                  });
+                });
+                """
+            ),
+        ),
+        "mc handoff harness OK",
+    )
+
+
+# 时间区间与刷新循环的 harness 前置：取数换成可手动放行的假函数（记下每次用的天数），
+# 其余全局与真实脚本同形。refreshOverview 里「取回后记下 overviewDays」这一行由静态断言守住
+_RANGE_PRELUDE = textwrap.dedent(
+    r"""
+    let refreshing = false;
+    let currentTab = 'overview'; let currentDays = 7; let overviewDays = 0;
+    const tabLoaded = { overview: false, sessions: false, config: false };
+    const TAB_LABELS = { overview: 'Overview', sessions: 'Sessions', config: 'Config' };
+    const now = () => '22:00:23';
+    globalThis.window = {};
+    const errors = [];
+    const console = Object.assign({}, globalThis.console, { error: (...args) => errors.push(args.map(String).join(' ')) });
+    const refreshTime = el('div', ''); refreshTime.id = 'refresh-time';
+    const title = el('div', 'card-title'); title.id = 'title-vendor-dist';
+    const range = el('span', 'trend-range'); range.id = 'trend-range';
+    const start = el('input', 'range-date'); start.id = 'range-start';
+    const end = el('input', 'range-date'); end.id = 'range-end';
+    const custom = el('div', 'range-custom'); custom.id = 'range-custom';
+    const fetches = []; let release = null; let failNext = false; let configFetches = 0;
+    const refreshSessions = () => Promise.resolve();
+    const refreshOverview = async () => {
+      const days = currentDays > 0 ? currentDays : 7;
+      const mine = {}; release = mine;
+      await new Promise((resolve) => { mine.resolve = resolve; });
+      if (failNext) { failNext = false; throw new Error('fetch failed'); }
+      overviewDays = days;
+      updateChartTitles(days);
+      fetches.push(days);
+    };
+    window.ConfigTab = { refresh: async () => { configFetches += 1; if (configFetches > 5) throw new Error('loop'); } };
+    """
+)
+
+
+def _range_harness(script: str, body: str) -> str:
+    return (
+        "const assert = require('assert');\n"
+        + _FAKE_DOM
+        + _RANGE_PRELUDE
+        + "const MAX_RANGE_DAYS = 90;\n"
+        + _sources(
+            script,
+            "function localDateStr(",
+            "function rangeLabel(",
+            "function setTimeRange(",
+            "function applyCustomRange(",
+            "function updateChartTitles(",
+        )
+        # _extract_function 从 function 起截，async 修饰符要自己补回
+        + "async "
+        + _extract_function(script, "function refresh(")
+        + "\n"
+        + textwrap.dedent(body)
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node 不可用")
+def test_refresh_reruns_when_range_changes_mid_flight(client: TestClient, tmp_path):
+    """刷新途中改时间区间：那次 refresh() 被在途标记挡掉，但当前这轮结束后按新区间补刷；取数失败不补刷（否则空转）."""
+    script = _inline_script(client.get("/dashboard").text)
+    # 标签与摘要读的是这批数据实际取数的天数：取回后先记入 overviewDays，再渲染
+    overview = _extract_function(script, "function refreshOverview(")
+    assert overview.index("overviewDays = days;") < overview.index(
+        "updateKPI(summary, days);"
+    )
+    assert overview.index("overviewDays = days;") < overview.index(
+        "updateChartTitles(days);"
+    )
+    assert "fetchJSON('/api/dashboard/summary?days=' + days)" in overview
+    _run_node(
+        tmp_path,
+        "range_refresh_harness.js",
+        _range_harness(
+            script,
+            r"""
+            // 首轮刷新途中点「近 30 天」：按钮状态立即切换；这次 refresh() 被在途标记挡掉，不另起取数
+            const btn30 = el('button', 'range-btn'); root.appendChild(btn30);
+            const first = refresh();
+            assert.strictEqual(refreshTime.textContent, '刷新中…');
+            assert.ok(refreshing);
+            setTimeRange(30, btn30);
+            assert.ok(btn30.classList.contains('active'));
+            assert.deepStrictEqual(fetches, []);
+            // 第一轮按旧区间收尾：已上屏的数据属于 7 天，标签跟着数据写「近 7 天」
+            release.resolve();
+            tick().then(() => {
+              assert.deepStrictEqual(fetches, [7]);
+              assert.strictEqual(title.textContent, '供应商请求分布（近 7 天）');
+              // 发现区间已改：接着按新区间补刷（原实现把这次点击丢掉，数据和按钮各说各话）
+              assert.ok(refreshing);
+              assert.strictEqual(refreshTime.textContent, '刷新中…');
+              release.resolve();
+              return first;
+            }).then(() => {
+              assert.deepStrictEqual(fetches, [7, 30]);
+              assert.strictEqual(title.textContent, '供应商请求分布（近 30 天）');
+              assert.strictEqual(range.textContent, '近 30 天');
+              assert.ok(!refreshing && tabLoaded.overview);
+              assert.strictEqual(refreshTime.textContent, '上次刷新: 22:00:23（Overview）');
+
+              // 区间没变：只取一次
+              const plain = refresh();
+              release.resolve();
+              return plain.then(() => {
+                assert.deepStrictEqual(fetches, [7, 30, 30]);
+
+                // 取数失败：不补刷（否则接口不可达时会空转），在途标记复位，报错进控制台
+                failNext = true;
+                const failed = refresh();
+                release.resolve();
+                return failed.then(() => {
+                  assert.deepStrictEqual(fetches, [7, 30, 30]);
+                  assert.ok(!refreshing);
+                  assert.strictEqual(refreshTime.textContent, '刷新失败 22:00:23');
+                  assert.strictEqual(errors.length, 1);
+
+                  // 取数失败、且途中又改了区间：同样不补刷
+                  const failedToo = refresh();
+                  setTimeRange(12, null);
+                  failNext = true;
+                  release.resolve();
+                  return failedToo.then(() => {
+                    assert.deepStrictEqual(fetches, [7, 30, 30]);
+                    assert.strictEqual(errors.length, 2);
+                    assert.strictEqual(currentDays, 12, '按钮状态保留用户的最后一次选择');
+
+                    // 下一次刷新（手动 ⟳ 或 10 分钟轮询）按最后选的区间取数
+                    const next = refresh();
+                    release.resolve();
+                    return next.then(() => {
+                      assert.deepStrictEqual(fetches, [7, 30, 30, 12]);
+                      assert.strictEqual(title.textContent, '供应商请求分布（近 12 天）');
+
+                      // 不在 Overview 页签时区间对不上也不循环：只刷新当前页签一次
+                      currentDays = 30;
+                      currentTab = 'config';
+                      return refresh().then(() => {
+                        assert.strictEqual(configFetches, 1);
+                        assert.deepStrictEqual(fetches, [7, 30, 30, 12]);
+                        currentTab = 'overview';
+                        console.log('range refresh harness OK');
+                      });
+                    });
+                  });
+                });
+              });
+            }).catch((e) => { process.stderr.write(String((e && e.stack) || e) + '\n'); process.exit(1); });
+""",
+        ),
+        "range refresh harness OK",
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node 不可用")
+def test_custom_range_defaults_to_local_dates(client: TestClient, tmp_path):
+    """自选区间默认带出本地今天的近 7 天：东八区 0 到 8 点不再把截止日写成 UTC 的昨天；天数超过接口上限按上限取."""
+    script = _inline_script(client.get("/dashboard").text)
+    assert "toISOString" not in _extract_function(script, "function setTimeRange(")
+    _run_node(
+        tmp_path,
+        "range_custom_harness.js",
+        _range_harness(
+            script,
+            r"""
+            process.env.TZ = 'Asia/Shanghai';
+            const RealDate = globalThis.Date;
+            const fakeNow = new RealDate(2026, 10, 27, 1, 0);   // 本地 11-27 凌晨 1 点，UTC 还是 11-26
+            globalThis.Date = class extends RealDate { constructor(...args) { super(...(args.length ? args : [fakeNow])); } };
+            assert.strictEqual(new Date().toISOString().slice(0, 10), '2026-11-26', '前置：进程时区已切到东八区');
+
+            const btnCustom = el('button', 'range-btn'); root.appendChild(btnCustom);
+            setTimeRange(0, btnCustom);
+            assert.ok(custom.classList.contains('visible') && btnCustom.classList.contains('active'));
+            assert.deepStrictEqual([start.value, end.value], ['2026-11-21', '2026-11-27'], '起止日期是本地日期');
+            assert.strictEqual(currentDays, 7);
+            release.resolve();
+            tick().then(() => {
+              assert.deepStrictEqual(fetches, [7]);
+              assert.strictEqual(title.textContent, '供应商请求分布（近 7 天）');
+
+              // 超过接口上限（90 天）的自选区间：按 90 天取数，标签随之
+              end.value = '2026-11-27'; start.value = '2026-01-01';
+              applyCustomRange();
+              assert.strictEqual(currentDays, 90);
+              release.resolve();
+              return tick();
+            }).then(() => {
+              assert.deepStrictEqual(fetches, [7, 90]);
+              assert.strictEqual(range.textContent, '近 90 天');
+
+              // 点回预设按钮：自选面板收起，按预设天数取数
+              const btn30 = el('button', 'range-btn'); root.appendChild(btn30);
+              setTimeRange(30, btn30);
+              assert.ok(!custom.classList.contains('visible'));
+              release.resolve();
+              return tick();
+            }).then(() => {
+              assert.deepStrictEqual(fetches, [7, 90, 30]);
+              assert.strictEqual(title.textContent, '供应商请求分布（近 30 天）');
+              console.log('range custom harness OK');
+            }).catch((e) => { process.stderr.write(String((e && e.stack) || e) + '\n'); process.exit(1); });
+            """,
+        ),
+        "range custom harness OK",
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node 不可用")
+def test_chart_summaries_and_dist_legend_position(client: TestClient, tmp_path):
+    """图形读屏读不到：canvas 带 role=img 与一句文字摘要（区间、合计、峰值 / 各项占比）；分布图图例在窄列移到下方."""
+    script = _inline_script(client.get("/dashboard").text)
+    for builder, name in (
+        ("buildTimeline", "请求量趋势"),
+        ("buildTokenTimeline", "Token 量趋势（按供应商）"),
+        ("buildModelTokenTimeline", "Token 用量趋势（Vendor / 模型）"),
+    ):
+        source = _extract_function(script, f"function {builder}(")
+        assert f"setChartSummary(ctx.canvas, trendSummary('{name}'," in source
+        assert source.index("chartEmpty(ctx);") < source.index(
+            "setChartSummary("
+        )  # 空态不写摘要
+    dist = _extract_function(script, "function buildVendorDist(")
+    assert (
+        "position: distLegendPosition(ctx, legendLabels, ctx.canvas.parentElement.clientWidth),"
+        in dist
+    )
+    assert "onResize: function (chart, size) {" in dist
+    assert (
+        "chart.options.plugins.legend.position = distLegendPosition(chart.ctx, chart.data.labels, size.width);"
+        in dist
+    )
+    # 图例宽度按 COMMON_LEGEND.labels 的色点、内边距与字体量出来：harness 用脚本里的同一份配置
+    legend_labels = _extract_block(
+        script, "const COMMON_LEGEND = {", "font: { size: 13, weight: '500' }"
+    )
+    assert "boxWidth: 10" in legend_labels and "padding: 14" in legend_labels
+    assert "供应商请求分布，" in dist
+
+    _run_node(
+        tmp_path,
+        "chart_summary_harness.js",
+        "const assert = require('assert');\n"
+        + _FAKE_DOM
+        + "let overviewDays = 30;\n"
+        + legend_labels
+        + "\n}};\n"
+        + _sources(
+            script,
+            "function setChartSummary(",
+            "function trendSummary(",
+            "function rangeLabel(",
+            "function fmtTokens(",
+            "function fmtNum(",
+            "function distLegendPosition(",
+        )
+        + textwrap.dedent(
+            r"""
+            const canvas = new FakeEl('canvas');
+            const dates = ['2026-11-23', '2026-11-24', '2026-11-25'];
+            const datasets = [
+              { data: [1000, 0, 2500] },
+              { data: [500, 250, null] },   // 缺值按 0 计
+              { data: [0, undefined, 500] },
+            ];
+            assert.strictEqual(canvas.getAttribute('role'), null);
+            setChartSummary(canvas, trendSummary('请求量趋势', fmtNum, ' 次', dates, datasets));
+            assert.strictEqual(canvas.getAttribute('role'), 'img');
+            // 区间取最近一次取数的天数；合计与单日最高都按所有系列逐日相加
+            assert.strictEqual(
+              canvas.getAttribute('aria-label'),
+              '请求量趋势，近 30 天：合计 4,750 次，单日最高 3,000 次（2026-11-25）',
+            );
+            // 覆盖写入，不残留上一次的摘要
+            setChartSummary(canvas, trendSummary('Token 量趋势（按供应商）', fmtTokens, ' Token', dates.slice(0, 1), datasets));
+            assert.strictEqual(
+              canvas.getAttribute('aria-label'),
+              'Token 量趋势（按供应商），近 30 天：合计 1.5K Token，单日最高 1.5K Token（2026-11-23）',
+            );
+
+            // 分布图图例：右侧图例最多占一半画布宽。宽度用图例自己的字体量：色点 + 字号的一半 + 文字宽。
+            // 假字体每个字符 6px：17 个字符的「agy | antigravity」一项 118.5px，连内边距占 132.5px，画布不到 265px 就移到下方
+            const fonts = [];
+            const ctx = {
+              canvas: { parentElement: { clientWidth: 0 } },
+              save() {}, restore() {},
+              set font(v) { fonts.push(v); },
+              measureText: (text) => ({ width: text.length * 6 }),
+            };
+            globalThis.Chart = { helpers: { toFont: (o) => Object.assign({}, o, { string: o.weight + ' ' + o.size + 'px fake' }) } };
+            const labels = ['cc | zhipu', 'agy | antigravity'];
+            assert.strictEqual(distLegendPosition(ctx, labels, 265), 'right');
+            assert.strictEqual(distLegendPosition(ctx, labels, 264.9), 'bottom');
+            assert.strictEqual(distLegendPosition(ctx, labels, 233), 'bottom');
+            // 标签短时更窄也放得下；没有标签不报错
+            assert.strictEqual(distLegendPosition(ctx, ['cc | zhipu'], 181), 'right');
+            assert.strictEqual(distLegendPosition(ctx, ['cc | zhipu'], 180), 'bottom');
+            assert.strictEqual(distLegendPosition(ctx, [], 233), 'right');
+            assert.deepStrictEqual(fonts, Array(6).fill('500 13px fake'));
+            console.log('chart summary harness OK');
+            """
+        ),
+        "chart summary harness OK",
     )
 
 
