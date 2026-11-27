@@ -477,7 +477,13 @@ def register_session_vendor_routes(app: Any, router: Any) -> None:
         if model is not None:
             model = model.strip()
             if not any(m.get("model") == model for m in bindable):
-                if not bindable:
+                known = {str(m.get("model")) for m in router.get_known_models()}
+                if model in known:
+                    message = (
+                        f"model is offline (pricing online=false): {model}; "
+                        "set the pricing row online to re-enable binding"
+                    )
+                elif not bindable:
                     message = (
                         "model binding is disabled: "
                         "session_policies.bindable_models is empty or unset in "

@@ -998,7 +998,7 @@ class _RouteExecutor:
         """
         if not model or not self._router:
             return None
-        for entry in self._router.get_bindable_models():
+        for entry in self._router.get_known_models():
             if str(entry.get("model", "")) == model:
                 tiers = [str(t) for t in entry.get("tiers", []) if t]
                 return tiers or None

@@ -23,7 +23,8 @@
 | I-011 | Antigravity 桌面 2.32.1 模型流绕过 `CLOUD_CODE_URL` 通道（前端只见控制面调用次数，无模型/Token 指标） | ✅ 已完成 | 2026-11-16 | [详情](#I-011) |
 | I-012 | Dashboard 供应商行拖拽在列表外松开后卡死（行停在半透明，列表不再刷新） | ✅ 已完成 | 2026-11-24 | [详情](#I-012) |
 | I-013 | Dashboard 无用量数据时第二次刷新起抛 TypeError（图表空态替换掉 canvas 后未恢复） | ✅ 已完成 | 2026-11-24 | [详情](#I-013) |
-| I-014 | Dashboard 编辑 Model Calling 并行度时轮询提交半截输入、每次编辑连发两个 PUT | ✅ 已完成 | 2026-11-27 | [详情](#I-014) |
+| I-014 | Model Bind 下拉缺 GLM 5.4（pricing 与调用记录已有，但内置目录停在 GLM 5.3） | ✅ 已完成 | 2026-11-27 | [详情](#I-014) |
+| I-015 | Dashboard 编辑 Model Calling 并行度时轮询提交半截输入、每次编辑连发两个 PUT | ✅ 已完成 | 2026-11-27 | [详情](#I-015) |
 
 ---
 
@@ -542,7 +543,34 @@ Overview 页拖动供应商行调整优先级：行越过相邻行（发生一�
 同类风险：任何「无数据时用 innerHTML 替换容器内容」的图表或列表面板（Chart.js、地图、表格容器）；排查时先看报错前的第一次渲染有没有移除节点。Chart.js 实例销毁后再调用 `destroy()` 不会出错（canvas 已置空，直接跳过），空态分支不清空图表变量不影响正确性。
 
 <a id="I-014"></a>
-## I-014：Dashboard 编辑 Model Calling 并行度时轮询提交半截输入、每次编辑连发两个 PUT
+## I-014：Model Bind 下拉缺 GLM 5.4（pricing 与调用记录已有，但内置目录停在 GLM 5.3）
+
+**问题描述**
+
+用户在 Config 页 pricing 给 zhipu 加了 `glm-5.4`，调用记录与 Sessions 页 Models 列也已出现 `glm-5.4`，但 Sessions 页 Model Bind 下拉里没有 GLM 5.4，无法把会话绑到该模型。
+
+**表因根因**
+
+表因：下拉选项来自 `/api/status` 的 `bindable_models`，前端原样渲染、不做过滤。根因：`bindable_models` 在 app 构建时由「内置 vendor 目录（`vendors/model_catalog.py` 的代码常量）∪ `session_policies.bindable_models` 显式条目」合成，pricing 和调用记录都不是目录来源；内置 zhipu 目录停在 GLM 5.3，没有 `glm-5.4`。[session-model-bind.md](../arch/session-model-bind.md) §6 已把「内置目录滞后于上游新模型」列为已知边界，这次是该边界在 GLM 5.4 上的实际触发。
+
+**处理方式**
+
+`_ZHIPU` 补 `("GLM 5.4", "glm-5.4")`；条目随目录自动获得 zhipu 锁定与 identity 映射规则（`glm-5.4 → glm-5.4`，不被 default 回退改写）。`tests/test_model_catalog.py` 补目录与 identity 规则两条回归用例，`tests/test_app_routes.py::test_status_returns_bindable_models` 补 `/api/status` 断言，补完先红后绿。对照验证（隔离实例，Playwright）：`/api/status` 含 GLM 5.4，Sessions 下拉 Zhipu 组首位出现 GLM 5.4，选中后 `PUT /api/session-vendor` 返回 200，绑定为 `vendors=[zhipu]`、`model=glm-5.4`。
+
+**第二步（同日，用户拍板「pricing 并入目录 + 只能下线不能删除」后实施）**：`compose_bindable_catalog` 扩为「内置 ∪ pricing 行（仅 native vendor，配价即入下拉）∪ bindable_models」；pricing 行新增 `online` 字段（false = 下线：不进下拉、PUT 拒绝新绑，executor 锁定链与热切换迁移改用 `get_known_models()` 含下线清单，已绑会话保留）；`ConfigService._plan` 加「pricing 不可缩减」校验（删除/改名/恢复默认丢行一律拒绝，错误只带条数不回显值）；Config 页 Pricing 表去删除、vendor/model 只读、加 Status 列与「下线/上线」，「恢复默认」改「恢复默认价格并保留自定义行」。全量 2270 项通过；隔离实例 + Playwright 端到端：配价即入下拉并可绑定，下线后下拉消失、已绑会话保留并显示 `(off-list)`、新绑 400 指明 offline，删除行被 422 拒绝，`online: true` 恢复可绑。
+
+**后续防范**
+
+上游出新 native 模型（GLM、MiniMax、Kimi、Doubao、MiMo、Qwen）时，配价（pricing 行）即入下拉，无需等发版补目录；非 native 模型或需要自定义 label/tiers 时，Config 页 Session Policies → Bindable Models 加一条 `label` + `model`（`tiers` 留空即可，自动获得 identity 规则），保存并应用配置后生效（每代配置经 `create_app` 重新合成目录）。模型退役走 pricing 行「下线」，不可删除。
+
+**同类问题影响与处理注意事项**
+
+同类风险：所有 native 系 vendor 的新型号。pricing 并入目录已落地（第二步）：配价即入下拉，删除被服务端拦截，退役走 `online: false`；注意该规则使「打错一行 pricing」无法删除只能下线后重加，属刻意取舍。`config.default.yaml` 的默认 pricing 未含 `glm-5.3` / `glm-5.4`，这两个型号的价格需用户按官方公布自配，代码里不臆填。
+
+---
+
+<a id="I-015"></a>
+## I-015：Dashboard 编辑 Model Calling 并行度时轮询提交半截输入、每次编辑连发两个 PUT
 
 **问题描述**
 

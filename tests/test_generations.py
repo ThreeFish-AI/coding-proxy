@@ -562,7 +562,7 @@ def test_migrate_bindings_counts_double_invalidation_once():
     resolver = SessionPolicyResolver()
     router = MagicMock()
     router.get_vendor_names.return_value = ["zhipu"]
-    router.get_bindable_models.return_value = [
+    router.get_known_models.return_value = [
         {"label": "Keep", "model": "keep-me", "tiers": []}
     ]
     router._executor._policy_resolver = resolver

@@ -4,8 +4,9 @@
 - 每类 vendor 一份内置目录常量（label/model/归属 tiers），随包升级自动
   触达所有用户，不受 config.db「list 整体替换」合并语义的存量冻结影响
 - ``compose_bindable_catalog`` 在 app 构建时把「内置目录按激活 vendor 过滤」
-  与 ``session_policies.bindable_models`` 显式条目按 model 去重合并：
-  config 同名条目可覆盖 label/tiers（tiers 留空 = 继承内置值），
+  与 pricing 行（仅 native vendor：配价即入目录，``online: false`` 只标记
+  下线、不可删除）及 ``session_policies.bindable_models`` 显式条目按 model
+  去重合并：config 同名条目可覆盖 label/tiers（tiers 留空 = 继承内置值），
   ``exclude: true`` 可剔除内置同名条目
 - 合成结果注入 ``RequestRouter._bindable_models``，/api/status 展示、
   PUT /api/session-vendor 白名单校验、generations 热切换迁移三个消费点
@@ -21,10 +22,11 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..config.routing import ModelMappingRule
+from ..config.routing import ModelMappingRule, ModelPricingEntry
 from ..config.session_policy import BindableModel
 
 logger = logging.getLogger(__name__)
@@ -66,6 +68,7 @@ _ANTHROPIC = [
 
 # zhipu（智谱）可绑定的 glm 家族
 _ZHIPU = [
+    ("GLM 5.4", "glm-5.4"),
     ("GLM 5.3", "glm-5.3"),
     ("GLM 5.3 Flash", "glm-5.3-flash"),
     ("GLM 5.2", "glm-5.2"),
@@ -132,57 +135,93 @@ def builtin_entries_for(vendor: str) -> list[CatalogEntry]:
 def compose_bindable_catalog(
     active_vendor_names: list[str],
     config_entries: list[BindableModel],
+    priced: Sequence[ModelPricingEntry] | None = None,
 ) -> list[dict[str, Any]]:
-    """合成可绑定模型清单 = 内置目录（按激活 vendor 过滤）∪ config 显式条目.
+    """合成可绑定模型清单 = 内置目录（按激活 vendor 过滤）∪ pricing 行 ∪ config 显式条目.
 
     合并规则：
-    - config 清单为空 = 整体关闭模型绑定（含内置目录，保留「空清单即禁用」
-      的既有语义作为 off 开关）
+    - config 清单为空 = 整体关闭模型绑定（含内置目录与 pricing 派生条目，
+      保留「空清单即禁用」的既有语义作为 off 开关）
+    - pricing 行仅取 native vendor（``_NATIVE_MAPPER_VENDORS``）且在激活链：
+      配价即入目录（派生条目 label = model 名，tiers 锁定该 vendor，自动获得
+      identity 映射规则），填补内置目录滞后于上游新型号的缺口；按 (vendor,
+      model) 精确去重，与内置/config 同名时让位
+    - 下线以 model 为粒度：同名模型任一 pricing 行 ``online: false`` 即视为
+      下线，条目带 ``offline: true`` 标记——不进 ``get_bindable_models()``
+      下拉与 PUT 校验，executor 锁定链与热切换迁移仍可见（已绑会话保留）
     - 按 model 去重；config 同名条目覆盖 label，tiers 非空时覆盖 tiers，
-      ``exclude=True`` 时剔除该内置条目（纯自定义条目 exclude 无效，warning）
+      ``exclude=True`` 时剔除该内置/派生条目（纯自定义条目 exclude 无效，warning）
     - config 纯自定义条目（model 不在内置目录）原样保留：tiers 留空表示
       沿用全局链路顺序（executor 侧仍受支持性门控保护）
-    - 返回条目含 vendor 字段（内置归属或 "custom"），供前端 optgroup 分组
+    - 返回条目含 vendor 字段（内置归属 / pricing 归属或 "custom"），供前端
+      optgroup 分组
     """
     if not config_entries:
         return []
     active = [v for v in dict.fromkeys(active_vendor_names) if v]
+    active_set = set(active)
     builtin_models = {e.model for v in active for e in builtin_entries_for(v)}
+    # pricing 行登记：下线状态按 model 聚合（任一行下线即下线），派生条目按
+    # (vendor, model) 精确匹配、保持配置顺序
+    priced_online: dict[str, bool] = {}
+    priced_rows: list[tuple[str, str]] = []
+    seen_rows: set[tuple[str, str]] = set()
+    for row in priced or ():
+        vendor, model = str(row.vendor), str(row.model)
+        online = bool(getattr(row, "online", True))
+        priced_online[model] = priced_online.get(model, True) and online
+        if (vendor, model) not in seen_rows:
+            seen_rows.add((vendor, model))
+            priced_rows.append((vendor, model))
     merged: dict[str, dict[str, Any]] = {}
     order: list[str] = []
-    # 用户 label 意图优先：内置条目 label 撞上 config 中「指向不同 model」的
-    # label 时降级（同 label 同 model 的覆盖合并不算冲突）；exclude 剔除的
-    # 内置条目本身不进目录，其 label 不参与冲突判定
+    # 用户 label 意图优先：内置/派生条目 label 撞上 config 中「指向不同 model」
+    # 的 label 时降级（同 label 同 model 的覆盖合并不算冲突）；exclude 剔除的
+    # 条目本身不进目录，其 label 不参与冲突判定
     config_label_models = {
         c.label: c.model
         for c in config_entries
         if not (c.exclude and c.model in builtin_models)
     }
 
+    def _claim_label(label: str, model: str, owner: str) -> str:
+        """label 撞 config 中指向不同 model 的 label 时降级为保证可区分的兜底名."""
+        if config_label_models.get(label, model) == model:
+            return label
+        fallback = model
+        if fallback in config_label_models:
+            fallback = f"{model} ({owner})"
+        logger.warning(
+            "bindable label %r collides with config label, falling back to %r",
+            label,
+            fallback,
+        )
+        return fallback
+
     for vendor in active:
         for e in builtin_entries_for(vendor):
             if e.model in merged:
                 continue
-            label = e.label
-            if config_label_models.get(label, e.model) != e.model:
-                fallback = e.model
-                if fallback in config_label_models:
-                    # 降级兜底名再撞 config label：附 vendor 保证可区分
-                    fallback = f"{e.model} ({e.vendor})"
-                logger.warning(
-                    "builtin bindable label %r collides with config label, "
-                    "falling back to %r",
-                    label,
-                    fallback,
-                )
-                label = fallback
             merged[e.model] = {
-                "label": label,
+                "label": _claim_label(e.label, e.model, e.vendor),
                 "model": e.model,
                 "tiers": list(e.tiers),
                 "vendor": e.vendor,
             }
             order.append(e.model)
+
+    for vendor, model in priced_rows:
+        if vendor not in _NATIVE_MAPPER_VENDORS or vendor not in active_set:
+            continue
+        if model in merged:
+            continue
+        merged[model] = {
+            "label": _claim_label(model, model, vendor),
+            "model": model,
+            "tiers": [vendor],
+            "vendor": vendor,
+        }
+        order.append(model)
 
     for cfg in config_entries:
         existing = merged.get(cfg.model)
@@ -209,7 +248,11 @@ def compose_bindable_catalog(
             }
             order.append(cfg.model)
 
-    return [merged[m] for m in order]
+    catalog = [merged[m] for m in order]
+    for entry in catalog:
+        if not priced_online.get(str(entry["model"]), True):
+            entry["offline"] = True
+    return catalog
 
 
 def builtin_identity_rules(

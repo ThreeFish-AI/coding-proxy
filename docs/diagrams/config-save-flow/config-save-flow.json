@@ -1,0 +1,253 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Config 页保存流程：改造前后",
+    "locale": "zh-CN",
+    "animation": "none",
+    "quality_profile": "showcase",
+    "output": "config-save-flow.html",
+    "legend": {
+      "entries": {
+        "frontend": {
+          "label": "页面（config.js）"
+        },
+        "backend": {
+          "label": "服务端 API"
+        },
+        "security": {
+          "label": "判断与移除的旧行为"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "保存流程"
+    },
+    {
+      "id": "old",
+      "label": "移除的旧行为",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "start",
+      "label": "发起保存",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "confirm",
+      "label": "是否需要确认",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "commit",
+      "label": "提交与结果",
+      "fromCol": 4,
+      "toCol": 5
+    }
+  ],
+  "groups": [
+    {
+      "id": "g-judge",
+      "label": "新增：有后果才弹",
+      "lane": "main",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "g-result",
+      "label": "新增：结果进保存栏",
+      "lane": "main",
+      "fromCol": 5,
+      "toCol": 5,
+      "variant": "emphasis"
+    }
+  ],
+  "mainPath": [
+    "edit",
+    "click",
+    "judge",
+    "confirm",
+    "put",
+    "result"
+  ],
+  "nodes": [
+    {
+      "id": "edit",
+      "lane": "main",
+      "col": 0,
+      "type": "frontend",
+      "label": "修改字段",
+      "sublabel": "保存栏列出待保存范围",
+      "width": 144
+    },
+    {
+      "id": "click",
+      "lane": "main",
+      "col": 1,
+      "type": "frontend",
+      "label": "点「保存」，冻结表单",
+      "sublabel": "读取 /api/status",
+      "width": 144
+    },
+    {
+      "id": "judge",
+      "lane": "main",
+      "col": 2,
+      "type": "security",
+      "label": "判定保存后果",
+      "sublabel": "密钥 · 在途请求 · 状态重置",
+      "tag": "新增",
+      "width": 144
+    },
+    {
+      "id": "confirm",
+      "lane": "main",
+      "col": 3,
+      "type": "frontend",
+      "label": "确认框",
+      "sublabel": "后果清单 + 字段级 diff",
+      "tag": "仅在有后果时",
+      "width": 144
+    },
+    {
+      "id": "put",
+      "lane": "main",
+      "col": 4,
+      "type": "backend",
+      "label": "提交并重载",
+      "sublabel": "PUT /api/config",
+      "width": 144
+    },
+    {
+      "id": "result",
+      "lane": "main",
+      "col": 5,
+      "type": "frontend",
+      "label": "保存栏显示结果",
+      "sublabel": "成功 / 待重启 / 失败",
+      "tag": "新增",
+      "width": 144
+    },
+    {
+      "id": "always",
+      "lane": "old",
+      "col": 3,
+      "type": "security",
+      "label": "每次都弹确认框",
+      "sublabel": "只列 section 名与套话",
+      "tag": "移除",
+      "width": 144
+    },
+    {
+      "id": "banner",
+      "lane": "old",
+      "col": 5,
+      "type": "security",
+      "label": "结果只在顶部 Banner",
+      "sublabel": "下滚后看不到",
+      "tag": "移除",
+      "width": 144
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-edit-click",
+      "from": "edit",
+      "to": "click",
+      "variant": "default"
+    },
+    {
+      "id": "e-click-judge",
+      "from": "click",
+      "to": "judge",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-judge-confirm",
+      "from": "judge",
+      "to": "confirm",
+      "variant": "emphasis",
+      "label": "有后果"
+    },
+    {
+      "id": "e-judge-put",
+      "from": "judge",
+      "to": "put",
+      "variant": "dashed",
+      "role": "branch",
+      "label": "无后果，直接提交"
+    },
+    {
+      "id": "e-confirm-put",
+      "from": "confirm",
+      "to": "put",
+      "variant": "emphasis",
+      "label": "确认保存"
+    },
+    {
+      "id": "e-put-result",
+      "from": "put",
+      "to": "result",
+      "variant": "emphasis",
+      "label": "保存完成"
+    },
+    {
+      "id": "e-click-always",
+      "from": "click",
+      "to": "always",
+      "variant": "dashed",
+      "role": "error"
+    },
+    {
+      "id": "e-always-put",
+      "from": "always",
+      "to": "put",
+      "variant": "dashed",
+      "role": "error"
+    },
+    {
+      "id": "e-put-banner",
+      "from": "put",
+      "to": "banner",
+      "variant": "dashed",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "怎么看这张图",
+      "items": [
+        "「保存流程」泳道里没有「新增」标记的步骤，改造前后都存在",
+        "「判定保存后果」「保存栏显示结果」是本次加入的",
+        "「移除的旧行为」泳道与虚线边是本次去掉的"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "确认框何时出现",
+      "items": [
+        "后果清单为空时不弹，直接提交",
+        "清单含密钥写入或清空、在途请求、运行时状态重置、移除 vendor",
+        "确认框列出每个字段的新旧值，破坏性后果用红色主按钮"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "无法提前预判的后果",
+      "items": [
+        "运行时并发上限被重置只能由服务端在保存后报告",
+        "这条信息出现在保存栏的结果明细里"
+      ]
+    }
+  ]
+}
