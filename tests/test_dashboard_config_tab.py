@@ -586,15 +586,18 @@ _DOM_HARNESS = textwrap.dedent(
     const pill = name => root.querySelector('.cfg-pills .range-btn[data-pill="' + name + '"]').click();
     const banners = () => root.querySelectorAll('.cfg-banner-text').map(b => b.textContent);
     const rows = () => root.querySelectorAll('.cfg-list-row');
-    const delRow = i => rows()[i].querySelector('.cfg-btn-danger').click();
+    const actionBtn = (row, label) => row.querySelectorAll('.cfg-cell-actions .cfg-btn').find(b => b.textContent === label);
 
     (async () => {
-      // 1) 未覆盖 pricing：删除默认行不出现「合并」banner
+      // 1) pricing 行不可删除：已保存行无「删除」，以「下线」产生本地修改；未覆盖时无「合并」banner
       view = mkView([], pricing.slice());
       await CT.refresh(true);
       pill('pricing');
-      delRow(0);
-      assert.strictEqual(rows().length, 1);
+      assert.strictEqual(rows()[0].querySelector('.cfg-btn-danger'), null, 'saved pricing row must not offer delete');
+      assert.strictEqual(rows()[1].querySelector('.cfg-btn-danger'), null);
+      actionBtn(rows()[0], '下线').click();
+      assert.strictEqual(rows().length, 2);
+      assert.ok(rows()[0].textContent.includes('Offline'), 'offline row shows Status Offline');
       assert.ok(!banners().some(t => t.includes('包内默认定价')), banners().join('|'));
       assert.ok(tabBtn.classList.contains('cfg-dirty'));
 
@@ -604,7 +607,7 @@ _DOM_HARNESS = textwrap.dedent(
       assert.strictEqual(CT.isDirty(), false);
       assert.strictEqual(tabBtn.classList.contains('cfg-dirty'), false);
 
-      // 1b) 已覆盖 pricing：仅统计已保存表中缺失的默认行；本地未保存删除不计入；合并后消失
+      // 1b) 已覆盖 pricing：仅统计已保存表中缺失的默认行；合并补齐后提示消失
       store['coding-proxy.admin-token'] = 'T'.repeat(43);
       view = mkView(['pricing'], pricing.slice(0, 1));
       await CT.refresh(true);
@@ -612,10 +615,8 @@ _DOM_HARNESS = textwrap.dedent(
       const hint = () => banners().filter(t => t.includes('包内默认定价'));
       assert.deepStrictEqual(hint().length, 1);
       assert.ok(hint()[0].includes(' 1 行'), hint()[0]);
-      delRow(0);
-      assert.ok(hint()[0].includes(' 1 行'), hint()[0]);
       root.querySelectorAll('.cfg-banner .cfg-btn').find(b => b.textContent === '合并').click();
-      assert.deepStrictEqual(rows().map(r => r.textContent.includes('y')), [true]);
+      assert.deepStrictEqual(rows().map(r => r.textContent.includes('y')), [false, true]);
       assert.strictEqual(hint().length, 0);
 
       // 5) pills 为 group + aria-current（不再声明缺少 tab 子项的 tablist）
@@ -781,7 +782,7 @@ _DOM_HARNESS = textwrap.dedent(
       view.values.failover = { status_codes: [429] };
       await CT.refresh(true);
       pill('pricing');
-      delRow(0); // pricing 与 failover 同时有本地修改
+      actionBtn(rows()[0], '下线').click(); // pricing 与 failover 同时有本地修改
       pill('failover');
       addChip('500');
       assert.ok(CT.isDirty());
@@ -799,6 +800,33 @@ _DOM_HARNESS = textwrap.dedent(
       assert.ok(chips().includes('500'));
       assert.ok(!root.textContent.includes('但重新加载失败'));
       net.put409 = null;
+
+      // 12) pricing 行生命周期：下线 ↔ 上线；已保存行 vendor/model 只读、价格可改；恢复默认价格保留自定义行；新增行可撤销
+      // 注：Node shim 的 dispatch 不模拟 stopPropagation，行内按钮点击会连带触发行展开（真实浏览器不会）
+      view = mkView(['pricing'], pricing.slice());
+      await CT.refresh(true);
+      pill('pricing');
+      actionBtn(rows()[0], '下线').click();
+      assert.ok(rows()[0].textContent.includes('Offline'), 'offline row shows Status Offline');
+      const vInp = root.querySelector('.cfg-row[data-path="pricing.0.vendor"] input');
+      assert.ok(vInp && vInp.disabled, 'saved row vendor is readonly');
+      assert.ok(root.querySelector('.cfg-row[data-path="pricing.0.model"] input').disabled, 'saved row model is readonly');
+      const priceInp = root.querySelector('.cfg-row[data-path="pricing.0.input_cost_per_mtok"] input');
+      priceInp.value = '9.0'; priceInp.dispatch('input');
+      root.querySelectorAll('.cfg-section-head .cfg-btn').find(b => b.textContent === '添加').click();
+      assert.strictEqual(rows().length, 3);
+      assert.ok(rows()[2].querySelector('.cfg-btn-danger'), 'unsaved row can still be removed');
+      root.querySelectorAll('.cfg-section-head .cfg-btn').find(b => b.textContent === '恢复默认价格').click();
+      assert.strictEqual(rows().length, 3, 'custom row survives restore-defaults');
+      assert.ok(rows()[0].textContent.includes('$1.0'), 'default row price restored');
+      assert.ok(rows()[1].textContent.includes('$2.0'));
+      rows()[2].querySelector('.cfg-btn-danger').click();
+      assert.strictEqual(rows().length, 2);
+      actionBtn(rows()[0], '下线').click();
+      assert.ok(rows()[0].textContent.includes('Offline'));
+      rows()[0].click(); // shim 连带展开后的收起（浏览器中此处不会展开）
+      actionBtn(rows()[0], '上线').click();
+      assert.ok(rows()[0].textContent.includes('Online'), 'online row shows Status Online');
       console.log('ok');
     })().catch(e => { console.error(e && e.stack || e); process.exit(1); });
     """
