@@ -248,19 +248,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       --text-primary: #e6edf3;
       --text-secondary: #8b949e;
       --text-tertiary: #6e7681;
-      --text-muted: #6e7681;
       --accent-blue: #58a6ff;
       --accent-green: #3fb950;
       --accent-yellow: #d29922;
       --accent-red: #f85149;
       --accent-purple: #bc8cff;
-      --accent-orange: #ffa657;
       --accent-teal: #39d353;
       --radius: 14px;
       --radius-sm: 8px;
       --shadow: 0 1px 2px rgba(0,0,0,.3);
       --shadow-md: 0 8px 24px rgba(0,0,0,.3);
-      --glow-blue: 0 0 0 1px rgba(88,166,255,.1), 0 8px 32px rgba(88,166,255,.04);
       --gradient-primary: linear-gradient(135deg, #667eea, #764ba2);
       --gap-section: 12px;
       /* 表格固定列宽 token（Sessions 与 Config 共用：同一属性同一宽度；
@@ -353,86 +350,94 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     /* ── 主内容 ── */
     main { padding: 28px 32px; max-width: 1440px; margin: 0 auto; }
-    /* ── KPI 卡片 ── */
+    /* ── KPI：一条 stat strip ──
+       六格合成一个表面，格间只留 hairline。数值穿文字色；图标、彩色顶线、hover 光晕这类装饰一概不加 */
     .kpi-grid {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: var(--gap-section);
-      margin-bottom: var(--gap-section);
-    }
-    .kpi-card {
+      gap: 0;
+      /* 费用可能是双币种长串（¥1,234.56 + $987.65），那一列略宽，其余五列等宽 */
+      grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.45fr) repeat(2, minmax(0, 1fr));
+      overflow: hidden;
       background: rgba(18,22,30,.7);
       border: 1px solid rgba(255,255,255,.05);
       border-radius: var(--radius);
-      padding: 20px 22px 18px;
       box-shadow: var(--shadow);
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
-      transition: all .2s ease;
-      animation: fadeInUp .4s ease both;
-      position: relative;
-      overflow: hidden;
-    }
-    .kpi-card::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 1px;
-      opacity: .6;
-      border-radius: var(--radius) var(--radius) 0 0;
-    }
-    .kpi-card:nth-child(1)::before { background: var(--accent-blue); }
-    .kpi-card:nth-child(2)::before { background: var(--accent-purple); }
-    .kpi-card:nth-child(3)::before { background: var(--accent-green); }
-    .kpi-card:nth-child(4)::before { background: var(--accent-yellow); }
-    .kpi-card:nth-child(5)::before { background: var(--accent-red); }
-    .kpi-card:nth-child(6)::before { background: var(--accent-orange); }
-    .kpi-card:hover {
-      background: var(--bg-card-hover);
-      box-shadow: var(--glow-blue);
-    }
-    .kpi-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-    .kpi-icon { font-size: 15px; opacity: .8; }
-    .kpi-label { font-size: 13px; color: var(--text-secondary); font-weight: 600; letter-spacing: .2px; }
-    .kpi-value {
-      font-size: clamp(20px, 2.2vw, 32px); font-weight: 700; line-height: 1.2;
-      font-family: 'JetBrains Mono', monospace;
-      letter-spacing: -1px;
-    }
-    #kpi-cost-today {
-      font-size: clamp(15px, 1.3vw + 0.25rem, 20px);
-      white-space: normal;
-      word-break: keep-all;
-      overflow-wrap: anywhere;
-      line-height: 1.25;
-    }
-    .kpi-sub { font-size: 13px; color: var(--text-tertiary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-    /* ── KPI 响应式：桌面/笔记本/平板横屏(≥1024px)强制 6 列单行，杜绝数值裁剪；窄屏优雅降级 ── */
-    @media (max-width: 1023px) {
-      .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    }
-    @media (max-width: 480px) {
-      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    .color-blue { color: var(--accent-blue); }
-    .color-green { color: var(--accent-green); }
-    .color-yellow { color: var(--accent-yellow); }
-    .color-red { color: var(--accent-red); }
-    .color-purple { color: var(--accent-purple); }
-    .color-orange { color: var(--accent-orange); }
-    /* ── 图表网格 ── */
-    .charts-grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 2fr;
-      gap: 16px;
       margin-bottom: var(--gap-section);
     }
-    .charts-grid-2 > .card {
+    .kpi-card {
+      position: relative;
       min-width: 0;
+      padding: 16px 20px 14px;
+      border-left: 1px solid rgba(255,255,255,.06);
+      animation: fadeInUp .4s ease both;
+    }
+    .kpi-card:nth-child(6n+1) { border-left: 0; }
+    /* 首末两格的外侧内边距取卡片标准内边距：首格文字与其它卡片标题左对齐 */
+    .kpi-card:first-child { padding-left: 24px; }
+    .kpi-card:last-child { padding-right: 24px; }
+    .kpi-label {
+      font-size: 13px; font-weight: 500; color: var(--text-secondary); letter-spacing: .2px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .kpi-value {
+      margin-top: 6px;
+      font-size: clamp(22px, 1.95vw, 28px); font-weight: 700; line-height: 1.15; letter-spacing: -.5px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-primary);
+      white-space: nowrap;
+    }
+    /* 费用：updateKPI 按「 + 」拆成两段，每段整体不断开，放不下时在段之间换行；数字比其它格小一号 */
+    .kpi-cost .kpi-value {
+      display: flex; flex-wrap: wrap; column-gap: 6px;
+      font-size: clamp(18px, 1.5vw, 22px); line-height: 1.25; letter-spacing: -.3px;
+    }
+    .kpi-cost .kpi-value > span { white-space: nowrap; }
+    /* 副行 = 区间标签 + 数值：放不下时在两段之间换行，两段各自不断开，不截断 */
+    .kpi-sub {
+      display: flex; flex-wrap: wrap; column-gap: 5px;
+      margin-top: 6px; font-size: 12px; line-height: 1.35; color: var(--text-secondary);
+    }
+    .kpi-sub-label, .kpi-sub-val { white-space: nowrap; }
+    /* ── KPI 响应式：平板横屏及以下转 3 列两行，手机转 2 列三行；分隔线跟着换行位置走 ── */
+    @media (max-width: 1023px) {
+      .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .kpi-card:nth-child(3n+1) { border-left: 0; padding-left: 24px; }
+      .kpi-card:nth-child(3n) { padding-right: 24px; }
+      .kpi-card:nth-child(n+4) { border-top: 1px solid rgba(255,255,255,.06); }
+    }
+    /* 列内边距规则按「先清 3 列、再排 2 列」的顺序写：同特异性下后写的赢，末列才是 24px */
+    @media (max-width: 519px) {
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .kpi-card { padding: 14px 16px 12px; }
+      .kpi-card:nth-child(3n+1) { border-left: 1px solid rgba(255,255,255,.06); padding-left: 16px; padding-right: 16px; }
+      .kpi-card:nth-child(3n) { padding-right: 16px; }
+      .kpi-card:nth-child(2n+1) { border-left: 0; padding-left: 24px; }
+      .kpi-card:nth-child(2n) { padding-right: 24px; }
+      .kpi-card:nth-child(n+3) { border-top: 1px solid rgba(255,255,255,.06); }
+    }
+    /* ── 同一水平栏：订阅状态 | 供应商请求分布 ──
+       右列放甜甜圈与图例；视口不够宽时订阅区会被挤到横向滚动，这一档改为上下堆叠 */
+    .status-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) clamp(280px, 24vw, 360px);
+      gap: var(--gap-section);
+      margin-bottom: var(--gap-section);
+    }
+    .status-row > .card {
+      min-width: 0;
+      margin-bottom: 0;
       overflow: hidden;
     }
-    @media (max-width: 960px) {
-      .charts-grid-2 { grid-template-columns: 1fr; }
+    /* 分布卡随左卡等高：标题留在顶上，图形区吃掉余量，甜甜圈与图例在余量里垂直居中。
+       flex-basis 取 0 而不是 auto：auto 会让图形区的高度钉在 canvas 上一次写下的像素高度上，
+       左卡变矮后这一行回不去 */
+    .dist-card { display: flex; flex-direction: column; }
+    .dist-card .chart-wrap { flex: 1 1 0; height: auto; min-height: 250px; }
+    @media (max-width: 1179px) {
+      .status-row { grid-template-columns: minmax(0, 1fr); }
+      .dist-card .chart-wrap { flex: none; height: 240px; min-height: 0; }
     }
     .card {
       background: rgba(18,22,30,.7);
@@ -467,8 +472,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .btn-card-action:disabled { opacity: .35; cursor: default; }
     .chart-wrap { position: relative; height: 260px; min-width: 0; }
-    .chart-wrap-lg { position: relative; height: 260px; min-width: 0; }
-    .chart-wrap-xl { position: relative; height: 280px; min-width: 0; }
+    /* 图位高度由外层容器定死；960px 及以下 .chart-with-legend 转为纵向 flex，那里要把图位的 flex-basis 解除（见下方媒体查询） */
+    .chart-wrap-lg { position: relative; height: 300px; min-width: 0; }
+    .chart-wrap-xl { position: relative; height: 300px; min-width: 0; }
     /* ── HTML Legend（单列可滚动） ── */
     .chart-with-legend {
       display: flex; align-items: stretch; gap: 0;
@@ -503,8 +509,61 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     @media (max-width: 960px) {
       .chart-with-legend { flex-direction: column; }
+      /* 纵向 flex 下 flex-basis: 0 会让图位高度跟着 canvas 内在高度走、塌成 150px */
+      .chart-with-legend > .chart-wrap-xl { flex: none; }
       .html-legend-wrap { flex: none; max-height: 120px; padding: 8px 0 0 0; }
       .html-legend-wrap ul { flex-direction: row; flex-wrap: wrap; gap: 4px 10px; }
+      .chart-wrap-lg, .chart-wrap-xl { height: 260px; }
+    }
+    /* ── 趋势页签：三张图共用一个图位 ──
+       类名另起 trend- 前缀：.tab-btn / .tab-pane 被页首主页签的状态逻辑按类名全文档匹配，不能借用 */
+    .trend-head {
+      display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    .trend-tabs {
+      display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none;
+      /* 负下边距：选中页签的 2px 下划线盖在头部 hairline 上；负左边距抵消首个页签的左内边距，
+         页签文字与其它卡片标题左对齐，各页签的内边距保持一致 */
+      margin: 0 0 -1px -12px;
+    }
+    /* 区间说明再长也不挤页签（≤600px 页签折行，需保留收缩，见下） */
+    @media (min-width: 601px) {
+      .trend-tabs { flex: 0 0 auto; }
+    }
+    .trend-tabs::-webkit-scrollbar { display: none; }
+    .trend-tab {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      padding: 8px 12px 10px;
+      font-family: inherit; font-size: 13px; font-weight: 500;
+      color: var(--text-secondary);
+      white-space: nowrap; cursor: pointer;
+      transition: color .15s ease, border-color .15s ease;
+    }
+    .trend-tab:hover { color: var(--text-primary); }
+    .trend-tab[aria-selected="true"] { color: var(--text-primary); border-bottom-color: var(--accent-blue); }
+    .trend-tab:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; border-radius: 4px; }
+    /* 区间说明只有「近 N 天」，不换行 */
+    .trend-range {
+      flex: 0 0 auto; padding-bottom: 11px;
+      font-size: 12px; line-height: 1.35; color: var(--text-secondary);
+      white-space: nowrap;
+    }
+    .trend-panel[hidden] { display: none; }
+    /* 面板可聚焦（tabpanel 惯例）：焦点环画在内侧，与全页 2px 蓝色焦点环一致 */
+    .trend-panel:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; border-radius: 4px; }
+    .trend-panel .html-legend-wrap { max-height: 300px; }
+    @media (max-width: 960px) {
+      .trend-panel .html-legend-wrap { max-height: 120px; }
+    }
+    /* 手机宽度：页签折成两行而不是横向截断；区间说明收起（上方区间栏已写明当前区间） */
+    @media (max-width: 600px) {
+      .trend-tabs { flex-wrap: wrap; overflow-x: visible; row-gap: 2px; }
+      .trend-range { display: none; }
     }
     /* ── 订阅状态（订阅档位 / 用量窗口 × 路由 tier 运行状态）── */
     .vendor-list { display: flex; flex-direction: column; gap: 8px; }
@@ -540,7 +599,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .vendor-badges::-webkit-scrollbar { display: none; }
     /* 分区标签（tier 名 / 模型族）统一灰字；档位是订阅的关键属性，重一级 */
-    .tier-tag, .zone-label { font-size: 11px; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
+    .zone-label { font-size: 11px; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
     .zone-label.plan { font-size: 12px; font-weight: 600; color: var(--text-primary); }
     /* 同一模型族的标签与窗口成组 */
     .qg { display: inline-flex; align-items: center; gap: 6px; }
@@ -561,7 +620,6 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border-radius: 10px;
       font-weight: 500;
     }
-    .sb-ok { background: rgba(63,185,80,.12); color: var(--accent-green); border: 1px solid rgba(63,185,80,.2); }
     .sb-warn { background: rgba(210,153,34,.12); color: var(--accent-yellow); border: 1px solid rgba(210,153,34,.2); }
     .sb-err { background: rgba(248,81,73,.12); color: var(--accent-red); border: 1px solid rgba(248,81,73,.2); }
     .sb-info { background: rgba(88,166,255,.12); color: var(--accent-blue); border: 1px solid rgba(88,166,255,.2); }
@@ -593,28 +651,32 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .drag-handle:hover, .drag-handle:focus-visible { opacity: 1 !important; color: var(--text-secondary); }
     /* 键盘焦点环不做淡入：调整优先级后行节点会被重建，淡入会让焦点环闪烁 */
     .drag-handle:focus-visible { transition: none; }
-    /* 同一实体一行：[标识] [订阅区] │ [路由区]。订阅区吃掉余宽，路由区不收缩；余量不足时只由
-       订阅区内横向滚动（单行硬约束）。手柄脱离文档流落在行左内边距里 */
+    /* 同一实体一行：[标识] [订阅区] [路由区]。订阅区吃掉余宽，路由区不收缩、靠行尾右对齐成一列；
+       余量不足时只由订阅区内横向滚动（单行硬约束）。手柄脱离文档流落在行左内边距里 */
     .vendor-item[data-vendor] { position: relative; }
     .has-sub > .sub-zone { flex: 1 1 auto; }
-    /* 路由区按「tier 名 + 状态徽章 + 一个用量格」的常见内容定最小宽：内容不超过它的行，
-       分隔线彼此对齐；内容更多的行（如同时配了 5h 与周两个配额守卫）自动外扩，仅该行的分隔线左移 */
-    .tier-zone { flex: 0 0 auto; min-width: 208px; }
-    /* 路由区紧跟订阅区时以竖线分隔（列间距 10px + 左内边距 10px，竖线居中） */
-    .sub-zone + .tier-zone { padding-left: 10px; border-left: 1px solid rgba(255,255,255,.22); }
+    .tier-zone { flex: 0 0 auto; justify-content: flex-end; }
+    /* 路由区只剩可用状态：无异常是「圆点 + 正常」，异常才是彩色胶囊（.status-badge） */
+    .tier-avail { display: inline-flex; align-items: center; column-gap: 6px; white-space: nowrap; }
+    .avail-ok { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; padding: 2px 0; }
+    .avail-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-green); }
     .zone-note { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
     .list-note { padding: 0 14px 0 38px; font-size: 12px; }
     .subscription-card .vendor-list + .vendor-list { margin-top: 8px; }
     .subscription-card .vendor-list + .vendor-list:empty { display: none; }
+    /* 放不下的行仍在订阅区内横向滚动（单行硬约束不变）：右缘渐隐提示「后面还有」，滚到头提示消失
+       （.has-more 由 syncZoneCues 在行重绘、滚动、窗口缩放时同步） */
+    .vendor-badges.has-more {
+      -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+      mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+    }
     @media (max-width: 960px) {
       /* 窄屏：标识与路由区占首行，订阅区独占次行（整行放不下才折行，分区内仍不折行） */
       .subscription-card .vendor-item { flex-wrap: wrap; row-gap: 6px; }
       .subscription-card .vendor-info { flex: 1 1 auto; min-width: 0; }
-      .subscription-card .tier-zone { min-width: 0; }
       .subscription-card .has-sub > .sub-zone { order: 3; flex: 1 1 100%; }
       .subscription-card .has-sub > .tier-zone,
       .subscription-card .has-sub > .sub-only { order: 2; flex: 0 1 auto; }
-      .sub-zone + .tier-zone { padding-left: 0; border-left: 0; }
     }
     /* ── 故障转移表 ── */
     .ft-table-wrap { overflow-x: auto; }
@@ -867,133 +929,141 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
 
-    /* ── Model Calling 实时状态 ────────────────────────── */
+    /* ── Model Calling 实时状态：对齐成列的 meter list ─────
+       一个表面内按行列出：vendor | 模型 | 并行度条 | 在途/上限 | 排队，五列逐行对齐 */
     .model-calling-card,
-    .subscription-card,
     .timeline-card {
       margin-bottom: var(--gap-section);
     }
-    .model-token-card {
-      margin-bottom: var(--gap-section);
+    .card-note { font-size: 12px; font-weight: 400; color: var(--text-secondary); letter-spacing: 0; white-space: nowrap; }
+    /* 仅供读屏的文本 */
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+      overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
     }
     .mc-empty {
       text-align: center;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       padding: 16px 0;
       font-size: 13px;
     }
-    .mc-grid {
+    .mc-list {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-      gap: 8px;
-    }
-    .mc-model-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 12px;
-      background: var(--bg-secondary);
-      border-radius: var(--radius-sm);
+      grid-template-columns: minmax(0, 1fr);
       border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      background: var(--bg-secondary);
+      overflow: hidden;
     }
+    .mc-row {
+      display: grid;
+      /* 计数列定宽并右对齐：条形终点逐行对齐，不随「4/10」「5/8」的字数变化 */
+      grid-template-columns: minmax(72px, 96px) minmax(0, 1.5fr) minmax(80px, 1fr) 64px minmax(80px, auto);
+      align-items: center;
+      column-gap: 12px;
+      min-height: 38px;
+      padding: 6px 16px;
+    }
+    .mc-row + .mc-row { border-top: 1px solid rgba(255,255,255,.04); }
+    /* 视口不少于 1280px 且不少于 3 行时排两列（更窄时模型名列连常见的带日期后缀的模型 ID 都要折行）：列间竖线，行间横线 */
+    @media (min-width: 1280px) {
+      .mc-list.mc-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .mc-list.mc-cols-2 .mc-row + .mc-row { border-top: 0; }
+      .mc-list.mc-cols-2 .mc-row:nth-child(n+3) { border-top: 1px solid rgba(255,255,255,.04); }
+      .mc-list.mc-cols-2 .mc-row:nth-child(even) { border-left: 1px solid rgba(255,255,255,.04); }
+    }
+    .mc-vendor,
     .mc-model-name {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 12px;
-      color: var(--text-primary);
-      min-width: 140px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      overflow: hidden; min-width: 0;
     }
-    .mc-bar-wrap {
-      flex: 1;
-      min-width: 60px;
-      height: 6px;
-      background: rgba(255,255,255,.06);
-      border-radius: 3px;
-      overflow: hidden;
+    .mc-vendor { font-size: 11px; color: var(--text-secondary); white-space: nowrap; text-overflow: ellipsis; }
+    /* 模型名最多折成两行：带日期后缀的模型 ID（claude-sonnet-4-5-20250929）在两列布局下放不进一行，
+       折行后仍完整可读；两行还放不下才省略，全名在 title 里（title 键盘与触屏拿不到，所以不默认截断） */
+    .mc-model-name {
+      font-size: 12px; color: var(--text-primary);
+      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+      white-space: normal; overflow-wrap: anywhere;
     }
-    .mc-bar-fill {
-      height: 100%;
-      border-radius: 3px;
-      transition: width .3s ease, background .3s ease;
+    .mc-meter {
+      height: 6px; border-radius: 3px; overflow: hidden;
+      background: rgba(255,255,255,.16);
     }
-    .mc-bar-fill.mc-low { background: var(--accent-green); }
-    .mc-bar-fill.mc-mid { background: var(--accent-yellow); }
-    .mc-bar-fill.mc-high { background: var(--accent-red); }
-    .mc-stats {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 11px;
-      font-family: 'JetBrains Mono', monospace;
-      color: var(--text-muted);
-      white-space: nowrap;
+    .mc-fill {
+      display: block; height: 100%; border-radius: 3px;
+      transition: width .6s cubic-bezier(.4,0,.2,1), background .3s ease;
     }
-    .mc-badge {
-      display: inline-flex;
-      align-items: center;
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-size: 10px;
-      font-weight: 600;
-      font-family: 'JetBrains Mono', monospace;
+    .mc-fill.mc-low { background: var(--accent-green); }
+    .mc-fill.mc-mid { background: var(--accent-yellow); }
+    .mc-fill.mc-high { background: var(--accent-red); }
+    /* monitor 模式没有上限：不出进度条，条的位置写明只监控 */
+    .mc-meter-note { display: none; font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+    .mc-monitor .mc-meter { display: none; }
+    .mc-monitor .mc-meter-note { display: block; }
+    .mc-note-narrow { display: none; }
+    .mc-use {
+      display: flex; align-items: center; justify-content: flex-end;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-secondary);
+      white-space: nowrap; font-variant-numeric: tabular-nums;
     }
-    .mc-badge-pending {
-      background: rgba(251,146,60,.15);
-      color: #fb923c;
-    }
-    .mc-badge-peak {
-      background: rgba(148,163,184,.12);
-      color: #94a3b8;
-    }
-    .mc-badge-active {
-      background: rgba(74,222,128,.12);
-      color: #4ade80;
-    }
-    .mc-vendor-tag {
-      font-size: 10px;
-      color: var(--text-muted);
-      background: rgba(255,255,255,.06);
-      padding: 1px 6px;
-      border-radius: 3px;
-    }
+    .mc-use .mc-in { font-weight: 600; color: var(--text-primary); }
+    .mc-use-unit { margin-left: 4px; }
+    /* 可编辑的上限：虚线下划线是「可点」的常驻提示，行悬停或按钮聚焦时露出铅笔图标 */
     .mc-limit-editable {
+      appearance: none;
+      display: inline-flex; align-items: center; justify-content: flex-start;
+      /* 一位数与两位数的上限同宽：斜杠后的数字左缘逐行对齐，命中区不小于 24×24 */
+      width: 40px;
+      background: none;
+      border: 0;
+      border-bottom: 1px dashed rgba(88,166,255,.8);
+      border-radius: 0;
+      padding: 3px 2px 3px 0;
+      margin: -3px 0;
+      min-height: 24px;
+      font: inherit; color: inherit; text-align: left;
       cursor: pointer;
-      border-bottom: 1px dashed rgba(74,222,128,.4);
       transition: border-color .2s, color .2s;
     }
-    .mc-limit-editable:hover {
-      border-bottom-color: #4ade80;
-      color: #4ade80;
-    }
+    .mc-limit-editable:hover { border-bottom-color: var(--accent-blue); color: var(--accent-blue); }
+    .mc-limit-editable:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 1px; border-radius: 3px; }
+    /* 编辑结果用静态色标而不是闪烁动画：系统开启「减少动态效果」时同样看得见 */
+    .mc-limit-editable.mc-limit-ok { color: var(--accent-green); border-bottom-color: var(--accent-green); }
+    .mc-limit-editable.mc-limit-err { color: var(--accent-red); border-bottom-color: var(--accent-red); }
+    .mc-pencil { opacity: 0; margin-left: auto; flex: 0 0 auto; transition: opacity .15s ease; }
+    .mc-row:hover .mc-pencil,
+    .mc-limit-editable:focus-visible .mc-pencil { opacity: .75; }
+    /* 编辑输入框：与它替换掉的数字同字号，宽度与按钮相同（进入编辑态列不跳） */
     .mc-limit-input {
-      width: 36px;
-      background: var(--bg-primary);
+      width: 40px; height: 24px; padding: 0 5px;
+      background: var(--bg);
       border: 1px solid var(--accent-blue);
-      border-radius: 3px;
+      border-radius: 4px;
       color: var(--text-primary);
-      font-size: 10px;
-      font-family: 'JetBrains Mono', monospace;
-      text-align: center;
-      padding: 0 2px;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px; text-align: left;
       outline: none;
-      -moz-appearance: textfield;
     }
-    .mc-limit-input::-webkit-outer-spin-button,
-    .mc-limit-input::-webkit-inner-spin-button {
-      -webkit-appearance: none;
-      margin: 0;
-    }
-    .mc-limit-flash-ok { animation: mc-flash-ok .6s ease; }
-    .mc-limit-flash-err { animation: mc-flash-err .6s ease; }
-    @keyframes mc-flash-ok {
-      0%,100% { color: inherit; }
-      40% { color: #4ade80; }
-    }
-    @keyframes mc-flash-err {
-      0%,100% { color: inherit; }
-      40% { color: #f87171; }
+    .mc-queue { display: flex; justify-content: flex-end; white-space: nowrap; min-height: 18px; }
+    .mc-badge { font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 10px; }
+    .mc-badge-pending { background: rgba(251,146,60,.15); color: #fb923c; }
+    .mc-peak { font-size: 11px; color: var(--text-secondary); }
+    /* 窄屏：一行放不下五列，折成两行（模型名与排队一行，vendor、并行度条与计数一行） */
+    @media (max-width: 759px) {
+      .mc-row {
+        grid-template-columns: minmax(64px, 88px) minmax(0, 1fr) 88px;
+        grid-template-areas: "model model queue" "vendor meter use";
+        column-gap: 10px;
+        row-gap: 8px;
+        padding: 10px 14px;
+      }
+      .mc-vendor { grid-area: vendor; }
+      .mc-model-name { grid-area: model; }
+      .mc-meter { grid-area: meter; }
+      .mc-monitor .mc-meter-note { grid-area: meter; }
+      .mc-use { grid-area: use; }
+      .mc-queue { grid-area: queue; }
+      .mc-note-wide { display: none; }
+      .mc-note-narrow { display: inline; }
     }
     /* ── 尊重「减少动态效果」系统偏好（前庭敏感用户）── */
     @media (prefers-reduced-motion: reduce) {
@@ -1041,91 +1111,98 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- KPI 卡片 -->
+  <!-- KPI：一条 stat strip，每格 = 今日数值 + 所选区间累计 -->
   <div class="kpi-grid" id="kpi-grid">
     <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">📊</span><span class="kpi-label">今日请求数</span></div>
-      <div class="kpi-value color-blue" id="kpi-req-today">–</div>
-      <div class="kpi-sub" id="kpi-req-week">本周 –</div>
+      <div class="kpi-label">今日请求数</div>
+      <div class="kpi-value" id="kpi-req-today">–</div>
+      <div class="kpi-sub" id="kpi-req-week">–</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">🔢</span><span class="kpi-label">今日 Token 总量</span></div>
-      <div class="kpi-value color-purple" id="kpi-tok-today">–</div>
-      <div class="kpi-sub" id="kpi-tok-week">本周 –</div>
+      <div class="kpi-label">今日 Token 总量</div>
+      <div class="kpi-value" id="kpi-tok-today">–</div>
+      <div class="kpi-sub" id="kpi-tok-week">–</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">💬</span><span class="kpi-label">今日输出 Token</span></div>
-      <div class="kpi-value color-green" id="kpi-out-today">–</div>
-      <div class="kpi-sub" id="kpi-out-week">本周 –</div>
+      <div class="kpi-label">今日输出 Token</div>
+      <div class="kpi-value" id="kpi-out-today">–</div>
+      <div class="kpi-sub" id="kpi-out-week">–</div>
+    </div>
+    <div class="kpi-card kpi-cost">
+      <div class="kpi-label">今日费用估算</div>
+      <div class="kpi-value" id="kpi-cost-today">–</div>
+      <div class="kpi-sub" id="kpi-cost-week">–</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">💰</span><span class="kpi-label">今日费用估算</span></div>
-      <div class="kpi-value color-yellow" id="kpi-cost-today">–</div>
-      <div class="kpi-sub" id="kpi-cost-week">本周 –</div>
+      <div class="kpi-label">今日故障转移</div>
+      <div class="kpi-value" id="kpi-fo-today">–</div>
+      <div class="kpi-sub" id="kpi-fo-week">–</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">🔄</span><span class="kpi-label">故障转移（今日）</span></div>
-      <div class="kpi-value color-red" id="kpi-fo-today">–</div>
-      <div class="kpi-sub" id="kpi-fo-week">本周 –</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">⚡</span><span class="kpi-label">平均延迟（今日）</span></div>
-      <div class="kpi-value color-orange" id="kpi-lat-today">–</div>
-      <div class="kpi-sub" id="kpi-lat-week">本周 –</div>
+      <div class="kpi-label">今日平均延迟</div>
+      <div class="kpi-value" id="kpi-lat-today">–</div>
+      <div class="kpi-sub" id="kpi-lat-week">–</div>
     </div>
   </div>
 
   <!-- Model Calling 实时状态 -->
   <div class="card model-calling-card" id="model-calling-card">
-    <div class="card-title">📡 Model Calling 实时状态</div>
+    <div class="card-title">Model Calling 实时状态<span class="card-note">每 10 秒刷新</span></div>
     <div class="model-calling-wrap" id="model-calling-wrap">
       <div class="mc-empty">加载中…</div>
     </div>
+    <!-- 并行度编辑结果的读屏播报节点：写死在模板里，首次播报前就已在可访问性树中（动态插入的 live region 首条可能被漏读） -->
+    <div class="sr-only" id="mc-live" role="status" aria-live="polite"></div>
   </div>
 
-  <!-- 订阅状态：订阅档位 / 用量窗口 + 路由 tier 运行状态，同一实体合并为一行 -->
-  <div class="card subscription-card" id="subscription-card">
-    <div class="card-title">🎫 订阅状态<button type="button" class="btn-card-action" id="btn-vendor-reset" onclick="resetVendorStatus(this)" aria-label="状态复位：复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）" title="复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）">⟲ 状态复位</button></div>
-    <div class="vendor-list" id="vendor-list">
-      <div class="empty">加载中…</div>
+  <!-- 同一水平栏：订阅状态 | 供应商请求分布 -->
+  <div class="status-row">
+    <!-- 订阅状态：订阅档位 / 用量窗口 + 路由 tier 的可用状态，同一实体合并为一行 -->
+    <div class="card subscription-card" id="subscription-card">
+      <div class="card-title">🎫 订阅状态<button type="button" class="btn-card-action" id="btn-vendor-reset" onclick="resetVendorStatus(this)" aria-label="状态复位：复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）" title="复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）">⟲ 状态复位</button></div>
+      <div class="vendor-list" id="vendor-list">
+        <div class="empty">加载中…</div>
+      </div>
+      <div class="vendor-list" id="subscription-list"></div>
     </div>
-    <div class="vendor-list" id="subscription-list"></div>
-  </div>
-
-  <!-- 请求量趋势折线图 -->
-  <div class="card timeline-card">
-    <div class="card-title" id="title-timeline">近 7 天请求量趋势</div>
-    <div class="chart-wrap-lg">
-      <canvas id="chart-timeline"></canvas>
-    </div>
-  </div>
-
-  <!-- 供应商分布 + Token 量趋势（按 vendor） -->
-  <div class="charts-grid-2">
-    <div class="card">
+    <div class="card dist-card">
       <div class="card-title" id="title-vendor-dist">供应商请求分布（近 7 天）</div>
       <div class="chart-wrap">
         <canvas id="chart-vendor-dist"></canvas>
       </div>
     </div>
-    <div class="card">
-      <div class="card-title" id="title-token-timeline">近 7 天 Token 量趋势（按供应商）</div>
+  </div>
+
+  <!-- 趋势：三张图共用一个图位，页签切换 -->
+  <section class="card timeline-card" aria-label="趋势">
+    <div class="trend-head">
+      <div class="trend-tabs" role="tablist" aria-label="趋势图">
+        <button type="button" class="trend-tab" id="trend-tab-requests" role="tab" aria-selected="true" aria-controls="trend-panel-requests" tabindex="0" data-trend="requests">请求量</button>
+        <button type="button" class="trend-tab" id="trend-tab-tokens" role="tab" aria-selected="false" aria-controls="trend-panel-tokens" tabindex="-1" data-trend="tokens">Token（按供应商）</button>
+        <button type="button" class="trend-tab" id="trend-tab-models" role="tab" aria-selected="false" aria-controls="trend-panel-models" tabindex="-1" data-trend="models">Token（Vendor / 模型）</button>
+      </div>
+      <span class="trend-range" id="trend-range">近 7 天</span>
+    </div>
+    <!-- 面板只靠 aria-labelledby 取名（再写 aria-label 会被它覆盖）；图形读屏读不到，canvas 的文字摘要由 setChartSummary 写入 -->
+    <div class="trend-panel" id="trend-panel-requests" role="tabpanel" aria-labelledby="trend-tab-requests" tabindex="0">
+      <div class="chart-wrap-lg">
+        <canvas id="chart-timeline"></canvas>
+      </div>
+    </div>
+    <div class="trend-panel" id="trend-panel-tokens" role="tabpanel" aria-labelledby="trend-tab-tokens" tabindex="0" hidden>
       <div class="chart-wrap-lg">
         <canvas id="chart-token-timeline"></canvas>
       </div>
     </div>
-  </div>
-
-  <!-- Token 用量（按 Vendor / 模型）堆叠图 -->
-  <div class="card model-token-card">
-    <div class="card-title" id="title-model-token-timeline">近 7 天 Token 用量（按 Vendor / 模型）</div>
-    <div class="chart-with-legend">
-      <div class="chart-wrap-xl">
-        <canvas id="chart-model-token-timeline"></canvas>
+    <div class="trend-panel" id="trend-panel-models" role="tabpanel" aria-labelledby="trend-tab-models" tabindex="0" hidden>
+      <div class="chart-with-legend">
+        <div class="chart-wrap-xl">
+          <canvas id="chart-model-token-timeline"></canvas>
+        </div>
+        <div class="html-legend-wrap" id="model-token-legend" style="display:none"></div>
       </div>
-      <div class="html-legend-wrap" id="model-token-legend" style="display:none"></div>
     </div>
-  </div>
+  </section>
   </section>
 
   <!-- Sessions 页签 -->
@@ -1300,6 +1377,10 @@ if (window.Chart) {
   Chart.defaults.font.size = 13;
   Chart.defaults.plugins.tooltip.usePointStyle = true;
   Chart.defaults.devicePixelRatio = window.devicePixelRatio || 1;
+  // 系统开启「减少动态效果」时关掉画布动画（页面下方的 CSS 规则管不到 canvas）
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    Chart.defaults.animation = false;
+  }
 }
 
 const COMMON_SCALE_X = { grid: { display: false }, ticks: { maxTicksLimit: 10, font: { size: 12 } } };
@@ -1533,8 +1614,23 @@ function chartEmpty(ctx) {
   ctx.canvas.style.display = 'none';
   const note = document.createElement('div');
   note.className = 'empty';
-  note.innerHTML = '<div class="empty-icon">📭</div>暂无数据';
+  note.textContent = '暂无数据';
   ctx.canvas.parentElement.appendChild(note);
+}
+
+// ── 图表的读屏摘要 ────────────────────────────────────────
+// canvas 里的图形与 Chart.js 自绘的图例读屏都读不到：建图时给 canvas 一句文字摘要，作为 role=img 的可访问名称
+function setChartSummary(canvas, text) {
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label', text);
+}
+
+// 堆叠趋势图的摘要：区间、合计、单日最高
+function trendSummary(name, fmt, unit, dates, datasets) {
+  const dayTotals = dates.map((_, i) => datasets.reduce((sum, ds) => sum + (Number(ds.data[i]) || 0), 0));
+  const peak = dayTotals.indexOf(Math.max(...dayTotals));
+  return name + '，' + rangeLabel(overviewDays) + '：合计 ' + fmt(dayTotals.reduce((s, v) => s + v, 0)) + unit
+    + '，单日最高 ' + fmt(dayTotals[peak]) + unit + '（' + dates[peak] + '）';
 }
 
 // ── 数据拉取 ──────────────────────────────────────────────
@@ -1545,47 +1641,68 @@ async function fetchJSON(url) {
 }
 
 // ── KPI 更新 ──────────────────────────────────────────────
-function updateKPI(summary) {
-  const t = summary.today, r = summary.range;
-  const lbl = currentRangeLabel;
+// 费用串形如「¥298.96 + $412.37」：按「 + 」拆段，每段是一个整体（放不下时在段之间换行）
+function costParts(cost) {
+  const parts = String(cost || '–').split(' + ');
+  return parts.map((part, i) => (i ? '+\u00a0' : '') + part);
+}
 
-  document.getElementById('kpi-req-today').textContent = fmtNum(t.requests);
-  document.getElementById('kpi-req-week').textContent = lbl + ' ' + fmtNum(r.requests);
+// days：这批 summary 实际取数的天数，区间标签由它生成
+function updateKPI(summary, days) {
+  const t = summary.today, r = summary.range;
+  const lbl = rangeLabel(days);
+  // 副行 = 区间标签 + 若干数值段，用 DOM API 写入（文案来自接口）
+  const sub = (id, label, ...values) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.replaceChildren();
+    const tag = document.createElement('span');
+    tag.className = 'kpi-sub-label';
+    tag.textContent = label;
+    node.appendChild(tag);
+    values.forEach((value) => {
+      const val = document.createElement('span');
+      val.className = 'kpi-sub-val';
+      val.textContent = value;
+      node.appendChild(val);
+    });
+  };
+  const text = (id, value) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = value;
+  };
+  const parts = (id, values) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.replaceChildren();
+    values.forEach((value) => {
+      const val = document.createElement('span');
+      val.textContent = value;
+      node.appendChild(val);
+    });
+  };
+
+  text('kpi-req-today', fmtNum(t.requests));
+  sub('kpi-req-week', lbl, fmtNum(r.requests));
 
   const tokT = t.tokens, tokR = r.tokens;
   const totalT = tokT.input + tokT.output + tokT.cache_creation + tokT.cache_read;
   const totalR = tokR.input + tokR.output + tokR.cache_creation + tokR.cache_read;
-  document.getElementById('kpi-tok-today').textContent = fmtTokens(totalT);
-  document.getElementById('kpi-tok-week').textContent = lbl + ' ' + fmtTokens(totalR);
+  text('kpi-tok-today', fmtTokens(totalT));
+  sub('kpi-tok-week', lbl, fmtTokens(totalR));
+  text('kpi-out-today', fmtTokens(tokT.output));
+  sub('kpi-out-week', lbl, fmtTokens(tokR.output));
 
-  document.getElementById('kpi-out-today').textContent = fmtTokens(tokT.output);
-  document.getElementById('kpi-out-week').textContent = lbl + ' ' + fmtTokens(tokR.output);
+  parts('kpi-cost-today', costParts(t.cost));
+  sub('kpi-cost-week', lbl, ...costParts(r.cost));
 
-  document.getElementById('kpi-cost-today').textContent = t.cost || '–';
-  document.getElementById('kpi-cost-week').textContent = lbl + ' ' + (r.cost || '–');
-
-  document.getElementById('kpi-fo-today').textContent = fmtNum(t.failovers);
-  document.getElementById('kpi-fo-week').textContent = lbl + ' ' + fmtNum(r.failovers);
-
-  document.getElementById('kpi-lat-today').textContent = t.avg_duration_ms ? t.avg_duration_ms + 'ms' : '–';
-  document.getElementById('kpi-lat-week').textContent = lbl + ' ' + (r.avg_duration_ms ? r.avg_duration_ms + 'ms' : '–');
+  text('kpi-fo-today', fmtNum(t.failovers));
+  sub('kpi-fo-week', lbl, fmtNum(r.failovers));
+  text('kpi-lat-today', t.avg_duration_ms ? t.avg_duration_ms + 'ms' : '–');
+  sub('kpi-lat-week', lbl, r.avg_duration_ms ? r.avg_duration_ms + 'ms' : '–');
 }
 
-// ── 订阅状态：路由区（熔断 / 配额守卫 / 限速）────────────────
-function cbStateClass(state) {
-  if (!state) return 'sb-ok';
-  const s = state.toUpperCase();
-  if (s === 'OPEN') return 'sb-err';
-  if (s === 'HALF_OPEN') return 'sb-warn';
-  return 'sb-ok';
-}
-function cbStateLabel(state) {
-  if (!state) return 'CLOSED';
-  const s = state.toUpperCase();
-  if (s === 'OPEN') return '熔断';
-  if (s === 'HALF_OPEN') return '半开';
-  return '正常';
-}
+// ── 订阅状态：用量格（订阅窗口共用）─────────────────────────
 // 用量格严重度（同时决定格底色与进度条填充色）：≥ 90% 红 / ≥ 70% 黄 / 其余绿
 function quotaClass(pct) {
   if (pct >= 90) return 'q-err';
@@ -1609,12 +1726,6 @@ function renderQuotaCell(label, pct, reset, title) {
     (reset ? `<span class="sub-reset">${RESET_ICON}${escapeHtml(reset)}</span>` : '') +
     `</span>`;
 }
-function renderQuotaBar(qg) {
-  if (!qg || qg.usage_percent == null) return '';
-  const pct = Math.round(qg.usage_percent);
-  const label = quotaWindowLabel(qg.window_hours);
-  return renderQuotaCell(label, pct, '', '本代理 ' + label + ' 滑动窗口配额守卫：已用 ' + pct + '%');
-}
 
 // 供应商行头像首字母（撞字母时取前两个字母，见 SUB_INITIALS）
 function _tierInitial(name) {
@@ -1622,16 +1733,47 @@ function _tierInitial(name) {
   return SUB_INITIALS.has(text.charAt(0).toUpperCase()) ? text.charAt(0).toUpperCase() + text.charAt(1) : text.charAt(0).toUpperCase();
 }
 
-// 路由区：[状态徽章] [配额守卫用量格]（本 proxy 的滑动窗口用量，与订阅区上游额度不同源）
-function _tierZoneHTML(tier) {
+// 路由区的可用状态：该 tier 现在能不能正常接请求。条件按熔断器、限速、配额守卫排列，多个并存时全部列出
+// （各自是独立的不可用原因）；没有异常返回 null，由调用方渲染成「圆点 + 正常」
+function tierAvailability(tier) {
   const cb = tier.circuit_breaker || {};
   const rlInfo = tier.rate_limit || {};
+  const state = String(cb.state || '').toUpperCase();
   // 失败次数来自载荷：转成数字再拼，非数字一律当作 0
   const failures = Number(cb.failure_count) || 0;
-  return `<span class="status-badge ${cbStateClass(cb.state)}">${cbStateLabel(cb.state)}${failures ? ' ×' + failures : ''}</span>` +
-    (rlInfo.is_rate_limited ? `<span class="status-badge sb-warn">限速中</span>` : '') +
-    (tier.quota_guard ? renderQuotaBar(tier.quota_guard) : '') +
-    (tier.weekly_quota_guard ? renderQuotaBar(tier.weekly_quota_guard) : '');
+  const exceeded = (g) => String((g && g.state) || '').toUpperCase() === 'QUOTA_EXCEEDED';
+  const out = [];
+  if (state === 'OPEN') out.push({ cls: 'sb-err', text: failures ? '熔断 ×' + failures : '熔断' });
+  if (state === 'HALF_OPEN') out.push({ cls: 'sb-warn', text: '半开' });
+  if (rlInfo.is_rate_limited) out.push({ cls: 'sb-warn', text: '限速中' });
+  if (exceeded(tier.quota_guard) || exceeded(tier.weekly_quota_guard)) out.push({ cls: 'sb-err', text: '配额超限' });
+  return out.length ? out : null;
+}
+
+// 悬停详情：不再常驻的 tier 名、熔断失败次数、限速剩余时间与配额守卫用量
+// （配额守卫是本 proxy 的滑动窗口预算，与订阅区上游额度不同源）
+function tierAvailabilityTitle(tier) {
+  const cb = tier.circuit_breaker || {};
+  const rlInfo = tier.rate_limit || {};
+  const state = String(cb.state || '').toUpperCase();
+  const failures = Number(cb.failure_count) || 0;
+  const parts = [String(tier.name || '') + ' 的路由状态'];
+  parts.push('熔断器 ' + ({ OPEN: '熔断', HALF_OPEN: '半开' }[state] || '正常') + (failures ? '（失败 ' + failures + ' 次）' : ''));
+  if (rlInfo.is_rate_limited) parts.push('限速中，剩余 ' + Math.ceil(Number(rlInfo.remaining_seconds) || 0) + ' 秒');
+  [tier.quota_guard, tier.weekly_quota_guard].forEach((g) => {
+    if (!g || g.usage_percent == null) return;
+    parts.push('配额守卫 ' + quotaWindowLabel(g.window_hours) + ' 窗口已用 ' + Math.round(g.usage_percent) + '%（阈值 ' + Math.round(Number(g.threshold_percent) || 0) + '%）');
+  });
+  return parts.join('；');
+}
+
+// 路由区只留可用状态：无异常是「圆点 + 正常」，异常才是彩色胶囊，整列里异常一眼可见
+function _tierZoneHTML(tier) {
+  const states = tierAvailability(tier);
+  const inner = states
+    ? states.map((s) => `<span class="status-badge ${s.cls}">${s.text}</span>`).join('')
+    : '<span class="avail-ok"><i class="avail-dot" aria-hidden="true"></i>正常</span>';
+  return `<span class="tier-avail" title="${escapeHtml(tierAvailabilityTitle(tier))}">${inner}</span>`;
 }
 
 let _tierStatus = { tiers: [] };   // 最近一次 /api/status 载荷
@@ -1777,7 +1919,7 @@ function _renderStatusRows() {
     const handle = reorderable ? `<button type="button" class="drag-handle" title="拖拽或按 ↑ / ↓ 调整优先级" aria-keyshortcuts="ArrowUp ArrowDown" aria-label="调整 ${escapeHtml(meta ? meta.label : tier.name || '')} 的优先级：第 ${index + 1} 位，共 ${tiers.length} 个">⠿</button>` : '';
     const routeHTML = _tierZoneHTML(tier);
     if (!meta) {
-      // 无订阅对应的 tier 行：路由区加「供应商状态」标注，避免在订阅卡片里被读成订阅行
+      // 无订阅对应的 tier 行：只有路由区（可用状态），不出订阅区
       const initial = escapeHtml(_tierInitial(tier.name));
       return `<div class="vendor-item" data-vendor="${safeName}">
         <div class="vendor-info">
@@ -1786,16 +1928,13 @@ function _renderStatusRows() {
           <span class="vendor-name">${safeName}</span>
         </div>
         <div class="vendor-badges tier-zone">
-          <span class="tier-tag">供应商状态</span>
           ${routeHTML}
         </div>
       </div>`;
     }
-    // 同一实体合并为一行：[标识] [订阅区] │ [路由区]；显示名取订阅名，订阅数据缺失时也不跳变
+    // 同一实体合并为一行：[标识] [订阅区] [路由区]；显示名取订阅名，订阅数据缺失时也不跳变
     const v = subByTier[tier.name];
     const subHTML = v ? _subZoneHTML(v) : '';
-    // 订阅显示名与 tier 名仅大小写不同时不重复标注
-    const tag = meta.label.toLowerCase() === tier.name ? '' : `<span class="tier-tag">${safeName}</span>`;
     return `<div class="vendor-item has-sub" data-vendor="${safeName}">
       <div class="vendor-info">
         ${handle}
@@ -1803,7 +1942,7 @@ function _renderStatusRows() {
         <span class="vendor-name">${escapeHtml(meta.label)}</span>
       </div>
       ${subHTML ? `<div class="vendor-badges sub-zone">${subHTML}</div>` : ''}
-      <div class="vendor-badges tier-zone">${tag}${routeHTML}</div>
+      <div class="vendor-badges tier-zone">${routeHTML}</div>
     </div>`;
   }).join('');
   tierList.innerHTML = (tiers.length ? '' : '<div class="empty"><div class="empty-icon">🔌</div>无供应商数据</div>') + tierRows;
@@ -1868,6 +2007,29 @@ function _focusTierHandle(listEl, vendor) {
   const handle = item ? item.querySelector('.drag-handle') : null;
   if (handle) handle.focus({ preventScroll: true });
 }
+
+// ── 订阅区放不下的提示：右缘渐隐 ──────────────────────────
+// 行重绘由多处触发（刷新、拖拽、复位），用 MutationObserver 统一收口，不去改渲染函数
+function syncZoneCues() {
+  document.querySelectorAll('#subscription-card .vendor-badges').forEach(function (zone) {
+    zone.classList.toggle('has-more', zone.scrollWidth - zone.clientWidth - zone.scrollLeft > 1);
+  });
+}
+(function initZoneCues() {
+  const card = document.getElementById('subscription-card');
+  if (!card) return;
+  if (window.MutationObserver) {
+    const observer = new MutationObserver(syncZoneCues);
+    ['vendor-list', 'subscription-list'].forEach(function (id) {
+      const list = document.getElementById(id);
+      if (list) observer.observe(list, { childList: true, subtree: true });
+    });
+  }
+  card.addEventListener('scroll', function (e) {
+    if (e.target.closest && e.target.closest('.vendor-badges')) syncZoneCues();
+  }, true);
+  window.addEventListener('resize', syncZoneCues);
+})();
 
 // ── 订阅状态：拖拽调整优先级（Pointer Events 重排，运行时生效，不重置配额） ────
 // 采用 Pointer Events 而非原生 HTML5 DnD：后者触屏不支持、跨浏览器易「拿不起来」，
@@ -2101,74 +2263,136 @@ function resetVendorStatus(btn) {
   });
 }
 
-// ── Model Calling 实时状态 ────────────────────────────────
-function updateModelCalling(status) {
-  var wrap = document.getElementById('model-calling-wrap');
-  if (!wrap) return;
-  var tiers = status.tiers || [];
+// ── Model Calling 实时状态：对齐成列的 meter list ──────────
+// 行节点按 vendor/model 键复用，只改文字与条宽，不整体重建 DOM：轮询不闪，编辑并行度时也不打断输入
+const _mcRows = new Map();   // key → 行节点引用
+var _mcEditing = false;      // 正在编辑并行度
+var _mcPendingEdit = null;   // 编辑期间点了另一行的上限：当前编辑结束后接着打开那一行
 
-  // 收集所有带 concurrency 诊断的模型
-  var models = [];
-  for (var i = 0; i < tiers.length; i++) {
-    var tier = tiers[i];
-    var diag = tier.diagnostics || {};
-    var conc = diag.concurrency;
+function _mcRowKey(vendor, model) { return vendor + '/' + model; }
+
+function _mcEl(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function _mcBuildRow(m) {
+  const row = _mcEl('div', 'mc-row');
+  row.setAttribute('role', 'listitem');
+  row.dataset.key = _mcRowKey(m.vendor, m.model);
+  const vendor = _mcEl('span', 'mc-vendor', m.vendor);
+  vendor.title = m.vendor;
+  const model = _mcEl('span', 'mc-model-name', m.model);
+  model.title = _mcRowKey(m.vendor, m.model);
+  const meter = _mcEl('div', 'mc-meter');
+  meter.setAttribute('aria-hidden', 'true');
+  const fill = _mcEl('i', 'mc-fill');
+  fill.style.width = '0%';
+  meter.appendChild(fill);
+  const meterNote = _mcEl('span', 'mc-meter-note');
+  meterNote.appendChild(_mcEl('span', 'mc-note-wide', '仅监控 · 不限并行度'));
+  meterNote.appendChild(_mcEl('span', 'mc-note-narrow', '仅监控'));
+  // 上限是一个真按钮：键盘可达（Tab 聚焦、Enter / 空格触发），点击后原地变成数字输入
+  const limit = _mcEl('button', 'mc-limit-editable');
+  limit.type = 'button';
+  limit.title = '点击修改并行度';
+  limit.appendChild(_mcEl('span', 'mc-limit-val'));
+  limit.insertAdjacentHTML('beforeend', '<svg class="mc-pencil" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5a1.3 1.3 0 0 1 1.8 1.8l-7.2 7.2-2.5.7.7-2.5z"/></svg>');
+  const use = _mcEl('span', 'mc-use');
+  const inUse = _mcEl('b', 'mc-in', '0');
+  const sep = _mcEl('span', 'mc-sep', '/');
+  const unit = _mcEl('span', 'mc-use-unit', '进行中');
+  use.append(inUse, sep, limit, unit);
+  const queue = _mcEl('span', 'mc-queue');
+  row.append(vendor, model, meter, meterNote, use, queue);
+  return { row, vendor, model, meter, fill, meterNote, use, inUse, sep, limit, unit, queue, m: null };
+}
+
+function _mcUpdateRow(r, m) {
+  r.m = m;   // 行缓存最近一次载荷：并行度改成功后用它就地重算，不等下一轮轮询
+  const monitor = m.mode === 'monitor';
+  r.row.classList.toggle('mc-monitor', monitor);
+  r.vendor.textContent = m.vendor;
+  r.model.textContent = m.model;
+  r.model.title = _mcRowKey(m.vendor, m.model);
+  if (monitor) {
+    r.inUse.textContent = m.in_use;
+    r.sep.style.display = 'none';
+    r.limit.style.display = 'none';
+    r.unit.style.display = '';
+  } else {
+    const limit = m.limit || 0;
+    const pct = limit > 0 ? Math.round((m.in_use / limit) * 100) : 0;
+    r.fill.style.width = Math.min(pct, 100) + '%';
+    r.fill.className = 'mc-fill ' + (pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high'));
+    r.meter.title = '并行度 ' + m.in_use + ' / ' + limit;
+    r.inUse.textContent = m.in_use;
+    r.sep.style.display = '';
+    r.limit.style.display = '';
+    r.unit.style.display = 'none';
+    r.limit.querySelector('.mc-limit-val').textContent = limit;
+    r.limit.setAttribute('aria-label', m.vendor + '/' + m.model + ' 的并行度上限，当前 ' + limit + '，点击修改');
+    r.limit.setAttribute('data-limit', limit);
+    r.limit.setAttribute('data-tier', m.vendor);
+    r.limit.setAttribute('data-model', m.model);
+  }
+  const peak = m.peak_pending_recent || 0;
+  if (m.pending > 0) r.queue.replaceChildren(_mcEl('span', 'mc-badge mc-badge-pending', '排队 ' + m.pending));
+  else if (peak > 0) r.queue.replaceChildren(_mcEl('span', 'mc-peak', '曾排队 ' + peak));
+  else r.queue.replaceChildren();
+}
+
+function updateModelCalling(status) {
+  const wrap = document.getElementById('model-calling-wrap');
+  if (!wrap) return;
+  // 正在编辑并行度时不碰 DOM：输入框、焦点与已输入的内容都原样保留，编辑结束后由下一轮轮询同步
+  if (_mcEditing) return;
+  const tiers = status.tiers || [];
+
+  const models = [];
+  for (const tier of tiers) {
+    const conc = (tier.diagnostics || {}).concurrency;
     if (!conc) continue;
-    var names = Object.keys(conc);
-    for (var j = 0; j < names.length; j++) {
-      var model = names[j];
-      var d = conc[model];
+    for (const model of Object.keys(conc)) {
+      const d = conc[model] || {};
       models.push({
-        vendor: tier.name,
-        model: model,
-        mode: d.mode || 'limited',
-        limit: d.limit,
-        in_use: d.in_use || 0,
-        available: d.available,
-        pending: d.pending || 0,
+        vendor: tier.name, model, mode: d.mode || 'limited', limit: d.limit,
+        in_use: d.in_use || 0, available: d.available, pending: d.pending || 0,
         peak_pending_recent: d.peak_pending_recent || 0,
       });
     }
   }
 
   if (!models.length) {
-    wrap.innerHTML = '<div class="mc-empty">无活跃模型调用</div>';
+    wrap.replaceChildren(_mcEl('div', 'mc-empty', '无活跃模型调用'));
+    _mcRows.clear();
     return;
   }
-
-  var html = '<div class="mc-grid">';
-  for (var k = 0; k < models.length; k++) {
-    var m = models[k];
-
-    if (m.mode === 'monitor') {
-      // monitor 模式：纯计数徽章，无 limit/进度条
-      html += '<div class="mc-model-row">'
-        + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
-        + '<div class="mc-bar-wrap"></div>'
-        + '<div class="mc-stats">'
-        + '<span class="mc-badge mc-badge-active">' + m.in_use + '</span>'
-        + '</div>'
-        + '</div>';
-    } else {
-      // limited 模式：保留现有渲染（进度条 + limit 编辑）
-      var limit = m.limit || 0;
-      var pct = limit > 0 ? Math.round((m.in_use / limit) * 100) : 0;
-      var barClass = pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high');
-
-      html += '<div class="mc-model-row">'
-        + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
-        + '<div class="mc-bar-wrap"><div class="mc-bar-fill ' + barClass + '" style="width:' + pct + '%"></div></div>'
-        + '<div class="mc-stats">'
-        + '<span class="mc-badge mc-badge-active">' + m.in_use
-        + '/<span class="mc-limit-editable" data-tier="' + escapeHtml(m.vendor) + '" data-model="' + escapeHtml(m.model) + '" data-limit="' + limit + '" title="点击修改并行度">' + limit + '</span></span>'
-        + (m.pending > 0 ? '<span class="mc-badge mc-badge-pending">⏳ ' + m.pending + '</span>' : '')
-        + (m.pending === 0 && m.peak_pending_recent > 0 ? '<span class="mc-badge mc-badge-peak">🕘 曾排队 ' + m.peak_pending_recent + '</span>' : '')
-        + '</div>'
-        + '</div>';
-    }
+  let list = wrap.querySelector('.mc-list');
+  if (!list) {
+    wrap.replaceChildren();
+    list = _mcEl('div', 'mc-list');
+    list.setAttribute('role', 'list');
+    wrap.appendChild(list);
   }
-  html += '</div>';
-  wrap.innerHTML = html;
+  const seen = new Set();
+  models.forEach(function (m, idx) {
+    const key = _mcRowKey(m.vendor, m.model);
+    seen.add(key);
+    let r = _mcRows.get(key);
+    if (!r || !r.row.parentNode) {
+      r = _mcBuildRow(m);
+      _mcRows.set(key, r);
+    }
+    if (list.children[idx] !== r.row) list.insertBefore(r.row, list.children[idx] || null);
+    _mcUpdateRow(r, m);
+  });
+  for (const [key, r] of _mcRows) {
+    if (!seen.has(key)) { r.row.remove(); _mcRows.delete(key); }
+  }
+  list.classList.toggle('mc-cols-2', models.length >= 3);
 }
 
 // Model Calling 独立短间隔轮询
@@ -2188,77 +2412,120 @@ function stopModelCallingPoll() {
 }
 
 // ── 并行度运行时编辑 ──────────────────────────────────────
-var _mcEditing = false;
-document.addEventListener('click', function(e) {
-  if (_mcEditing) return;
-  var el = e.target.closest('.mc-limit-editable');
-  if (!el) return;
+// 输入只接受 1 到 20 的整数：7.5、1e2 这类输入按非法处理，不截断后提交
+function limitValue(raw) {
+  const text = String(raw == null ? '' : raw).trim();
+  if (!/^\\d{1,2}$/.test(text)) return NaN;
+  const value = Number(text);
+  return value >= 1 && value <= 20 ? value : NaN;
+}
+
+// 事件委托接管上限按钮的点击。编辑期间（含提交在途）_mcEditing 为真、轮询不重绘：这时点了另一行的上限，
+// 先记入 _mcPendingEdit，由当前编辑的 restore 接着打开，这次点击不被吞掉。
+// 提交带在途守卫与 8 秒超时，请求悬住时也能解除编辑态；结束编辑后焦点回到按钮；
+// 结果用静态色标并写进 role=status 节点供读屏播报
+document.addEventListener('click', function (e) {
+  const btn = e.target.closest('.mc-limit-editable');
+  if (!btn) return;
+  if (_mcEditing) { _mcPendingEdit = btn; return; }
   e.preventDefault();
+  startLimitEdit(btn);
+});
+
+// 播报节点 #mc-live 写在模板里：动态插入的 live region，首条内容可能被读屏漏掉
+function _mcAnnounce(text) {
+  const live = document.getElementById('mc-live');
+  if (!live) return;
+  live.textContent = '';
+  setTimeout(function () { live.textContent = text; }, 30);
+}
+
+function startLimitEdit(btn) {
   _mcEditing = true;
-  var oldVal = el.getAttribute('data-limit');
-  var tier = el.getAttribute('data-tier');
-  var model = el.getAttribute('data-model');
-  var input = document.createElement('input');
-  input.type = 'number';
+  const oldVal = btn.getAttribute('data-limit');
+  const tier = btn.getAttribute('data-tier');
+  const model = btn.getAttribute('data-model');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.inputMode = 'numeric';
   input.className = 'mc-limit-input';
-  input.min = '1';
-  input.max = '20';
+  input.setAttribute('aria-label', tier + '/' + model + ' 的并行度上限（1 到 20 的整数）');
   input.value = oldVal;
-  el.style.display = 'none';
-  el.parentNode.insertBefore(input, el.nextSibling);
+  btn.style.display = 'none';
+  btn.parentNode.insertBefore(input, btn.nextSibling);
   input.focus();
   input.select();
 
-  var _cancelled = false;
-
-  function restore() {
+  let done = false;
+  let inFlight = false;   // PUT 未决期间不再接受第二次提交
+  const restore = function () {
+    if (done) return;
+    const hadFocus = document.activeElement === input;
+    done = true;            // 先落标记再移除输入框：移除引发的 blur 不会再提交
     _mcEditing = false;
-    if (input.parentNode) input.parentNode.removeChild(input);
-    el.style.display = '';
-  }
-
-  function flash(cls) {
-    el.classList.add(cls);
-    setTimeout(function() { el.classList.remove(cls); }, 600);
-  }
-
-  input.addEventListener('keydown', function(ev) {
-    if (ev.key === 'Escape') { _cancelled = true; restore(); return; }
+    input.remove();
+    btn.style.display = '';
+    // 编辑期间点了另一行的上限：接着编辑那一行。期间焦点已被用户移到别处就作罢，不抢焦点
+    const next = _mcPendingEdit;
+    _mcPendingEdit = null;
+    const idle = document.activeElement === next || document.activeElement === document.body;
+    if (next && next.isConnected && idle) { startLimitEdit(next); return; }
+    if (hadFocus) btn.focus();   // 回车 / Esc 结束后焦点回到上限按钮，键盘用户不用从头 Tab
+  };
+  let markTimer = null;
+  const mark = function (cls) {
+    btn.classList.remove('mc-limit-ok', 'mc-limit-err');
+    clearTimeout(markTimer);
+    btn.classList.add(cls);
+    markTimer = setTimeout(function () { btn.classList.remove(cls); }, 1500);
+  };
+  const submit = function () {
+    if (done || inFlight) return;
+    const value = limitValue(input.value);
+    if (isNaN(value)) { restore(); mark('mc-limit-err'); _mcAnnounce('并行度须是 1 到 20 的整数'); return; }
+    if (String(value) === oldVal) { restore(); return; }
+    inFlight = true;
+    // 8 秒兜底：请求悬住（网络挂起、fetch 不响应 abort）时也解除编辑态，不让整张表停在「编辑中」
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    let timeoutId = null;
+    const timeout = new Promise(function (_, reject) {
+      timeoutId = setTimeout(function () { reject(new Error('timeout')); if (controller) controller.abort(); }, 8000);
+    });
+    const request = fetch('/api/concurrency', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tier: tier, model: model, limit: value }),
+      signal: controller ? controller.signal : undefined,
+    });
+    Promise.race([request, timeout]).then(function (res) {
+      if (!res.ok) throw new Error(String(res.status));
+      btn.querySelector('.mc-limit-val').textContent = value;
+      btn.setAttribute('data-limit', value);
+      // 就地重算这一行（条形、可访问名称立刻自洽），再拉一次状态对齐服务端
+      const row = _mcRows.get(_mcRowKey(tier, model));
+      if (row && row.m && row.m.mode !== 'monitor') { row.m.limit = value; _mcUpdateRow(row, row.m); }
+      mark('mc-limit-ok');
+      _mcAnnounce(tier + '/' + model + ' 的并行度已更新为 ' + value);
+      fetchJSON('/api/status').then(function (status) { updateModelCalling(status); }).catch(function () {});
+    }).catch(function () {
+      mark('mc-limit-err');
+      _mcAnnounce(tier + '/' + model + ' 的并行度更新失败');
+    }).finally(function () {
+      clearTimeout(timeoutId);
+      inFlight = false;
+      restore();
+    });
+  };
+  input.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') { restore(); return; }
     if (ev.key !== 'Enter') return;
     ev.preventDefault();
     submit();
   });
-
-  input.addEventListener('blur', function() {
-    setTimeout(function() { if (!_cancelled) submit(); }, 50);
+  input.addEventListener('blur', function () {
+    setTimeout(function () { if (!done) submit(); }, 50);
   });
-
-  function submit() {
-    if (_cancelled) return;
-    var v = parseInt(input.value, 10);
-    if (isNaN(v) || v < 1 || v > 20) { restore(); flash('mc-limit-flash-err'); return; }
-    if (String(v) === oldVal) { restore(); return; }
-    fetch('/api/concurrency', {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({tier: tier, model: model, limit: v})
-    }).then(function(res) {
-      if (res.ok) {
-        return res.json().then(function() {
-          el.textContent = v;
-          el.setAttribute('data-limit', v);
-          flash('mc-limit-flash-ok');
-        });
-      } else {
-        flash('mc-limit-flash-err');
-      }
-    }).catch(function() {
-      flash('mc-limit-flash-err');
-    }).finally(function() {
-      restore();
-    });
-  }
-});
+}
 
 // ── 按 tiers 顺序排序 vendor 列表 ─────────────────────────
 function sortByTierOrder(vendors, tierOrder) {
@@ -2287,8 +2554,12 @@ function buildTimeline(rows, tierOrder) {
   const dates = [...allDates].sort();
   const vendors = sortByTierOrder(Object.keys(vendorDateMap), tierOrder);
 
-  if (chartTimeline) chartTimeline.destroy();
-  const ctx = document.getElementById('chart-timeline').getContext('2d');
+  if (chartTimeline) { chartTimeline.destroy(); chartTimeline = null; }
+  const ctx = chartContext('chart-timeline');
+  if (!dates.length) {
+    chartEmpty(ctx);
+    return;
+  }
   const datasets = vendors.map((v, i) => {
     const color = VENDOR_COLORS[i % VENDOR_COLORS.length];
     return {
@@ -2297,9 +2568,11 @@ function buildTimeline(rows, tierOrder) {
       data: dates.map(d => vendorDateMap[v][d] || 0),
       borderColor: color,
       backgroundColor: color + '30',
-      fill: true,
+      // 真堆叠面积：每条线填充到上一条堆叠线，首条填到底；各自填到底会叠成灰褐色
+      fill: i === 0 ? 'start' : '-1',
     };
   });
+  setChartSummary(ctx.canvas, trendSummary('请求量趋势', fmtNum, ' 次', dates, datasets));
 
   chartTimeline = new Chart(ctx, {
     type: 'line',
@@ -2324,6 +2597,18 @@ function buildTimeline(rows, tierOrder) {
 }
 
 // ── 供应商分布环形图 ──────────────────────────────────────
+// 图例位置：Chart.js 给右侧图例最多一半画布宽，最长的标签（「agy | antigravity」实测约 130px）放不下时会被裁掉。
+// 并排右列在约 1210px 视口以下放不下，这时图例移到下方自动换行。宽度用 Chart.js 自己的字体量出来，不另抄一份
+function distLegendPosition(ctx, labels, canvasWidth) {
+  const opts = COMMON_LEGEND.labels;
+  const font = Chart.helpers.toFont(opts.font);
+  ctx.save();
+  ctx.font = font.string;
+  const widest = labels.reduce((w, text) => Math.max(w, opts.boxWidth + font.size / 2 + ctx.measureText(text).width), 0);
+  ctx.restore();
+  return canvasWidth >= 2 * (opts.padding + widest) ? 'right' : 'bottom';
+}
+
 function buildVendorDist(rows, tierOrder) {
   const vendorTotals = {};
   for (const r of rows) {
@@ -2340,10 +2625,14 @@ function buildVendorDist(rows, tierOrder) {
     chartEmpty(ctx);
     return;
   }
+  const total = data.reduce((s, v) => s + v, 0);
+  const legendLabels = labels.map(formatVendorLabel);
+  setChartSummary(ctx.canvas, '供应商请求分布，' + rangeLabel(overviewDays) + '：共 ' + fmtNum(total) + ' 次请求；'
+    + legendLabels.map((text, i) => text + ' ' + (total ? Math.round((data[i] / total) * 100) : 0) + '%').join('，'));
   chartVendorDist = new Chart(ctx, {
     type: 'doughnut',
     data: {
-      labels: labels.map(formatVendorLabel),
+      labels: legendLabels,
       datasets: [{
         data,
         backgroundColor: labels.map((_,i) => VENDOR_COLORS[i % VENDOR_COLORS.length]),
@@ -2354,9 +2643,11 @@ function buildVendorDist(rows, tierOrder) {
     options: {
       responsive: true, maintainAspectRatio: false,
       cutout: '55%',
+      // 建图与每次尺寸变化都会经过这里：跨过并排 / 堆叠断点、右列变宽变窄时图例位置跟着走
+      onResize: function (chart, size) { chart.options.plugins.legend.position = distLegendPosition(chart.ctx, chart.data.labels, size.width); },
       plugins: {
         legend: {
-          position: 'right',
+          position: distLegendPosition(ctx, legendLabels, ctx.canvas.parentElement.clientWidth),
           onClick: legendOnClick,
           labels: {
             ...COMMON_LEGEND.labels,
@@ -2404,7 +2695,7 @@ function buildTokenTimeline(rows, tierOrder) {
   const dates = [...allDates].sort();
   const vendors = sortByTierOrder(Object.keys(vendorDateMap), tierOrder);
 
-  if (chartTokenTimeline) chartTokenTimeline.destroy();
+  if (chartTokenTimeline) { chartTokenTimeline.destroy(); chartTokenTimeline = null; }
   const ctx = chartContext('chart-token-timeline');
   if (!dates.length) {
     chartEmpty(ctx);
@@ -2419,9 +2710,11 @@ function buildTokenTimeline(rows, tierOrder) {
       data: dates.map(d => vendorDateMap[v][d] || 0),
       borderColor: color,
       backgroundColor: color + '30',
-      fill: true,
+      // 真堆叠面积：每条线填充到上一条堆叠线，首条填到底；各自填到底会叠成灰褐色
+      fill: i === 0 ? 'start' : '-1',
     };
   });
+  setChartSummary(ctx.canvas, trendSummary('Token 量趋势（按供应商）', fmtTokens, ' Token', dates, datasets));
 
   chartTokenTimeline = new Chart(ctx, {
     type: 'line',
@@ -2469,7 +2762,7 @@ function buildModelTokenTimeline(rows) {
     return sumB - sumA;
   });
 
-  if (chartModelTokenTimeline) chartModelTokenTimeline.destroy();
+  if (chartModelTokenTimeline) { chartModelTokenTimeline.destroy(); chartModelTokenTimeline = null; }
   const ctx = chartContext('chart-model-token-timeline');
 
   // 清理 HTML Legend 容器
@@ -2494,7 +2787,8 @@ function buildModelTokenTimeline(rows) {
       data: dates.map(d => modelDateMap[key][d] || 0),
       borderColor: color,
       backgroundColor: color + '30',
-      fill: true,
+      // 真堆叠面积：每条线填充到上一条堆叠线，首条填到底；各自填到底会叠成灰褐色
+      fill: i === 0 ? 'start' : '-1',
     };
   });
 
@@ -2513,6 +2807,8 @@ function buildModelTokenTimeline(rows) {
       return items;
     },
   };
+
+  setChartSummary(ctx.canvas, trendSummary('Token 用量趋势（Vendor / 模型）', fmtTokens, ' Token', dates, datasets));
 
   chartModelTokenTimeline = new Chart(ctx, {
     type: 'line',
@@ -2548,12 +2844,24 @@ function buildModelTokenTimeline(rows) {
 
 // ── 时间区间控制 ──────────────────────────────────────────
 let currentDays = 7;
-let currentRangeLabel = '本周';
+let overviewDays = 0;   // Overview 最近一次成功取数用的天数（0 = 尚未取数）
+// 与服务端 summary / timeline 接口的天数上限一致：接口只收 days，超出部分不取数
+const MAX_RANGE_DAYS = 90;
+
+// 本地日期的 YYYY-MM-DD（toISOString 给的是 UTC 日期：东八区 0 到 8 点会写成昨天）
+function localDateStr(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+// 区间标签：KPI 副行、趋势页签说明、分布图标题共用同一口径，一律「近 N 天」。入参是这次取数实际用的天数，
+// 不是页面当前选中的区间：刷新途中改了区间，已上屏的数据仍属于旧区间，标签要跟数据走。
+// 自选区间也只折算成天数：接口取的是截至今天的最近 N 天，区间栏里选的起止日期不是取数窗口，写成起止日期会和横轴对不上
+function rangeLabel(days) {
+  return '近 ' + days + ' 天';
+}
 
 function setTimeRange(days, btn) {
   currentDays = days;
-  if (days === 7) currentRangeLabel = '本周';
-  else if (days === 30) currentRangeLabel = '本月';
   // 仅限时间区间栏：Config 页的 section pills 复用 .range-btn
   document.querySelectorAll('.time-range-bar .range-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
@@ -2563,8 +2871,8 @@ function setTimeRange(days, btn) {
     const today = new Date();
     const weekAgo = new Date(today);
     weekAgo.setDate(weekAgo.getDate() - 6);
-    document.getElementById('range-end').value = today.toISOString().slice(0, 10);
-    document.getElementById('range-start').value = weekAgo.toISOString().slice(0, 10);
+    document.getElementById('range-end').value = localDateStr(today);
+    document.getElementById('range-start').value = localDateStr(weekAgo);
     applyCustomRange();
   } else {
     customEl.classList.remove('visible');
@@ -2579,22 +2887,76 @@ function applyCustomRange() {
   const startMs = new Date(s).getTime();
   const endMs = new Date(e).getTime();
   if (endMs < startMs) return;
-  currentDays = Math.ceil((endMs - startMs) / 86400000) + 1;
-  currentRangeLabel = s + '—' + e;
+  currentDays = Math.min(MAX_RANGE_DAYS, Math.ceil((endMs - startMs) / 86400000) + 1);
   refresh();
 }
 
+// 区间说明同步到分布图标题与趋势页签行（三张趋势图的标题就是页签文案，不带区间）
 function updateChartTitles(days) {
-  const label = days <= 7 ? '近 7 天' : (days <= 30 ? '近 30 天' : '近 ' + days + ' 天');
-  const tl = document.getElementById('title-timeline');
-  const tt = document.getElementById('title-token-timeline');
+  const label = rangeLabel(days);
   const vd = document.getElementById('title-vendor-dist');
-  const mt = document.getElementById('title-model-token-timeline');
-  if (tl) tl.textContent = label + ' 请求量趋势';
-  if (tt) tt.textContent = label + ' Token 量趋势（按供应商）';
   if (vd) vd.textContent = '供应商请求分布（' + label + '）';
-  if (mt) mt.textContent = label + ' Token 用量（按 Vendor / 模型）';
+  const range = document.getElementById('trend-range');
+  if (range) range.textContent = label;
 }
+
+// ── 趋势页签：三张图共用一个图位 ──────────────────────────
+// 三张图在刷新时一并重建，非当前页签 hidden；切换只改显示，不做懒建。
+// 类名另起 trend- 前缀：applyTabState / switchTab 按 .tab-btn / .tab-pane 全文档匹配，借用量会被主页签逻辑误伤
+const TREND_CHARTS = {
+  requests: 'chart-timeline',
+  tokens: 'chart-token-timeline',
+  models: 'chart-model-token-timeline',
+};
+
+// 面板由隐藏变可见后让 Chart.js 按容器尺寸重算并直接出终帧：它在 resize 里会先建一段 attach 动画，
+// 只调 update('none') 取消不了在途动画，要先 stop
+function showTrendChart(key) {
+  const instance = window.Chart ? Chart.getChart(TREND_CHARTS[key]) : null;
+  if (instance) { instance.resize(); instance.stop(); instance.update('none'); }
+}
+
+function setTrendTab(key, focus) {
+  document.querySelectorAll('.trend-tab').forEach(function (tab) {
+    const on = tab.dataset.trend === key;
+    tab.setAttribute('aria-selected', on ? 'true' : 'false');
+    tab.tabIndex = on ? 0 : -1;
+  });
+  document.querySelectorAll('.trend-panel').forEach(function (panel) {
+    const on = panel.id === 'trend-panel-' + key;
+    panel.hidden = !on;
+    if (on) showTrendChart(key);
+  });
+  if (focus) {
+    const tab = document.getElementById('trend-tab-' + key);
+    if (tab) tab.focus();
+  }
+}
+
+(function initTrendTabs() {
+  const tablist = document.querySelector('.trend-tabs');
+  if (!tablist) return;
+  tablist.addEventListener('click', function (e) {
+    const tab = e.target.closest('.trend-tab');
+    if (tab) setTrendTab(tab.dataset.trend, false);
+  });
+  // 方向键在页签间循环，Home / End 到首尾；焦点移到哪个页签就选中哪个
+  // （automatic activation：面板内容都已在 DOM 里，切换没有延迟）
+  tablist.addEventListener('keydown', function (e) {
+    const tab = e.target.closest('.trend-tab');
+    if (!tab) return;
+    const keys = Array.from(tablist.querySelectorAll('.trend-tab'), function (t) { return t.dataset.trend; });
+    const i = keys.indexOf(tab.dataset.trend);
+    let next = null;
+    if (e.key === 'ArrowRight') next = keys[(i + 1) % keys.length];
+    else if (e.key === 'ArrowLeft') next = keys[(i - 1 + keys.length) % keys.length];
+    else if (e.key === 'Home') next = keys[0];
+    else if (e.key === 'End') next = keys[keys.length - 1];
+    if (next == null) return;
+    e.preventDefault();
+    setTrendTab(next, true);
+  });
+})();
 
 // ── Sessions Panel ──────────────────────────────────────────────
 function relativeTime(tsStr) {
@@ -2854,11 +3216,14 @@ async function refreshOverview() {
     fetchJSON('/api/dashboard/subscriptions').catch(function () { return { vendors: [] }; }),
   ]);
 
+  // 这批数据实际取数的天数：区间标签与图表摘要读它，不读页面当前选中的区间
+  overviewDays = days;
+
   if (summary.version) {
     document.getElementById('version-badge').textContent = 'v' + summary.version;
   }
 
-  updateKPI(summary);
+  updateKPI(summary, days);
   // 行数据与随后的订阅数据到齐后只重绘一次：连续替换行节点会让键盘焦点环闪烁
   updateVendorStatus(status, true);
   updateModelCalling(status);
@@ -2882,9 +3247,11 @@ async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
-    // 循环：若 await 期间用户切到了尚未加载的另一页签，补一次刷新，避免 tabLoaded 错位。
+    // 循环：若 await 期间用户切到了尚未加载的另一页签，或改了时间区间，补一次刷新，
+    // 避免 tabLoaded 错位、或新区间的点击被在途标记挡掉后没有下文。
     while (true) {
       const tab = currentTab;
+      let ok = false;
       document.getElementById('refresh-time').textContent = '刷新中…';
       try {
         if (tab === 'config') {
@@ -2895,6 +3262,7 @@ async function refresh() {
           await refreshOverview();
         }
         tabLoaded[tab] = true;
+        ok = true;
         if (tab === currentTab) {
           document.getElementById('refresh-time').textContent =
             '上次刷新: ' + now() + '（' + TAB_LABELS[tab] + '）';
@@ -2904,6 +3272,8 @@ async function refresh() {
         document.getElementById('refresh-time').textContent = '刷新失败 ' + now();
       }
       if (currentTab !== tab && !tabLoaded[currentTab]) continue;
+      // 取数成功但区间已在途中改掉：按新区间再取一次（取数失败不重试，否则接口不可达时会空转）
+      if (ok && tab === 'overview' && overviewDays !== currentDays) continue;
       break;
     }
   } finally {
