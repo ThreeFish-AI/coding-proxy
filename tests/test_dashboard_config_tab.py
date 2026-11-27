@@ -619,8 +619,13 @@ _DOM_HARNESS = textwrap.dedent(
       assert.strictEqual(rows().length, 1);
       assert.ok(!banners().some(t => t.includes('包内默认定价')), banners().join('|'));
       assert.ok(tabBtn.classList.contains('cfg-dirty'));
-
-      // 2) 锁定丢弃工作副本 → 页签 dirty 点同步清除
+      assert.strictEqual(confirms.length, 0, 'row removal must not ask for confirmation');
+      const undoBtn = root.querySelectorAll('.cfg-savebar .cfg-link').find(b => b.textContent === '撤销');
+      assert.ok(undoBtn, 'undo entry must be offered');
+      undoBtn.click();
+      assert.strictEqual(rows().length, 2);
+      assert.strictEqual(CT.isDirty(), false, 'undo restores the saved state');
+      delRow(0); // 恢复原步骤的前置状态：移除第 1 行后继续 → 页签 dirty 点同步清除
       root.querySelectorAll('.cfg-toolbar .cfg-btn').find(b => b.textContent === '锁定').click();
       assert.ok(root.querySelector('.cfg-lock'));
       assert.strictEqual(CT.isDirty(), false);
@@ -840,6 +845,46 @@ _DOM_HARNESS = textwrap.dedent(
       assert.ok(chips().includes('500'));
       assert.ok(!root.textContent.includes('但重新加载失败'));
       net.put409 = null;
+
+      // 12) Per-Model 行移除后保存栏给「撤销」，撤销恢复该模型的上限
+      view = mkView([], pricing.slice());
+      view.registry.fields = registry.concat([
+        { path: 'vendors.*.concurrency', label: 'Concurrency', widget: 'optional_group', vendors: ['zhipu'], group: 'Concurrency', description: '并发' },
+        { path: 'vendors.*.concurrency.models', label: 'Per-Model', widget: 'map', vendors: ['zhipu'], group: 'Concurrency', description: '上限' },
+      ]);
+      view.values.vendors = [{ vendor: 'zhipu', enabled: true, concurrency: { models: { 'glm-x': 3 } } }];
+      await CT.refresh(true);
+      pill('vendors');
+      assert.strictEqual(root.querySelector('.cfg-map-row span.cfg-map-key').textContent, 'glm-x');
+      const undo = () => root.querySelectorAll('.cfg-savebar .cfg-link').find(b => b.textContent === '撤销');
+      root.querySelector('.cfg-map-row .cfg-btn-sm').click(); // 移除 glm-x
+      assert.strictEqual(root.querySelector('.cfg-map-row span.cfg-map-key'), null);
+      assert.ok(undo(), 'map removal must offer undo immediately');
+      undo().click();
+      assert.strictEqual(root.querySelector('.cfg-map-row span.cfg-map-key').textContent, 'glm-x', 'undo restores the removed limit');
+      assert.strictEqual(CT.isDirty(), false);
+
+      // 13) 移除 vendor 后撤销把它插回 vendors 与 tiers 的原位；期间重新添加会清掉撤销入口，不产生重复 vendor
+      view = mkView([], pricing.slice());
+      view.registry.fields = registry.concat([{ path: 'tiers', label: 'Tiers', widget: 'list', description: '链路', enum: ['zhipu', 'kimi'] }]);
+      view.values.vendors = [{ vendor: 'zhipu', enabled: true }, { vendor: 'kimi', enabled: true }];
+      view.values.tiers = ['zhipu', 'kimi'];
+      view.defaults.vendors = [{ vendor: 'zhipu', enabled: true }, { vendor: 'kimi', enabled: true }];
+      await CT.refresh(true);
+      pill('vendors');
+      const pills = () => root.querySelectorAll('.cfg-subpills .range-btn[data-vendor]').map(x => x.getAttribute('data-vendor'));
+      const removeVendorBtn = () => root.querySelector('.cfg-vendor-head .cfg-btn-danger');
+      removeVendorBtn().click(); // window.confirm 桩恒为 true
+      assert.deepStrictEqual(pills(), ['kimi', 'zhipu']);
+      assert.ok(undo(), 'vendor removal must offer undo');
+      undo().click();
+      assert.deepStrictEqual(pills(), ['zhipu', 'kimi'], 'undo puts the vendor back at its original position');
+      assert.strictEqual(CT.isDirty(), false);
+      removeVendorBtn().click();
+      assert.ok(undo());
+      root.querySelectorAll('.cfg-body .cfg-btn-primary').find(b => b.textContent === '添加').click(); // 在「未配置」视图里重新添加 zhipu
+      assert.strictEqual(undo(), undefined, 're-adding the vendor clears the undo entry');
+      assert.deepStrictEqual(pills(), ['kimi', 'zhipu']);
       console.log('ok');
     })().catch(e => { console.error(e && e.stack || e); process.exit(1); });
     """

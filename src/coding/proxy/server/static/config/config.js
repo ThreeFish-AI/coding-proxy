@@ -416,8 +416,10 @@
       ['mode', 'errors', 'notices', 'overridden', 'vendor_overrides', 'secrets', 'sources', 'running', 'apply_supported']
         .forEach(function (k) { prev[k] = view[k]; });
       prev.values.absent_vendors = view.values.absent_vendors;
+      clearUndo(only); // 冲突 section 的工作副本已被服务器值替换
     } else {
       S.view = view;
+      S.undo = null;
       S.base = {};
       S.work = {};
       S.ops = {};
@@ -532,12 +534,13 @@
     });
     return h('div', { class: 'cfg-toolbar' }, [
       pills,
-      btn('锁定', function () {
-        if (isDirty() && !window.confirm('锁定会丢弃未保存的修改，继续？')) return;
-        forgetToken();
-        renderLocked();
-      }, 'cfg-btn-sm', { title: '清除本浏览器保存的管理 token' }),
+      btn('锁定', lockNow, 'cfg-btn-sm', { title: '清除本浏览器保存的管理 token' }),
     ]);
+  }
+  function lockNow() {
+    var run = function () { forgetToken(); S.undo = null; renderLocked(); };
+    if (!isDirty()) { run(); return; }
+    askConfirm({ title: '锁定并丢弃修改？', body: '锁定会丢弃全部未保存的修改，已保存的配置不受影响。', confirmText: '丢弃并锁定', danger: true }, run);
   }
   function goPill(name, vendor) {
     S.pill = name;
@@ -583,6 +586,7 @@
     S.loaded = false;
     S.view = null; // 丢弃工作副本（含待设置的密钥明文）
     S.ops = {};
+    S.undo = null;
     updateDirty(); // 清除 Config 页签上的 dirty 点
     var input = h('input', {
       type: 'password', class: 'cfg-input', autocomplete: 'off', 'aria-label': 'Admin token',
@@ -752,7 +756,16 @@
             type: 'number', class: 'cfg-input cfg-num', value: String(cur()[k]), disabled: dis, 'aria-label': k,
             oninput: function (e) { var n = cur(); n[k] = numVal(e.target.value); b.set(n); },
           }),
-          dis ? null : btn('删除', function () { var n = cur(); delete n[k]; b.set(n); redraw(); }, 'cfg-btn-sm'),
+          dis ? null : btn('移除', function () {
+            var n = cur(), old = n[k];
+            delete n[k];
+            // 先记撤销再写工作副本（b.set 会立刻重建保存栏）；b.path 只是展示路径（vendors 是数组），撤销用闭包回写
+            S.undo = { kind: 'fn', section: b.path.split('.')[0], path: b.path, label: '已移除 ' + sp.label + ' 中的 ' + k, run: function () { var m = cur(); m[k] = old; b.set(m); } };
+            b.set(n);
+            redraw();
+            var add = wrap.querySelector('[data-map-add]');
+            if (add && add.focus) add.focus();
+          }, 'cfg-btn-sm'),
         ]));
       });
       if (dis) return;
@@ -829,10 +842,28 @@
       h('div', { class: 'cfg-actions' }, actions || []),
     ]);
   }
+  // 「恢复默认」：vendors 的入口重置全部 vendor，改名并降权；会替换已保存值或波及当前对象之外时先确认
   function resetBtn(section) {
     if (S.readonly) return null;
-    return btn('恢复默认', function () { S.work[section] = clone(S.view.defaults[section]); changed(); rerender(); }, 'cfg-btn-sm',
-      { title: '把本 section 改回包内默认值（保存后生效）' });
+    var all = section === 'vendors';
+    var n = ((S.view.defaults || {}).vendors || S.work.vendors || []).length;
+    return btn(all ? '全部恢复默认' : '恢复默认', function () { resetSection(section); }, 'cfg-btn-sm' + (all ? ' cfg-btn-ghost' : ''), all
+      ? { title: '把全部 ' + n + ' 个 vendor 改回包内默认值，其他 vendor 上未保存的修改也会丢弃（保存后生效）', 'aria-label': '全部恢复默认（所有 vendor）' }
+      : { title: '把本 section 改回包内默认值（保存后生效）' });
+  }
+  function resetSection(section) {
+    var dflt = S.view.defaults[section];
+    if (deepEqual(S.work[section], dflt)) return;
+    var all = section === 'vendors';
+    var saved = (S.view.overridden || []).indexOf(section) >= 0;
+    var run = function () { S.work[section] = clone(dflt); S.undo = null; changed(); rerender(); };
+    if (!all && !saved) { run(); return; }
+    var name = all ? '全部 ' + ((S.view.defaults.vendors || S.work.vendors || []).length) + ' 个 vendor' : sectionLabel(section);
+    askConfirm({
+      title: (all ? '全部' : '') + '恢复默认？',
+      body: '以下范围将改回包内默认值：' + name + '。' + (saved ? '已保存的自定义值会在保存后被替换。' : '') + (all ? '其他 vendor 上未保存的修改也会丢弃。' : ''),
+      confirmText: all ? '全部恢复默认' : '恢复默认', danger: true,
+    }, run);
   }
 
   // ── 表格 ──────────────────────────────────────────────────
@@ -863,6 +894,22 @@
       S.undo = null; // 撤销按下标插回，行序变了就不再是原位
       setArr(a, movedOpenIndex(S.expanded[o.key], from, to));
     };
+    // 移除一行：不弹确认，保存栏给单级「撤销」（插回原位，不影响其后的其它编辑）
+    var removeRow = function (i) {
+      var a = arr().slice(), item = a.splice(i, 1)[0];
+      S.undo = { kind: 'row', section: o.parts[0], key: o.key, label: '已移除 ' + o.title + ' 的「' + o.cols.slice(0, 2).map(function (c) { return fmtVal(c.text(item)); }).join(' / ') + '」', parts: o.parts, index: i, item: clone(item) };
+      S.focusTo = function () {
+        var wrap = S.root.querySelector('.ft-table-wrap[data-path="' + prefix + '"]');
+        var rs = wrap.querySelectorAll('.cfg-list-row');
+        if (!rs.length) { // 表已空：落到该表的「添加」
+          var acts = wrap.parentNode.querySelector('.cfg-section-head .cfg-actions');
+          return acts && acts.children.length ? acts.children[acts.children.length - 1] : false;
+        }
+        var r = rs[Math.min(i, rs.length - 1)];
+        return r.querySelector('.cfg-btn-sm') || false;
+      };
+      setArr(a, null);
+    };
     var rows = [];
     arr().forEach(function (item, i) {
       var open = S.expanded[o.key] === i;
@@ -872,7 +919,7 @@
       rows.push(h('tr', { class: 'cfg-list-row' + (open ? ' cfg-row-open' : ''), 'data-path': prefix + '.' + i, onclick: toggle },
         (o.ordered ? [orderCell(arr(), i, move)] : []).concat(cells, [h('td', { class: 'cfg-cell-actions' }, [
           btn(open ? '收起' : '编辑', function (e) { e.stopPropagation(); toggle(); }, 'cfg-btn-sm', { 'aria-expanded': open ? 'true' : 'false' }),
-          S.readonly ? null : btn('删除', function (e) { e.stopPropagation(); var a = arr().slice(); a.splice(i, 1); setArr(a, null); }, 'cfg-btn-sm cfg-btn-danger'),
+          S.readonly ? null : btn('移除', function (e) { e.stopPropagation(); removeRow(i); }, 'cfg-btn-sm cfg-btn-danger'),
         ]), h('td')])));
       if (!open) return;
       var fields = o.fields(i).map(function (f) {
@@ -988,8 +1035,8 @@
     if (t !== 'anthropic' && !scoped) badges.push(badge('No scoped mapping', 'warn', '没有仅作用于该 vendor 的 model_mapping 规则，请求模型名可能被通用规则映射'));
     return h('div', { class: 'cfg-vendor-head' }, [
       sectionHead(t, null, S.readonly ? [] : [
-        btn('恢复默认', function () { replaceVendor(t, clone(findVendor(S.view.defaults.vendors, t)) || { vendor: t }); }, 'cfg-btn-sm', { title: '把该 vendor 改回包内默认参数（保存后生效）' }),
-        btn('移除', function () { removeVendor(t); }, 'cfg-btn-sm cfg-btn-danger', { title: '从配置中移除该 vendor（同时移出 tiers）' }),
+        btn('恢复默认', function () { resetVendor(t); }, 'cfg-btn-sm', { title: '把该 vendor 改回包内默认参数（保存后生效）', 'aria-label': '恢复默认（' + t + '）' }),
+        btn('移除', function () { removeVendor(t); }, 'cfg-btn-sm cfg-btn-danger', { title: '从配置中移除该 vendor（同时移出 tiers）', 'aria-label': '移除 ' + t }),
       ]),
       h('div', { class: 'cfg-badges' }, badges),
     ]);
@@ -997,6 +1044,7 @@
   function addVendor(t) {
     var v = clone(findVendor(S.base.vendors, t) || findVendor(S.view.defaults.vendors, t)) || { vendor: t };
     S.work.vendors = (S.work.vendors || []).concat([v]);
+    S.undo = null;
     changed();
     rerender();
   }
@@ -1005,11 +1053,31 @@
     changed();
     rerender();
   }
+  // vendor 级恢复默认：只在会替换已保存的自定义值时确认
+  function resetVendor(t) {
+    var v = clone(findVendor(S.view.defaults.vendors, t)) || { vendor: t };
+    if (deepEqual(findVendor(S.work.vendors, t), v)) return;
+    var run = function () { replaceVendor(t, v); };
+    if ((S.view.vendor_overrides || []).indexOf(t) < 0) { run(); return; }
+    askConfirm({ title: '恢复默认？', body: t + ' 有已保存的自定义参数，恢复默认后会在保存时被替换（保存前可用「放弃修改」找回）。', confirmText: '恢复默认', danger: true }, run);
+  }
+  // 移除 vendor：总是确认（会同时移出 tiers 链路）；保存栏给单级「撤销」
   function removeVendor(t) {
-    S.work.vendors = (S.work.vendors || []).filter(function (x) { return x.vendor !== t; });
-    if (Array.isArray(S.work.tiers)) S.work.tiers = S.work.tiers.filter(function (x) { return x !== t; });
-    changed();
-    rerender();
+    var pos = effectiveChain(S.work.tiers, S.work.vendors).indexOf(t);
+    askConfirm({
+      title: '移除 ' + t + '？',
+      body: '将从配置中移除 ' + t + (pos >= 0 ? '，并移出 Tiers 链路（当前 Tier #' + (pos + 1) + '）' : '') + '。已保存的密钥不会删除，重新添加后仍可用。',
+      confirmText: '移除', danger: true,
+    }, function () {
+      var list = S.work.vendors || [], i = -1;
+      list.forEach(function (x, k) { if (x.vendor === t) i = k; });
+      if (i < 0) return;
+      S.undo = { kind: 'vendor', section: 'vendors', label: '已移除 vendor ' + t, index: i, vendor: clone(list[i]), tierIndex: Array.isArray(S.work.tiers) ? S.work.tiers.indexOf(t) : -1 };
+      S.work.vendors = list.filter(function (x) { return x.vendor !== t; });
+      if (Array.isArray(S.work.tiers)) S.work.tiers = S.work.tiers.filter(function (x) { return x !== t; });
+      changed();
+      rerender();
+    });
   }
 
   RENDER.tiers = function (body) {
@@ -1298,10 +1366,44 @@
     }
   }
   function discard() {
-    if (!window.confirm('放弃全部未保存的修改？')) return;
-    EDITABLE.forEach(function (s) { S.work[s] = clone(S.base[s]); });
-    S.ops = {};
-    S.errors = [];
+    askConfirm({ title: '放弃修改？', body: '将丢弃全部未保存的修改，已保存的配置不受影响。', confirmText: '放弃修改', danger: true }, function () {
+      EDITABLE.forEach(function (s) { S.work[s] = clone(S.base[s]); });
+      S.ops = {};
+      S.errors = [];
+      S.undo = null;
+      S.focusTo = function () { return S.root.querySelector('.cfg-pills .range-btn.active'); };
+      rerender();
+    });
+  }
+  // 撤销快照指向工作副本里的位置：重载替换了它所在的 section 就作废
+  function clearUndo(sections) {
+    if (S.undo && (!sections || sections.indexOf(S.undo.section) >= 0)) S.undo = null;
+  }
+  // 单级撤销：只恢复被移除的对象本身并插回原位，不影响其后的其它编辑
+  function undoLast() {
+    var u = S.undo;
+    if (!u || S.saving) return; // 保存进行中载荷已定稿，此时撤销会被随后的重载覆盖
+    S.undo = null;
+    if (u.kind === 'row') {
+      var a = getIn(S.work, u.parts);
+      if (!Array.isArray(a)) { a = []; setIn(S.work, u.parts, a); }
+      a.splice(Math.min(u.index, a.length), 0, clone(u.item));
+      if (typeof S.expanded[u.key] === 'number' && S.expanded[u.key] >= u.index) S.expanded[u.key] += 1; // 展开行跟着后移
+      S.focusTo = function () {
+        var rs = S.root.querySelectorAll('.ft-table-wrap[data-path="' + u.parts.join('.') + '"] .cfg-list-row');
+        return rs[u.index] ? rs[u.index].querySelector('.cfg-btn-sm') : false;
+      };
+    } else if (u.kind === 'fn') {
+      u.run();
+      S.focusTo = function () { return S.root.querySelector('.cfg-row[data-path="' + u.path + '"] [data-map-add]'); };
+    } else if (u.kind === 'vendor') {
+      if (findVendor(S.work.vendors, u.vendor.vendor)) { changed(); rerender(); return; } // 期间已重新添加，不再插入
+      S.work.vendors = S.work.vendors || [];
+      S.work.vendors.splice(Math.min(u.index, S.work.vendors.length), 0, clone(u.vendor));
+      if (u.tierIndex >= 0 && Array.isArray(S.work.tiers) && S.work.tiers.indexOf(u.vendor.vendor) < 0) S.work.tiers.splice(Math.min(u.tierIndex, S.work.tiers.length), 0, u.vendor.vendor);
+      S.focusTo = function () { return S.root.querySelector('.cfg-subpills .range-btn[data-vendor="' + u.vendor.vendor + '"]'); };
+    }
+    changed();
     rerender();
   }
   function focusError(path) {
@@ -1496,6 +1598,7 @@
     [payload.secret_ops, S.ops].forEach(function (ops) { Object.keys(ops).forEach(function (p) { if (ops[p]) delete ops[p].value; }); });
     S.ops = {};
     S.errors = [];
+    S.undo = null;
     if (isObj(revisions)) Object.keys(revisions).forEach(function (s) { S.view.revisions[s] = revisions[s]; });
   }
   // 重载完成前保持冻结：重载会覆盖工作副本；'locked'（已渲染解锁界面）不叠 fatal 视图
@@ -1580,7 +1683,10 @@
   function refresh(force) {
     if (!S.root) mount(document.getElementById('config-root'));
     if (S.saving) return Promise.resolve(); // 保存结束后自行重载
-    if (!force && isDirty() && !window.confirm('放弃未保存的修改并重新加载？')) return Promise.resolve();
+    if (!force && isDirty()) {
+      return askConfirmP({ title: '重新加载？', body: '将放弃全部未保存的修改，并重新加载服务器上的配置。', confirmText: '放弃并重新加载', danger: true })
+        .then(function (ok) { return ok ? load() : undefined; });
+    }
     return load();
   }
 
