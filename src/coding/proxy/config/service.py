@@ -402,6 +402,43 @@ def boundary_errors(section: str, value: Any, current: Any = _MISSING) -> list[d
     return [*errors, *rules]
 
 
+def _pricing_shrink_errors(
+    current_raw: Mapping[str, Any], new_raw: Mapping[str, Any]
+) -> list[dict]:
+    """pricing 行不可删除：任何 (vendor, model) 行消失（删除 / 改名 / 恢复默认丢行）都拒绝.
+
+    pricing 行是 Model Bind 目录的派生来源与下线锚点，删除会使已绑该模型的
+    会话在热切换时被整条丢弃；退役请将该行 ``online`` 置 false。错误只带
+    消失条数，不回显任何值。
+    """
+
+    def _keys(rows: Any) -> set[tuple[str, str]]:
+        out: set[tuple[str, str]] = set()
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict):
+                    vendor, model = row.get("vendor"), row.get("model")
+                    if (
+                        isinstance(vendor, str)
+                        and isinstance(model, str)
+                        and vendor
+                        and model
+                    ):
+                        out.add((vendor, model))
+        return out
+
+    removed = _keys(current_raw.get("pricing")) - _keys(new_raw.get("pricing"))
+    if removed:
+        return [
+            _err(
+                ["pricing"],
+                f"pricing 行不可删除（将移除 {len(removed)} 行）；"
+                "下线请将该行 online 置为 false",
+            )
+        ]
+    return []
+
+
 # ── 服务 ────────────────────────────────────────────────────────
 
 
@@ -597,6 +634,7 @@ class ConfigService:
                     json.dumps(override, ensure_ascii=False)
                 )
         new_raw = compose_raw(defaults, new_sections)
+        errors += _pricing_shrink_errors(current_raw, new_raw)
         self._check_tiers_membership(new_raw, sections, errors)
         if not allow_env_any:
             errors += _http_env_binding_errors(defaults, new_raw, secret_ops)

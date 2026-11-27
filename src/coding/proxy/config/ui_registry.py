@@ -470,6 +470,12 @@ REGISTRY: list[FieldSpec] = [
         unit="/Mtok",
         min=0,
     ),
+    _f(
+        "pricing.*.online",
+        "Online",
+        "bool",
+        "下线（false）后不进 Model Bind 下拉、不可新绑定；已绑会话保留，成本照常计价",
+    ),
 ]
 
 for _provider in ("openai", "gemini", "anthropic"):
