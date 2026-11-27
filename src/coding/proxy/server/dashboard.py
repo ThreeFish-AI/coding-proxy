@@ -863,7 +863,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
 
-    /* ── Model Calling 实时状态 ────────────────────────── */
+    /* ── Model Calling 实时状态：对齐成列的 meter list ─────
+       一个表面内按行列出：vendor | 模型 | 并行度条 | 在途/上限 | 排队，五列逐行对齐 */
     .model-calling-card,
     .subscription-card,
     .timeline-card {
@@ -872,124 +873,129 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .model-token-card {
       margin-bottom: var(--gap-section);
     }
+    .card-note { font-size: 12px; font-weight: 400; color: var(--text-secondary); letter-spacing: 0; white-space: nowrap; }
+    /* 仅供读屏的文本 */
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+      overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+    }
     .mc-empty {
       text-align: center;
-      color: var(--text-muted);
+      color: var(--text-secondary);
       padding: 16px 0;
       font-size: 13px;
     }
-    .mc-grid {
+    .mc-list {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-      gap: 8px;
-    }
-    .mc-model-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 12px;
-      background: var(--bg-secondary);
-      border-radius: var(--radius-sm);
+      grid-template-columns: minmax(0, 1fr);
       border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      background: var(--bg-secondary);
+      overflow: hidden;
     }
+    .mc-row {
+      display: grid;
+      /* 计数列定宽并右对齐：条形终点逐行对齐，不随「4/10」「5/8」的字数变化 */
+      grid-template-columns: minmax(72px, 96px) minmax(0, 1.5fr) minmax(80px, 1fr) 64px minmax(80px, auto);
+      align-items: center;
+      column-gap: 12px;
+      min-height: 38px;
+      padding: 6px 16px;
+    }
+    .mc-row + .mc-row { border-top: 1px solid rgba(255,255,255,.04); }
+    /* 视口不少于 1280px 且不少于 3 行时排两列（再窄模型名会被挤到截断）：列间竖线，行间横线 */
+    @media (min-width: 1280px) {
+      .mc-list.mc-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .mc-list.mc-cols-2 .mc-row + .mc-row { border-top: 0; }
+      .mc-list.mc-cols-2 .mc-row:nth-child(n+3) { border-top: 1px solid rgba(255,255,255,.04); }
+      .mc-list.mc-cols-2 .mc-row:nth-child(even) { border-left: 1px solid rgba(255,255,255,.04); }
+    }
+    .mc-vendor,
     .mc-model-name {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 12px;
-      color: var(--text-primary);
-      min-width: 140px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
     }
-    .mc-bar-wrap {
-      flex: 1;
-      min-width: 60px;
-      height: 6px;
-      background: rgba(255,255,255,.06);
-      border-radius: 3px;
-      overflow: hidden;
+    .mc-vendor { font-size: 11px; color: var(--text-secondary); }
+    .mc-model-name { font-size: 12px; color: var(--text-primary); }
+    .mc-meter {
+      height: 6px; border-radius: 3px; overflow: hidden;
+      background: rgba(255,255,255,.16);
     }
-    .mc-bar-fill {
-      height: 100%;
-      border-radius: 3px;
-      transition: width .3s ease, background .3s ease;
+    .mc-fill {
+      display: block; height: 100%; border-radius: 3px;
+      transition: width .6s cubic-bezier(.4,0,.2,1), background .3s ease;
     }
-    .mc-bar-fill.mc-low { background: var(--accent-green); }
-    .mc-bar-fill.mc-mid { background: var(--accent-yellow); }
-    .mc-bar-fill.mc-high { background: var(--accent-red); }
-    .mc-stats {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 11px;
-      font-family: 'JetBrains Mono', monospace;
-      color: var(--text-muted);
-      white-space: nowrap;
+    .mc-fill.mc-low { background: var(--accent-green); }
+    .mc-fill.mc-mid { background: var(--accent-yellow); }
+    .mc-fill.mc-high { background: var(--accent-red); }
+    /* monitor 模式没有上限：不出进度条，条的位置写明只监控 */
+    .mc-meter-note { display: none; font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+    .mc-monitor .mc-meter { display: none; }
+    .mc-monitor .mc-meter-note { display: block; }
+    .mc-note-narrow { display: none; }
+    .mc-use {
+      display: flex; align-items: center; justify-content: flex-end;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-secondary);
+      white-space: nowrap; font-variant-numeric: tabular-nums;
     }
-    .mc-badge {
-      display: inline-flex;
-      align-items: center;
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-size: 10px;
-      font-weight: 600;
-      font-family: 'JetBrains Mono', monospace;
-    }
-    .mc-badge-pending {
-      background: rgba(251,146,60,.15);
-      color: #fb923c;
-    }
-    .mc-badge-peak {
-      background: rgba(148,163,184,.12);
-      color: #94a3b8;
-    }
-    .mc-badge-active {
-      background: rgba(74,222,128,.12);
-      color: #4ade80;
-    }
-    .mc-vendor-tag {
-      font-size: 10px;
-      color: var(--text-muted);
-      background: rgba(255,255,255,.06);
-      padding: 1px 6px;
-      border-radius: 3px;
-    }
+    .mc-use .mc-in { font-weight: 600; color: var(--text-primary); }
+    .mc-use-unit { margin-left: 4px; }
+    /* 可编辑的上限：虚线下划线是「可点」的常驻提示，行悬停或按钮聚焦时露出铅笔图标 */
     .mc-limit-editable {
+      appearance: none;
+      display: inline-flex; align-items: center; justify-content: flex-start;
+      /* 一位数与两位数的上限同宽：斜杠后的数字左缘逐行对齐，命中区不小于 24×24 */
+      width: 40px;
+      background: none;
+      border: 0;
+      border-bottom: 1px dashed rgba(88,166,255,.8);
+      border-radius: 0;
+      padding: 3px 2px 3px 0;
+      margin: -3px 0;
+      min-height: 24px;
+      font: inherit; color: inherit; text-align: left;
       cursor: pointer;
-      border-bottom: 1px dashed rgba(74,222,128,.4);
       transition: border-color .2s, color .2s;
     }
-    .mc-limit-editable:hover {
-      border-bottom-color: #4ade80;
-      color: #4ade80;
-    }
+    .mc-limit-editable:hover { border-bottom-color: var(--accent-blue); color: var(--accent-blue); }
+    .mc-limit-editable:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 1px; border-radius: 3px; }
+    /* 编辑结果用静态色标而不是闪烁动画：系统开启「减少动态效果」时同样看得见 */
+    .mc-limit-editable.mc-limit-ok { color: var(--accent-green); border-bottom-color: var(--accent-green); }
+    .mc-limit-editable.mc-limit-err { color: var(--accent-red); border-bottom-color: var(--accent-red); }
+    .mc-pencil { opacity: 0; margin-left: auto; flex: 0 0 auto; transition: opacity .15s ease; }
+    .mc-row:hover .mc-pencil,
+    .mc-limit-editable:focus-visible .mc-pencil { opacity: .75; }
+    /* 编辑输入框：与它替换掉的数字同字号，宽度与按钮相同（进入编辑态列不跳） */
     .mc-limit-input {
-      width: 36px;
-      background: var(--bg-primary);
+      width: 40px; height: 24px; padding: 0 5px;
+      background: var(--bg);
       border: 1px solid var(--accent-blue);
-      border-radius: 3px;
+      border-radius: 4px;
       color: var(--text-primary);
-      font-size: 10px;
-      font-family: 'JetBrains Mono', monospace;
-      text-align: center;
-      padding: 0 2px;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px; text-align: left;
       outline: none;
-      -moz-appearance: textfield;
     }
-    .mc-limit-input::-webkit-outer-spin-button,
-    .mc-limit-input::-webkit-inner-spin-button {
-      -webkit-appearance: none;
-      margin: 0;
-    }
-    .mc-limit-flash-ok { animation: mc-flash-ok .6s ease; }
-    .mc-limit-flash-err { animation: mc-flash-err .6s ease; }
-    @keyframes mc-flash-ok {
-      0%,100% { color: inherit; }
-      40% { color: #4ade80; }
-    }
-    @keyframes mc-flash-err {
-      0%,100% { color: inherit; }
-      40% { color: #f87171; }
+    .mc-queue { display: flex; justify-content: flex-end; white-space: nowrap; min-height: 18px; }
+    .mc-badge { font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 10px; }
+    .mc-badge-pending { background: rgba(251,146,60,.15); color: #fb923c; }
+    .mc-peak { font-size: 11px; color: var(--text-secondary); }
+    /* 窄屏：一行放不下五列，折成两行（模型名与排队一行，vendor、并行度条与计数一行） */
+    @media (max-width: 759px) {
+      .mc-row {
+        grid-template-columns: minmax(64px, 88px) minmax(0, 1fr) 88px;
+        grid-template-areas: "model model queue" "vendor meter use";
+        column-gap: 10px;
+        row-gap: 8px;
+        padding: 10px 14px;
+      }
+      .mc-vendor { grid-area: vendor; }
+      .mc-model-name { grid-area: model; }
+      .mc-meter { grid-area: meter; }
+      .mc-monitor .mc-meter-note { grid-area: meter; }
+      .mc-use { grid-area: use; }
+      .mc-queue { grid-area: queue; }
+      .mc-note-wide { display: none; }
+      .mc-note-narrow { display: inline; }
     }
     /* ── 尊重「减少动态效果」系统偏好（前庭敏感用户）── */
     @media (prefers-reduced-motion: reduce) {
@@ -1073,7 +1079,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
   <!-- Model Calling 实时状态 -->
   <div class="card model-calling-card" id="model-calling-card">
-    <div class="card-title">📡 Model Calling 实时状态</div>
+    <div class="card-title">Model Calling 实时状态<span class="card-note">每 10 秒刷新</span></div>
     <div class="model-calling-wrap" id="model-calling-wrap">
       <div class="mc-empty">加载中…</div>
     </div>
@@ -2139,74 +2145,135 @@ function resetVendorStatus(btn) {
   });
 }
 
-// ── Model Calling 实时状态 ────────────────────────────────
-function updateModelCalling(status) {
-  var wrap = document.getElementById('model-calling-wrap');
-  if (!wrap) return;
-  var tiers = status.tiers || [];
+// ── Model Calling 实时状态：对齐成列的 meter list ──────────
+// 行节点按 vendor/model 键复用，只改文字与条宽，不整体重建 DOM：轮询不闪，编辑并行度时也不打断输入
+const _mcRows = new Map();   // key → 行节点引用
+var _mcEditing = false;      // 正在编辑并行度
 
-  // 收集所有带 concurrency 诊断的模型
-  var models = [];
-  for (var i = 0; i < tiers.length; i++) {
-    var tier = tiers[i];
-    var diag = tier.diagnostics || {};
-    var conc = diag.concurrency;
+function _mcRowKey(vendor, model) { return vendor + '/' + model; }
+
+function _mcEl(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function _mcBuildRow(m) {
+  const row = _mcEl('div', 'mc-row');
+  row.setAttribute('role', 'listitem');
+  row.dataset.key = _mcRowKey(m.vendor, m.model);
+  const vendor = _mcEl('span', 'mc-vendor', m.vendor);
+  vendor.title = m.vendor;
+  const model = _mcEl('span', 'mc-model-name', m.model);
+  model.title = _mcRowKey(m.vendor, m.model);
+  const meter = _mcEl('div', 'mc-meter');
+  meter.setAttribute('aria-hidden', 'true');
+  const fill = _mcEl('i', 'mc-fill');
+  fill.style.width = '0%';
+  meter.appendChild(fill);
+  const meterNote = _mcEl('span', 'mc-meter-note');
+  meterNote.appendChild(_mcEl('span', 'mc-note-wide', '仅监控 · 不限并行度'));
+  meterNote.appendChild(_mcEl('span', 'mc-note-narrow', '仅监控'));
+  // 上限是一个真按钮：键盘可达（Tab 聚焦、Enter / 空格触发），点击后原地变成数字输入
+  const limit = _mcEl('button', 'mc-limit-editable');
+  limit.type = 'button';
+  limit.title = '点击修改并行度';
+  limit.appendChild(_mcEl('span', 'mc-limit-val'));
+  limit.insertAdjacentHTML('beforeend', '<svg class="mc-pencil" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5a1.3 1.3 0 0 1 1.8 1.8l-7.2 7.2-2.5.7.7-2.5z"/></svg>');
+  const use = _mcEl('span', 'mc-use');
+  const inUse = _mcEl('b', 'mc-in', '0');
+  const sep = _mcEl('span', 'mc-sep', '/');
+  const unit = _mcEl('span', 'mc-use-unit', '进行中');
+  use.append(inUse, sep, limit, unit);
+  const queue = _mcEl('span', 'mc-queue');
+  row.append(vendor, model, meter, meterNote, use, queue);
+  return { row, vendor, model, meter, fill, meterNote, use, inUse, sep, limit, unit, queue, m: null };
+}
+
+function _mcUpdateRow(r, m) {
+  r.m = m;   // 行缓存最近一次载荷：并行度改成功后用它就地重算，不等下一轮轮询
+  const monitor = m.mode === 'monitor';
+  r.row.classList.toggle('mc-monitor', monitor);
+  r.vendor.textContent = m.vendor;
+  r.model.textContent = m.model;
+  r.model.title = _mcRowKey(m.vendor, m.model);
+  if (monitor) {
+    r.inUse.textContent = m.in_use;
+    r.sep.style.display = 'none';
+    r.limit.style.display = 'none';
+    r.unit.style.display = '';
+  } else {
+    const limit = m.limit || 0;
+    const pct = limit > 0 ? Math.round((m.in_use / limit) * 100) : 0;
+    r.fill.style.width = Math.min(pct, 100) + '%';
+    r.fill.className = 'mc-fill ' + (pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high'));
+    r.meter.title = '并行度 ' + m.in_use + ' / ' + limit;
+    r.inUse.textContent = m.in_use;
+    r.sep.style.display = '';
+    r.limit.style.display = '';
+    r.unit.style.display = 'none';
+    r.limit.querySelector('.mc-limit-val').textContent = limit;
+    r.limit.setAttribute('aria-label', m.vendor + '/' + m.model + ' 的并行度上限，当前 ' + limit + '，点击修改');
+    r.limit.setAttribute('data-limit', limit);
+    r.limit.setAttribute('data-tier', m.vendor);
+    r.limit.setAttribute('data-model', m.model);
+  }
+  const peak = m.peak_pending_recent || 0;
+  if (m.pending > 0) r.queue.replaceChildren(_mcEl('span', 'mc-badge mc-badge-pending', '排队 ' + m.pending));
+  else if (peak > 0) r.queue.replaceChildren(_mcEl('span', 'mc-peak', '曾排队 ' + peak));
+  else r.queue.replaceChildren();
+}
+
+function updateModelCalling(status) {
+  const wrap = document.getElementById('model-calling-wrap');
+  if (!wrap) return;
+  // 正在编辑并行度时不碰 DOM：输入框、焦点与已输入的内容都原样保留，编辑结束后由下一轮轮询同步
+  if (_mcEditing) return;
+  const tiers = status.tiers || [];
+
+  const models = [];
+  for (const tier of tiers) {
+    const conc = (tier.diagnostics || {}).concurrency;
     if (!conc) continue;
-    var names = Object.keys(conc);
-    for (var j = 0; j < names.length; j++) {
-      var model = names[j];
-      var d = conc[model];
+    for (const model of Object.keys(conc)) {
+      const d = conc[model] || {};
       models.push({
-        vendor: tier.name,
-        model: model,
-        mode: d.mode || 'limited',
-        limit: d.limit,
-        in_use: d.in_use || 0,
-        available: d.available,
-        pending: d.pending || 0,
+        vendor: tier.name, model, mode: d.mode || 'limited', limit: d.limit,
+        in_use: d.in_use || 0, available: d.available, pending: d.pending || 0,
         peak_pending_recent: d.peak_pending_recent || 0,
       });
     }
   }
 
   if (!models.length) {
-    wrap.innerHTML = '<div class="mc-empty">无活跃模型调用</div>';
+    wrap.replaceChildren(_mcEl('div', 'mc-empty', '无活跃模型调用'));
+    _mcRows.clear();
     return;
   }
-
-  var html = '<div class="mc-grid">';
-  for (var k = 0; k < models.length; k++) {
-    var m = models[k];
-
-    if (m.mode === 'monitor') {
-      // monitor 模式：纯计数徽章，无 limit/进度条
-      html += '<div class="mc-model-row">'
-        + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
-        + '<div class="mc-bar-wrap"></div>'
-        + '<div class="mc-stats">'
-        + '<span class="mc-badge mc-badge-active">' + m.in_use + '</span>'
-        + '</div>'
-        + '</div>';
-    } else {
-      // limited 模式：保留现有渲染（进度条 + limit 编辑）
-      var limit = m.limit || 0;
-      var pct = limit > 0 ? Math.round((m.in_use / limit) * 100) : 0;
-      var barClass = pct <= 50 ? 'mc-low' : (pct <= 80 ? 'mc-mid' : 'mc-high');
-
-      html += '<div class="mc-model-row">'
-        + '<span class="mc-model-name">' + escapeHtml(m.vendor + '/' + m.model) + '</span>'
-        + '<div class="mc-bar-wrap"><div class="mc-bar-fill ' + barClass + '" style="width:' + pct + '%"></div></div>'
-        + '<div class="mc-stats">'
-        + '<span class="mc-badge mc-badge-active">' + m.in_use
-        + '/<span class="mc-limit-editable" data-tier="' + escapeHtml(m.vendor) + '" data-model="' + escapeHtml(m.model) + '" data-limit="' + limit + '" title="点击修改并行度">' + limit + '</span></span>'
-        + (m.pending > 0 ? '<span class="mc-badge mc-badge-pending">⏳ ' + m.pending + '</span>' : '')
-        + (m.pending === 0 && m.peak_pending_recent > 0 ? '<span class="mc-badge mc-badge-peak">🕘 曾排队 ' + m.peak_pending_recent + '</span>' : '')
-        + '</div>'
-        + '</div>';
-    }
+  let list = wrap.querySelector('.mc-list');
+  if (!list) {
+    wrap.replaceChildren();
+    list = _mcEl('div', 'mc-list');
+    list.setAttribute('role', 'list');
+    wrap.appendChild(list);
   }
-  html += '</div>';
-  wrap.innerHTML = html;
+  const seen = new Set();
+  models.forEach(function (m, idx) {
+    const key = _mcRowKey(m.vendor, m.model);
+    seen.add(key);
+    let r = _mcRows.get(key);
+    if (!r || !r.row.parentNode) {
+      r = _mcBuildRow(m);
+      _mcRows.set(key, r);
+    }
+    if (list.children[idx] !== r.row) list.insertBefore(r.row, list.children[idx] || null);
+    _mcUpdateRow(r, m);
+  });
+  for (const [key, r] of _mcRows) {
+    if (!seen.has(key)) { r.row.remove(); _mcRows.delete(key); }
+  }
+  list.classList.toggle('mc-cols-2', models.length >= 3);
 }
 
 // Model Calling 独立短间隔轮询
@@ -2226,77 +2293,117 @@ function stopModelCallingPoll() {
 }
 
 // ── 并行度运行时编辑 ──────────────────────────────────────
-var _mcEditing = false;
-document.addEventListener('click', function(e) {
-  if (_mcEditing) return;
-  var el = e.target.closest('.mc-limit-editable');
-  if (!el) return;
+// 输入只接受 1 到 20 的整数：7.5、1e2 这类输入按非法处理，不截断后提交
+function limitValue(raw) {
+  const text = String(raw == null ? '' : raw).trim();
+  if (!/^\\d{1,2}$/.test(text)) return NaN;
+  const value = Number(text);
+  return value >= 1 && value <= 20 ? value : NaN;
+}
+
+// 捕获阶段接管上限按钮的点击。编辑期间 _mcEditing 为真，轮询不重绘；提交带在途守卫与 8 秒超时，
+// 请求悬住时也能解除编辑态；结束编辑后焦点回到按钮；结果用静态色标并写进 role=status 节点供读屏播报
+document.addEventListener('click', function (e) {
+  const btn = e.target.closest('.mc-limit-editable');
+  if (!btn || _mcEditing) return;
   e.preventDefault();
+  startLimitEdit(btn);
+}, true);
+
+function _mcAnnounce(text) {
+  let live = document.getElementById('mc-live');
+  if (!live) {
+    live = _mcEl('div', 'sr-only');
+    live.id = 'mc-live';
+    live.setAttribute('role', 'status');
+    live.setAttribute('aria-live', 'polite');
+    document.getElementById('model-calling-card').appendChild(live);
+  }
+  live.textContent = '';
+  setTimeout(function () { live.textContent = text; }, 30);
+}
+
+function startLimitEdit(btn) {
   _mcEditing = true;
-  var oldVal = el.getAttribute('data-limit');
-  var tier = el.getAttribute('data-tier');
-  var model = el.getAttribute('data-model');
-  var input = document.createElement('input');
-  input.type = 'number';
+  const oldVal = btn.getAttribute('data-limit');
+  const tier = btn.getAttribute('data-tier');
+  const model = btn.getAttribute('data-model');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.inputMode = 'numeric';
   input.className = 'mc-limit-input';
-  input.min = '1';
-  input.max = '20';
+  input.setAttribute('aria-label', tier + '/' + model + ' 的并行度上限（1 到 20 的整数）');
   input.value = oldVal;
-  el.style.display = 'none';
-  el.parentNode.insertBefore(input, el.nextSibling);
+  btn.style.display = 'none';
+  btn.parentNode.insertBefore(input, btn.nextSibling);
   input.focus();
   input.select();
 
-  var _cancelled = false;
-
-  function restore() {
+  let done = false;
+  let inFlight = false;   // PUT 未决期间不再接受第二次提交
+  const restore = function () {
+    if (done) return;
+    const hadFocus = document.activeElement === input;
+    done = true;            // 先落标记再移除输入框：移除引发的 blur 不会再提交
     _mcEditing = false;
-    if (input.parentNode) input.parentNode.removeChild(input);
-    el.style.display = '';
-  }
-
-  function flash(cls) {
-    el.classList.add(cls);
-    setTimeout(function() { el.classList.remove(cls); }, 600);
-  }
-
-  input.addEventListener('keydown', function(ev) {
-    if (ev.key === 'Escape') { _cancelled = true; restore(); return; }
+    input.remove();
+    btn.style.display = '';
+    if (hadFocus) btn.focus();   // 回车 / Esc 结束后焦点回到上限按钮，键盘用户不用从头 Tab
+  };
+  let markTimer = null;
+  const mark = function (cls) {
+    btn.classList.remove('mc-limit-ok', 'mc-limit-err');
+    clearTimeout(markTimer);
+    btn.classList.add(cls);
+    markTimer = setTimeout(function () { btn.classList.remove(cls); }, 1500);
+  };
+  const submit = function () {
+    if (done || inFlight) return;
+    const value = limitValue(input.value);
+    if (isNaN(value)) { restore(); mark('mc-limit-err'); _mcAnnounce('并行度须是 1 到 20 的整数'); return; }
+    if (String(value) === oldVal) { restore(); return; }
+    inFlight = true;
+    // 8 秒兜底：请求悬住（网络挂起、fetch 不响应 abort）时也解除编辑态，不让整张表停在「编辑中」
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    let timeoutId = null;
+    const timeout = new Promise(function (_, reject) {
+      timeoutId = setTimeout(function () { reject(new Error('timeout')); if (controller) controller.abort(); }, 8000);
+    });
+    const request = fetch('/api/concurrency', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tier: tier, model: model, limit: value }),
+      signal: controller ? controller.signal : undefined,
+    });
+    Promise.race([request, timeout]).then(function (res) {
+      if (!res.ok) throw new Error(String(res.status));
+      btn.querySelector('.mc-limit-val').textContent = value;
+      btn.setAttribute('data-limit', value);
+      // 就地重算这一行（条形、可访问名称立刻自洽），再拉一次状态对齐服务端
+      const row = _mcRows.get(_mcRowKey(tier, model));
+      if (row && row.m && row.m.mode !== 'monitor') { row.m.limit = value; _mcUpdateRow(row, row.m); }
+      mark('mc-limit-ok');
+      _mcAnnounce(tier + '/' + model + ' 的并行度已更新为 ' + value);
+      fetchJSON('/api/status').then(function (status) { updateModelCalling(status); }).catch(function () {});
+    }).catch(function () {
+      mark('mc-limit-err');
+      _mcAnnounce(tier + '/' + model + ' 的并行度更新失败');
+    }).finally(function () {
+      clearTimeout(timeoutId);
+      inFlight = false;
+      restore();
+    });
+  };
+  input.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') { restore(); return; }
     if (ev.key !== 'Enter') return;
     ev.preventDefault();
     submit();
   });
-
-  input.addEventListener('blur', function() {
-    setTimeout(function() { if (!_cancelled) submit(); }, 50);
+  input.addEventListener('blur', function () {
+    setTimeout(function () { if (!done) submit(); }, 50);
   });
-
-  function submit() {
-    if (_cancelled) return;
-    var v = parseInt(input.value, 10);
-    if (isNaN(v) || v < 1 || v > 20) { restore(); flash('mc-limit-flash-err'); return; }
-    if (String(v) === oldVal) { restore(); return; }
-    fetch('/api/concurrency', {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({tier: tier, model: model, limit: v})
-    }).then(function(res) {
-      if (res.ok) {
-        return res.json().then(function() {
-          el.textContent = v;
-          el.setAttribute('data-limit', v);
-          flash('mc-limit-flash-ok');
-        });
-      } else {
-        flash('mc-limit-flash-err');
-      }
-    }).catch(function() {
-      flash('mc-limit-flash-err');
-    }).finally(function() {
-      restore();
-    });
-  }
-});
+}
 
 // ── 按 tiers 顺序排序 vendor 列表 ─────────────────────────
 function sortByTierOrder(vendors, tierOrder) {
