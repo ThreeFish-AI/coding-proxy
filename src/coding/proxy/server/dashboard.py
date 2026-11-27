@@ -353,73 +353,71 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     /* ── 主内容 ── */
     main { padding: 28px 32px; max-width: 1440px; margin: 0 auto; }
-    /* ── KPI 卡片 ── */
+    /* ── KPI：一条 stat strip ──
+       六格合成一个表面，格间只留 hairline。数值穿文字色；图标、彩色顶线、hover 光晕这类装饰一概不加 */
     .kpi-grid {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: var(--gap-section);
-      margin-bottom: var(--gap-section);
-    }
-    .kpi-card {
+      /* 费用可能是双币种长串（¥1,234.56 + $987.65），那一列略宽，其余五列等宽 */
+      grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.45fr) repeat(2, minmax(0, 1fr));
+      overflow: hidden;
       background: rgba(18,22,30,.7);
       border: 1px solid rgba(255,255,255,.05);
       border-radius: var(--radius);
-      padding: 20px 22px 18px;
       box-shadow: var(--shadow);
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
-      transition: all .2s ease;
-      animation: fadeInUp .4s ease both;
+      margin-bottom: var(--gap-section);
+    }
+    .kpi-card {
       position: relative;
-      overflow: hidden;
+      min-width: 0;
+      padding: 16px 20px 14px;
+      border-left: 1px solid rgba(255,255,255,.06);
+      animation: fadeInUp .4s ease both;
     }
-    .kpi-card::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 1px;
-      opacity: .6;
-      border-radius: var(--radius) var(--radius) 0 0;
+    .kpi-card:nth-child(6n+1) { border-left: 0; }
+    /* 首末两格的外侧内边距取卡片标准内边距：首格文字与其它卡片标题左对齐 */
+    .kpi-card:first-child { padding-left: 24px; }
+    .kpi-card:last-child { padding-right: 24px; }
+    .kpi-label {
+      font-size: 13px; font-weight: 500; color: var(--text-secondary); letter-spacing: .2px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .kpi-card:nth-child(1)::before { background: var(--accent-blue); }
-    .kpi-card:nth-child(2)::before { background: var(--accent-purple); }
-    .kpi-card:nth-child(3)::before { background: var(--accent-green); }
-    .kpi-card:nth-child(4)::before { background: var(--accent-yellow); }
-    .kpi-card:nth-child(5)::before { background: var(--accent-red); }
-    .kpi-card:nth-child(6)::before { background: var(--accent-orange); }
-    .kpi-card:hover {
-      background: var(--bg-card-hover);
-      box-shadow: var(--glow-blue);
-    }
-    .kpi-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-    .kpi-icon { font-size: 15px; opacity: .8; }
-    .kpi-label { font-size: 13px; color: var(--text-secondary); font-weight: 600; letter-spacing: .2px; }
     .kpi-value {
-      font-size: clamp(20px, 2.2vw, 32px); font-weight: 700; line-height: 1.2;
+      margin-top: 6px;
+      font-size: clamp(22px, 1.95vw, 28px); font-weight: 700; line-height: 1.15; letter-spacing: -.5px;
       font-family: 'JetBrains Mono', monospace;
-      letter-spacing: -1px;
+      color: var(--text-primary);
+      white-space: nowrap;
     }
-    #kpi-cost-today {
-      font-size: clamp(15px, 1.3vw + 0.25rem, 20px);
-      white-space: normal;
-      word-break: keep-all;
-      overflow-wrap: anywhere;
-      line-height: 1.25;
+    /* 费用：updateKPI 按「 + 」拆成两段，每段整体不断开，放不下时在段之间换行；数字比其它格小一号 */
+    .kpi-cost .kpi-value {
+      display: flex; flex-wrap: wrap; column-gap: 6px;
+      font-size: clamp(18px, 1.5vw, 22px); line-height: 1.25; letter-spacing: -.3px;
     }
-    .kpi-sub { font-size: 13px; color: var(--text-tertiary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-    /* ── KPI 响应式：桌面/笔记本/平板横屏(≥1024px)强制 6 列单行，杜绝数值裁剪；窄屏优雅降级 ── */
+    .kpi-cost .kpi-value > span { white-space: nowrap; }
+    /* 副行 = 区间标签 + 数值：放不下时在两段之间换行（数值自身不断开），不截断 */
+    .kpi-sub {
+      display: flex; flex-wrap: wrap; column-gap: 5px;
+      margin-top: 6px; font-size: 12px; line-height: 1.35; color: var(--text-secondary);
+    }
+    .kpi-sub-label { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+    .kpi-sub-val { white-space: nowrap; }
+    /* ── KPI 响应式：平板横屏及以下转 3 列两行，手机转 2 列三行；分隔线跟着换行位置走 ── */
     @media (max-width: 1023px) {
       .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .kpi-card:nth-child(3n+1) { border-left: 0; padding-left: 24px; }
+      .kpi-card:nth-child(3n) { padding-right: 24px; }
+      .kpi-card:nth-child(n+4) { border-top: 1px solid rgba(255,255,255,.06); }
     }
-    @media (max-width: 480px) {
+    @media (max-width: 519px) {
       .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .kpi-card { padding: 14px 16px 12px; }
+      .kpi-card:nth-child(3n+1) { border-left: 1px solid rgba(255,255,255,.06); padding-left: 16px; padding-right: 16px; }
+      .kpi-card:nth-child(2n+1) { border-left: 0; padding-left: 24px; }
+      .kpi-card:nth-child(2n) { padding-right: 24px; }
+      .kpi-card:nth-child(n+3) { border-top: 1px solid rgba(255,255,255,.06); }
     }
-    .color-blue { color: var(--accent-blue); }
-    .color-green { color: var(--accent-green); }
-    .color-yellow { color: var(--accent-yellow); }
-    .color-red { color: var(--accent-red); }
-    .color-purple { color: var(--accent-purple); }
-    .color-orange { color: var(--accent-orange); }
     /* ── 图表网格 ── */
     .charts-grid-2 {
       display: grid;
@@ -1039,37 +1037,37 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- KPI 卡片 -->
+  <!-- KPI：一条 stat strip，每格 = 今日数值 + 所选区间累计 -->
   <div class="kpi-grid" id="kpi-grid">
     <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">📊</span><span class="kpi-label">今日请求数</span></div>
-      <div class="kpi-value color-blue" id="kpi-req-today">–</div>
-      <div class="kpi-sub" id="kpi-req-week">本周 –</div>
+      <div class="kpi-label">今日请求数</div>
+      <div class="kpi-value" id="kpi-req-today">–</div>
+      <div class="kpi-sub" id="kpi-req-week">–</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">🔢</span><span class="kpi-label">今日 Token 总量</span></div>
-      <div class="kpi-value color-purple" id="kpi-tok-today">–</div>
-      <div class="kpi-sub" id="kpi-tok-week">本周 –</div>
+      <div class="kpi-label">今日 Token 总量</div>
+      <div class="kpi-value" id="kpi-tok-today">–</div>
+      <div class="kpi-sub" id="kpi-tok-week">–</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">💬</span><span class="kpi-label">今日输出 Token</span></div>
-      <div class="kpi-value color-green" id="kpi-out-today">–</div>
-      <div class="kpi-sub" id="kpi-out-week">本周 –</div>
+      <div class="kpi-label">今日输出 Token</div>
+      <div class="kpi-value" id="kpi-out-today">–</div>
+      <div class="kpi-sub" id="kpi-out-week">–</div>
+    </div>
+    <div class="kpi-card kpi-cost">
+      <div class="kpi-label">今日费用估算</div>
+      <div class="kpi-value" id="kpi-cost-today">–</div>
+      <div class="kpi-sub" id="kpi-cost-week">–</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">💰</span><span class="kpi-label">今日费用估算</span></div>
-      <div class="kpi-value color-yellow" id="kpi-cost-today">–</div>
-      <div class="kpi-sub" id="kpi-cost-week">本周 –</div>
+      <div class="kpi-label">今日故障转移</div>
+      <div class="kpi-value" id="kpi-fo-today">–</div>
+      <div class="kpi-sub" id="kpi-fo-week">–</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">🔄</span><span class="kpi-label">故障转移（今日）</span></div>
-      <div class="kpi-value color-red" id="kpi-fo-today">–</div>
-      <div class="kpi-sub" id="kpi-fo-week">本周 –</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-header"><span class="kpi-icon">⚡</span><span class="kpi-label">平均延迟（今日）</span></div>
-      <div class="kpi-value color-orange" id="kpi-lat-today">–</div>
-      <div class="kpi-sub" id="kpi-lat-week">本周 –</div>
+      <div class="kpi-label">今日平均延迟</div>
+      <div class="kpi-value" id="kpi-lat-today">–</div>
+      <div class="kpi-sub" id="kpi-lat-week">–</div>
     </div>
   </div>
 
@@ -1543,30 +1541,64 @@ async function fetchJSON(url) {
 }
 
 // ── KPI 更新 ──────────────────────────────────────────────
+// 费用串形如「¥298.96 + $412.37」：按「 + 」拆段，每段是一个整体（放不下时在段之间换行）
+function costParts(cost) {
+  const parts = String(cost || '–').split(' + ');
+  return parts.map((part, i) => (i ? '+\u00a0' : '') + part);
+}
+
 function updateKPI(summary) {
   const t = summary.today, r = summary.range;
-  const lbl = currentRangeLabel;
+  const lbl = rangeLabel();
+  // 副行 = 区间标签 + 若干数值段，用 DOM API 写入（文案来自接口）
+  const sub = (id, label, ...values) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.replaceChildren();
+    const tag = document.createElement('span');
+    tag.className = 'kpi-sub-label';
+    tag.textContent = label;
+    node.appendChild(tag);
+    values.forEach((value) => {
+      const val = document.createElement('span');
+      val.className = 'kpi-sub-val';
+      val.textContent = value;
+      node.appendChild(val);
+    });
+  };
+  const text = (id, value) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = value;
+  };
+  const parts = (id, values) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.replaceChildren();
+    values.forEach((value) => {
+      const val = document.createElement('span');
+      val.textContent = value;
+      node.appendChild(val);
+    });
+  };
 
-  document.getElementById('kpi-req-today').textContent = fmtNum(t.requests);
-  document.getElementById('kpi-req-week').textContent = lbl + ' ' + fmtNum(r.requests);
+  text('kpi-req-today', fmtNum(t.requests));
+  sub('kpi-req-week', lbl, fmtNum(r.requests));
 
   const tokT = t.tokens, tokR = r.tokens;
   const totalT = tokT.input + tokT.output + tokT.cache_creation + tokT.cache_read;
   const totalR = tokR.input + tokR.output + tokR.cache_creation + tokR.cache_read;
-  document.getElementById('kpi-tok-today').textContent = fmtTokens(totalT);
-  document.getElementById('kpi-tok-week').textContent = lbl + ' ' + fmtTokens(totalR);
+  text('kpi-tok-today', fmtTokens(totalT));
+  sub('kpi-tok-week', lbl, fmtTokens(totalR));
+  text('kpi-out-today', fmtTokens(tokT.output));
+  sub('kpi-out-week', lbl, fmtTokens(tokR.output));
 
-  document.getElementById('kpi-out-today').textContent = fmtTokens(tokT.output);
-  document.getElementById('kpi-out-week').textContent = lbl + ' ' + fmtTokens(tokR.output);
+  parts('kpi-cost-today', costParts(t.cost));
+  sub('kpi-cost-week', lbl, ...costParts(r.cost));
 
-  document.getElementById('kpi-cost-today').textContent = t.cost || '–';
-  document.getElementById('kpi-cost-week').textContent = lbl + ' ' + (r.cost || '–');
-
-  document.getElementById('kpi-fo-today').textContent = fmtNum(t.failovers);
-  document.getElementById('kpi-fo-week').textContent = lbl + ' ' + fmtNum(r.failovers);
-
-  document.getElementById('kpi-lat-today').textContent = t.avg_duration_ms ? t.avg_duration_ms + 'ms' : '–';
-  document.getElementById('kpi-lat-week').textContent = lbl + ' ' + (r.avg_duration_ms ? r.avg_duration_ms + 'ms' : '–');
+  text('kpi-fo-today', fmtNum(t.failovers));
+  sub('kpi-fo-week', lbl, fmtNum(r.failovers));
+  text('kpi-lat-today', t.avg_duration_ms ? t.avg_duration_ms + 'ms' : '–');
+  sub('kpi-lat-week', lbl, r.avg_duration_ms ? r.avg_duration_ms + 'ms' : '–');
 }
 
 // ── 订阅状态：用量格（订阅窗口共用）─────────────────────────
@@ -2554,12 +2586,25 @@ function buildModelTokenTimeline(rows) {
 
 // ── 时间区间控制 ──────────────────────────────────────────
 let currentDays = 7;
-let currentRangeLabel = '本周';
+
+// 区间标签：KPI 副行、趋势页签说明、分布图标题共用同一口径。自选区间且截止日是今天写「近 N 天」；
+// 看历史窗口写起止日期（跨年写两位年份，完整日期在区间栏的日期输入框里），不能也叫「近 N 天」
+function rangeLabel() {
+  const custom = document.getElementById('range-custom');
+  if (custom && custom.classList.contains('visible')) {
+    const start = document.getElementById('range-start');
+    const end = document.getElementById('range-end');
+    const today = new Date().toISOString().slice(0, 10);
+    if (start && start.value && end && end.value && end.value !== today) {
+      const sameYear = start.value.slice(0, 4) === end.value.slice(0, 4);
+      return start.value.slice(sameYear ? 5 : 2) + ' ~ ' + end.value.slice(sameYear ? 5 : 2);
+    }
+  }
+  return '近 ' + currentDays + ' 天';
+}
 
 function setTimeRange(days, btn) {
   currentDays = days;
-  if (days === 7) currentRangeLabel = '本周';
-  else if (days === 30) currentRangeLabel = '本月';
   // 仅限时间区间栏：Config 页的 section pills 复用 .range-btn
   document.querySelectorAll('.time-range-bar .range-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
@@ -2586,7 +2631,6 @@ function applyCustomRange() {
   const endMs = new Date(e).getTime();
   if (endMs < startMs) return;
   currentDays = Math.ceil((endMs - startMs) / 86400000) + 1;
-  currentRangeLabel = s + '—' + e;
   refresh();
 }
 
