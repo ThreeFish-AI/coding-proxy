@@ -418,19 +418,25 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       .kpi-card:nth-child(2n) { padding-right: 24px; }
       .kpi-card:nth-child(n+3) { border-top: 1px solid rgba(255,255,255,.06); }
     }
-    /* ── 图表网格 ── */
-    .charts-grid-2 {
+    /* ── 同一水平栏：订阅状态 | 供应商请求分布 ──
+       右列放甜甜圈与图例；视口不够宽时订阅区会被挤到横向滚动，这一档改为上下堆叠 */
+    .status-row {
       display: grid;
-      grid-template-columns: 1fr 2fr;
-      gap: 16px;
+      grid-template-columns: minmax(0, 1fr) clamp(280px, 24vw, 360px);
+      gap: var(--gap-section);
       margin-bottom: var(--gap-section);
     }
-    .charts-grid-2 > .card {
+    .status-row > .card {
       min-width: 0;
+      margin-bottom: 0;
       overflow: hidden;
     }
-    @media (max-width: 960px) {
-      .charts-grid-2 { grid-template-columns: 1fr; }
+    /* 分布卡随左卡等高：标题留在顶上，图形区吃掉余量，甜甜圈与图例在余量里垂直居中 */
+    .dist-card { display: flex; flex-direction: column; }
+    .dist-card .chart-wrap { flex: 1 1 auto; height: auto; min-height: 250px; }
+    @media (max-width: 1179px) {
+      .status-row { grid-template-columns: minmax(0, 1fr); }
+      .dist-card .chart-wrap { flex: none; height: 240px; min-height: 0; }
     }
     .card {
       background: rgba(18,22,30,.7);
@@ -604,6 +610,12 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .list-note { padding: 0 14px 0 38px; font-size: 12px; }
     .subscription-card .vendor-list + .vendor-list { margin-top: 8px; }
     .subscription-card .vendor-list + .vendor-list:empty { display: none; }
+    /* 放不下的行仍在订阅区内横向滚动（单行硬约束不变）：右缘渐隐提示「后面还有」，滚到头提示消失
+       （.has-more 由 syncZoneCues 在行重绘、滚动、窗口缩放时同步） */
+    .vendor-badges.has-more {
+      -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+      mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+    }
     @media (max-width: 960px) {
       /* 窄屏：标识与路由区占首行，订阅区独占次行（整行放不下才折行，分区内仍不折行） */
       .subscription-card .vendor-item { flex-wrap: wrap; row-gap: 6px; }
@@ -867,9 +879,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
        一个表面内按行列出：vendor | 模型 | 并行度条 | 在途/上限 | 排队，五列逐行对齐 */
     .model-calling-card,
     .subscription-card,
-    .timeline-card {
-      margin-bottom: var(--gap-section);
-    }
+    .timeline-card,
+    .token-timeline-card,
     .model-token-card {
       margin-bottom: var(--gap-section);
     }
@@ -1085,13 +1096,22 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- 订阅状态：订阅档位 / 用量窗口 + 路由 tier 运行状态，同一实体合并为一行 -->
-  <div class="card subscription-card" id="subscription-card">
-    <div class="card-title">🎫 订阅状态<button type="button" class="btn-card-action" id="btn-vendor-reset" onclick="resetVendorStatus(this)" aria-label="状态复位：复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）" title="复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）">⟲ 状态复位</button></div>
-    <div class="vendor-list" id="vendor-list">
-      <div class="empty">加载中…</div>
+  <!-- 同一水平栏：订阅状态 | 供应商请求分布 -->
+  <div class="status-row">
+    <!-- 订阅状态：订阅档位 / 用量窗口 + 路由 tier 的可用状态，同一实体合并为一行 -->
+    <div class="card subscription-card" id="subscription-card">
+      <div class="card-title">🎫 订阅状态<button type="button" class="btn-card-action" id="btn-vendor-reset" onclick="resetVendorStatus(this)" aria-label="状态复位：复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）" title="复位所有供应商的熔断 / 限流 / 配额守卫状态（保留额度用量与优先级）">⟲ 状态复位</button></div>
+      <div class="vendor-list" id="vendor-list">
+        <div class="empty">加载中…</div>
+      </div>
+      <div class="vendor-list" id="subscription-list"></div>
     </div>
-    <div class="vendor-list" id="subscription-list"></div>
+    <div class="card dist-card">
+      <div class="card-title" id="title-vendor-dist">供应商请求分布（近 7 天）</div>
+      <div class="chart-wrap">
+        <canvas id="chart-vendor-dist"></canvas>
+      </div>
+    </div>
   </div>
 
   <!-- 请求量趋势折线图 -->
@@ -1102,21 +1122,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- 供应商分布 + Token 量趋势（按 vendor） -->
-  <div class="charts-grid-2">
-    <div class="card">
-      <div class="card-title" id="title-vendor-dist">供应商请求分布（近 7 天）</div>
-      <div class="chart-wrap">
-        <canvas id="chart-vendor-dist"></canvas>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title" id="title-token-timeline">近 7 天 Token 量趋势（按供应商）</div>
-      <div class="chart-wrap-lg">
-        <canvas id="chart-token-timeline"></canvas>
-      </div>
+  <!-- Token 量趋势（按 vendor） -->
+  <div class="card token-timeline-card">
+    <div class="card-title" id="title-token-timeline">近 7 天 Token 量趋势（按供应商）</div>
+    <div class="chart-wrap-lg">
+      <canvas id="chart-token-timeline"></canvas>
     </div>
   </div>
+
 
   <!-- Token 用量（按 Vendor / 模型）堆叠图 -->
   <div class="card model-token-card">
@@ -1912,6 +1925,29 @@ function _focusTierHandle(listEl, vendor) {
   const handle = item ? item.querySelector('.drag-handle') : null;
   if (handle) handle.focus({ preventScroll: true });
 }
+
+// ── 订阅区放不下的提示：右缘渐隐 ──────────────────────────
+// 行重绘由多处触发（刷新、拖拽、复位），用 MutationObserver 统一收口，不去改渲染函数
+function syncZoneCues() {
+  document.querySelectorAll('#subscription-card .vendor-badges').forEach(function (zone) {
+    zone.classList.toggle('has-more', zone.scrollWidth - zone.clientWidth - zone.scrollLeft > 1);
+  });
+}
+(function initZoneCues() {
+  const card = document.getElementById('subscription-card');
+  if (!card) return;
+  if (window.MutationObserver) {
+    const observer = new MutationObserver(syncZoneCues);
+    ['vendor-list', 'subscription-list'].forEach(function (id) {
+      const list = document.getElementById(id);
+      if (list) observer.observe(list, { childList: true, subtree: true });
+    });
+  }
+  card.addEventListener('scroll', function (e) {
+    if (e.target.closest && e.target.closest('.vendor-badges')) syncZoneCues();
+  }, true);
+  window.addEventListener('resize', syncZoneCues);
+})();
 
 // ── 订阅状态：拖拽调整优先级（Pointer Events 重排，运行时生效，不重置配额） ────
 // 采用 Pointer Events 而非原生 HTML5 DnD：后者触屏不支持、跨浏览器易「拿不起来」，
