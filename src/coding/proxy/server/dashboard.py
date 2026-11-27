@@ -540,7 +540,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .vendor-badges::-webkit-scrollbar { display: none; }
     /* 分区标签（tier 名 / 模型族）统一灰字；档位是订阅的关键属性，重一级 */
-    .tier-tag, .zone-label { font-size: 11px; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
+    .zone-label { font-size: 11px; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
     .zone-label.plan { font-size: 12px; font-weight: 600; color: var(--text-primary); }
     /* 同一模型族的标签与窗口成组 */
     .qg { display: inline-flex; align-items: center; gap: 6px; }
@@ -593,15 +593,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .drag-handle:hover, .drag-handle:focus-visible { opacity: 1 !important; color: var(--text-secondary); }
     /* 键盘焦点环不做淡入：调整优先级后行节点会被重建，淡入会让焦点环闪烁 */
     .drag-handle:focus-visible { transition: none; }
-    /* 同一实体一行：[标识] [订阅区] │ [路由区]。订阅区吃掉余宽，路由区不收缩；余量不足时只由
-       订阅区内横向滚动（单行硬约束）。手柄脱离文档流落在行左内边距里 */
+    /* 同一实体一行：[标识] [订阅区] [路由区]。订阅区吃掉余宽，路由区不收缩、靠行尾右对齐成一列；
+       余量不足时只由订阅区内横向滚动（单行硬约束）。手柄脱离文档流落在行左内边距里 */
     .vendor-item[data-vendor] { position: relative; }
     .has-sub > .sub-zone { flex: 1 1 auto; }
-    /* 路由区按「tier 名 + 状态徽章 + 一个用量格」的常见内容定最小宽：内容不超过它的行，
-       分隔线彼此对齐；内容更多的行（如同时配了 5h 与周两个配额守卫）自动外扩，仅该行的分隔线左移 */
-    .tier-zone { flex: 0 0 auto; min-width: 208px; }
-    /* 路由区紧跟订阅区时以竖线分隔（列间距 10px + 左内边距 10px，竖线居中） */
-    .sub-zone + .tier-zone { padding-left: 10px; border-left: 1px solid rgba(255,255,255,.22); }
+    .tier-zone { flex: 0 0 auto; justify-content: flex-end; }
+    /* 路由区只剩可用状态：无异常是「圆点 + 正常」，异常才是彩色胶囊（.status-badge） */
+    .tier-avail { display: inline-flex; align-items: center; column-gap: 6px; white-space: nowrap; }
+    .avail-ok { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; padding: 2px 0; }
+    .avail-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-green); }
     .zone-note { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
     .list-note { padding: 0 14px 0 38px; font-size: 12px; }
     .subscription-card .vendor-list + .vendor-list { margin-top: 8px; }
@@ -610,11 +610,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       /* 窄屏：标识与路由区占首行，订阅区独占次行（整行放不下才折行，分区内仍不折行） */
       .subscription-card .vendor-item { flex-wrap: wrap; row-gap: 6px; }
       .subscription-card .vendor-info { flex: 1 1 auto; min-width: 0; }
-      .subscription-card .tier-zone { min-width: 0; }
       .subscription-card .has-sub > .sub-zone { order: 3; flex: 1 1 100%; }
       .subscription-card .has-sub > .tier-zone,
       .subscription-card .has-sub > .sub-only { order: 2; flex: 0 1 auto; }
-      .sub-zone + .tier-zone { padding-left: 0; border-left: 0; }
     }
     /* ── 故障转移表 ── */
     .ft-table-wrap { overflow-x: auto; }
@@ -1571,21 +1569,7 @@ function updateKPI(summary) {
   document.getElementById('kpi-lat-week').textContent = lbl + ' ' + (r.avg_duration_ms ? r.avg_duration_ms + 'ms' : '–');
 }
 
-// ── 订阅状态：路由区（熔断 / 配额守卫 / 限速）────────────────
-function cbStateClass(state) {
-  if (!state) return 'sb-ok';
-  const s = state.toUpperCase();
-  if (s === 'OPEN') return 'sb-err';
-  if (s === 'HALF_OPEN') return 'sb-warn';
-  return 'sb-ok';
-}
-function cbStateLabel(state) {
-  if (!state) return 'CLOSED';
-  const s = state.toUpperCase();
-  if (s === 'OPEN') return '熔断';
-  if (s === 'HALF_OPEN') return '半开';
-  return '正常';
-}
+// ── 订阅状态：用量格（订阅窗口共用）─────────────────────────
 // 用量格严重度（同时决定格底色与进度条填充色）：≥ 90% 红 / ≥ 70% 黄 / 其余绿
 function quotaClass(pct) {
   if (pct >= 90) return 'q-err';
@@ -1609,12 +1593,6 @@ function renderQuotaCell(label, pct, reset, title) {
     (reset ? `<span class="sub-reset">${RESET_ICON}${escapeHtml(reset)}</span>` : '') +
     `</span>`;
 }
-function renderQuotaBar(qg) {
-  if (!qg || qg.usage_percent == null) return '';
-  const pct = Math.round(qg.usage_percent);
-  const label = quotaWindowLabel(qg.window_hours);
-  return renderQuotaCell(label, pct, '', '本代理 ' + label + ' 滑动窗口配额守卫：已用 ' + pct + '%');
-}
 
 // 供应商行头像首字母（撞字母时取前两个字母，见 SUB_INITIALS）
 function _tierInitial(name) {
@@ -1622,16 +1600,47 @@ function _tierInitial(name) {
   return SUB_INITIALS.has(text.charAt(0).toUpperCase()) ? text.charAt(0).toUpperCase() + text.charAt(1) : text.charAt(0).toUpperCase();
 }
 
-// 路由区：[状态徽章] [配额守卫用量格]（本 proxy 的滑动窗口用量，与订阅区上游额度不同源）
-function _tierZoneHTML(tier) {
+// 路由区的可用状态：该 tier 现在能不能正常接请求。条件按熔断器、限速、配额守卫排列，多个并存时全部列出
+// （各自是独立的不可用原因）；没有异常返回 null，由调用方渲染成「圆点 + 正常」
+function tierAvailability(tier) {
   const cb = tier.circuit_breaker || {};
   const rlInfo = tier.rate_limit || {};
+  const state = String(cb.state || '').toUpperCase();
   // 失败次数来自载荷：转成数字再拼，非数字一律当作 0
   const failures = Number(cb.failure_count) || 0;
-  return `<span class="status-badge ${cbStateClass(cb.state)}">${cbStateLabel(cb.state)}${failures ? ' ×' + failures : ''}</span>` +
-    (rlInfo.is_rate_limited ? `<span class="status-badge sb-warn">限速中</span>` : '') +
-    (tier.quota_guard ? renderQuotaBar(tier.quota_guard) : '') +
-    (tier.weekly_quota_guard ? renderQuotaBar(tier.weekly_quota_guard) : '');
+  const exceeded = (g) => String((g && g.state) || '').toUpperCase() === 'QUOTA_EXCEEDED';
+  const out = [];
+  if (state === 'OPEN') out.push({ cls: 'sb-err', text: failures ? '熔断 ×' + failures : '熔断' });
+  if (state === 'HALF_OPEN') out.push({ cls: 'sb-warn', text: '半开' });
+  if (rlInfo.is_rate_limited) out.push({ cls: 'sb-warn', text: '限速中' });
+  if (exceeded(tier.quota_guard) || exceeded(tier.weekly_quota_guard)) out.push({ cls: 'sb-err', text: '配额超限' });
+  return out.length ? out : null;
+}
+
+// 悬停详情：不再常驻的 tier 名、熔断失败次数、限速剩余时间与配额守卫用量
+// （配额守卫是本 proxy 的滑动窗口预算，与订阅区上游额度不同源）
+function tierAvailabilityTitle(tier) {
+  const cb = tier.circuit_breaker || {};
+  const rlInfo = tier.rate_limit || {};
+  const state = String(cb.state || '').toUpperCase();
+  const failures = Number(cb.failure_count) || 0;
+  const parts = [String(tier.name || '') + ' 的路由状态'];
+  parts.push('熔断器 ' + ({ OPEN: '熔断', HALF_OPEN: '半开' }[state] || '正常') + (failures ? '（失败 ' + failures + ' 次）' : ''));
+  if (rlInfo.is_rate_limited) parts.push('限速中，剩余 ' + Math.ceil(Number(rlInfo.remaining_seconds) || 0) + ' 秒');
+  [tier.quota_guard, tier.weekly_quota_guard].forEach((g) => {
+    if (!g || g.usage_percent == null) return;
+    parts.push('配额守卫 ' + quotaWindowLabel(g.window_hours) + ' 窗口已用 ' + Math.round(g.usage_percent) + '%（阈值 ' + Math.round(Number(g.threshold_percent) || 0) + '%）');
+  });
+  return parts.join('；');
+}
+
+// 路由区只留可用状态：无异常是「圆点 + 正常」，异常才是彩色胶囊，整列里异常一眼可见
+function _tierZoneHTML(tier) {
+  const states = tierAvailability(tier);
+  const inner = states
+    ? states.map((s) => `<span class="status-badge ${s.cls}">${s.text}</span>`).join('')
+    : '<span class="avail-ok"><i class="avail-dot" aria-hidden="true"></i>正常</span>';
+  return `<span class="tier-avail" title="${escapeHtml(tierAvailabilityTitle(tier))}">${inner}</span>`;
 }
 
 let _tierStatus = { tiers: [] };   // 最近一次 /api/status 载荷
@@ -1777,7 +1786,7 @@ function _renderStatusRows() {
     const handle = reorderable ? `<button type="button" class="drag-handle" title="拖拽或按 ↑ / ↓ 调整优先级" aria-keyshortcuts="ArrowUp ArrowDown" aria-label="调整 ${escapeHtml(meta ? meta.label : tier.name || '')} 的优先级：第 ${index + 1} 位，共 ${tiers.length} 个">⠿</button>` : '';
     const routeHTML = _tierZoneHTML(tier);
     if (!meta) {
-      // 无订阅对应的 tier 行：路由区加「供应商状态」标注，避免在订阅卡片里被读成订阅行
+      // 无订阅对应的 tier 行：只有路由区（可用状态），不出订阅区
       const initial = escapeHtml(_tierInitial(tier.name));
       return `<div class="vendor-item" data-vendor="${safeName}">
         <div class="vendor-info">
@@ -1786,16 +1795,13 @@ function _renderStatusRows() {
           <span class="vendor-name">${safeName}</span>
         </div>
         <div class="vendor-badges tier-zone">
-          <span class="tier-tag">供应商状态</span>
           ${routeHTML}
         </div>
       </div>`;
     }
-    // 同一实体合并为一行：[标识] [订阅区] │ [路由区]；显示名取订阅名，订阅数据缺失时也不跳变
+    // 同一实体合并为一行：[标识] [订阅区] [路由区]；显示名取订阅名，订阅数据缺失时也不跳变
     const v = subByTier[tier.name];
     const subHTML = v ? _subZoneHTML(v) : '';
-    // 订阅显示名与 tier 名仅大小写不同时不重复标注
-    const tag = meta.label.toLowerCase() === tier.name ? '' : `<span class="tier-tag">${safeName}</span>`;
     return `<div class="vendor-item has-sub" data-vendor="${safeName}">
       <div class="vendor-info">
         ${handle}
@@ -1803,7 +1809,7 @@ function _renderStatusRows() {
         <span class="vendor-name">${escapeHtml(meta.label)}</span>
       </div>
       ${subHTML ? `<div class="vendor-badges sub-zone">${subHTML}</div>` : ''}
-      <div class="vendor-badges tier-zone">${tag}${routeHTML}</div>
+      <div class="vendor-badges tier-zone">${routeHTML}</div>
     </div>`;
   }).join('');
   tierList.innerHTML = (tiers.length ? '' : '<div class="empty"><div class="empty-icon">🔌</div>无供应商数据</div>') + tierRows;
