@@ -121,6 +121,13 @@ span.cfg-map-key { color: var(--text-secondary); }
 .cfg-btn-primary { background: rgba(88,166,255,.16); border-color: rgba(88,166,255,.35); color: var(--accent-blue); }
 .cfg-btn-primary:hover:not(:disabled) { background: rgba(88,166,255,.24); color: #fff; }
 .cfg-btn-danger:hover:not(:disabled) { color: var(--accent-red); border-color: rgba(248,81,73,.4); }
+/* 大范围操作的入口降权：透明底，hover 才显形 */
+.cfg-btn-ghost { background: transparent; border-color: transparent; }
+.cfg-btn-ghost:hover:not(:disabled) { background: rgba(255,255,255,.06); border-color: transparent; color: var(--text-primary); }
+.cfg-vendor-head .cfg-actions .cfg-btn-danger { margin-left: 8px; }
+/* 确认框的主按钮在破坏性操作上用 danger */
+.cfg-btn-primary.cfg-btn-danger-solid { background: rgba(248,81,73,.16); border-color: rgba(248,81,73,.45); color: var(--accent-red); }
+.cfg-btn-primary.cfg-btn-danger-solid:hover:not(:disabled) { background: rgba(248,81,73,.24); border-color: var(--accent-red); color: #fff; }
 .cfg-link {
   border: none; background: none; padding: 0; max-width: 100%; cursor: pointer; font: inherit; color: var(--accent-blue);
   text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -159,6 +166,25 @@ span.cfg-map-key { color: var(--text-secondary); }
 }
 .cfg-savebar[hidden] { display: none; }
 .cfg-savebar-msg { flex: 1; min-width: 0; font-size: 13px; color: var(--text-secondary); }
+.cfg-savebar-msg > * + * { margin-top: 2px; }
+.cfg-savebar-ok { border-color: rgba(63,185,80,.35); }
+.cfg-savebar-warn { border-color: rgba(210,153,34,.45); }
+.cfg-savebar-err { border-color: rgba(248,81,73,.45); }
+.cfg-result { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; color: var(--text-primary); }
+.cfg-result:focus { outline: none; }
+.cfg-result:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+.cfg-result-dot { flex: none; align-self: center; width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); }
+.cfg-savebar-ok .cfg-result-dot { background: var(--accent-green); }
+.cfg-savebar-warn .cfg-result-dot { background: var(--accent-yellow); }
+.cfg-savebar-err .cfg-result-dot { background: var(--accent-red); }
+.cfg-result .cfg-note { flex-basis: 100%; margin: 0; max-height: 72px; overflow-y: auto; }
+.cfg-undo { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cfg-undo .cfg-link { flex: none; }
+.cfg-scope { color: var(--text-secondary); }
+/* 保存栏常驻时，键盘焦点不被它盖住 */
+html:has(#config-root .cfg-savebar:not([hidden])) { scroll-padding-bottom: 120px; }
+#config-root [data-focus-ring]:focus { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+.cfg-live { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .cfg-savebar-errors { list-style: none; margin: 4px 0 0; padding: 0; max-height: 120px; overflow-y: auto; }
 .cfg-savebar-errors .cfg-link { color: var(--accent-red); font-size: 12px; }
 .cfg-lock { max-width: 720px; }
@@ -173,6 +199,15 @@ span.cfg-map-key { color: var(--text-secondary); }
 .cfg-dialog-block { margin: 12px 0; font-size: 13px; }
 .cfg-dialog-block ul { margin: 0; padding-left: 18px; color: var(--text-secondary); }
 .cfg-dialog-block li { overflow-wrap: anywhere; }
+.cfg-dialog-text { margin: 8px 0 2px; font-size: 13px; line-height: 1.55; color: var(--text-secondary); }
+.cfg-dialog-impact li { padding: 1px 0; }
+.cfg-diff-group-title { margin-top: 6px; font-size: 12px; color: var(--text-tertiary); }
+.cfg-diff-row { display: grid; grid-template-columns: minmax(120px, 34%) minmax(0, 1fr); gap: 8px; padding: 1px 0; font-size: 13px; color: var(--text-secondary); }
+.cfg-diff-val { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-primary); min-width: 0; overflow-wrap: anywhere; }
+.cfg-diff-val del { color: var(--text-tertiary); }
+.cfg-diff-val ins { color: var(--accent-blue); text-decoration: none; }
+.cfg-dialog details > summary { cursor: pointer; color: var(--accent-blue); }
+.cfg-dialog details[open] > summary { margin-bottom: 4px; }
 .cfg-dialog-warn .cfg-group-title, .cfg-dialog-warn li { color: var(--accent-yellow); }
 .cfg-dialog .cfg-actions { margin-top: 16px; }
 

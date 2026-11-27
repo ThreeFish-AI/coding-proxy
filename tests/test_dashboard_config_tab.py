@@ -718,7 +718,10 @@ _DOM_HARNESS = textwrap.dedent(
       await until(() => !CT.isDirty() && !root.querySelector('.cfg-body').hasAttribute('inert'), 'still saving');
       assert.strictEqual(root.querySelector('.cfg-body').getAttribute('aria-busy'), null);
       assert.strictEqual(chips(), '429,500');
-      assert.ok(banners().some(t => t.startsWith('已保存并生效')), banners().join('|'));
+      const bar6 = root.querySelector('.cfg-savebar').textContent;
+      assert.ok(bar6.includes('已保存并生效'), bar6);
+      assert.ok(!banners().some(t => t.startsWith('已保存')), banners().join('|'));
+      assert.strictEqual(confirms.length, confirmsDuring, 'routine save must not ask for confirmation');
       net.putGate = Promise.resolve();
 
       // 7) PUT 200 但随后 GET 失败：本地已落定（无 dirty、无待设置明文），「已保存」提示仍可见
@@ -748,8 +751,13 @@ _DOM_HARNESS = textwrap.dedent(
       const confirmsAfter = confirms.length;
       await CT.refresh(false);
       assert.strictEqual(confirms.length, confirmsAfter, 'asked to discard already-saved changes');
-      assert.ok(root.querySelector('.cfg-savebar').hidden);
       assert.ok(!root.querySelectorAll('input').some(i => i.value === PLAIN));
+      const bar7 = root.querySelector('.cfg-savebar');
+      assert.ok(!bar7.hidden && bar7.textContent.includes('已保存并生效'), bar7.textContent);
+      const close7 = root.querySelectorAll('.cfg-savebar .cfg-btn').find(b => b.textContent === '关闭');
+      assert.ok(close7, 'result state must be dismissible');
+      close7.click();
+      assert.ok(root.querySelector('.cfg-savebar').hidden);
 
       // 8) Esc 只隐藏当前说明；再次悬停 / 聚焦其他 ⓘ 时恢复显示
       pill('failover');
@@ -779,7 +787,7 @@ _DOM_HARNESS = textwrap.dedent(
       saveBtn().click();
       await until(() => net.puts.length > putsBefore9 && !CT.isDirty() && !root.querySelector('.cfg-body').hasAttribute('inert'), 'save not finished');
       assert.deepStrictEqual(net.puts[net.puts.length - 1].secret_ops, { 'auth.google_client_secret': { op: 'clear' } });
-      const note = banners().find(t => t.startsWith('已保存'));
+      const note = root.querySelector('.cfg-savebar').textContent;
       assert.ok(note && !note.startsWith('已保存并生效') && note.includes('CLI 登录'), String(note));
 
       // 10) 排序后展开行仍指向原条目：move 对夹在区间内的展开下标做 ∓1 平移

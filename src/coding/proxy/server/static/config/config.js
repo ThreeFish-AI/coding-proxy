@@ -489,7 +489,6 @@
   }
   function renderBanners() {
     var out = [], v = S.view;
-    if (S.notice) out.push(noticeBanner());
     if (v.mode !== 'store') out.push(banner(v.mode === 'defaults' ? 'info' : 'err', MODE_TEXT[v.mode] || v.mode));
     if (!v.apply_supported && !S.readonly) out.push(banner('info', '当前实例不支持在线生效：保存会写入 config.db，需重启 coding-proxy 后生效'));
     var boot = (v.running && v.running.boot_revisions) || {};
@@ -1117,7 +1116,7 @@
 
   // ── Dirty / 错误 / 保存 ───────────────────────────────────
   function isDirty() { return !!S.view && (dirtySections(S.base, S.work).length > 0 || activeOps(S.ops).length > 0); }
-  function changed() { updateDirty(); }
+  function changed() { if (S.notice && S.notice.kind === 'ok') S.notice = null; updateDirty(); }
   function affectedSections() {
     var set = {};
     dirtySections(S.base, S.work).forEach(function (s) { set[s] = true; });
@@ -1148,20 +1147,56 @@
     var bar = S.root.querySelector('.cfg-savebar');
     if (bar) fillSaveBar(bar);
   }
+  function sectionLabel(s) {
+    for (var i = 0; i < PILLS.length; i++) if (PILLS[i][0] === s) return PILLS[i][1];
+    return s;
+  }
+  // 待保存范围的可读名称：vendors 细到具体 vendor，其余用 pill 名
+  function scopeText() {
+    return affectedSections().map(function (s) {
+      if (s !== 'vendors') return sectionLabel(s);
+      var seen = {};
+      var vs = (S.base.vendors || []).concat(S.work.vendors || []).map(function (v) { return v.vendor; })
+        .filter(function (t) { return !seen[t] && (seen[t] = true) && vendorDirty(t); });
+      activeOps(S.ops).forEach(function (p) { var m = /^vendors\.([^.]+)\./.exec(p); if (m && vs.indexOf(m[1]) < 0) vs.push(m[1]); });
+      return vs.length ? 'Vendors › ' + vs.slice(0, 3).join('、') + (vs.length > 3 ? ' 等 ' + vs.length + ' 个' : '') : 'Vendors';
+    }).join('、');
+  }
   function renderSaveBar() { var bar = h('div', { class: 'cfg-savebar', role: 'region', 'aria-label': 'Save changes' }); fillSaveBar(bar); return bar; }
+  // 保存栏是唯一的保存结果反馈面（顶部 Banner 只留模式类提示）；结果不自动消失，由用户关闭或在下一次编辑时清除
   function fillSaveBar(bar) {
-    var dirty = isDirty(), n = countChangedFields(S.base, S.work, S.ops), k = affectedSections().length;
-    bar.hidden = !dirty && !S.errors.length;
+    var dirty = isDirty(), n = countChangedFields(S.base, S.work, S.ops);
+    var hadFocus = !!(document.activeElement && bar.contains && bar.contains(document.activeElement));
+    bar.hidden = !dirty && !S.errors.length && !S.notice && !S.undo;
+    bar.className = 'cfg-savebar' + (S.notice ? ' cfg-savebar-' + S.notice.kind : '');
     clear(bar);
-    var msg = h('div', { class: 'cfg-savebar-msg' }, [h('div', { text: dirty ? n + ' 个字段待保存（' + k + ' 个 section）' : '没有未保存的修改' })]);
+    var msg = h('div', { class: 'cfg-savebar-msg' });
+    if (S.notice) {
+      msg.appendChild(h('div', { class: 'cfg-result', tabindex: '-1' }, [h('span', { class: 'cfg-result-dot', 'aria-hidden': 'true' }), h('span', { text: S.notice.text })]
+        .concat((S.notice.lines || []).map(function (l) { return h('div', { class: 'cfg-note cfg-trunc', text: l, title: l }); }))));
+    }
+    if (S.undo) msg.appendChild(h('div', { class: 'cfg-undo' }, [h('span', { class: 'cfg-trunc', text: S.undo.label, title: S.undo.label }), h('button', { type: 'button', class: 'cfg-link', text: '撤销', onclick: undoLast, disabled: S.saving })]));
+    if (dirty) msg.appendChild(h('div', { class: 'cfg-scope', text: '待保存：' + scopeText() + '（' + n + ' 处）' }));
     if (S.errors.length) {
       msg.appendChild(h('ul', { class: 'cfg-savebar-errors' }, S.errors.slice(0, 8).map(function (e) {
         var p = locToPath(e.loc);
-        return h('li', { class: 'cfg-trunc' }, h('button', { type: 'button', class: 'cfg-link', text: (p || '<root>') + '：' + e.msg, onclick: function () { focusError(p); } }));
+        return h('li', { class: 'cfg-trunc' }, h('button', { type: 'button', class: 'cfg-link', text: (p ? labelOf(p) : '<root>') + '：' + e.msg, title: p, onclick: function () { focusError(p); } }));
       }).concat(S.errors.length > 8 ? [h('li', { text: '…共 ' + S.errors.length + ' 个错误' })] : [])));
     }
-    add(bar, [msg, btn('放弃修改', discard, '', { disabled: !dirty || S.saving }),
-      btn(S.saving ? '保存中…' : '保存 ' + n + ' 个字段（' + k + ' 个 section）', onSave, 'cfg-btn-primary', { disabled: !dirty || S.saving || S.readonly })]);
+    var acts = [];
+    if (S.notice && !dirty) acts.push(btn('关闭', function () { S.notice = null; updateDirty(); }, 'cfg-btn-sm'));
+    if (dirty || S.errors.length) {
+      acts.push(btn('放弃修改', discard, '', { disabled: !dirty || S.saving }));
+      acts.push(btn(S.confirming ? '等待确认…' : S.saving ? '保存中…' : '保存', onSave, 'cfg-btn-primary', { disabled: !dirty || S.saving || S.readonly }));
+    }
+    add(bar, [msg].concat(acts));
+    // 保存栏每次整体重建：原先落在栏内的焦点（通常是「保存」按钮）跟着回来；
+    // 栏里已没有可聚焦控件（如点「关闭」后隐藏）时落到当前激活的 pill，而不是掉回 body
+    if (hadFocus) {
+      var b = bar.querySelector('.cfg-btn-primary') || bar.querySelector('.cfg-btn');
+      if (b && b.focus) b.focus();
+      else if (S.root) { var p = S.root.querySelector('.cfg-pills .range-btn.active'); if (p && p.focus) p.focus(); }
+    }
   }
   function discard() {
     if (!window.confirm('放弃全部未保存的修改？')) return;
@@ -1201,25 +1236,28 @@
   function fetchStatus() {
     return fetch('/api/status', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
   }
-  function runtimeLines(status) {
-    if (!S.view.apply_supported) return ['当前实例不支持在线生效：保存后需重启，运行时状态不受影响。'];
-    var tiers = (status && status.tiers) || [], lines = [];
-    var names = function (pred) { return tiers.filter(pred).map(function (t) { return t.name; }); };
-    var cb = names(function (t) { return t.circuit_breaker && t.circuit_breaker.state && t.circuit_breaker.state !== 'closed'; });
-    var rl = names(function (t) { return t.rate_limit && t.rate_limit.is_rate_limited; });
-    var qx = names(function (t) { return [t.quota_guard, t.weekly_quota_guard].some(function (q) { return q && q.state === 'quota_exceeded'; }); });
-    if (status && typeof status.in_flight === 'number') lines.push('进行中的请求：' + status.in_flight + ' 个（在旧实例上继续完成）');
-    if (cb.length) lines.push('熔断状态将重置：' + cb.join('、'));
-    if (rl.length) lines.push('限流状态将重置：' + rl.join('、'));
-    if (qx.length) lines.push('配额超限状态按用量数据库重建：' + qx.join('、'));
-    lines.push('运行时调整的并发上限恢复为配置值；配额窗口按用量数据库重建。');
-    var running = S.view.running && S.view.running.tiers;
-    if (Array.isArray(running) && !deepEqual(running, enabledChain())) {
-      lines.push('运行中的优先级（含 Overview 拖拽）与保存的 tiers 不同，保存后以 tiers 为准。');
+  // 具体路径 → 注册表 spec（vendors 的 vendor 段与列表下标泛化为 *）
+  function specFor(path) {
+    var parts = String(path).split('.');
+    if (S.specMap[path]) return S.specMap[path];
+    for (var i = 1; i < parts.length; i++) {
+      if (parts[0] === 'vendors' ? i !== 1 : !/^\d+$/.test(parts[i])) continue;
+      var hit = S.specMap[parts.slice(0, i).concat(['*'], parts.slice(i + 1)).join('.')];
+      if (hit) return hit;
     }
-    return lines;
+    return null;
   }
-  function confirmSave(payload, status) {
+  function labelOf(path) {
+    var parts = String(path).split('.'), sp = specFor(path);
+    if (parts[0] === 'vendors') return (sp ? sp.label : parts[parts.length - 1]) + '（' + parts[1] + '）';
+    return sp ? sp.label : parts[parts.length - 1];
+  }
+  function rowTitleOf(sec, row) {
+    var ks = ROW_KEY[sec] || [], sub = sec.split('.').slice(1);
+    return (sub.length ? sub.join(' › ') + ' › ' : '') + (ks.length ? ks.map(function (k) { return String(row[k]); }).join(' / ') : fmtVal(row));
+  }
+  // 保存后果清单：每一项都来自可预判的运行时状态或本次载荷；非空才弹确认框
+  function saveImpactList(payload, status) {
     var secretFields = {};
     S.specs.forEach(function (sp) {
       if (sp.widget !== 'secret' || !sp.vendors) return;
@@ -1229,26 +1267,85 @@
       base: S.base, work: S.work, defaults: S.view.defaults, secrets: S.view.secrets, ops: S.ops, secretFields: secretFields,
       targetDefaults: { base_url: dflt('vendors.*.base_url'), token_url: dflt('vendors.*.token_url') },
     });
-    var blocks = [
-      ['修改的 section', Object.keys(payload.sections)],
-      ['密钥操作', Object.keys(payload.secret_ops).map(function (p) { return p + '：' + payload.secret_ops[p].op; })],
-      ['目标地址已变更，以下密钥将被清空（需重新设置）', cleared],
-      ['运行时影响', runtimeLines(status)],
-    ].filter(function (b) { return b[1].length; });
-    var text = blocks.map(function (b) { return b[0] + '：\n- ' + b[1].join('\n- '); }).join('\n\n');
-    if (typeof window.HTMLDialogElement !== 'function') return Promise.resolve(window.confirm('确认保存？\n\n' + text));
-    return new Promise(function (resolve) {
-      var dlg = h('dialog', { class: 'cfg-dialog', 'aria-label': '确认保存' });
-      var close = function (ok) { dlg.close(); dlg.remove(); resolve(ok); };
-      add(dlg, [h('div', { class: 'cfg-section-title', text: '确认保存' })].concat(blocks.map(function (b, i) {
-        return h('div', { class: 'cfg-dialog-block' + (b[1] === cleared ? ' cfg-dialog-warn' : '') }, [
-          h('div', { class: 'cfg-group-title', text: b[0] }),
-          h('ul', {}, b[1].map(function (l) { return h('li', { text: l }); })),
-        ]);
-      }), [h('div', { class: 'cfg-actions' }, [btn('取消', function () { close(false); }), btn('确认保存', function () { close(true); }, 'cfg-btn-primary')])]));
-      dlg.addEventListener('cancel', function (e) { e.preventDefault(); close(false); });
-      document.body.appendChild(dlg);
-      dlg.showModal();
+    return saveImpact({ payload: payload, base: S.base, work: S.work, view: S.view, status: status, cleared: cleared, chain: enabledChain() });
+  }
+  function impactLines(impact, payload) {
+    var l = function (a) { return a.join('、'); };
+    return impact.map(function (it) {
+      if (it.code === 'secrets') return '密钥：' + l(it.paths.map(function (p) { var op = payload.secret_ops[p]; return op.op === 'set' ? '设置 ' + labelOf(p) : op.op === 'clear' ? '清空 ' + labelOf(p) : labelOf(p) + ' 改用环境变量 ' + ((S.view.secrets[p] || {}).default_env || ''); }));
+      if (it.code === 'cleared') return '目标地址已变更，保存后将清空密钥（需重新设置）：' + l(it.paths.map(labelOf));
+      if (it.code === 'inflight') return it.n + ' 个请求正在进行，会在旧实例上完成后切到新配置';
+      if (it.code === 'breaker') return '熔断状态将重置：' + l(it.names);
+      if (it.code === 'ratelimit') return '限流状态将重置：' + l(it.names);
+      if (it.code === 'quota') return '配额超限状态将按用量数据库重建：' + l(it.names);
+      if (it.code === 'tiers') return '运行中的优先级与保存的 Tiers 不同，保存后以 Tiers 为准';
+      if (it.code === 'pending') return '上次保存后尚未生效的 section 会一并生效：' + l(it.sections.map(sectionLabel));
+      if (it.code === 'removed') return '移除 vendor（同时移出 Tiers 链路）：' + l(it.vendors);
+      return it.code;
+    });
+  }
+  function diffBlock(groups) {
+    var rows = [];
+    groups.forEach(function (g) {
+      rows.push(h('div', { class: 'cfg-diff-group-title', text: g.title }));
+      g.rows.forEach(function (r) {
+        rows.push(h('div', { class: 'cfg-diff-row' }, [h('span', { class: 'cfg-diff-label cfg-trunc', text: r.label, title: r.label }),
+          h('span', { class: 'cfg-diff-val' }, r.added ? [h('ins', { text: '新增' })] : r.removed ? [h('del', { text: '移除' })] : [h('del', { text: r.before }), ' → ', h('ins', { text: r.after })])]));
+      });
+    });
+    var block = h('div', { class: 'cfg-dialog-block cfg-dialog-diff' }, [h('div', { class: 'cfg-group-title', text: '将保存的修改' })]);
+    if (rows.length > 8) block.appendChild(h('details', {}, [h('summary', { text: '共 ' + groups.reduce(function (n, g) { return n + g.rows.length; }, 0) + ' 处，展开查看' })].concat(rows)));
+    else rows.forEach(function (r) { block.appendChild(r); });
+    return block;
+  }
+  // 页面内确认框；不支持 <dialog> 的环境回退到 window.confirm 并同步执行
+  function askConfirm(o, onOk, onCancel) {
+    if (typeof window.HTMLDialogElement !== 'function') {
+      var text = o.title + (o.body ? '\n\n' + o.body : '') + (o.impacts && o.impacts.length ? '\n\n保存后会发生：\n- ' + o.impacts.join('\n- ') : '');
+      if (window.confirm(text)) onOk(); else if (onCancel) onCancel();
+      return;
+    }
+    var bodyId = 'cfg-dlg-' + (++uid) + '-body', impactId = 'cfg-dlg-' + uid + '-impact';
+    var described = [o.body ? bodyId : null, o.impacts && o.impacts.length ? impactId : null].filter(Boolean).join(' ');
+    // 破坏性确认用 alertdialog；正文与后果清单挂到 aria-describedby，焦点落在「取消」时也会被读出
+    var opener = document.activeElement, dlg = h('dialog', { class: 'cfg-dialog', 'aria-label': o.title, role: o.danger ? 'alertdialog' : null, 'aria-describedby': described || null });
+    var close = function (ok) {
+      dlg.close(); dlg.remove();
+      if (ok) onOk();
+      else if (onCancel) onCancel();
+      else if (opener && opener.focus) opener.focus();
+    };
+    var kids = [h('div', { class: 'cfg-section-title', text: o.title })];
+    if (o.body) kids.push(h('p', { class: 'cfg-dialog-text', id: bodyId, text: o.body }));
+    if (o.impacts && o.impacts.length) kids.push(h('div', { class: 'cfg-dialog-block cfg-dialog-impact', id: impactId }, [h('div', { class: 'cfg-group-title', text: '保存后会发生' }),
+      h('ul', {}, o.impacts.map(function (l) { return h('li', { text: l }); }))]));
+    if (o.diff && o.diff.length) kids.push(diffBlock(o.diff));
+    kids.push(h('div', { class: 'cfg-actions' }, [btn('取消', function () { close(false); }),
+      btn(o.confirmText || '确认', function () { close(true); }, 'cfg-btn-primary' + (o.danger ? ' cfg-btn-danger-solid' : ''))]));
+    add(dlg, kids);
+    dlg.addEventListener('cancel', function (e) { e.preventDefault(); close(false); });
+    document.body.appendChild(dlg);
+    dlg.showModal();
+    // 初始焦点放在「取消」：不可逆操作把焦点放在破坏性最小的一项上
+    var cancel = dlg.querySelector('.cfg-actions .cfg-btn');
+    if (cancel && cancel.focus) cancel.focus();
+  }
+  function askConfirmP(o) {
+    return new Promise(function (resolve) { askConfirm(o, function () { resolve(true); }, function () { resolve(false); }); });
+  }
+  function confirmSave(payload, status) {
+    var impact = saveImpactList(payload, status);
+    if (!impact.length) return Promise.resolve(true);
+    return askConfirmP({
+      title: impact.some(function (it) { return it.danger; }) ? '保存并应用这些变更？' : '确认保存？',
+      impacts: impactLines(impact, payload),
+      diff: changedRows(S.base, S.work, {
+        label: function (path) { var sp = specFor(path); return sp ? sp.label : String(path).split('.').pop(); },
+        skip: function (path) { var sp = specFor(path); return !!(sp && sp.widget === 'secret'); },
+        sectionLabel: sectionLabel, rowTitle: rowTitleOf,
+      }),
+      danger: impact.some(function (it) { return it.danger; }),
+      confirmText: '确认保存',
     });
   }
   function onSave() {
@@ -1260,16 +1357,39 @@
       rerender();
       return;
     }
-    S.saving = true;
+    S.saving = true; S.confirming = true;
     updateDirty();
-    fetchStatus().then(function (status) { return confirmSave(payload, status); }).then(function (ok) {
-      if (!ok) { S.saving = false; updateDirty(); return null; }
+    fetchStatus().then(function (status) { S.confirming = false; return confirmSave(payload, status); }).then(function (ok) {
+      S.confirming = false;
+      if (!ok) { S.saving = false; updateDirty(); focusSaveButton(); return null; }
+      updateDirty();
       return request('PUT', payload).then(function (r) { return handleSave(r, payload); });
     }).catch(function () {
+      S.confirming = false;
       S.saving = false;
       S.notice = { kind: 'err', text: '保存请求失败：网络错误' };
       rerender();
+      reportResult();
     });
+  }
+  function focusSaveButton() {
+    var b = S.root && S.root.querySelector('.cfg-savebar .cfg-btn-primary');
+    if (b && b.focus) b.focus();
+  }
+  // 常驻播报节点：rerender 整体重建 #config-root，带 aria-live 的新节点不保证被朗读
+  function ensureLive() {
+    if (S.live || !S.root || !S.root.parentNode) return;
+    S.live = h('div', { class: 'cfg-live', role: 'status', 'aria-live': 'polite' });
+    S.root.parentNode.insertBefore(S.live, S.root.nextSibling);
+  }
+  function reportResult() {
+    ensureLive();
+    if (!S.live || !S.notice) return;
+    S.live.textContent = '';
+    // 回调里现读：409 之后的重载失败会把提示换成另一段，不能提前拼好
+    setTimeout(function () { if (S.live && S.notice) S.live.textContent = [S.notice.text].concat(S.notice.lines || []).join('。'); }, 0);
+    var res = S.root && S.root.querySelector('.cfg-result');
+    if (res && res.focus) { try { res.focus({ preventScroll: true }); } catch (e) { res.focus(); } }
   }
   // PUT 成功即在本地落定：已提交 section 并入 base，丢弃密钥明文；随后重载失败也不残留 dirty / 明文
   function commitSaved(payload, revisions) {
@@ -1285,6 +1405,7 @@
       S.saving = false;
       updateDirty();
       if (ok === false && only) conflictReloadFailed(only);
+      reportResult();
     });
   }
 
@@ -1332,6 +1453,7 @@
     if (r.status === 423) { S.readonly = true; S.notice = { kind: 'err', text: errText(d) || MODE_TEXT.legacy_readonly }; }
     else S.notice = { kind: 'err', text: '保存失败（HTTP ' + r.status + '）' + (errText(d) ? '：' + errText(d) : '') };
     rerender();
+    reportResult();
     return null;
   }
 
@@ -1350,6 +1472,7 @@
   function mount(el) {
     if (!el || S.root === el) return;
     S.root = el;
+    ensureLive();
     S.schema = readSchemaDefaults();
     readUrlSection();
     clear(el);
