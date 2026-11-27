@@ -32,9 +32,9 @@ def _inline_script(html: str) -> str:
 
 
 def _card(html: str) -> str:
-    """截取合并卡片的 HTML 片段（起点为卡片 id，终点为紧随其后的折线图卡片）."""
+    """截取合并卡片的 HTML 片段（起点为卡片 id，终点为同一水平栏里紧随其后的分布卡）."""
     start = html.index('id="subscription-card"')
-    return html[start : html.index('class="card timeline-card"', start)]
+    return html[start : html.index('<div class="card dist-card">', start)]
 
 
 def test_subscription_card_wired(client: TestClient):
@@ -45,9 +45,9 @@ def test_subscription_card_wired(client: TestClient):
     assert 'id="btn-vendor-reset"' in card
     assert 'id="vendor-list"' in card
     assert card.index('id="vendor-list"') < card.index('id="subscription-list"')
-    # 原「供应商状态」卡片不再独立存在，折线图脱离网格变全宽
+    # 原「供应商状态」卡片不再独立存在；趋势图收在页签卡里，不再放进 charts-grid 网格
     assert '<div class="card-title">供应商状态' not in html
-    assert 'class="charts-grid"' not in html
+    assert 'class="charts-grid' not in html
     assert 'class="card timeline-card"' in html
     # 数据链路：refreshOverview 并发拉取 + 独立兜底
     assert "fetchJSON('/api/dashboard/subscriptions').catch" in html
@@ -232,7 +232,10 @@ _SUB_HARNESS = textwrap.dedent(
       { key: 'antigravity', plan: 'Antigravity', status: 'ok', windows: agWindows },
     ];
 
-    // 同账号合并为一行：[标识] [订阅区] │ [路由区]，行序 = tier 优先级
+    const zone = (html) => html.slice(html.indexOf('class="vendor-badges tier-zone"'));
+    const badges = (html) => Array.from(html.matchAll(/class="status-badge [^"]*">([^<]*)<\/span>/g), m => m[1]);
+
+    // 同账号合并为一行：[标识] [订阅区] [路由区]，行序 = tier 优先级
     updateVendorStatus({ tiers: screenshotTiers });
     updateSubscriptions({ vendors: screenshotVendors });
     let rows = tierHTML();
@@ -240,21 +243,22 @@ _SUB_HARNESS = textwrap.dedent(
     assert.ok(rows.indexOf('data-vendor="zhipu"') < rows.indexOf('data-vendor="anthropic"'));
     const glmRow = rows.slice(0, rows.indexOf('data-vendor="anthropic"'));
     assert.ok(glmRow.includes('GLM Coding Plan'));                           // 行名取订阅名
-    assert.ok(glmRow.includes('<span class="tier-tag">zhipu</span>'));        // 路由区标注 tier 名
+    assert.ok(!glmRow.includes('tier-tag'));                                 // 路由区不再标注 tier 名
     assert.ok(glmRow.includes('<span class="zone-label plan">Max</span>'));   // 档位：行名后的加粗亮字
-    assert.deepStrictEqual(labels(glmRow), ['5h', '1d']);                     // 订阅区与路由区的窗口短标签同一套
-    assert.deepStrictEqual(values(glmRow), ['30%', '0%']);
+    assert.deepStrictEqual(labels(glmRow), ['5h']);                           // 用量格只剩订阅区的
+    assert.deepStrictEqual(values(glmRow), ['30%']);
     // 用量格：完整写法进 Tooltip，行内只留紧凑倒计时
     assert.ok(/class="quota-group q-ok" title="5 小时：已用 30%，\d+ 分钟后重置">/.test(glmRow));
     assert.ok(/class="sub-reset"><svg[^>]*>.*?<\/svg>\d+m<\/span>/.test(glmRow));
-    assert.ok(glmRow.includes('title="本代理 1d 滑动窗口配额守卫：已用 0%"'));
-    assert.ok(glmRow.includes('>正常</span>'));
+    // 路由区只剩可用状态：无异常是「圆点 + 正常」，tier 名与配额守卫用量收进悬停详情
+    assert.ok(zone(glmRow).includes('<span class="tier-avail" title="zhipu 的路由状态；熔断器 正常；配额守卫 1d 窗口已用 0%（阈值 0%）"><span class="avail-ok"><i class="avail-dot" aria-hidden="true"></i>正常</span></span>'));
+    assert.ok(!zone(glmRow).includes('quota-group'));
     assert.ok(glmRow.indexOf('class="vendor-badges sub-zone"')
       < glmRow.indexOf('class="vendor-badges tier-zone"'));
     assert.strictEqual((glmRow.match(/class="drag-handle"/g) || []).length, 1);
     const claudeRow = rows.slice(rows.indexOf('data-vendor="anthropic"'));
     assert.ok(claudeRow.includes('Claude Code 订阅'));
-    assert.ok(claudeRow.includes('<span class="tier-tag">anthropic</span>'));
+    assert.ok(!claudeRow.includes('tier-tag'));
     assert.ok(claudeRow.includes('>等待首个请求</span>'));                    // 行内短文案，说明进 Tooltip
     assert.ok(claudeRow.includes('title="用量来自被动采集'));
     assert.ok(!rows.includes('无订阅数据'));
@@ -274,7 +278,7 @@ _SUB_HARNESS = textwrap.dedent(
     assert.deepStrictEqual(labels(agHTML), ['5h', '周', '5h', '周']);
     assert.deepStrictEqual(values(agHTML), ['5%', '0%', '0%', '0%']);
 
-    // 无订阅对应的 tier 行：保留路由区并加「供应商状态」标注，不出订阅区
+    // 无订阅对应的 tier 行：只有路由区（可用状态），不出订阅区，也不带标注
     updateVendorStatus({ tiers: [tier('zhipu'),
       tier('copilot', { weekly_quota_guard: quota(168, 12) }), tier('anthropic')] });
     rows = tierHTML();
@@ -282,10 +286,12 @@ _SUB_HARNESS = textwrap.dedent(
     assert.ok(rows.indexOf('data-vendor="zhipu"') < rows.indexOf('data-vendor="copilot"'));
     const copilotRow = rows.slice(rows.indexOf('data-vendor="copilot"'), rows.indexOf('data-vendor="anthropic"'));
     assert.ok(copilotRow.includes('<span class="vendor-name">copilot</span>'));
-    assert.ok(copilotRow.includes('<span class="tier-tag">供应商状态</span>'));
-    assert.ok(copilotRow.includes('<div class="vendor-badges tier-zone">'));  // 路由区类名统一，分隔线才对齐
-    assert.deepStrictEqual(labels(copilotRow), ['7d']);
-    assert.deepStrictEqual(values(copilotRow), ['12%']);
+    assert.ok(!copilotRow.includes('tier-tag') && !copilotRow.includes('供应商状态'));
+    assert.ok(copilotRow.includes('<div class="vendor-badges tier-zone">'));  // 路由区容器类名固定，滚动位置键靠它区分
+    assert.deepStrictEqual(labels(copilotRow), []);                           // 配额守卫用量不再常驻
+    assert.deepStrictEqual(values(copilotRow), []);
+    assert.ok(copilotRow.includes('配额守卫 7d 窗口已用 12%（阈值 0%）'));     // 用量只进悬停详情
+    assert.ok(zone(copilotRow).includes('class="avail-ok"'));
     assert.ok(!copilotRow.includes('sub-zone'));
 
     // 头像首字母：供应商行与订阅行头像（C / G / A）撞字母时取前两个字母
@@ -310,21 +316,51 @@ _SUB_HARNESS = textwrap.dedent(
     rows = tierHTML();
     assert.ok(rows.indexOf('data-vendor="anthropic"') < rows.indexOf('data-vendor="zhipu"'));
 
-    // 路由区：状态徽章在前（熔断 ×N / 限速中 / 半开），配额守卫用量格在后
+    // 路由区可用状态：条件按熔断器、半开、限速、配额守卫排列，多个并存时全部列出；用量格不再出现
     updateVendorStatus({ tiers: [
       tier('zhipu', { circuit_breaker: { state: 'open', failure_count: 3 },
-        rate_limit: { is_rate_limited: true }, weekly_quota_guard: quota(168, 78) }),
-      tier('anthropic', { circuit_breaker: { state: 'half_open', failure_count: 0 } }),
+        rate_limit: { is_rate_limited: true, remaining_seconds: 41.2 }, weekly_quota_guard: quota(168, 78) }),
+      tier('anthropic', { circuit_breaker: { state: 'half_open', failure_count: 2 } }),
     ] });
     rows = tierHTML();
     const zhipuRow = rows.slice(0, rows.indexOf('data-vendor="anthropic"'));
-    const zhipuTier = zhipuRow.slice(zhipuRow.indexOf('class="vendor-badges tier-zone"'));
+    const zhipuTier = zone(zhipuRow);
     assert.ok(zhipuRow.includes('<span class="status-badge sb-err">熔断 ×3</span>'));
     assert.ok(zhipuTier.includes('<span class="status-badge sb-warn">限速中</span>'));
-    assert.ok(zhipuTier.indexOf('>熔断 ×3</span>') < zhipuTier.indexOf('>限速中</span>'));
-    assert.ok(zhipuTier.indexOf('>限速中</span>') < zhipuTier.indexOf('class="quota-group'));
-    assert.ok(zhipuTier.includes('<span class="quota-group q-warn" title="本代理 7d 滑动窗口配额守卫：已用 78%">'));
-    assert.ok(rows.includes('<span class="status-badge sb-warn">半开</span>'));
+    assert.deepStrictEqual(badges(zhipuTier), ['熔断 ×3', '限速中']);
+    assert.ok(!zhipuTier.includes('quota-group'));
+    assert.ok(zhipuTier.includes('title="zhipu 的路由状态；熔断器 熔断（失败 3 次）；限速中，剩余 42 秒；配额守卫 7d 窗口已用 78%（阈值 0%）"'));
+    assert.ok(zhipuRow.indexOf('class="vendor-badges sub-zone"') < zhipuRow.indexOf('class="vendor-badges tier-zone"'));
+    const anthropicRow = rows.slice(rows.indexOf('data-vendor="anthropic"'));
+    assert.deepStrictEqual(badges(anthropicRow), ['半开']);
+    assert.ok(anthropicRow.includes('熔断器 半开（失败 2 次）'));
+
+    // 配额超限是真实的不可用原因，保留为状态：任一守卫超限即列出，排在熔断与限速之后
+    const exceeded = (hours, pct) => ({ state: 'quota_exceeded', usage_percent: pct, window_hours: hours, threshold_percent: 95 });
+    updateVendorStatus({ tiers: [
+      tier('zhipu', { quota_guard: exceeded(24, 97) }),
+      tier('copilot', { circuit_breaker: { state: 'open', failure_count: 0 }, rate_limit: { is_rate_limited: true },
+        quota_guard: exceeded(24, 40), weekly_quota_guard: exceeded(168, 99) }),
+      tier('antigravity', { quota_guard: { state: 'within_quota', usage_percent: 96, window_hours: 24, threshold_percent: 95 } }),
+    ] });
+    rows = tierHTML();
+    assert.deepStrictEqual(badges(zone(rows.slice(0, rows.indexOf('data-vendor="copilot"')))), ['配额超限']);
+    const copilotTier = zone(rows.slice(rows.indexOf('data-vendor="copilot"'), rows.indexOf('data-vendor="antigravity"')));
+    assert.deepStrictEqual(badges(copilotTier), ['熔断', '限速中', '配额超限']);  // 失败 0 次只写「熔断」；双守卫只列一枚
+    assert.ok(copilotTier.includes('配额守卫 1d 窗口已用 40%（阈值 95%）；配额守卫 7d 窗口已用 99%（阈值 95%）'));
+    assert.ok(zone(rows.slice(rows.indexOf('data-vendor="antigravity"'))).includes('class="avail-ok"'));  // 未超阈值只是用量高
+
+    // 熔断器状态不分大小写；缺熔断器、限速或守卫字段的 tier 一律是正常
+    updateVendorStatus({ tiers: [
+      tier('zhipu', { circuit_breaker: { state: 'Open', failure_count: 1 } }),
+      tier('copilot', { circuit_breaker: null, rate_limit: null, quota_guard: null, weekly_quota_guard: null }),
+    ] });
+    rows = tierHTML();
+    assert.deepStrictEqual(badges(zone(rows.slice(0, rows.indexOf('data-vendor="copilot"')))), ['熔断 ×1']);
+    const bareRow = rows.slice(rows.indexOf('data-vendor="copilot"'));
+    assert.deepStrictEqual(badges(bareRow), []);
+    assert.ok(zone(bareRow).includes('class="avail-ok"'));
+    assert.ok(bareRow.includes('title="copilot 的路由状态；熔断器 正常"'));
 
     // 订阅接口失败或为空：行名不跳变、订阅区不渲染，卡片底部提示
     updateVendorStatus({ tiers: screenshotTiers });
@@ -476,9 +512,8 @@ _ROW_FUNCTION_SIGNATURES = (
     "function quotaClass(",
     "function quotaWindowLabel(",
     "function renderQuotaCell(",
-    "function renderQuotaBar(",
-    "function cbStateClass(",
-    "function cbStateLabel(",
+    "function tierAvailability(",
+    "function tierAvailabilityTitle(",
     "function _tierZoneHTML(",
     "function _tierInitial(",
     "function fmtResetCountdown(",

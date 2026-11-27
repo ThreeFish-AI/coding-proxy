@@ -400,6 +400,28 @@ _NODE_HARNESS = textwrap.dedent(
     assert.deepStrictEqual(h.pricingMergeRows(['pricing'], saved, dflt, dflt), []);
     assert.ok(h.validToken('A'.repeat(32)) && !h.validToken('short') && !h.validToken('a b'.repeat(16)));
     assert.ok(h.isTmpl({ $tmpl: '${X}' }) && !h.isTmpl({ $tmpl: 1 }));
+
+    // 保存后果清单：无后果为空（不弹确认框）；在途请求、密钥、地址变更、熔断、移除 vendor 各自成条
+    const view0 = { running: { tiers: ['a'], boot_revisions: {} }, revisions: {} };
+    const plain = { sections: { failover: {} }, secret_ops: {}, revisions: {} };
+    assert.deepStrictEqual(h.saveImpact({ payload: plain, base: {}, work: {}, view: view0, status: { in_flight: 0, tiers: [] }, cleared: [], chain: ['a'] }), []);
+    const codes = o => h.saveImpact(o).map(x => x.code);
+    assert.deepStrictEqual(codes({ payload: plain, base: {}, work: {}, view: view0, status: { in_flight: 2, tiers: [] }, cleared: [], chain: ['a'] }), ['inflight']);
+    const sec = { sections: {}, secret_ops: { 'vendors.zhipu.api_key': { op: 'clear' } }, revisions: {} };
+    const it = h.saveImpact({ payload: sec, base: {}, work: {}, view: view0, status: null, cleared: [], chain: ['a'] });
+    assert.deepStrictEqual(it.map(x => [x.code, x.danger]), [['secrets', true]]);
+    assert.ok(h.saveImpact({ payload: plain, base: {}, work: {}, view: view0, status: null, cleared: ['vendors.zhipu.api_key'], chain: ['a'] })[0].danger);
+    assert.deepStrictEqual(codes({ payload: plain, base: {}, work: {}, view: view0, status: { tiers: [{ name: 'a', circuit_breaker: { state: 'open' } }] }, cleared: [], chain: ['a'] }), ['breaker']);
+    const vpay = { sections: { vendors: [] }, secret_ops: {}, revisions: {} };
+    assert.ok(codes({ payload: vpay, base: { vendors: [{ vendor: 'kimi' }] }, work: { vendors: [] }, view: view0, status: null, cleared: [], chain: ['a'] }).includes('removed'));
+    // 字段级 diff：vendors 按名配对、pricing 按 vendor + model 配对，未配上的行记为新增 / 移除
+    const lab = { label: p => p.split('.').pop(), skip: () => false, sectionLabel: s => s, rowTitle: (s, r) => r.vendor + '/' + r.model };
+    const g = h.changedRows(
+      { vendors: [{ vendor: 'zhipu', timeout_ms: 1 }], pricing: [{ vendor: 'a', model: 'x' }, { vendor: 'a', model: 'y' }] },
+      { vendors: [{ vendor: 'zhipu', timeout_ms: 2 }], pricing: [{ vendor: 'a', model: 'y' }] }, lab);
+    assert.deepStrictEqual(g.map(x => x.title), ['vendors › zhipu', 'pricing']);
+    assert.deepStrictEqual([g[0].rows[0].label, g[0].rows[0].before, g[0].rows[0].after], ['timeout_ms', '1', '2']);
+    assert.deepStrictEqual(g[1].rows.map(r => [r.label, !!r.removed]), [['a/x', true]]);
     console.log('ok');
     """
 )
@@ -482,7 +504,7 @@ _DOM_HARNESS = textwrap.dedent(
         for (let n = this; n; n = n.parentNode) (n.listeners[t] || []).forEach(f => f(Object.assign(e, { currentTarget: n })));
       }
       click() { if (!this.disabled) this.dispatch('click'); }
-      focus() {}
+      focus() { doc.activeElement = this; }
       scrollIntoView() {}
       showModal() { this.open = true; }
       close() { this.open = false; }
@@ -586,15 +608,19 @@ _DOM_HARNESS = textwrap.dedent(
     const pill = name => root.querySelector('.cfg-pills .range-btn[data-pill="' + name + '"]').click();
     const banners = () => root.querySelectorAll('.cfg-banner-text').map(b => b.textContent);
     const rows = () => root.querySelectorAll('.cfg-list-row');
-    const delRow = i => rows()[i].querySelector('.cfg-btn-danger').click();
+    const actionBtn = (row, label) => row.querySelectorAll('.cfg-cell-actions .cfg-btn').find(b => b.textContent === label);
+    const undo = () => root.querySelectorAll('.cfg-savebar .cfg-link').find(b => b.textContent === '撤销');
 
     (async () => {
-      // 1) 未覆盖 pricing：删除默认行不出现「合并」banner
+      // 1) pricing 行不可删除：已保存行无「删除」，以「下线」产生本地修改；未覆盖时无「合并」banner
       view = mkView([], pricing.slice());
       await CT.refresh(true);
       pill('pricing');
-      delRow(0);
-      assert.strictEqual(rows().length, 1);
+      assert.strictEqual(rows()[0].querySelector('.cfg-btn-danger'), null, 'saved pricing row must not offer delete');
+      assert.strictEqual(rows()[1].querySelector('.cfg-btn-danger'), null);
+      actionBtn(rows()[0], '下线').click();
+      assert.strictEqual(rows().length, 2);
+      assert.ok(rows()[0].textContent.includes('Offline'), 'offline row shows Status Offline');
       assert.ok(!banners().some(t => t.includes('包内默认定价')), banners().join('|'));
       assert.ok(tabBtn.classList.contains('cfg-dirty'));
 
@@ -604,7 +630,7 @@ _DOM_HARNESS = textwrap.dedent(
       assert.strictEqual(CT.isDirty(), false);
       assert.strictEqual(tabBtn.classList.contains('cfg-dirty'), false);
 
-      // 1b) 已覆盖 pricing：仅统计已保存表中缺失的默认行；本地未保存删除不计入；合并后消失
+      // 1b) 已覆盖 pricing：仅统计已保存表中缺失的默认行；合并补齐后提示消失
       store['coding-proxy.admin-token'] = 'T'.repeat(43);
       view = mkView(['pricing'], pricing.slice(0, 1));
       await CT.refresh(true);
@@ -612,10 +638,8 @@ _DOM_HARNESS = textwrap.dedent(
       const hint = () => banners().filter(t => t.includes('包内默认定价'));
       assert.deepStrictEqual(hint().length, 1);
       assert.ok(hint()[0].includes(' 1 行'), hint()[0]);
-      delRow(0);
-      assert.ok(hint()[0].includes(' 1 行'), hint()[0]);
       root.querySelectorAll('.cfg-banner .cfg-btn').find(b => b.textContent === '合并').click();
-      assert.deepStrictEqual(rows().map(r => r.textContent.includes('y')), [true]);
+      assert.deepStrictEqual(rows().map(r => r.textContent.includes('y')), [false, true]);
       assert.strictEqual(hint().length, 0);
 
       // 5) pills 为 group + aria-current（不再声明缺少 tab 子项的 tablist）
@@ -696,7 +720,10 @@ _DOM_HARNESS = textwrap.dedent(
       await until(() => !CT.isDirty() && !root.querySelector('.cfg-body').hasAttribute('inert'), 'still saving');
       assert.strictEqual(root.querySelector('.cfg-body').getAttribute('aria-busy'), null);
       assert.strictEqual(chips(), '429,500');
-      assert.ok(banners().some(t => t.startsWith('已保存并生效')), banners().join('|'));
+      const bar6 = root.querySelector('.cfg-savebar').textContent;
+      assert.ok(bar6.includes('已保存并生效'), bar6);
+      assert.ok(!banners().some(t => t.startsWith('已保存')), banners().join('|'));
+      assert.strictEqual(confirms.length, confirmsDuring, 'routine save must not ask for confirmation');
       net.putGate = Promise.resolve();
 
       // 7) PUT 200 但随后 GET 失败：本地已落定（无 dirty、无待设置明文），「已保存」提示仍可见
@@ -726,8 +753,13 @@ _DOM_HARNESS = textwrap.dedent(
       const confirmsAfter = confirms.length;
       await CT.refresh(false);
       assert.strictEqual(confirms.length, confirmsAfter, 'asked to discard already-saved changes');
-      assert.ok(root.querySelector('.cfg-savebar').hidden);
       assert.ok(!root.querySelectorAll('input').some(i => i.value === PLAIN));
+      const bar7 = root.querySelector('.cfg-savebar');
+      assert.ok(!bar7.hidden && bar7.textContent.includes('已保存并生效'), bar7.textContent);
+      const close7 = root.querySelectorAll('.cfg-savebar .cfg-btn').find(b => b.textContent === '关闭');
+      assert.ok(close7, 'result state must be dismissible');
+      close7.click();
+      assert.ok(root.querySelector('.cfg-savebar').hidden);
 
       // 8) Esc 只隐藏当前说明；再次悬停 / 聚焦其他 ⓘ 时恢复显示
       pill('failover');
@@ -757,7 +789,7 @@ _DOM_HARNESS = textwrap.dedent(
       saveBtn().click();
       await until(() => net.puts.length > putsBefore9 && !CT.isDirty() && !root.querySelector('.cfg-body').hasAttribute('inert'), 'save not finished');
       assert.deepStrictEqual(net.puts[net.puts.length - 1].secret_ops, { 'auth.google_client_secret': { op: 'clear' } });
-      const note = banners().find(t => t.startsWith('已保存'));
+      const note = root.querySelector('.cfg-savebar').textContent;
       assert.ok(note && !note.startsWith('已保存并生效') && note.includes('CLI 登录'), String(note));
 
       // 10) 排序后展开行仍指向原条目：move 对夹在区间内的展开下标做 ∓1 平移
@@ -771,17 +803,28 @@ _DOM_HARNESS = textwrap.dedent(
       pill('model_mapping');
       rows()[1].click(); // 展开 B（index 1）
       assert.ok(root.querySelector('.cfg-detail-row .cfg-row[data-path="model_mapping.1.pattern"]'));
+      rows()[0].querySelector('.cfg-btn-icon[aria-label="下移"]').focus();
       rows()[0].querySelector('.cfg-btn-icon[aria-label="下移"]').click(); // [A,B,C] → [B,A,C]
       assert.ok(root.querySelector('.cfg-detail-row .cfg-row[data-path="model_mapping.0.pattern"]'),
         'expanded row must follow the original entry after move');
       assert.ok(root.querySelectorAll('.cfg-detail-row').length === 1);
+      const moved = doc.activeElement;
+      assert.ok(moved && moved.tagName === 'BUTTON' && moved.getAttribute('aria-label') === '下移' &&
+        moved.closest('[data-path]').getAttribute('data-path') === 'model_mapping.1', 'focus must follow the moved row');
+
+      // 10b) 「添加」后焦点落在新行自己的编辑表单（此时另一行处于展开状态）
+      root.querySelectorAll('.cfg-section-head .cfg-btn').find(b => b.textContent === '添加').click();
+      const added = doc.activeElement;
+      assert.ok(added && added.tagName === 'INPUT' && added.closest('.cfg-detail-row') &&
+        added.closest('.cfg-detail-row').querySelector('.cfg-row').getAttribute('data-path') === 'model_mapping.3.pattern',
+        'focus must land in the newly added row, not an already expanded one');
 
       // 11) 409 + 定向重载失败：不保留「已重新加载」承诺；重试仅重载冲突 section
       view = mkView([], pricing.slice());
       view.values.failover = { status_codes: [429] };
       await CT.refresh(true);
       pill('pricing');
-      delRow(0); // pricing 与 failover 同时有本地修改
+      actionBtn(rows()[0], '下线').click(); // pricing 与 failover 同时有本地修改
       pill('failover');
       addChip('500');
       assert.ok(CT.isDirty());
@@ -799,6 +842,81 @@ _DOM_HARNESS = textwrap.dedent(
       assert.ok(chips().includes('500'));
       assert.ok(!root.textContent.includes('但重新加载失败'));
       net.put409 = null;
+
+      // 12) pricing 行生命周期：下线 ↔ 上线；已保存行 vendor/model 只读、价格可改；恢复默认价格保留自定义行；新增行可移除并撤销
+      // 注：Node shim 的 dispatch 不模拟 stopPropagation，行内按钮点击会连带触发行展开（真实浏览器不会）
+      view = mkView(['pricing'], pricing.slice());
+      await CT.refresh(true);
+      pill('pricing');
+      actionBtn(rows()[0], '下线').focus();
+      actionBtn(rows()[0], '下线').click();
+      assert.ok(rows()[0].textContent.includes('Offline'), 'offline row shows Status Offline');
+      assert.ok(doc.activeElement && doc.activeElement.textContent === '上线', 'focus follows the row action whose label just changed');
+      const vInp = root.querySelector('.cfg-row[data-path="pricing.0.vendor"] input');
+      assert.ok(vInp && vInp.disabled, 'saved row vendor is readonly');
+      assert.ok(root.querySelector('.cfg-row[data-path="pricing.0.model"] input').disabled, 'saved row model is readonly');
+      const priceInp = root.querySelector('.cfg-row[data-path="pricing.0.input_cost_per_mtok"] input');
+      priceInp.value = '9.0'; priceInp.dispatch('input');
+      root.querySelectorAll('.cfg-section-head .cfg-btn').find(b => b.textContent === '添加').click();
+      assert.strictEqual(rows().length, 3);
+      assert.ok(rows()[2].querySelector('.cfg-btn-danger'), 'unsaved row can still be removed');
+      root.querySelectorAll('.cfg-section-head .cfg-btn').find(b => b.textContent === '恢复默认价格').click();
+      assert.strictEqual(rows().length, 3, 'custom row survives restore-defaults');
+      assert.ok(rows()[0].textContent.includes('$1.0'), 'default row price restored');
+      assert.ok(rows()[1].textContent.includes('$2.0'));
+      const confirmsBefore = confirms.length;
+      rows()[2].querySelector('.cfg-btn-danger').click();
+      assert.strictEqual(rows().length, 2);
+      assert.strictEqual(confirms.length, confirmsBefore, 'row removal must not ask for confirmation');
+      assert.ok(undo(), 'row removal must offer undo');
+      undo().click();
+      assert.strictEqual(rows().length, 3, 'undo puts the removed row back');
+      rows()[2].querySelector('.cfg-btn-danger').click(); // 再移除一次，保持后续步骤的前置状态
+      assert.strictEqual(rows().length, 2);
+      actionBtn(rows()[0], '下线').click();
+      assert.ok(rows()[0].textContent.includes('Offline'));
+      rows()[0].click(); // shim 连带展开后的收起（浏览器中此处不会展开）
+      actionBtn(rows()[0], '上线').click();
+      assert.ok(rows()[0].textContent.includes('Online'), 'online row shows Status Online');
+
+      // 13) Per-Model 行移除后保存栏给「撤销」，撤销恢复该模型的上限
+      view = mkView([], pricing.slice());
+      view.registry.fields = registry.concat([
+        { path: 'vendors.*.concurrency', label: 'Concurrency', widget: 'optional_group', vendors: ['zhipu'], group: 'Concurrency', description: '并发' },
+        { path: 'vendors.*.concurrency.models', label: 'Per-Model', widget: 'map', vendors: ['zhipu'], group: 'Concurrency', description: '上限' },
+      ]);
+      view.values.vendors = [{ vendor: 'zhipu', enabled: true, concurrency: { models: { 'glm-x': 3 } } }];
+      await CT.refresh(true);
+      pill('vendors');
+      assert.strictEqual(root.querySelector('.cfg-map-row span.cfg-map-key').textContent, 'glm-x');
+      root.querySelector('.cfg-map-row .cfg-btn-sm').click(); // 移除 glm-x
+      assert.strictEqual(root.querySelector('.cfg-map-row span.cfg-map-key'), null);
+      assert.ok(undo(), 'map removal must offer undo immediately');
+      undo().click();
+      assert.strictEqual(root.querySelector('.cfg-map-row span.cfg-map-key').textContent, 'glm-x', 'undo restores the removed limit');
+      assert.strictEqual(CT.isDirty(), false);
+
+      // 14) 移除 vendor 后撤销把它插回 vendors 与 tiers 的原位；期间重新添加会清掉撤销入口，不产生重复 vendor
+      view = mkView([], pricing.slice());
+      view.registry.fields = registry.concat([{ path: 'tiers', label: 'Tiers', widget: 'list', description: '链路', enum: ['zhipu', 'kimi'] }]);
+      view.values.vendors = [{ vendor: 'zhipu', enabled: true }, { vendor: 'kimi', enabled: true }];
+      view.values.tiers = ['zhipu', 'kimi'];
+      view.defaults.vendors = [{ vendor: 'zhipu', enabled: true }, { vendor: 'kimi', enabled: true }];
+      await CT.refresh(true);
+      pill('vendors');
+      const pills = () => root.querySelectorAll('.cfg-subpills .range-btn[data-vendor]').map(x => x.getAttribute('data-vendor'));
+      const removeVendorBtn = () => root.querySelector('.cfg-vendor-head .cfg-btn-danger');
+      removeVendorBtn().click(); // window.confirm 桩恒为 true
+      assert.deepStrictEqual(pills(), ['kimi', 'zhipu']);
+      assert.ok(undo(), 'vendor removal must offer undo');
+      undo().click();
+      assert.deepStrictEqual(pills(), ['zhipu', 'kimi'], 'undo puts the vendor back at its original position');
+      assert.strictEqual(CT.isDirty(), false);
+      removeVendorBtn().click();
+      assert.ok(undo());
+      root.querySelectorAll('.cfg-body .cfg-btn-primary').find(b => b.textContent === '添加').click(); // 在「未配置」视图里重新添加 zhipu
+      assert.strictEqual(undo(), undefined, 're-adding the vendor clears the undo entry');
+      assert.deepStrictEqual(pills(), ['kimi', 'zhipu']);
       console.log('ok');
     })().catch(e => { console.error(e && e.stack || e); process.exit(1); });
     """

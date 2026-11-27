@@ -85,7 +85,20 @@ class RequestRouter:
         return [t.name for t in self._tiers]
 
     def get_bindable_models(self) -> list[dict[str, Any]]:
-        """返回可绑定模型清单（Model Bind 下拉选项与 API 校验的来源）."""
+        """返回可绑定模型清单（Model Bind 下拉选项与 API 校验的来源）.
+
+        只含可选条目：pricing 下线（``offline`` 标记）的模型不在此列；
+        executor 锁定链与热切换迁移需含下线的全量清单，见 :meth:`get_known_models`.
+        """
+        return [m for m in self._bindable_models if not m.get("offline")]
+
+    def get_known_models(self) -> list[dict[str, Any]]:
+        """返回全部已知模型（含下线条目）.
+
+        下线模型对「已绑会话保持绑定」仍需可见：executor 锁定链
+        （``_pinned_tier_names``）与热切换绑定迁移（``_migrate_bindings``）
+        消费本清单；下拉与 PUT 校验消费 :meth:`get_bindable_models`.
+        """
         return self._bindable_models
 
     def reorder_tiers(self, vendor_names: list[str]) -> None:

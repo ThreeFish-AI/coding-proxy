@@ -122,6 +122,9 @@ class ModelPricingEntry(BaseModel):
 
     vendor: str  # 供应商名称（对应 usage 表"供应商"列）
     model: str  # 实际模型名（对应 usage 表"实际模型"列）
+    # 下线开关：False = 不进 Model Bind 下拉、不可再绑定；已绑会话保留并继续
+    # 按锁定 vendor 路由，成本照常计价（pricing 行不可删除，退役走下线）
+    online: bool = True
     input_cost_per_mtok: PriceField = 0.0  # 输入 Token 单价
     output_cost_per_mtok: PriceField = 0.0  # 输出 Token 单价
     cache_write_cost_per_mtok: PriceField = 0.0  # 缓存创建 Token 单价

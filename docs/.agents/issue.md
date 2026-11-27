@@ -23,6 +23,8 @@
 | I-011 | Antigravity 桌面 2.32.1 模型流绕过 `CLOUD_CODE_URL` 通道（前端只见控制面调用次数，无模型/Token 指标） | ✅ 已完成 | 2026-11-16 | [详情](#I-011) |
 | I-012 | Dashboard 供应商行拖拽在列表外松开后卡死（行停在半透明，列表不再刷新） | ✅ 已完成 | 2026-11-24 | [详情](#I-012) |
 | I-013 | Dashboard 无用量数据时第二次刷新起抛 TypeError（图表空态替换掉 canvas 后未恢复） | ✅ 已完成 | 2026-11-24 | [详情](#I-013) |
+| I-014 | Model Bind 下拉缺 GLM 5.4（pricing 与调用记录已有，但内置目录停在 GLM 5.3） | ✅ 已完成 | 2026-11-27 | [详情](#I-014) |
+| I-015 | Dashboard 编辑 Model Calling 并行度时轮询提交半截输入、每次编辑连发两个 PUT | ✅ 已完成 | 2026-11-27 | [详情](#I-015) |
 
 ---
 
@@ -539,5 +541,55 @@ Overview 页拖动供应商行调整优先级：行越过相邻行（发生一�
 **同类问题影响与处理注意事项**
 
 同类风险：任何「无数据时用 innerHTML 替换容器内容」的图表或列表面板（Chart.js、地图、表格容器）；排查时先看报错前的第一次渲染有没有移除节点。Chart.js 实例销毁后再调用 `destroy()` 不会出错（canvas 已置空，直接跳过），空态分支不清空图表变量不影响正确性。
+
+<a id="I-014"></a>
+## I-014：Model Bind 下拉缺 GLM 5.4（pricing 与调用记录已有，但内置目录停在 GLM 5.3）
+
+**问题描述**
+
+用户在 Config 页 pricing 给 zhipu 加了 `glm-5.4`，调用记录与 Sessions 页 Models 列也已出现 `glm-5.4`，但 Sessions 页 Model Bind 下拉里没有 GLM 5.4，无法把会话绑到该模型。
+
+**表因根因**
+
+表因：下拉选项来自 `/api/status` 的 `bindable_models`，前端原样渲染、不做过滤。根因：`bindable_models` 在 app 构建时由「内置 vendor 目录（`vendors/model_catalog.py` 的代码常量）∪ `session_policies.bindable_models` 显式条目」合成，pricing 和调用记录都不是目录来源；内置 zhipu 目录停在 GLM 5.3，没有 `glm-5.4`。[session-model-bind.md](../arch/session-model-bind.md) §6 已把「内置目录滞后于上游新模型」列为已知边界，这次是该边界在 GLM 5.4 上的实际触发。
+
+**处理方式**
+
+`_ZHIPU` 补 `("GLM 5.4", "glm-5.4")`；条目随目录自动获得 zhipu 锁定与 identity 映射规则（`glm-5.4 → glm-5.4`，不被 default 回退改写）。`tests/test_model_catalog.py` 补目录与 identity 规则两条回归用例，`tests/test_app_routes.py::test_status_returns_bindable_models` 补 `/api/status` 断言，补完先红后绿。对照验证（隔离实例，Playwright）：`/api/status` 含 GLM 5.4，Sessions 下拉 Zhipu 组首位出现 GLM 5.4，选中后 `PUT /api/session-vendor` 返回 200，绑定为 `vendors=[zhipu]`、`model=glm-5.4`。
+
+**第二步（同日，用户拍板「pricing 并入目录 + 只能下线不能删除」后实施）**：`compose_bindable_catalog` 扩为「内置 ∪ pricing 行（仅 native vendor，配价即入下拉）∪ bindable_models」；pricing 行新增 `online` 字段（false = 下线：不进下拉、PUT 拒绝新绑，executor 锁定链与热切换迁移改用 `get_known_models()` 含下线清单，已绑会话保留）；`ConfigService._plan` 加「pricing 不可缩减」校验（删除/改名/恢复默认丢行一律拒绝，错误只带条数不回显值）；Config 页 Pricing 表去删除、vendor/model 只读、加 Status 列与「下线/上线」，「恢复默认」改「恢复默认价格并保留自定义行」。全量 2270 项通过；隔离实例 + Playwright 端到端：配价即入下拉并可绑定，下线后下拉消失、已绑会话保留并显示 `(off-list)`、新绑 400 指明 offline，删除行被 422 拒绝，`online: true` 恢复可绑。
+
+**后续防范**
+
+上游出新 native 模型（GLM、MiniMax、Kimi、Doubao、MiMo、Qwen）时，配价（pricing 行）即入下拉，无需等发版补目录；非 native 模型或需要自定义 label/tiers 时，Config 页 Session Policies → Bindable Models 加一条 `label` + `model`（`tiers` 留空即可，自动获得 identity 规则），保存并应用配置后生效（每代配置经 `create_app` 重新合成目录）。模型退役走 pricing 行「下线」，不可删除。
+
+**同类问题影响与处理注意事项**
+
+同类风险：所有 native 系 vendor 的新型号。pricing 并入目录已落地（第二步）：配价即入下拉，删除被服务端拦截，退役走 `online: false`；注意该规则使「打错一行 pricing」无法删除只能下线后重加，属刻意取舍。`config.default.yaml` 的默认 pricing 未含 `glm-5.3` / `glm-5.4`，这两个型号的价格需用户按官方公布自配，代码里不臆填。
+
+---
+
+<a id="I-015"></a>
+## I-015：Dashboard 编辑 Model Calling 并行度时轮询提交半截输入、每次编辑连发两个 PUT
+
+**问题描述**
+
+在 Overview 的「Model Calling 实时状态」卡片点开某个模型的上限、输入新值时，如果赶上 10 秒一次的轮询，输入框被整体重绘移除；移除触发 blur，挂起的提交把半截输入当成最终值发给 `PUT /api/concurrency`（真实页面复现：想把 10 改成 12，刚敲出「1」时发出了 `{"limit":1}`，成功与失败的闪烁又落在已脱离文档的旧节点上，用户毫无察觉）。另外每次编辑会连发两个相同的 PUT；上限是不可聚焦的 span，键盘用户无法修改；`7.5`、`1e2` 这类输入被 `parseInt` 截断后提交。
+
+**表因根因**
+
+表因：`updateModelCalling` 每轮轮询用 `innerHTML` 整体重建列表，没有判断是否处在编辑态；blur 回调里的 `submit()` 没有幂等守卫，回车提交后移除输入框又触发一次提交。根因：把「每 10 秒刷新」实现成「整块 DOM 替换」，用户正在输入的节点没有被当作受保护的状态；提交路径没有单一出口，「回车提交」与「失焦提交」各自成立、叠加后不收敛。
+
+**处理方式**
+
+Model Calling 改为按 vendor / model 键复用行节点，轮询只改文字与条宽；`_mcEditing` 为真时整卡跳过重绘，输入框、焦点与已输入的内容原样保留。编辑流程重写：上限是可聚焦的按钮；提交带一次性与在途守卫，输入只接受 1 到 20 的整数；请求挂起时 8 秒兜底解除编辑态；结束编辑后焦点回到按钮；成功后就地重算这一行并拉一次状态对齐服务端；结果用静态色标并写入模板里常驻的 `role=status` 节点供读屏播报；编辑一行时点另一行的上限，当前提交完成后接着打开那一行，不再要点第二次。新增 `tests/test_dashboard_overview.py`，在 Node 假 DOM 上覆盖编辑全流程（轮询不打断、回车后失焦不二次提交、非法输入、失败、超时）。真实页面复测：编辑中触发轮询，输入框、值与焦点保留且不发请求；回车后只发 1 个 PUT。
+
+**后续防范**
+
+轮询驱动的面板不要整块重建 DOM，改为按键复用节点、就地更新；用户正在输入的节点视为受保护状态，重绘前先判断编辑态。「失焦即提交」的控件必须有单一提交出口（一次性守卫先落标记再移除节点），验证用例至少覆盖「回车提交后紧跟失焦」「提交未决时再次回车」「输入到一半时刷新到达」三条路径。
+
+**同类问题影响与处理注意事项**
+
+同类风险：其它「变更即提交」的控件，以及任何用 `innerHTML` 周期性重建、内部含输入控件的列表。排查时先问两件事：重绘会不会移除正在编辑的节点；提交函数重入时会不会再发一次请求。用浏览器自动化复现这类时序问题时，要直接调用页面的刷新函数制造「输入到一半时刷新到达」，不要等真实的轮询周期。
 
 ---
