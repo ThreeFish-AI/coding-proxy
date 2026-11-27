@@ -23,7 +23,9 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace      # 去除行尾空白
+        exclude: ^docs/diagrams/     # Archify 图产物与校验回执按字节绑定，不能被 hook 改写
       - id: end-of-file-fixer        # 确保文件以换行符结尾
+        exclude: ^docs/diagrams/
       - id: check-yaml
         args: ["--unsafe"]           # 兼容 GitHub Actions ${{ }} 表达式语法
       - id: check-toml               # 校验 TOML 语法（pyproject.toml）

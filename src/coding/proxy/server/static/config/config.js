@@ -204,6 +204,89 @@
     return newDefaultRows(work, newDefaultRows(base, defaults));
   }
 
+  // 字段级 diff（保存确认框用）：对象按路径递归；vendors 按 vendor 名配对；列表型 section 按行键配对
+  var ROW_KEY = {
+    pricing: ['vendor', 'model'], model_mapping: ['pattern'], 'session_policies.policies': ['name'],
+    'session_policies.bindable_models': ['label'], 'session_policies.title_vendor_bindings': ['prefix'],
+  };
+  function rowKeyOf(sec, row) {
+    var ks = ROW_KEY[sec];
+    return ks && isObj(row) ? ks.map(function (k) { return String(row[k]); }).join('/') : JSON.stringify(row);
+  }
+  function shortVal(v) {
+    var s = Array.isArray(v) ? (v.length ? v.map(String).join(' → ') : '[]') : fmtVal(v);
+    return s.length > 60 ? s.slice(0, 57) + '…' : s;
+  }
+  function maskUrl(v) { return typeof v === 'string' ? v.replace(/\/\/[^/@\s]+@/, '//***@') : v; }
+  function diffLeaves(a, b, path, out, o) {
+    if (deepEqual(a, b)) return;
+    if (Array.isArray(a) && Array.isArray(b) && ROW_KEY[path]) { diffRows(path, a, b, out, o); return; }
+    if (isObj(a) && isObj(b)) {
+      Object.keys(a).concat(Object.keys(b).filter(function (k) { return !(k in a); }))
+        .forEach(function (k) { if (!o.skip(path + '.' + k)) diffLeaves(a[k], b[k], path + '.' + k, out, o); });
+      return;
+    }
+    out.push({ path: path, label: o.label(path), before: maskUrl(shortVal(a)), after: maskUrl(shortVal(b)) });
+  }
+  function diffRows(sec, a, b, out, o) {
+    var pool = {}, hit = {};
+    (b || []).forEach(function (r, j) { var k = rowKeyOf(sec, r); (pool[k] = pool[k] || []).push(j); });
+    (a || []).forEach(function (r, i) {
+      var q = pool[rowKeyOf(sec, r)];
+      if (q && q.length) { var j = q.shift(); hit[j] = true; diffLeaves(r, b[j], sec + '.' + j, out, o); }
+      else out.push({ path: sec + '.' + i, label: o.rowTitle(sec, r), before: '', after: '', removed: true });
+    });
+    (b || []).forEach(function (r, j) { if (!hit[j]) out.push({ path: sec + '.' + j, label: o.rowTitle(sec, r), before: '', after: '', added: true }); });
+  }
+  // 返回按 section 分组的差异行；数组型 section 只给「新增 / 移除 / 同键条目的字段变化」
+  function changedRows(base, work, o) {
+    var groups = [], open = function (title) { var g = { title: title, rows: [] }; groups.push(g); return g.rows; };
+    dirtySections(base, work).forEach(function (s) {
+      if (s === 'vendors') {
+        var a = vendorMap(base.vendors), b = vendorMap(work.vendors);
+        var oa = (base.vendors || []).map(function (v) { return v.vendor; }), ob = (work.vendors || []).map(function (v) { return v.vendor; });
+        if (oa.join('\u0000') !== ob.join('\u0000') && oa.slice().sort().join('\u0000') === ob.slice().sort().join('\u0000')) {
+          open(o.sectionLabel(s)).push({ path: 'vendors', label: '顺序', before: oa.join(' → '), after: ob.join(' → ') });
+        }
+        Object.keys(a).concat(Object.keys(b).filter(function (t) { return !(t in a); })).forEach(function (t) {
+          var rows = open(o.sectionLabel(s) + ' › ' + t);
+          if (!a[t]) rows.push({ path: 'vendors.' + t, label: t, before: '', after: '', added: true });
+          else if (!b[t]) rows.push({ path: 'vendors.' + t, label: t, before: '', after: '', removed: true });
+          else diffLeaves(a[t], b[t], 'vendors.' + t, rows, o);
+        });
+        return;
+      }
+      var rows = open(o.sectionLabel(s));
+      if (Array.isArray(base[s]) || Array.isArray(work[s])) diffRows(s, base[s] || [], work[s] || [], rows, o);
+      else diffLeaves(base[s], work[s], s, rows, o);
+    });
+    return groups.filter(function (g) { return g.rows.length; });
+  }
+  // 保存后果清单（非空才弹确认框）：只返回原因码与数据，文案由界面层生成
+  function saveImpact(o) {
+    var out = [], p = o.payload, v = o.view, st = o.status || {}, tiers = st.tiers || [];
+    var names = function (pred) { return tiers.filter(pred).map(function (t) { return t.name; }); };
+    var ops = Object.keys(p.secret_ops);
+    if (ops.length) out.push({ code: 'secrets', danger: ops.some(function (x) { return p.secret_ops[x].op === 'clear'; }), paths: ops });
+    if (o.cleared.length) out.push({ code: 'cleared', danger: true, paths: o.cleared });
+    if (st.in_flight > 0) out.push({ code: 'inflight', n: st.in_flight });
+    var cb = names(function (t) { return t.circuit_breaker && t.circuit_breaker.state && t.circuit_breaker.state !== 'closed'; });
+    var rl = names(function (t) { return t.rate_limit && t.rate_limit.is_rate_limited; });
+    var qx = names(function (t) { return [t.quota_guard, t.weekly_quota_guard].some(function (q) { return q && q.state === 'quota_exceeded'; }); });
+    if (cb.length) out.push({ code: 'breaker', names: cb });
+    if (rl.length) out.push({ code: 'ratelimit', names: rl });
+    if (qx.length) out.push({ code: 'quota', names: qx });
+    var running = v.running && v.running.tiers;
+    if (Array.isArray(running) && (p.sections.vendors || p.sections.tiers) && !deepEqual(running, o.chain)) out.push({ code: 'tiers' });
+    var boot = (v.running && v.running.boot_revisions) || {};
+    var pend = Object.keys(p.sections).filter(function (s) { return s in boot && boot[s] !== v.revisions[s]; });
+    if (pend.length) out.push({ code: 'pending', sections: pend });
+    var before = vendorMap(o.base.vendors), after = vendorMap(o.work.vendors);
+    var gone = Object.keys(before).filter(function (t) { return !after[t]; });
+    if (gone.length && p.sections.vendors) out.push({ code: 'removed', vendors: gone });
+    return out;
+  }
+
   var helpers = {
     deepEqual: deepEqual, clone: clone, isTmpl: isTmpl, validToken: validToken, assignField: assignField,
     parsePrice: parsePrice, entryCurrency: entryCurrency, priceText: priceText, withCurrency: withCurrency,
@@ -211,6 +294,7 @@
     countChangedFields: countChangedFields, buildPayload: buildPayload, predictClearedSecrets: predictClearedSecrets,
     movedOpenIndex: movedOpenIndex,
     effectiveChain: effectiveChain, newDefaultRows: newDefaultRows, pricingMergeRows: pricingMergeRows,
+    changedRows: changedRows, saveImpact: saveImpact,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = helpers;
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
@@ -232,6 +316,7 @@
     pill: 'vendors', vendor: null, expanded: {}, loaded: false, saving: false, readonly: false,
     specs: [], specMap: {}, schema: { fields: {}, groups: {} },
     retryOnly: null, fatalText: null,
+    confirming: false, focus: null, focusTo: null, focusRemap: null, newRow: null, undo: null, live: null,
   };
   var uid = 0;
 
@@ -331,8 +416,10 @@
       ['mode', 'errors', 'notices', 'overridden', 'vendor_overrides', 'secrets', 'sources', 'running', 'apply_supported']
         .forEach(function (k) { prev[k] = view[k]; });
       prev.values.absent_vendors = view.values.absent_vendors;
+      clearUndo(only); // 冲突 section 的工作副本已被服务器值替换
     } else {
       S.view = view;
+      S.undo = null;
       S.base = {};
       S.work = {};
       S.ops = {};
@@ -346,8 +433,95 @@
   }
 
   // ── 渲染骨架 ──────────────────────────────────────────────
+  // ── 焦点找回：rerender 整体重建 DOM，按「容器路径 + 控件角色」把焦点还给同一控件 ──
+  var ROLE_CLASS = /^(cfg-(input|num|check|info|chip-add|chip-x|link|secret-menu|secret-input|map-key|btn-icon|btn-sm|btn-primary)|range-btn)$/;
+  function roleOf(el) {
+    if (!el || !el.getAttribute) return null;
+    var aria = el.getAttribute('aria-label');
+    if (aria) return el.tagName + '@' + aria;
+    if (/^(BUTTON|A|SUMMARY)$/.test(el.tagName)) return el.tagName + ':' + String(el.textContent || '').trim().slice(0, 24);
+    var cls = String(el.className || '').split(/\s+/).filter(function (c) { return ROLE_CLASS.test(c); });
+    return el.tagName + '.' + (cls[0] || '');
+  }
+  // :focus-visible 在旧浏览器是未知伪类，matches() 会抛 SyntaxError
+  function visibleRing(el) {
+    if (!el || !el.matches) return false;
+    try { return el.matches(':focus-visible'); } catch (e) { return false; }
+  }
+  function captureFocus() {
+    S.focus = null;
+    var a = document.activeElement;
+    if (!a || a === document.body || !S.root) return;
+    if (S.root.contains && !S.root.contains(a)) return;
+    var host = a.closest && a.closest('[data-path], [data-pill], [data-vendor]');
+    if (!host) return;
+    var attr = host.hasAttribute('data-path') ? 'data-path' : host.hasAttribute('data-pill') ? 'data-pill' : 'data-vendor';
+    var loose = looseRole(a);
+    S.focus = { attr: attr, val: host.getAttribute(attr), role: roleOf(a), loose: loose, li: sameLoose(host, loose).indexOf(a), ring: visibleRing(a) };
+  }
+  // 容器内与某控件同属一类的控件（文档序），用于按钮文案变化后按序号找回
+  function sameLoose(host, loose) {
+    return [host].concat(Array.prototype.slice.call(host.querySelectorAll('*'))).filter(function (n) { return looseRole(n) === loose; });
+  }
+  // 按钮文案会变（编辑 ↔ 收起），用「标签 + 首个按钮类」做第二级匹配
+  function looseRole(el) {
+    if (!/^(BUTTON|A|SUMMARY)$/.test(el.tagName)) return roleOf(el);
+    var c = String(el.className || '').split(/\s+/).filter(function (x) { return /^(cfg-btn|range-btn)/.test(x); });
+    return el.tagName + '.' + (c[c.length - 1] || '');
+  }
+  function focusable(n) {
+    return !!(n && n.focus && !n.disabled && n.getAttribute('tabindex') !== '-1');
+  }
+  // 落点优先级：调用方指定的 S.focusTo > 同容器内同角色 > 同容器内同类按钮 > 同容器内首个控件 > 当前激活的 pill；
+  // 目标必须可聚焦（如上移到首行后「上移」已禁用，落到同行的「下移」）
+  function restoreFocus() {
+    // focusRemap 无条件取走：鼠标点 ↑/↓ 不聚焦按钮的浏览器不会带 key，不能让它留到下一次重绘
+    var pick = S.focusTo, key = S.focus, remap = S.focusRemap;
+    S.focusTo = null; S.focus = null; S.focusRemap = null;
+    if (!S.root) return;
+    var target = null, ring = !!(key && key.ring);
+    // 调用方的落点：返回 false 表示「不聚焦」（如撤销目标已不在当前页），不走回退
+    if (pick) { try { target = pick(); } catch (e) { target = null; } if (target === false) return; }
+    if (!target && key && key.val !== null && key.role) {
+      var val = remap && remap.from === key.val ? remap.to : key.val;
+      var host = S.root.querySelector('[' + key.attr + '="' + val + '"]');
+      if (host) {
+        var first = function (list, f) { for (var i = 0; i < list.length; i++) if (f(list[i]) && focusable(list[i])) return list[i]; return null; };
+        var all = [host].concat(Array.prototype.slice.call(host.querySelectorAll('*')));
+        target = first(all, function (n) { return roleOf(n) === key.role; });
+        if (!target) {
+          // 按钮文案会变（编辑 ↔ 收起、下线 ↔ 上线）：按它在同类按钮里的序号找回同一位置的那颗
+          var peers = sameLoose(host, key.loose);
+          target = first([peers[Math.min(key.li, peers.length - 1)]], function () { return true; }) || first(peers, function () { return true; });
+        }
+        if (!target) target = first(all, function (n) { return /^(BUTTON|INPUT|SELECT|TEXTAREA|A)$/.test(n.tagName) && n.type !== 'hidden'; });
+      }
+      if (!target) target = S.root.querySelector('.cfg-pills .range-btn.active');
+    }
+    if (!focusable(target)) return;
+    // 焦点原由键盘而来时，重绘后脚本聚焦不触发 :focus-visible，用属性补回焦点环，失焦即撤
+    if (ring && target.setAttribute) {
+      target.setAttribute('data-focus-ring', '1');
+      target.addEventListener('blur', function () { target.removeAttribute('data-focus-ring'); });
+    }
+    // 不用 preventScroll：控件被常驻保存栏盖住时，让浏览器按 scroll-padding-bottom 把它滚出来；
+    // 控件本来就在视口内时 focus() 不会滚动
+    target.focus();
+  }
+  // 「添加」后的新行：高亮 2 秒，并把展开的编辑表单滚到视口中部
+  function flashNewRow() {
+    var key = S.newRow;
+    S.newRow = null;
+    if (!key || !S.root) return;
+    var row = S.root.querySelector('.cfg-list-row[data-path="' + key + '"]');
+    if (!row) return;
+    row.classList.add('cfg-row-new');
+    if (row.nextElementSibling && row.nextElementSibling.scrollIntoView) row.nextElementSibling.scrollIntoView({ block: 'center' });
+    setTimeout(function () { row.classList.remove('cfg-row-new'); }, 2000);
+  }
   function rerender() {
     if (!S.root || !S.view) return;
+    captureFocus();
     var nodes = [renderToolbar()].concat(renderBanners());
     var body = h('div', { class: 'card cfg-body', 'data-path': S.pill === 'system' ? null : S.pill });
     RENDER[S.pill](body);
@@ -355,7 +529,10 @@
     clear(S.root);
     add(S.root, nodes);
     applyErrors();
+    syncTruncTitles();
     updateDirty();
+    restoreFocus();
+    flashNewRow();
   }
   function renderToolbar() {
     // pills 为按钮组（非 tabs 模式）：当前项以 aria-current 标注
@@ -368,17 +545,21 @@
     });
     return h('div', { class: 'cfg-toolbar' }, [
       pills,
-      btn('锁定', function () {
-        if (isDirty() && !window.confirm('锁定会丢弃未保存的修改，继续？')) return;
-        forgetToken();
-        renderLocked();
-      }, 'cfg-btn-sm', { title: '清除本浏览器保存的管理 token' }),
+      btn('锁定', lockNow, 'cfg-btn-sm', { title: '清除本浏览器保存的管理 token' }),
     ]);
+  }
+  function lockNow() {
+    var run = function () { forgetToken(); S.undo = null; renderLocked(); };
+    if (!isDirty()) { run(); return; }
+    askConfirm({ title: '锁定并丢弃修改？', body: '锁定会丢弃全部未保存的修改，已保存的配置不受影响。', confirmText: '丢弃并锁定', danger: true }, run);
   }
   function goPill(name, vendor) {
     S.pill = name;
     if (vendor) S.vendor = vendor;
     syncUrl();
+    // 整页重绘后焦点落到新的激活项，而不是掉回 body
+    var sel = vendor ? '.cfg-subpills .range-btn[data-vendor="' + vendor + '"]' : '.cfg-pills .range-btn[data-pill="' + name + '"]';
+    S.focusTo = function () { return S.root.querySelector(sel); };
     rerender();
   }
   function syncUrl() {
@@ -404,7 +585,6 @@
   }
   function renderBanners() {
     var out = [], v = S.view;
-    if (S.notice) out.push(noticeBanner());
     if (v.mode !== 'store') out.push(banner(v.mode === 'defaults' ? 'info' : 'err', MODE_TEXT[v.mode] || v.mode));
     if (!v.apply_supported && !S.readonly) out.push(banner('info', '当前实例不支持在线生效：保存会写入 config.db，需重启 coding-proxy 后生效'));
     var boot = (v.running && v.running.boot_revisions) || {};
@@ -417,6 +597,7 @@
     S.loaded = false;
     S.view = null; // 丢弃工作副本（含待设置的密钥明文）
     S.ops = {};
+    S.undo = null;
     updateDirty(); // 清除 Config 页签上的 dirty 点
     var input = h('input', {
       type: 'password', class: 'cfg-input', autocomplete: 'off', 'aria-label': 'Admin token',
@@ -459,13 +640,13 @@
   }
 
   // ── 表单行与控件 ──────────────────────────────────────────
-  function infoTip(label, desc) {
+  function infoTip(label, desc, withLabel) {
     var id = 'cfg-tip' + (++uid);
     // Esc 隐藏全部说明；再次悬停或聚焦某个 ⓘ 时恢复该项
     var rearm = function (e) { e.currentTarget.classList.remove('cfg-tip-off'); };
     return h('span', { class: 'cfg-info-wrap', onmouseenter: rearm, onfocusin: rearm }, [
       h('button', { type: 'button', class: 'cfg-info', 'aria-label': 'Help: ' + label, 'aria-describedby': id, text: 'ⓘ' }),
-      h('span', { class: 'cfg-tip', role: 'tooltip', id: id, text: desc || label }),
+      h('span', { class: 'cfg-tip', role: 'tooltip', id: id, text: withLabel && desc ? label + '：' + desc : (desc || label) }),
     ]);
   }
   var LABELABLE = ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'OUTPUT', 'METER', 'PROGRESS'];
@@ -479,7 +660,7 @@
       labelable
         ? h('label', { class: 'cfg-label cfg-trunc', for: id, text: sp.label })
         : h('span', { class: 'cfg-label cfg-trunc', id: lid, text: sp.label }),
-      infoTip(sp.label, sp.description),
+      infoTip(sp.label, sp.description, true),
       h('div', { class: 'cfg-control', role: labelable ? null : 'group', 'aria-labelledby': labelable ? null : lid },
         [ctrl, sp.unit ? h('span', { class: 'cfg-unit', text: sp.unit }) : null].concat(extras || [])),
     ]);
@@ -586,7 +767,16 @@
             type: 'number', class: 'cfg-input cfg-num', value: String(cur()[k]), disabled: dis, 'aria-label': k,
             oninput: function (e) { var n = cur(); n[k] = numVal(e.target.value); b.set(n); },
           }),
-          dis ? null : btn('删除', function () { var n = cur(); delete n[k]; b.set(n); redraw(); }, 'cfg-btn-sm'),
+          dis ? null : btn('移除', function () {
+            var n = cur(), old = n[k];
+            delete n[k];
+            // 先记撤销再写工作副本（b.set 会立刻重建保存栏）；b.path 只是展示路径（vendors 是数组），撤销用闭包回写
+            S.undo = { kind: 'fn', section: b.path.split('.')[0], path: b.path, label: '已移除 ' + sp.label + ' 中的 ' + k, run: function () { var m = cur(); m[k] = old; b.set(m); } };
+            b.set(n);
+            redraw();
+            var add = wrap.querySelector('[data-map-add]');
+            if (add && add.focus) add.focus();
+          }, 'cfg-btn-sm'),
         ]));
       });
       if (dis) return;
@@ -596,7 +786,9 @@
         var k = key.value.trim();
         if (!k || val.value === '') return;
         var n = cur(); n[k] = numVal(val.value); b.set(n); redraw();
-      }, 'cfg-btn-sm')]));
+        var first = wrap.querySelector('.cfg-map-key[type="text"]');
+        if (first && first.focus) first.focus();
+      }, 'cfg-btn-sm', { 'data-map-add': '1' })]));
     }
     redraw();
     return wrap;
@@ -625,16 +817,17 @@
     if (!kind || kind === 'keep') delete S.ops[path];
     else S.ops[path] = kind === 'set' ? { op: 'set', value: '' } : { op: kind };
     changed();
+    S.focusTo = function () {
+      return S.root.querySelector(kind === 'set' ? '.cfg-secret-input[data-for="' + path + '"]' : 'select.cfg-secret-menu[data-for="' + path + '"]');
+    };
     rerender();
-    var input = kind === 'set' && S.root.querySelector('.cfg-secret-input[data-for="' + path + '"]');
-    if (input) input.focus();
   }
   function secretWidget(sp, path, id) {
     var st = (S.view.secrets || {})[path] || { kind: 'empty' }, op = S.ops[path];
     var wrap = h('div', { class: 'cfg-secret' }, [secretPill(st, op, sp)]);
     if (S.readonly || sp.readonly) return wrap;
     wrap.appendChild(h('select', {
-      id: id, class: 'cfg-input cfg-secret-menu', onchange: function (e) { var k = e.target.value; e.target.value = ''; if (k) setOp(path, k); },
+      id: id, class: 'cfg-input cfg-secret-menu', 'data-for': path, onchange: function (e) { var k = e.target.value; e.target.value = ''; if (k) setOp(path, k); },
     }, [
       h('option', { value: '', text: '更改 ▾' }),
       h('option', { value: 'set', text: '设置新值' }),
@@ -660,10 +853,28 @@
       h('div', { class: 'cfg-actions' }, actions || []),
     ]);
   }
+  // 「恢复默认」：vendors 的入口重置全部 vendor，改名并降权；会替换已保存值或波及当前对象之外时先确认
   function resetBtn(section) {
     if (S.readonly) return null;
-    return btn('恢复默认', function () { S.work[section] = clone(S.view.defaults[section]); changed(); rerender(); }, 'cfg-btn-sm',
-      { title: '把本 section 改回包内默认值（保存后生效）' });
+    var all = section === 'vendors';
+    var n = ((S.view.defaults || {}).vendors || S.work.vendors || []).length;
+    return btn(all ? '全部恢复默认' : '恢复默认', function () { resetSection(section); }, 'cfg-btn-sm' + (all ? ' cfg-btn-ghost' : ''), all
+      ? { title: '把全部 ' + n + ' 个 vendor 改回包内默认值，其他 vendor 上未保存的修改也会丢弃（保存后生效）', 'aria-label': '全部恢复默认（所有 vendor）' }
+      : { title: '把本 section 改回包内默认值（保存后生效）' });
+  }
+  function resetSection(section) {
+    var dflt = S.view.defaults[section];
+    if (deepEqual(S.work[section], dflt)) return;
+    var all = section === 'vendors';
+    var saved = (S.view.overridden || []).indexOf(section) >= 0;
+    var run = function () { S.work[section] = clone(dflt); S.undo = null; changed(); rerender(); };
+    if (!all && !saved) { run(); return; }
+    var name = all ? '全部 ' + ((S.view.defaults.vendors || S.work.vendors || []).length) + ' 个 vendor' : sectionLabel(section);
+    askConfirm({
+      title: (all ? '全部' : '') + '恢复默认？',
+      body: '以下范围将改回包内默认值：' + name + '。' + (saved ? '已保存的自定义值会在保存后被替换。' : '') + (all ? '其他 vendor 上未保存的修改也会丢弃。' : ''),
+      confirmText: all ? '全部恢复默认' : '恢复默认', danger: true,
+    }, run);
   }
 
   // ── 表格 ──────────────────────────────────────────────────
@@ -682,7 +893,12 @@
     ]);
   }
   // 列表 section：固定列宽表格 + 展开行编辑 +（可选）↑/↓ 排序
-  // o.deletable(item, i)：行级删除开关（返回 false 不出「删除」）；o.rowActions(item, i)：行内额外按钮
+  // 被移除行在保存栏里的名字：取前两列；刚「添加」还没填的空行统一叫「空行」
+  function rowName(o, item) {
+    var name = o.cols.slice(0, 2).map(function (c) { return fmtVal(c.text(item)); }).join(' / ');
+    return name === '— / —' ? '空行' : name;
+  }
+  // o.deletable(item, i)：行级移除开关（返回 false 不出「移除」）；o.rowActions(item, i)：行内额外按钮
   function listBlock(o) {
     var arr = function () { var a = getIn(S.work, o.parts); return Array.isArray(a) ? a : []; };
     var setArr = function (a, open) { setIn(S.work, o.parts, a); S.expanded[o.key] = open; changed(); rerender(); };
@@ -692,19 +908,37 @@
     var move = function (from, to) {
       var a = arr().slice(), item = a.splice(from, 1)[0];
       a.splice(to, 0, item);
+      S.focusRemap = { from: prefix + '.' + from, to: prefix + '.' + to };
+      S.undo = null; // 撤销按下标插回，行序变了就不再是原位
       setArr(a, movedOpenIndex(S.expanded[o.key], from, to));
+    };
+    // 移除一行：不弹确认，保存栏给单级「撤销」（插回原位，不影响其后的其它编辑）
+    var removeRow = function (i) {
+      var a = arr().slice(), item = a.splice(i, 1)[0];
+      S.undo = { kind: 'row', section: o.parts[0], key: o.key, label: '已移除 ' + o.title + ' 的「' + rowName(o, item) + '」', parts: o.parts, index: i, item: clone(item) };
+      S.focusTo = function () {
+        var wrap = S.root.querySelector('.ft-table-wrap[data-path="' + prefix + '"]');
+        var rs = wrap.querySelectorAll('.cfg-list-row');
+        if (!rs.length) { // 表已空：落到该表的「添加」
+          var acts = wrap.parentNode.querySelector('.cfg-section-head .cfg-actions');
+          return acts && acts.children.length ? acts.children[acts.children.length - 1] : false;
+        }
+        var r = rs[Math.min(i, rs.length - 1)];
+        return r.querySelector('.cfg-btn-sm') || false;
+      };
+      setArr(a, null);
     };
     var rows = [];
     arr().forEach(function (item, i) {
       var open = S.expanded[o.key] === i;
       var cells = o.cols.map(function (c) { return cell(c.text(item), c.mono ? 'cfg-mono' : ''); });
       var refresh = function () { var it = arr()[i]; o.cols.forEach(function (c, k) { cells[k].textContent = fmtVal(c.text(it)); }); };
-      var toggle = function () { S.expanded[o.key] = open ? null : i; rerender(); };
+      var toggle = function () { if (window.getSelection && String(window.getSelection())) return; S.expanded[o.key] = open ? null : i; rerender(); };
       rows.push(h('tr', { class: 'cfg-list-row' + (open ? ' cfg-row-open' : ''), 'data-path': prefix + '.' + i, onclick: toggle },
         (o.ordered ? [orderCell(arr(), i, move)] : []).concat(cells, [h('td', { class: 'cfg-cell-actions' }, [
           btn(open ? '收起' : '编辑', function (e) { e.stopPropagation(); toggle(); }, 'cfg-btn-sm', { 'aria-expanded': open ? 'true' : 'false' }),
         ].concat(o.rowActions ? (o.rowActions(item, i) || []) : [], [
-          S.readonly || !canDelete(item, i) ? null : btn('删除', function (e) { e.stopPropagation(); var a = arr().slice(); a.splice(i, 1); setArr(a, null); }, 'cfg-btn-sm cfg-btn-danger'),
+          S.readonly || !canDelete(item, i) ? null : btn('移除', function (e) { e.stopPropagation(); removeRow(i); }, 'cfg-btn-sm cfg-btn-danger'),
         ])), h('td')])));
       if (!open) return;
       var fields = o.fields(i).map(function (f) {
@@ -715,7 +949,19 @@
       rows.push(h('tr', { class: 'cfg-detail-row' }, h('td', { colspan: String(cols.length + 1) }, h('div', { class: 'detail-card cfg-detail' }, fields))));
     });
     if (!rows.length) rows.push(h('tr', {}, h('td', { colspan: String(cols.length + 1), class: 'empty', text: '暂无条目' })));
-    var actions = (o.actions || []).concat(S.readonly ? [] : [btn('添加', function () { var a = arr().slice(); a.push(o.blank()); setArr(a, a.length - 1); }, 'cfg-btn-sm')]);
+    var actions = (o.actions || []).concat(S.readonly ? [] : [btn('添加', function () {
+      var a = arr().slice(); a.push(o.blank());
+      S.undo = null;
+      var at = a.length - 1;
+      S.newRow = prefix + '.' + at;
+      // 落点限定在「新行自己的展开表单」：别的行可能也处于展开状态
+      S.focusTo = function () {
+        var row = S.root.querySelector('.cfg-list-row[data-path="' + prefix + '.' + at + '"]');
+        var detail = row && row.nextElementSibling;
+        return detail ? detail.querySelector('.cfg-control input, .cfg-control select') : null;
+      };
+      setArr(a, a.length - 1);
+    }, 'cfg-btn-sm')]);
     return h('div', { class: 'cfg-list' }, [sectionHead(o.title, spec(o.specPath), actions)].concat(o.before || [], [table(cols, rows, prefix)]));
   }
   function itemBind(parts, i, rel, specPath) {
@@ -808,8 +1054,8 @@
     if (t !== 'anthropic' && !scoped) badges.push(badge('No scoped mapping', 'warn', '没有仅作用于该 vendor 的 model_mapping 规则，请求模型名可能被通用规则映射'));
     return h('div', { class: 'cfg-vendor-head' }, [
       sectionHead(t, null, S.readonly ? [] : [
-        btn('恢复默认', function () { replaceVendor(t, clone(findVendor(S.view.defaults.vendors, t)) || { vendor: t }); }, 'cfg-btn-sm', { title: '把该 vendor 改回包内默认参数（保存后生效）' }),
-        btn('移除', function () { removeVendor(t); }, 'cfg-btn-sm cfg-btn-danger', { title: '从配置中移除该 vendor（同时移出 tiers）' }),
+        btn('恢复默认', function () { resetVendor(t); }, 'cfg-btn-sm', { title: '把该 vendor 改回包内默认参数（保存后生效）', 'aria-label': '恢复默认（' + t + '）' }),
+        btn('移除', function () { removeVendor(t); }, 'cfg-btn-sm cfg-btn-danger', { title: '从配置中移除该 vendor（同时移出 tiers）', 'aria-label': '移除 ' + t }),
       ]),
       h('div', { class: 'cfg-badges' }, badges),
     ]);
@@ -817,6 +1063,7 @@
   function addVendor(t) {
     var v = clone(findVendor(S.base.vendors, t) || findVendor(S.view.defaults.vendors, t)) || { vendor: t };
     S.work.vendors = (S.work.vendors || []).concat([v]);
+    S.undo = null;
     changed();
     rerender();
   }
@@ -825,11 +1072,31 @@
     changed();
     rerender();
   }
+  // vendor 级恢复默认：只在会替换已保存的自定义值时确认
+  function resetVendor(t) {
+    var v = clone(findVendor(S.view.defaults.vendors, t)) || { vendor: t };
+    if (deepEqual(findVendor(S.work.vendors, t), v)) return;
+    var run = function () { replaceVendor(t, v); };
+    if ((S.view.vendor_overrides || []).indexOf(t) < 0) { run(); return; }
+    askConfirm({ title: '恢复默认？', body: t + ' 有已保存的自定义参数，恢复默认后会在保存时被替换（保存前可用「放弃修改」找回）。', confirmText: '恢复默认', danger: true }, run);
+  }
+  // 移除 vendor：总是确认（会同时移出 tiers 链路）；保存栏给单级「撤销」
   function removeVendor(t) {
-    S.work.vendors = (S.work.vendors || []).filter(function (x) { return x.vendor !== t; });
-    if (Array.isArray(S.work.tiers)) S.work.tiers = S.work.tiers.filter(function (x) { return x !== t; });
-    changed();
-    rerender();
+    var pos = effectiveChain(S.work.tiers, S.work.vendors).indexOf(t);
+    askConfirm({
+      title: '移除 ' + t + '？',
+      body: '将从配置中移除 ' + t + (pos >= 0 ? '，并移出 Tiers 链路（当前 Tier #' + (pos + 1) + '）' : '') + '。已保存的密钥不会删除，重新添加后仍可用。',
+      confirmText: '移除', danger: true,
+    }, function () {
+      var list = S.work.vendors || [], i = -1;
+      list.forEach(function (x, k) { if (x.vendor === t) i = k; });
+      if (i < 0) return;
+      S.undo = { kind: 'vendor', section: 'vendors', label: '已移除 vendor ' + t, index: i, vendor: clone(list[i]), tierIndex: Array.isArray(S.work.tiers) ? S.work.tiers.indexOf(t) : -1 };
+      S.work.vendors = list.filter(function (x) { return x.vendor !== t; });
+      if (Array.isArray(S.work.tiers)) S.work.tiers = S.work.tiers.filter(function (x) { return x !== t; });
+      changed();
+      rerender();
+    });
   }
 
   RENDER.tiers = function (body) {
@@ -1069,7 +1336,7 @@
 
   // ── Dirty / 错误 / 保存 ───────────────────────────────────
   function isDirty() { return !!S.view && (dirtySections(S.base, S.work).length > 0 || activeOps(S.ops).length > 0); }
-  function changed() { updateDirty(); }
+  function changed() { if (S.notice && S.notice.kind === 'ok') S.notice = null; updateDirty(); }
   function affectedSections() {
     var set = {};
     dirtySections(S.base, S.work).forEach(function (s) { set[s] = true; });
@@ -1100,26 +1367,96 @@
     var bar = S.root.querySelector('.cfg-savebar');
     if (bar) fillSaveBar(bar);
   }
+  function sectionLabel(s) {
+    for (var i = 0; i < PILLS.length; i++) if (PILLS[i][0] === s) return PILLS[i][1];
+    return s;
+  }
+  // 待保存范围的可读名称：vendors 细到具体 vendor，其余用 pill 名
+  function scopeText() {
+    return affectedSections().map(function (s) {
+      if (s !== 'vendors') return sectionLabel(s);
+      var seen = {};
+      var vs = (S.base.vendors || []).concat(S.work.vendors || []).map(function (v) { return v.vendor; })
+        .filter(function (t) { return !seen[t] && (seen[t] = true) && vendorDirty(t); });
+      activeOps(S.ops).forEach(function (p) { var m = /^vendors\.([^.]+)\./.exec(p); if (m && vs.indexOf(m[1]) < 0) vs.push(m[1]); });
+      return vs.length ? 'Vendors › ' + vs.slice(0, 3).join('、') + (vs.length > 3 ? ' 等 ' + vs.length + ' 个' : '') : 'Vendors';
+    }).join('、');
+  }
   function renderSaveBar() { var bar = h('div', { class: 'cfg-savebar', role: 'region', 'aria-label': 'Save changes' }); fillSaveBar(bar); return bar; }
+  // 保存栏是唯一的保存结果反馈面（顶部 Banner 只留模式类提示）；结果不自动消失，由用户关闭或在下一次编辑时清除
   function fillSaveBar(bar) {
-    var dirty = isDirty(), n = countChangedFields(S.base, S.work, S.ops), k = affectedSections().length;
-    bar.hidden = !dirty && !S.errors.length;
+    var dirty = isDirty(), n = countChangedFields(S.base, S.work, S.ops);
+    var hadFocus = !!(document.activeElement && bar.contains && bar.contains(document.activeElement));
+    bar.hidden = !dirty && !S.errors.length && !S.notice && !S.undo;
+    bar.className = 'cfg-savebar' + (S.notice ? ' cfg-savebar-' + S.notice.kind : '');
     clear(bar);
-    var msg = h('div', { class: 'cfg-savebar-msg' }, [h('div', { text: dirty ? n + ' 个字段待保存（' + k + ' 个 section）' : '没有未保存的修改' })]);
+    var msg = h('div', { class: 'cfg-savebar-msg' });
+    if (S.notice) {
+      msg.appendChild(h('div', { class: 'cfg-result', tabindex: '-1' }, [h('span', { class: 'cfg-result-dot', 'aria-hidden': 'true' }), h('span', { text: S.notice.text })]
+        .concat((S.notice.lines || []).map(function (l) { return h('div', { class: 'cfg-note cfg-trunc', text: l, title: l }); }))));
+    }
+    if (S.undo) msg.appendChild(h('div', { class: 'cfg-undo' }, [h('span', { class: 'cfg-trunc', text: S.undo.label, title: S.undo.label }), h('button', { type: 'button', class: 'cfg-link', text: '撤销', onclick: undoLast, disabled: S.saving })]));
+    if (dirty) msg.appendChild(h('div', { class: 'cfg-scope', text: '待保存：' + scopeText() + '（' + n + ' 处）' }));
     if (S.errors.length) {
       msg.appendChild(h('ul', { class: 'cfg-savebar-errors' }, S.errors.slice(0, 8).map(function (e) {
         var p = locToPath(e.loc);
-        return h('li', { class: 'cfg-trunc' }, h('button', { type: 'button', class: 'cfg-link', text: (p || '<root>') + '：' + e.msg, onclick: function () { focusError(p); } }));
+        return h('li', { class: 'cfg-trunc' }, h('button', { type: 'button', class: 'cfg-link', text: (p ? labelOf(p) : '<root>') + '：' + e.msg, title: p, onclick: function () { focusError(p); } }));
       }).concat(S.errors.length > 8 ? [h('li', { text: '…共 ' + S.errors.length + ' 个错误' })] : [])));
     }
-    add(bar, [msg, btn('放弃修改', discard, '', { disabled: !dirty || S.saving }),
-      btn(S.saving ? '保存中…' : '保存 ' + n + ' 个字段（' + k + ' 个 section）', onSave, 'cfg-btn-primary', { disabled: !dirty || S.saving || S.readonly })]);
+    var acts = [];
+    if (S.notice && !dirty) acts.push(btn('关闭', function () { S.notice = null; updateDirty(); }, 'cfg-btn-sm'));
+    if (dirty || S.errors.length) {
+      acts.push(btn('放弃修改', discard, '', { disabled: !dirty || S.saving }));
+      acts.push(btn(S.confirming ? '等待确认…' : S.saving ? '保存中…' : '保存', onSave, 'cfg-btn-primary', { disabled: !dirty || S.saving || S.readonly }));
+    }
+    add(bar, [msg].concat(acts));
+    // 保存栏每次整体重建：原先落在栏内的焦点（通常是「保存」按钮）跟着回来；
+    // 栏里已没有可聚焦控件（如点「关闭」后隐藏）时落到当前激活的 pill，而不是掉回 body
+    if (hadFocus) {
+      var b = bar.querySelector('.cfg-btn-primary') || bar.querySelector('.cfg-btn');
+      if (b && b.focus) b.focus();
+      else if (S.root) { var p = S.root.querySelector('.cfg-pills .range-btn.active'); if (p && p.focus) p.focus(); }
+    }
   }
   function discard() {
-    if (!window.confirm('放弃全部未保存的修改？')) return;
-    EDITABLE.forEach(function (s) { S.work[s] = clone(S.base[s]); });
-    S.ops = {};
-    S.errors = [];
+    askConfirm({ title: '放弃修改？', body: '将丢弃全部未保存的修改，已保存的配置不受影响。', confirmText: '放弃修改', danger: true }, function () {
+      EDITABLE.forEach(function (s) { S.work[s] = clone(S.base[s]); });
+      S.ops = {};
+      S.errors = [];
+      S.undo = null;
+      S.focusTo = function () { return S.root.querySelector('.cfg-pills .range-btn.active'); };
+      rerender();
+    });
+  }
+  // 撤销快照指向工作副本里的位置：重载替换了它所在的 section 就作废
+  function clearUndo(sections) {
+    if (S.undo && (!sections || sections.indexOf(S.undo.section) >= 0)) S.undo = null;
+  }
+  // 单级撤销：只恢复被移除的对象本身并插回原位，不影响其后的其它编辑
+  function undoLast() {
+    var u = S.undo;
+    if (!u || S.saving) return; // 保存进行中载荷已定稿，此时撤销会被随后的重载覆盖
+    S.undo = null;
+    if (u.kind === 'row') {
+      var a = getIn(S.work, u.parts);
+      if (!Array.isArray(a)) { a = []; setIn(S.work, u.parts, a); }
+      a.splice(Math.min(u.index, a.length), 0, clone(u.item));
+      if (typeof S.expanded[u.key] === 'number' && S.expanded[u.key] >= u.index) S.expanded[u.key] += 1; // 展开行跟着后移
+      S.focusTo = function () {
+        var rs = S.root.querySelectorAll('.ft-table-wrap[data-path="' + u.parts.join('.') + '"] .cfg-list-row');
+        return rs[u.index] ? rs[u.index].querySelector('.cfg-btn-sm') : false;
+      };
+    } else if (u.kind === 'fn') {
+      u.run();
+      S.focusTo = function () { return S.root.querySelector('.cfg-row[data-path="' + u.path + '"] [data-map-add]'); };
+    } else if (u.kind === 'vendor') {
+      if (findVendor(S.work.vendors, u.vendor.vendor)) { changed(); rerender(); return; } // 期间已重新添加，不再插入
+      S.work.vendors = S.work.vendors || [];
+      S.work.vendors.splice(Math.min(u.index, S.work.vendors.length), 0, clone(u.vendor));
+      if (u.tierIndex >= 0 && Array.isArray(S.work.tiers) && S.work.tiers.indexOf(u.vendor.vendor) < 0) S.work.tiers.splice(Math.min(u.tierIndex, S.work.tiers.length), 0, u.vendor.vendor);
+      S.focusTo = function () { return S.root.querySelector('.cfg-subpills .range-btn[data-vendor="' + u.vendor.vendor + '"]'); };
+    }
+    changed();
     rerender();
   }
   function focusError(path) {
@@ -1153,25 +1490,28 @@
   function fetchStatus() {
     return fetch('/api/status', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
   }
-  function runtimeLines(status) {
-    if (!S.view.apply_supported) return ['当前实例不支持在线生效：保存后需重启，运行时状态不受影响。'];
-    var tiers = (status && status.tiers) || [], lines = [];
-    var names = function (pred) { return tiers.filter(pred).map(function (t) { return t.name; }); };
-    var cb = names(function (t) { return t.circuit_breaker && t.circuit_breaker.state && t.circuit_breaker.state !== 'closed'; });
-    var rl = names(function (t) { return t.rate_limit && t.rate_limit.is_rate_limited; });
-    var qx = names(function (t) { return [t.quota_guard, t.weekly_quota_guard].some(function (q) { return q && q.state === 'quota_exceeded'; }); });
-    if (status && typeof status.in_flight === 'number') lines.push('进行中的请求：' + status.in_flight + ' 个（在旧实例上继续完成）');
-    if (cb.length) lines.push('熔断状态将重置：' + cb.join('、'));
-    if (rl.length) lines.push('限流状态将重置：' + rl.join('、'));
-    if (qx.length) lines.push('配额超限状态按用量数据库重建：' + qx.join('、'));
-    lines.push('运行时调整的并发上限恢复为配置值；配额窗口按用量数据库重建。');
-    var running = S.view.running && S.view.running.tiers;
-    if (Array.isArray(running) && !deepEqual(running, enabledChain())) {
-      lines.push('运行中的优先级（含 Overview 拖拽）与保存的 tiers 不同，保存后以 tiers 为准。');
+  // 具体路径 → 注册表 spec（vendors 的 vendor 段与列表下标泛化为 *）
+  function specFor(path) {
+    var parts = String(path).split('.');
+    if (S.specMap[path]) return S.specMap[path];
+    for (var i = 1; i < parts.length; i++) {
+      if (parts[0] === 'vendors' ? i !== 1 : !/^\d+$/.test(parts[i])) continue;
+      var hit = S.specMap[parts.slice(0, i).concat(['*'], parts.slice(i + 1)).join('.')];
+      if (hit) return hit;
     }
-    return lines;
+    return null;
   }
-  function confirmSave(payload, status) {
+  function labelOf(path) {
+    var parts = String(path).split('.'), sp = specFor(path);
+    if (parts[0] === 'vendors') return (sp ? sp.label : parts[parts.length - 1]) + '（' + parts[1] + '）';
+    return sp ? sp.label : parts[parts.length - 1];
+  }
+  function rowTitleOf(sec, row) {
+    var ks = ROW_KEY[sec] || [], sub = sec.split('.').slice(1);
+    return (sub.length ? sub.join(' › ') + ' › ' : '') + (ks.length ? ks.map(function (k) { return String(row[k]); }).join(' / ') : fmtVal(row));
+  }
+  // 保存后果清单：每一项都来自可预判的运行时状态或本次载荷；非空才弹确认框
+  function saveImpactList(payload, status) {
     var secretFields = {};
     S.specs.forEach(function (sp) {
       if (sp.widget !== 'secret' || !sp.vendors) return;
@@ -1181,26 +1521,85 @@
       base: S.base, work: S.work, defaults: S.view.defaults, secrets: S.view.secrets, ops: S.ops, secretFields: secretFields,
       targetDefaults: { base_url: dflt('vendors.*.base_url'), token_url: dflt('vendors.*.token_url') },
     });
-    var blocks = [
-      ['修改的 section', Object.keys(payload.sections)],
-      ['密钥操作', Object.keys(payload.secret_ops).map(function (p) { return p + '：' + payload.secret_ops[p].op; })],
-      ['目标地址已变更，以下密钥将被清空（需重新设置）', cleared],
-      ['运行时影响', runtimeLines(status)],
-    ].filter(function (b) { return b[1].length; });
-    var text = blocks.map(function (b) { return b[0] + '：\n- ' + b[1].join('\n- '); }).join('\n\n');
-    if (typeof window.HTMLDialogElement !== 'function') return Promise.resolve(window.confirm('确认保存？\n\n' + text));
-    return new Promise(function (resolve) {
-      var dlg = h('dialog', { class: 'cfg-dialog', 'aria-label': '确认保存' });
-      var close = function (ok) { dlg.close(); dlg.remove(); resolve(ok); };
-      add(dlg, [h('div', { class: 'cfg-section-title', text: '确认保存' })].concat(blocks.map(function (b, i) {
-        return h('div', { class: 'cfg-dialog-block' + (b[1] === cleared ? ' cfg-dialog-warn' : '') }, [
-          h('div', { class: 'cfg-group-title', text: b[0] }),
-          h('ul', {}, b[1].map(function (l) { return h('li', { text: l }); })),
-        ]);
-      }), [h('div', { class: 'cfg-actions' }, [btn('取消', function () { close(false); }), btn('确认保存', function () { close(true); }, 'cfg-btn-primary')])]));
-      dlg.addEventListener('cancel', function (e) { e.preventDefault(); close(false); });
-      document.body.appendChild(dlg);
-      dlg.showModal();
+    return saveImpact({ payload: payload, base: S.base, work: S.work, view: S.view, status: status, cleared: cleared, chain: enabledChain() });
+  }
+  function impactLines(impact, payload) {
+    var l = function (a) { return a.join('、'); };
+    return impact.map(function (it) {
+      if (it.code === 'secrets') return '密钥：' + l(it.paths.map(function (p) { var op = payload.secret_ops[p]; return op.op === 'set' ? '设置 ' + labelOf(p) : op.op === 'clear' ? '清空 ' + labelOf(p) : labelOf(p) + ' 改用环境变量 ' + ((S.view.secrets[p] || {}).default_env || ''); }));
+      if (it.code === 'cleared') return '目标地址已变更，保存后将清空密钥（需重新设置）：' + l(it.paths.map(labelOf));
+      if (it.code === 'inflight') return it.n + ' 个请求正在进行，会在旧实例上完成后切到新配置';
+      if (it.code === 'breaker') return '熔断状态将重置：' + l(it.names);
+      if (it.code === 'ratelimit') return '限流状态将重置：' + l(it.names);
+      if (it.code === 'quota') return '配额超限状态将按用量数据库重建：' + l(it.names);
+      if (it.code === 'tiers') return '运行中的优先级与保存的 Tiers 不同，保存后以 Tiers 为准';
+      if (it.code === 'pending') return '上次保存后尚未生效的 section 会一并生效：' + l(it.sections.map(sectionLabel));
+      if (it.code === 'removed') return '移除 vendor（同时移出 Tiers 链路）：' + l(it.vendors);
+      return it.code;
+    });
+  }
+  function diffBlock(groups) {
+    var rows = [];
+    groups.forEach(function (g) {
+      rows.push(h('div', { class: 'cfg-diff-group-title', text: g.title }));
+      g.rows.forEach(function (r) {
+        rows.push(h('div', { class: 'cfg-diff-row' }, [h('span', { class: 'cfg-diff-label cfg-trunc', text: r.label, title: r.label }),
+          h('span', { class: 'cfg-diff-val' }, r.added ? [h('ins', { text: '新增' })] : r.removed ? [h('del', { text: '移除' })] : [h('del', { text: r.before }), ' → ', h('ins', { text: r.after })])]));
+      });
+    });
+    var block = h('div', { class: 'cfg-dialog-block cfg-dialog-diff' }, [h('div', { class: 'cfg-group-title', text: '将保存的修改' })]);
+    if (rows.length > 8) block.appendChild(h('details', {}, [h('summary', { text: '共 ' + groups.reduce(function (n, g) { return n + g.rows.length; }, 0) + ' 处，展开查看' })].concat(rows)));
+    else rows.forEach(function (r) { block.appendChild(r); });
+    return block;
+  }
+  // 页面内确认框；不支持 <dialog> 的环境回退到 window.confirm 并同步执行
+  function askConfirm(o, onOk, onCancel) {
+    if (typeof window.HTMLDialogElement !== 'function') {
+      var text = o.title + (o.body ? '\n\n' + o.body : '') + (o.impacts && o.impacts.length ? '\n\n保存后会发生：\n- ' + o.impacts.join('\n- ') : '');
+      if (window.confirm(text)) onOk(); else if (onCancel) onCancel();
+      return;
+    }
+    var bodyId = 'cfg-dlg-' + (++uid) + '-body', impactId = 'cfg-dlg-' + uid + '-impact';
+    var described = [o.body ? bodyId : null, o.impacts && o.impacts.length ? impactId : null].filter(Boolean).join(' ');
+    // 破坏性确认用 alertdialog；正文与后果清单挂到 aria-describedby，焦点落在「取消」时也会被读出
+    var opener = document.activeElement, dlg = h('dialog', { class: 'cfg-dialog', 'aria-label': o.title, role: o.danger ? 'alertdialog' : null, 'aria-describedby': described || null });
+    var close = function (ok) {
+      dlg.close(); dlg.remove();
+      if (ok) onOk();
+      else if (onCancel) onCancel();
+      else if (opener && opener.focus) opener.focus();
+    };
+    var kids = [h('div', { class: 'cfg-section-title', text: o.title })];
+    if (o.body) kids.push(h('p', { class: 'cfg-dialog-text', id: bodyId, text: o.body }));
+    if (o.impacts && o.impacts.length) kids.push(h('div', { class: 'cfg-dialog-block cfg-dialog-impact', id: impactId }, [h('div', { class: 'cfg-group-title', text: '保存后会发生' }),
+      h('ul', {}, o.impacts.map(function (l) { return h('li', { text: l }); }))]));
+    if (o.diff && o.diff.length) kids.push(diffBlock(o.diff));
+    kids.push(h('div', { class: 'cfg-actions' }, [btn('取消', function () { close(false); }),
+      btn(o.confirmText || '确认', function () { close(true); }, 'cfg-btn-primary' + (o.danger ? ' cfg-btn-danger-solid' : ''))]));
+    add(dlg, kids);
+    dlg.addEventListener('cancel', function (e) { e.preventDefault(); close(false); });
+    document.body.appendChild(dlg);
+    dlg.showModal();
+    // 初始焦点放在「取消」：不可逆操作把焦点放在破坏性最小的一项上
+    var cancel = dlg.querySelector('.cfg-actions .cfg-btn');
+    if (cancel && cancel.focus) cancel.focus();
+  }
+  function askConfirmP(o) {
+    return new Promise(function (resolve) { askConfirm(o, function () { resolve(true); }, function () { resolve(false); }); });
+  }
+  function confirmSave(payload, status) {
+    var impact = saveImpactList(payload, status);
+    if (!impact.length) return Promise.resolve(true);
+    return askConfirmP({
+      title: impact.some(function (it) { return it.danger; }) ? '保存并应用这些变更？' : '确认保存？',
+      impacts: impactLines(impact, payload),
+      diff: changedRows(S.base, S.work, {
+        label: function (path) { var sp = specFor(path); return sp ? sp.label : String(path).split('.').pop(); },
+        skip: function (path) { var sp = specFor(path); return !!(sp && sp.widget === 'secret'); },
+        sectionLabel: sectionLabel, rowTitle: rowTitleOf,
+      }),
+      danger: impact.some(function (it) { return it.danger; }),
+      confirmText: '确认保存',
     });
   }
   function onSave() {
@@ -1212,16 +1611,39 @@
       rerender();
       return;
     }
-    S.saving = true;
+    S.saving = true; S.confirming = true;
     updateDirty();
-    fetchStatus().then(function (status) { return confirmSave(payload, status); }).then(function (ok) {
-      if (!ok) { S.saving = false; updateDirty(); return null; }
+    fetchStatus().then(function (status) { S.confirming = false; return confirmSave(payload, status); }).then(function (ok) {
+      S.confirming = false;
+      if (!ok) { S.saving = false; updateDirty(); focusSaveButton(); return null; }
+      updateDirty();
       return request('PUT', payload).then(function (r) { return handleSave(r, payload); });
     }).catch(function () {
+      S.confirming = false;
       S.saving = false;
       S.notice = { kind: 'err', text: '保存请求失败：网络错误' };
       rerender();
+      reportResult();
     });
+  }
+  function focusSaveButton() {
+    var b = S.root && S.root.querySelector('.cfg-savebar .cfg-btn-primary');
+    if (b && b.focus) b.focus();
+  }
+  // 常驻播报节点：rerender 整体重建 #config-root，带 aria-live 的新节点不保证被朗读
+  function ensureLive() {
+    if (S.live || !S.root || !S.root.parentNode) return;
+    S.live = h('div', { class: 'cfg-live', role: 'status', 'aria-live': 'polite' });
+    S.root.parentNode.insertBefore(S.live, S.root.nextSibling);
+  }
+  function reportResult() {
+    ensureLive();
+    if (!S.live || !S.notice) return;
+    S.live.textContent = '';
+    // 回调里现读：409 之后的重载失败会把提示换成另一段，不能提前拼好
+    setTimeout(function () { if (S.live && S.notice) S.live.textContent = [S.notice.text].concat(S.notice.lines || []).join('。'); }, 0);
+    var res = S.root && S.root.querySelector('.cfg-result');
+    if (res && res.focus) { try { res.focus({ preventScroll: true }); } catch (e) { res.focus(); } }
   }
   // PUT 成功即在本地落定：已提交 section 并入 base，丢弃密钥明文；随后重载失败也不残留 dirty / 明文
   function commitSaved(payload, revisions) {
@@ -1229,6 +1651,7 @@
     [payload.secret_ops, S.ops].forEach(function (ops) { Object.keys(ops).forEach(function (p) { if (ops[p]) delete ops[p].value; }); });
     S.ops = {};
     S.errors = [];
+    S.undo = null;
     if (isObj(revisions)) Object.keys(revisions).forEach(function (s) { S.view.revisions[s] = revisions[s]; });
   }
   // 重载完成前保持冻结：重载会覆盖工作副本；'locked'（已渲染解锁界面）不叠 fatal 视图
@@ -1237,6 +1660,7 @@
       S.saving = false;
       updateDirty();
       if (ok === false && only) conflictReloadFailed(only);
+      reportResult();
     });
   }
 
@@ -1284,6 +1708,7 @@
     if (r.status === 423) { S.readonly = true; S.notice = { kind: 'err', text: errText(d) || MODE_TEXT.legacy_readonly }; }
     else S.notice = { kind: 'err', text: '保存失败（HTTP ' + r.status + '）' + (errText(d) ? '：' + errText(d) : '') };
     rerender();
+    reportResult();
     return null;
   }
 
@@ -1295,6 +1720,15 @@
     if (el.scrollWidth > el.clientWidth) { el.title = el.textContent; el.setAttribute('data-auto-title', '1'); }
     else if (el.getAttribute('data-auto-title')) { el.removeAttribute('title'); el.removeAttribute('data-auto-title'); }
   }
+  // rerender 后立即为被截断的文本补 title（原先只在鼠标移入时懒补，键盘与触屏拿不到）
+  function syncTruncTitles() {
+    if (!S.root) return;
+    Array.prototype.forEach.call(S.root.querySelectorAll('.cfg-trunc'), function (el) {
+      if (el.title && !el.getAttribute('data-auto-title')) return;
+      if (el.scrollWidth > el.clientWidth) { el.title = el.textContent; el.setAttribute('data-auto-title', '1'); }
+      else if (el.getAttribute('data-auto-title')) { el.removeAttribute('title'); el.removeAttribute('data-auto-title'); }
+    });
+  }
   function readSchemaDefaults() {
     var el = document.getElementById('config-schema-defaults');
     try { return el ? JSON.parse(el.textContent) : { fields: {}, groups: {} }; } catch (e) { return { fields: {}, groups: {} }; }
@@ -1302,6 +1736,7 @@
   function mount(el) {
     if (!el || S.root === el) return;
     S.root = el;
+    ensureLive();
     S.schema = readSchemaDefaults();
     readUrlSection();
     clear(el);
@@ -1310,7 +1745,10 @@
   function refresh(force) {
     if (!S.root) mount(document.getElementById('config-root'));
     if (S.saving) return Promise.resolve(); // 保存结束后自行重载
-    if (!force && isDirty() && !window.confirm('放弃未保存的修改并重新加载？')) return Promise.resolve();
+    if (!force && isDirty()) {
+      return askConfirmP({ title: '重新加载？', body: '将放弃全部未保存的修改，并重新加载服务器上的配置。', confirmText: '放弃并重新加载', danger: true })
+        .then(function (ok) { return ok ? load() : undefined; });
+    }
     return load();
   }
 

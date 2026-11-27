@@ -1,0 +1,144 @@
+{
+  "schema_version": 2,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Config 页编辑与撤销：工作副本的状态",
+    "locale": "zh-CN",
+    "animation": "none",
+    "quality_profile": "showcase",
+    "output": "config-edit-undo.html",
+    "legend": {
+      "entries": {
+        "start": {
+          "label": "起点"
+        },
+        "active": {
+          "label": "有未保存修改"
+        },
+        "decision": {
+          "label": "先确认再执行"
+        },
+        "success": {
+          "label": "已保存"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "工作副本"
+    },
+    {
+      "id": "confirm",
+      "label": "需要先确认的大范围操作"
+    }
+  ],
+  "states": [
+    {
+      "id": "clean",
+      "type": "start",
+      "label": "未修改",
+      "sublabel": "保存栏隐藏",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "tag": "起点"
+    },
+    {
+      "id": "dirty",
+      "type": "active",
+      "label": "有未保存修改",
+      "sublabel": "移除一行后带「撤销」",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "tag": "可保存"
+    },
+    {
+      "id": "ask",
+      "type": "decision",
+      "label": "先确认再执行",
+      "sublabel": "全部恢复默认 / 移除 vendor",
+      "lane": "confirm",
+      "col": 0,
+      "tag": "新增"
+    },
+    {
+      "id": "done",
+      "type": "success",
+      "label": "已保存",
+      "sublabel": "保存栏显示结果",
+      "lane": "main",
+      "col": 2,
+      "step": "03",
+      "tag": "新增：结果在底部"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t-edit",
+      "from": "clean",
+      "to": "dirty",
+      "label": "编辑字段、添加行或移除一行"
+    },
+    {
+      "id": "t-ask",
+      "from": "dirty",
+      "to": "ask",
+      "variant": "emphasis",
+      "label": "点大范围操作",
+      "route": "auto"
+    },
+    {
+      "id": "t-back",
+      "from": "ask",
+      "to": "dirty",
+      "label": "取消，或确认后作用于工作副本",
+      "route": "auto"
+    },
+    {
+      "id": "t-save",
+      "from": "dirty",
+      "to": "done",
+      "variant": "emphasis",
+      "label": "保存成功"
+    },
+    {
+      "id": "t-close",
+      "from": "done",
+      "to": "clean",
+      "label": "关闭或再次编辑",
+      "route": "top-channel"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "确认与撤销的分界",
+      "items": [
+        "范围超出当前可见对象（全部 vendor、整个 vendor）时先弹确认框",
+        "只影响当前列表里的一行时不弹确认，保存栏给「撤销」",
+        "全部恢复默认、移除 vendor、放弃修改、锁定共用同一个页面内确认框"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "撤销的边界",
+      "items": [
+        "只保留最近一次移除",
+        "撤销把对象插回原位，不影响其后的其它编辑",
+        "不覆盖「恢复默认」：它有确认，已保存的值可用「放弃修改」找回"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "重绘后焦点落在哪里",
+      "items": [
+        "添加：新行滚入视口，焦点在第一个输入框",
+        "排序：同一行的同一颗按钮，按钮禁用时落到同行另一颗",
+        "展开：该行的「收起」；切换 section：新的激活项"
+      ]
+    }
+  ]
+}
