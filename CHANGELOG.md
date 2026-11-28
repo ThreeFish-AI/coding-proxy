@@ -2,6 +2,18 @@
 
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.7](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.7) - 2026-11-28
+
+> 本版主轴：Dashboard 的 Overview 与 Config 两个页面各做了一轮体验改造；Model Bind 的可绑定模型目录补上 GLM 5.4，并改为内置、pricing、手配清单三源合成。
+
+- feat(dashboard): **Overview 简化改造**：页高（1440 宽）减少约 34%。KPI 合成一条 strip，副行统一为「近 N 天」口径；Model Calling 改为列对齐的 meter list（视口不少于 1280px 且不少于 3 行时排两列），模型名最多折两行；订阅状态与供应商请求分布并排一栏（1180px 以下上下堆叠）；三张趋势图合并为一个图位的三个页签（WAI-ARIA Tabs），改为真堆叠面积，请求量图补空态（#317）；
+- feat(subscription-status): 订阅状态行右栏只留 vendor 的可用状态：无异常是「绿点 + 正常」，异常才用彩色胶囊（熔断 ×N / 半开 / 限速中 / 配额超限），tier 名与配额守卫用量收进悬停详情（#317）；
+- fix(dashboard): 编辑 Model Calling 并行度时，10 秒轮询整体重建 DOM，半截输入被当成最终值提交（想把 10 改成 12，刚敲「1」就发出 `PUT {"limit":1}`），每次编辑还连发两个 PUT；改为按 vendor / model 键复用行节点、编辑中不重绘、单次提交、只收 1 到 20 的整数、8 秒超时兜底；上限改为可聚焦按钮，编辑一行时点另一行的上限不再要点两次（#317）；
+- fix(dashboard): 自选区间的标签一律写「近 N 天」并取自实际取数的天数：接口只按天数取「截至今天的最近 N 天」，此前把起止日期写进标签会和图表对不上；刷新途中改区间不再丢，当前轮结束后按新区间补刷；分布图图例在窄列移到图下方，不再被画布右缘裁掉；趋势图与分布图补读屏文字摘要（#317）；
+- feat(dashboard): **Config 页第一批体验改造**：保存结果显示在底部保存栏，成功 / 需重启 / 失败都不自动消失；确认框只在保存会产生后果时弹出（密钥写入或清空、目标地址变化清空已存密钥、有进行中的请求、熔断 / 限流 / 配额状态将重置等），并列出每个字段的新旧值；整页重绘后键盘焦点留在原控件，「添加」后新行滚入视口并聚焦；Vendors 页的「全部恢复默认」与 vendor 级「恢复默认」区分开，移除 vendor 先确认、移除表格行不确认，两者之后保存栏都提供单级「撤销」；表单 label 列加 104px 下限，640px 以下 label 与控件分两行（#316）；
+- feat(model-bind): Model Bind 下拉补上 GLM 5.4，可绑定目录改为「内置目录 ∪ pricing 行 ∪ `bindable_models`」三源合成（pricing 行仅限激活链里的 native vendor）；pricing 行新增 `online` 字段，只能「下线 / 上线」、不能删除、改名或被恢复默认丢弃：下线后不进下拉、新绑返回 400，已绑会话保留并继续按锁定 vendor 路由，Sessions 页显示 `(off-list)`；Config 页 Pricing 表新增 Status 列（#315）；
+- docs(dashboard): README 首图按简化后的 Overview 重拍，版本徽标更新为 v0.6.7；`docs/guide/dashboard.md` 补 Overview 各区块与 Config 页新行为，新增 `docs/design/config-tab-ux-batch1.md` 与两张 Archify 流程图，`docs/arch/session-model-bind.md`、`config-reference.md`、`subscription-status.md`、`testing.md` 同步（#315、#316、#317）；
+
 ## [v0.6.6](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.6) - 2026-11-25
 
 > 本版主轴：Overview「订阅状态」卡片统一为单行用量格语法，文字与图形收敛成一套；用量窗口补结构化字段。
