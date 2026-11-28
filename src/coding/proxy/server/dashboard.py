@@ -432,9 +432,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     /* 分布卡随左卡等高：标题留在顶上，图形区吃掉余量，甜甜圈与图例在余量里垂直居中。
        flex-basis 取 0 而不是 auto：auto 会让图形区的高度钉在 canvas 上一次写下的像素高度上，
-       左卡变矮后这一行回不去 */
+       左卡变矮后这一行回不去。min-height 只在订阅行很少时保底，须 ≤ 190px（3 行订阅卡 269px 减去
+       标题与内边距 79px），否则分布卡撑高整行，订阅卡底部留白 */
     .dist-card { display: flex; flex-direction: column; }
-    .dist-card .chart-wrap { flex: 1 1 0; height: auto; min-height: 250px; }
+    .dist-card .chart-wrap { flex: 1 1 0; height: auto; min-height: 180px; }
     @media (max-width: 1179px) {
       .status-row { grid-template-columns: minmax(0, 1fr); }
       .dist-card .chart-wrap { flex: none; height: 240px; min-height: 0; }
