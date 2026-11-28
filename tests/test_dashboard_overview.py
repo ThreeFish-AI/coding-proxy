@@ -170,7 +170,10 @@ def test_overview_css_constraints(client: TestClient):
     focus = _rule(html, ".trend-panel:focus-visible")
     assert "outline: 2px solid var(--accent-blue); outline-offset: -2px;" in focus
     # 分布卡图形区的 flex-basis 为 0：钉在 canvas 上一次写下的像素高度上，左卡变矮后这一行回不去
-    assert "flex: 1 1 0;" in _rule(html, ".dist-card .chart-wrap")
+    dist_wrap = _rule(html, ".dist-card .chart-wrap")
+    assert "flex: 1 1 0;" in dist_wrap
+    # 图形区下限 ≤ 190px（3 行订阅卡 269px 减去分布卡标题与内边距 79px）：更高则整行被分布卡撑高，订阅卡底部留白
+    assert int(re.search(r"min-height: (\d+)px", dist_wrap).group(1)) <= 190
     # 模型名最多折两行，不默认截断（全名只在 title 里，键盘与触屏拿不到）
     name = html[html.index(".mc-model-name {\n      font-size: 12px") :]
     assert "-webkit-line-clamp: 2" in name[: name.index("}")]
