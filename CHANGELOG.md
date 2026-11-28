@@ -2,6 +2,13 @@
 
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范维护，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.8](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.8) - 2026-11-28
+
+> 本版主轴：Overview 订阅状态只有 3 行时，供应商请求分布卡不再把整行撑高，两卡等高、无留白。
+
+- fix(dashboard): **供应商请求分布卡与订阅状态卡等高**：订阅状态只有 3 行时，分布卡图形区的最小高度（250px）高过订阅卡，整行被撑高，订阅卡底部留白约 81px；下限改为 180px，3 行订阅时两卡同为 269px，环图随之缩小，4 行、8 行订阅与窄屏堆叠档的版面与改前一致（#320）；
+- docs(dashboard): README 首图版本徽标更新为 v0.6.8；`docs/.agents/issue.md` 登记 I-016（#320）；
+
 ## [v0.6.7](https://github.com/ThreeFish-AI/coding-proxy/releases/tag/v0.6.7) - 2026-11-28
 
 > 本版主轴：Dashboard 的 Overview 与 Config 两个页面各做了一轮体验改造；Model Bind 的可绑定模型目录补上 GLM 5.4，并改为内置、pricing、手配清单三源合成。
